@@ -130,6 +130,8 @@ export function buildTheaIndex(roster: TheaRoster, query: ReadyTheaQuery, sessio
     byWeekday: new Map(Array.from({ length: 7 }, (_, day) => [day, indexed])) };
 }
 
+export class TheaAvailabilityError extends Error {}
+
 export function checkedTheaAvailability(value: WiseAvailabilityResponse) {
   const time = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
   if (!Array.isArray(value.workingHours?.slots) || !Array.isArray(value.leaves)
@@ -139,7 +141,7 @@ export function checkedTheaAvailability(value: WiseAvailabilityResponse) {
     || value.workingHours.slots.some(w => !(typeof w.day === "number" ? Number.isInteger(w.day) && w.day >= 0 && w.day <= 6
       : typeof w.day === "string" && /^(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/i.test(w.day))
       || !time.test(w.startTime) || !(time.test(w.endTime) || w.endTime === "24:00") || w.endTime <= w.startTime)) {
-    throw new Error("Wise returned incomplete working hours or leave; availability cannot be confirmed.");
+    throw new TheaAvailabilityError("Wise returned incomplete working hours or leave; availability cannot be confirmed.");
   }
   return value;
 }
@@ -169,14 +171,21 @@ export async function answerTheaQuery(reader: TheaWiseReader, roster: TheaRoster
   const groups = qualifiedTheaGroups(roster, query);
   if (query.teacher && groups.length !== 1) return `Please use one exact teacher nickname. ${groups.length ? "Matches: " + groups.map(g => g.displayName).join(", ") : "No matching teacher was found."}`;
   const availability = new Map<string, WiseAvailabilityResponse>();
+  const unverified = new Set<string>();
   for (const group of groups) for (const member of group.members) {
-    if (!member.wiseUserId || availability.has(member.wiseUserId)) continue;
-    const { data } = await reader.read(`availability:${member.wiseUserId}:${query.date}`, 10 * 60_000, async () => {
-      const result = await fetchTeacherAvailability(reader.client, process.env.WISE_INSTITUTE_ID!, member.wiseUserId!,
-        new Date(`${query.date}T00:00:00+07:00`), new Date(`${addBangkokDays(query.date, 1)}T00:00:00+07:00`));
-      return checkedTheaAvailability(result);
-    });
-    availability.set(member.wiseUserId, data);
+    if (!member.wiseUserId) { unverified.add(group.canonicalKey); continue; }
+    if (availability.has(member.wiseUserId)) continue;
+    try {
+      const { data } = await reader.read(`availability:${member.wiseUserId}:${query.date}`, 10 * 60_000, async () => {
+        const result = await fetchTeacherAvailability(reader.client, process.env.WISE_INSTITUTE_ID!, member.wiseUserId!,
+          new Date(`${query.date}T00:00:00+07:00`), new Date(`${addBangkokDays(query.date, 1)}T00:00:00+07:00`));
+        return checkedTheaAvailability(result);
+      });
+      availability.set(member.wiseUserId, data);
+    } catch (error) {
+      if (!(error instanceof TheaAvailabilityError)) throw error;
+      unverified.add(group.canonicalKey);
+    }
   }
   // Read changing bookings last, after the slower teacher-hours checks.
   const { data: sessions, checkedAt: sessionsAt } = await reader.read(`day:${query.date}`, 2 * 60_000, async () => {
@@ -197,18 +206,18 @@ export async function answerTheaQuery(reader: TheaWiseReader, roster: TheaRoster
   if (query.intent === "schedule") {
     const g = index.tutorGroups[0];
     if (g.dataIssues.some(i => i.type === "identity" || i.type === "availability")) throw new Error("This teacher's identity or working hours need review.");
-    const time = (d: Date) => new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }).format(d);
     const start = new Date(`${query.date}T${query.start}:00+07:00`), end = new Date(`${query.date}T${query.end}:00+07:00`);
     const status = new Map(sessions.map(s => [s._id, s.meetingStatus?.toUpperCase()]));
     const rows = g.sessionBlocks.filter(b => !["CANCELLED", "CANCELED"].includes(status.get(b.wiseSessionId!) ?? "")
       && b.startTime < end && b.endTime > start).sort((a, b) => +a.startTime - +b.startTime)
-      .map(b => `${time(b.startTime)}–${time(b.endTime)} ${thai ? "มีสอน" : "Class"}${b.location ? ` · ${b.location}` : ""}`);
-    rows.push(...g.leaves.filter(l => l.startTime < end && l.endTime > start).map(l => `${time(l.startTime)}–${time(l.endTime)} ${thai ? "ลา" : "Leave"}`));
+      .map(b => `${formatBangkokDateTime(b.startTime)}–${formatBangkokDateTime(b.endTime)} ${thai ? "มีสอน" : "Class"}${b.location ? ` · ${b.location}` : ""}`);
+    rows.push(...g.leaves.filter(l => l.startTime < end && l.endTime > start).map(l => `${formatBangkokDateTime(l.startTime)}–${formatBangkokDateTime(l.endTime)} ${thai ? "ลา" : "Leave"}`));
     return `${header}\n${g.displayName}\n${boundedLines(rows) || (thai ? "ไม่พบชั้นเรียนในช่วงเวลานี้ (ไม่ได้หมายความว่าว่างทั้งช่วง)" : "No classes found in this window (this does not mean the whole window is available).")}${footer}`;
   }
   const slot = searchTheaAvailability(index, query);
   const names = slot.available.map(t => `${t.displayName} (${[...new Set(t.qualifications.filter(q => !query.filters.subject || q.subject === query.filters.subject)
     .map(q => `${q.subject} / ${q.curriculum} / ${q.level}`))].join("; ")})`);
-  const review = slot.needsReview.length ? `\n${thai ? "ยังยืนยันไม่ได้ ต้องตรวจสอบ" : "Not confirmed; needs review"}: ${slot.needsReview.map(t => t.displayName).join(", ")}` : "";
+  const reviewNames = [...new Set([...slot.needsReview.map(t => t.displayName), ...groups.filter(g => unverified.has(g.canonicalKey)).map(g => g.displayName)])];
+  const review = reviewNames.length ? `\n${thai ? "ยังยืนยันไม่ได้ ต้องตรวจสอบ" : "Not confirmed; needs review"}: ${reviewNames.join(", ")}` : "";
   return `${header}\n${thai ? "ครูที่ว่าง" : "Available teachers"}:\n${boundedLines(names) || (thai ? "ไม่พบครูที่ยืนยันได้ว่าว่างและตรงเงื่อนไข" : "No verified available matches.")}${review}${footer}`;
 }

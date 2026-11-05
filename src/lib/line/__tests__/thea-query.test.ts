@@ -61,6 +61,18 @@ function fixture() {
 }
 
 describe("Thea deterministic availability", () => {
+  it("keeps a teacher with missing hours unconfirmed while answering from verified teachers", async () => {
+    const { roster, availability } = fixture();
+    const reader = { checks: [new Date()], invalidatedAt: async () => new Date(0),
+      read: async (_key: string, _ttl: number, load: () => Promise<unknown>) => ({ data: await load(), checkedAt: new Date() }),
+      client: { get: async (path: string) => path.endsWith("/sessions") ? { data: { page_count: 0, sessions: [] } }
+        : { data: path.includes("Free-off-user") ? { leaves: [] } : availability.get(path.split("/").at(-2)!) } },
+    } as unknown as TheaWiseReader;
+    const answer = await answerTheaQuery(reader, roster, ready);
+    expect(answer.split("Not confirmed")[0]).not.toContain("Free (Math");
+    expect(answer.split("Not confirmed")[0]).toContain("Busy (Math");
+    expect(answer.split("Not confirmed")[1]).toContain("Free");
+  });
   it("reads overnight lessons from the preceding day before claiming a teacher is free", async () => {
     const { roster, availability } = fixture();
     const reader = {
