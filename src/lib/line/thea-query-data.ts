@@ -169,7 +169,8 @@ export async function answerTheaQuery(reader: TheaWiseReader, roster: TheaRoster
   const groups = qualifiedTheaGroups(roster, query);
   if (query.teacher && groups.length !== 1) return `Please use one exact teacher nickname. ${groups.length ? "Matches: " + groups.map(g => g.displayName).join(", ") : "No matching teacher was found."}`;
   const { data: sessions, checkedAt: sessionsAt } = await reader.read(`day:${query.date}`, 2 * 60_000, async () => {
-    const rows = await fetchWiseSessionsForBangkokDates(reader.client, process.env.WISE_INSTITUTE_ID!, [query.date]);
+    // Include the preceding day so an overnight lesson cannot look like a free morning.
+    const rows = await fetchWiseSessionsForBangkokDates(reader.client, process.env.WISE_INSTITUTE_ID!, [addBangkokDays(query.date, -1), query.date]);
     if (rows.some(s => isBlockingStatus(s.meetingStatus) && !getWiseSessionTeacherUserId(s))) throw new Error("Some Wise sessions have no verified teacher; availability cannot be confirmed.");
     // No student names, class titles or contact details enter this cache or the model.
     return rows.map(s => ({ _id: s._id, userId: getWiseSessionTeacherUserId(s), teacherId: s.teacherId,

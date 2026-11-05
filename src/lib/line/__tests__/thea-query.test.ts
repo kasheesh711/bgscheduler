@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/feedback-autowriter/openrouter", () => ({ callOpenRouter: vi.fn() }));
 import { callOpenRouter } from "@/lib/feedback-autowriter/openrouter";
 import { mentionedTheaText, parseTheaQuery, validateTheaQuery, type TheaQuery, type ReadyTheaQuery } from "../thea-query";
-import { buildTheaIndex, checkedTheaAvailability, searchTheaAvailability, type TheaRoster } from "../thea-query-data";
+import { answerTheaQuery, buildTheaIndex, checkedTheaAvailability, searchTheaAvailability, type TheaRoster, type TheaWiseReader } from "../thea-query-data";
 import type { WiseAvailabilityResponse } from "@/lib/wise/types";
 
 const options = { subjects: ["Math"], curriculums: ["International"], levels: ["Y2-8"] };
@@ -60,6 +60,20 @@ function fixture() {
 }
 
 describe("Thea deterministic availability", () => {
+  it("reads overnight lessons from the preceding day before claiming a teacher is free", async () => {
+    const { roster, availability } = fixture();
+    const reader = {
+      checks: [new Date()], invalidatedAt: async () => new Date(0),
+      read: async (_key: string, _ttl: number, load: () => Promise<unknown>) => ({ data: await load(), checkedAt: new Date() }),
+      client: { get: async (path: string, params: Record<string, string>) => path.endsWith("/sessions")
+        ? { data: { page_count: 1, sessions: params.startDate === "2026-11-06" ? [{ _id: "overnight", userId: "Busy-off-user",
+          scheduledStartTime: "2026-11-06T16:30:00Z", scheduledEndTime: "2026-11-06T18:30:00Z", meetingStatus: "FUTURE" }] : [] } }
+        : { data: availability.get(path.split("/").at(-2)!) } },
+    } as unknown as TheaWiseReader;
+    const answer = await answerTheaQuery(reader, roster, { ...ready, start: "00:00", end: "01:00" });
+    expect(answer).toContain("Free (Math");
+    expect(answer).not.toContain("Busy (Math");
+  });
   it("excludes conflicts, leave, other subjects and ambiguous identities while freeing cancellations", () => {
     const { roster, availability } = fixture();
     const sessions = [
