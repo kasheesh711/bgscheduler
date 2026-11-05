@@ -1,6 +1,6 @@
 import { normalizeTutorName } from "./rooms";
 
-export const CLASSROOM_ALGORITHM_VERSION = "continuity-v1";
+export const CLASSROOM_ALGORITHM_VERSION = "continuity-v2";
 export const CONTINUITY_GAP_MINUTES = 15;
 
 export interface TutorRoomPolicy {
