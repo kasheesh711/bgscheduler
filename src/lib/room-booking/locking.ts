@@ -1,9 +1,11 @@
 import { randomUUID } from "crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, lt, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { roomDayStates, roomTutorLinks } from "@/lib/db/schema";
 import { RoomBookingError } from "./model";
+
+const LEASE_MS = 15 * 60_000;
 
 // Tutor mutations always lock identity before dates (in ascending order).
 // Collectors and classroom writers only lock dates and never acquire tutor locks.
@@ -18,6 +20,22 @@ export async function lockRoomTutor(tx: Database, userId: string) {
 
 export async function lockRoomDay(tx: Database, date: string) {
   await tx.insert(roomDayStates).values({ date }).onConflictDoNothing();
+  // Take over an expired lease. LEASE_MS (15m) is longer than any route's
+  // maxDuration (800s), so its holder was stopped before its `finally` ran.
+  // The row lock and the re-checked WHERE let only one caller clear it.
+  // checkedAt resets because the holder's Wise writes have an unknown outcome.
+  await tx
+    .update(roomDayStates)
+    .set({
+      leaseOwner: null,
+      leaseUntil: null,
+      checkedAt: null,
+      revision: sql`${roomDayStates.revision} + 1`,
+    })
+    .where(
+      // App clock, like the clock that wrote leaseUntil.
+      and(eq(roomDayStates.date, date), lt(roomDayStates.leaseUntil, new Date())),
+    );
   const [state] = await tx
     .select()
     .from(roomDayStates)
@@ -27,8 +45,7 @@ export async function lockRoomDay(tx: Database, date: string) {
 }
 export function assertRoomDayIdle(state: typeof roomDayStates.$inferSelect) {
   if (state.leaseOwner) {
-    // Expiry is not permission to steal a Wise writer's lease. Its outcome may
-    // be unknown. A subsequent refresh can clear an abandoned lease after 15m.
+    // lockRoomDay has already cleared an expired lease, so this lease is live.
     throw new RoomBookingError(
       "ROOMS_UPDATING",
       "Rooms are being updated. Please try again shortly.",
@@ -49,7 +66,7 @@ export async function withRoomDayOperation<T>(
       .update(roomDayStates)
       .set({
         leaseOwner: owner,
-        leaseUntil: new Date(Date.now() + 15 * 60_000),
+        leaseUntil: new Date(Date.now() + LEASE_MS),
         revision: sql`${roomDayStates.revision} + 1`,
       })
       .where(eq(roomDayStates.date, date));

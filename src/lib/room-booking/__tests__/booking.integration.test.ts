@@ -313,6 +313,67 @@ describe("transactional room reservations", () => {
       (await db.select().from(s.roomNotifications))[0].reservationId,
     );
   });
+  describe("expired room-day lease", () => {
+    // A weekend day outside the today/tomorrow refresh window: nothing else clears it.
+    const later = "2026-09-13";
+    const setLease = (leaseUntil: Date) =>
+      db
+        .insert(s.roomDayStates)
+        .values({ date: later, leaseOwner: "stopped-writer", leaseUntil, revision: 5 })
+        .onConflictDoUpdate({
+          target: s.roomDayStates.date,
+          set: { leaseOwner: "stopped-writer", leaseUntil, revision: 5 },
+        });
+    const stateFor = async () =>
+      (await db.select().from(s.roomDayStates).where(eq(s.roomDayStates.date, later)))[0];
+
+    it("is taken over by the next operation", async () => {
+      await setLease(new Date(now.getTime() - 1));
+      let ownerDuringWork: string | null = null;
+      await withRoomDayOperation(db, later, async () => {
+        ownerDuringWork = (await stateFor()).leaseOwner;
+      });
+      expect(ownerDuringWork).not.toBeNull();
+      expect(ownerDuringWork).not.toBe("stopped-writer");
+      const after = await stateFor();
+      expect(after.leaseOwner).toBeNull();
+      expect(after.checkedAt).toBeNull();
+      expect(after.revision).toBeGreaterThan(5);
+    });
+
+    it("still blocks while it is live", async () => {
+      await setLease(new Date(now.getTime() + 60_000));
+      const work = vi.fn();
+      await expect(withRoomDayOperation(db, later, work)).rejects.toMatchObject({
+        code: "ROOMS_UPDATING",
+      });
+      expect(work).not.toHaveBeenCalled();
+      expect((await stateFor()).leaseOwner).toBe("stopped-writer");
+    });
+
+    it("lets only one of two concurrent operations take it over", async () => {
+      await setLease(new Date(now.getTime() - 1));
+      let entered = 0;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const operation = () =>
+        withRoomDayOperation(db, later, async () => {
+          if (++entered === 2) release(); // both won: fail the test, do not hang
+          await gate;
+        }).catch((error) => {
+          release();
+          throw error;
+        });
+      const results = await Promise.allSettled([operation(), operation()]);
+      expect(entered).toBe(1);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      const [rejected] = results.filter((r) => r.status === "rejected");
+      expect((rejected as PromiseRejectedResult).reason).toMatchObject({
+        code: "ROOMS_UPDATING",
+      });
+      expect((await stateFor()).leaseOwner).toBeNull();
+    });
+  });
   it("rejects a refresh based on an obsolete classroom revision", async () => {
     await withRoomDayOperation(db, date, async () => undefined);
     await expect(
