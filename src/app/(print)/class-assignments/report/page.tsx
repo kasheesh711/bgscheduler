@@ -31,7 +31,7 @@ async function Report({ searchParams }: { searchParams: Params }) {
     const missingDates = (typeof raw.missingDates === "string" ? raw.missingDates.split(",") : []).filter(date => printDateSchema.safeParse(date).success).slice(0, 7);
     return <ClassroomPrintDocument key={report.generatedAt} report={report} view={view.success ? view.data : "tutors"} missingDates={missingDates} />;
   }
-  return <main className="begifted flex min-h-0 flex-1 items-center justify-center p-8"><div className="max-w-lg rounded-xl border p-8"><h1 className="begifted-display text-3xl">Classroom sheets unavailable</h1><ClassroomPrintUnavailable message={view.success ? error : "Choose By tutor or By room to print."} /><Link href="/class-assignments" className="underline">Back to Class Assignments</Link></div></main>;
+  return <main className="begifted flex min-h-0 flex-1 items-center justify-center p-8"><div className="max-w-lg rounded-xl border p-8"><h1 className="begifted-display text-3xl">Classroom sheets unavailable</h1><ClassroomPrintUnavailable message={view.success ? error : "Choose By tutor, By room, or Full day to print."} /><Link href="/class-assignments" className="underline">Back to Class Assignments</Link></div></main>;
 }
 
 export default function ClassroomReportPage(props: { searchParams: Params }) {
