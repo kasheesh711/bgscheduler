@@ -15,6 +15,11 @@ export async function GET(request: NextRequest) {
   return withCronInvocationAudit({ jobKey: "classroom_publish_recovery", triggerSource: "cron", requestMethod: request.method }, async () => {
       const thea = theaEnabled() ? await runTheaWeekendWorker(getDb()) : { handled: false };
       if (thea.handled) return NextResponse.json(thea);
+      if (process.env.THEA_TEACHER_QUERIES_ENABLED === "true") {
+        const { runTheaQueryWorker } = await import("@/lib/line/thea-query-queue");
+        const queries = await runTheaQueryWorker(getDb());
+        if (queries.handled) return NextResponse.json(queries);
+      }
       if (!wiseClassroomAutomationEnabled()) return NextResponse.json(pausedWiseClassroomResult());
     try {
       const result = await runClassroomPublishRecovery(getDb());

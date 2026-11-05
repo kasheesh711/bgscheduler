@@ -151,7 +151,7 @@ export async function callOpenRouter(input: {
   title?: string;
   schemaName: string;
   schema: object;
-  effort: "max" | "high" | "medium" | "low";
+  effort: "max" | "high" | "medium" | "low" | "none";
   maxTokens: number;
   timeoutMs: number;
   fetchImpl?: typeof fetch;
