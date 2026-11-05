@@ -107,7 +107,7 @@ export async function runTheaQueryWorker(db: Database) {
         answer = `${safe}\nยังยืนยันข้อมูลไม่ได้ กรุณาลองใหม่ค่ะ`;
       }
       // LINE text limit is 5,000 characters. Truncation is explicit, never an exhaustive claim.
-      if (answer.length > 4500) answer = `${answer.slice(0, 4100)}\n…More results were omitted. Please narrow the subject, level or teacher.`;
+      if (answer.length > 4500) answer = `${answer.slice(0, 3600)}\n…More results were omitted. Please narrow the subject, level or teacher.\n${answer.split("\n").slice(-2).join("\n").slice(-500)}`;
       const [saved] = await db.update(jobs).set({ answer }).where(fence()).returning({ id: jobs.id });
       if (!saved) return { handled };
     }
