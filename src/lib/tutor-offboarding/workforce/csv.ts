@@ -15,7 +15,8 @@ const labels: Record<WorkforceExportSection, string[]> = {
   people: ["canonicalKey", "displayName", "role", "rosterState", "joinedAt", "departedAt", "pendingDeparture"],
 };
 
-function cell(value: unknown): string {
+/** Quotes one CSV cell and defuses formula-leading text. Shared with the current-tutor export. */
+export function cell(value: unknown): string {
   if (typeof value === "number") return Number.isFinite(value) ? String(value) : '""';
   let text = value == null ? "" : String(value);
   if (/^[\s\u0000-\u001f]*[=+@-]/.test(text)) text = `'${text}`;
