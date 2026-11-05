@@ -1,7 +1,13 @@
 import { splitRoomEvents, ingestRoomEvents } from "@/lib/room-booking/ingress";
 import type { Database } from "@/lib/db";
 import { recordLineWebhookPayload, type LineGroupCommand } from "@/lib/line/data";
+import { replyLineMessage } from "@/lib/line/client";
 import { verifyLineSignature } from "@/lib/line/signature";
+
+const FORM_REPLIES = new Map([
+  ["/leave", "Leave form\n- for taking leave (please inform 7 days in advance)\nhttps://docs.google.com/forms/d/e/1FAIpQLSd-tzTC1XrOq4MtvVjlueOrbZ-6vLJgKambL812dfItiGTJPw/formResponse"],
+  ["/request", "- Request form (Changing availability and other issues)\nhttps://docs.google.com/forms/d/e/1FAIpQLSe8GzpXwjc-PPldy_nIat2kTQA8XQw6cGnKGALxn_vWEV_NAA/viewform"],
+]);
 
 export interface LineWebhookHandlerResult {
   status: number;
@@ -47,6 +53,22 @@ export async function handleLineWebhookPost(input: {
       body: { ok: false, error: "Invalid JSON" },
     };
   }
+
+  // Public form links need no staff lookup and must not enter AI processing.
+  const root = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  const otherEvents: unknown[] = [];
+  for (const raw of Array.isArray(root.events) ? root.events : []) {
+    const event = raw as { type?: string; replyToken?: string; message?: { type?: string; text?: string } } | null;
+    const text = event?.type === "message" && event.message?.type === "text" && typeof event.message.text === "string"
+      ? FORM_REPLIES.get(event.message.text.trim().toLowerCase())
+      : undefined;
+    if (text && typeof event?.replyToken === "string" && event.replyToken) {
+      await replyLineMessage({ replyToken: event.replyToken, text, tutorBot: input.progressOnly });
+    } else {
+      otherEvents.push(raw);
+    }
+  }
+  payload = { ...root, events: otherEvents };
 
   const roomEvents = input.progressOnly ? { room: [], otherPayload: payload } : splitRoomEvents(payload);
   if (roomEvents.room.length) {

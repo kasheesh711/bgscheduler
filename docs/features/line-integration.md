@@ -15,6 +15,10 @@ The users are BeGifted admin staff. Every `/api/line/**` route except three mach
 
 The `/credit` and `/report` command families (`src/lib/line/credit-bot.ts`, `credit-digest.ts`, `report-bot.ts`) ride the schedule bot's router but belong to Credit Control and the Parent Report; this document covers how they are dispatched and gated and summarises their rules in [§ Credit and report command families](#credit-and-report-command-families); Credit Control's business meaning lives in [`credit-control.md`](./credit-control.md). Their own pages carry the rest: [`line-credit-bot.md`](./line-credit-bot.md) for the `/credit` family, the daily run-out digest and the group allowlist, and [`student-report.md`](./student-report.md) for the `/report` family and the Parent Report surface behind it.
 
+## Leave and request forms
+
+`/leave` and `/request` return the supplied leave and availability/request form links in direct chats, groups and rooms. Commands are case-insensitive and permit surrounding spaces. They need no admin role. The signed webhook replies with the receiving bot's channel token, including the tutor bot, before database or AI processing. Other commands keep their existing access checks.
+
 ## Conceptual data model
 
 Columns, indexes, and relationships live in [`reference/database/erd-line.md`](../reference/database/erd-line.md); this section says what each table *means*. The feature owns 13 `line_*` tables — `lineContacts`, `lineThreads`, `lineMessages`, `lineContactStudentLinks`, `lineSchedulerReviews`, `lineWiseActionLogs`, `lineOaResolverRuns`, `lineOaResolverRows`, `lineBacklogRecoverySyncRuns`, `lineScheduleBotPending`, `lineGroupSettings`, `lineCreditDigestRuns`, `lineGroupScheduleSends` — declared in two blocks of `src/lib/db/schema.ts` (`:2437-2684` and `:4668-4772`), plus four LINE-specific enums (`schema.ts:110-134`). Per-table line anchors belong to the ERD page, which is currently one table behind (see open question 5).
