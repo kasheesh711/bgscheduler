@@ -56,6 +56,7 @@ function fixture() {
     leaves: g.displayName === "Leave" ? [{ startTime: "2026-11-07T02:00:00Z", endTime: "2026-11-07T03:00:00Z" }] : [],
   }] as [string, WiseAvailabilityResponse])));
   const roster: TheaRoster = { groups, qualifications, options, issues: [], blocked: new Set(["Ambiguous"]) };
+  qualifications.get("Free-off")!.issues.push({ type: "tag", entityType: "teacher", entityId: "Free-off", entityName: "Free", message: 'Unmapped Wise tag: "Tier 1"' });
   return { roster, availability };
 }
 

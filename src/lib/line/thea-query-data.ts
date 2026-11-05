@@ -112,7 +112,7 @@ export function buildTheaIndex(roster: TheaRoster, query: ReadyTheaQuery, sessio
     if (modality.issue) dataIssues.push({ type: "modality", message: modality.issue.message });
     const windows: IndexedTutorGroup["availabilityWindows"] = [], leaves: IndexedTutorGroup["leaves"] = [];
     for (const member of g.members) {
-      dataIssues.push(...(roster.qualifications.get(member.wiseTeacherId)?.issues ?? []).map(i => ({ type: "qualification", message: i.message })));
+      // Capability requires a parsed qualification; unrelated tags such as "Tier 1" do not negate it.
       const raw = member.wiseUserId ? availability.get(member.wiseUserId) : undefined;
       if (!raw) { dataIssues.push({ type: "availability", message: "Working hours and leave could not be verified" }); continue; }
       windows.push(...normalizeWorkingHours(raw.workingHours?.slots).map(w => ({ ...w, wiseTeacherId: member.wiseTeacherId,
