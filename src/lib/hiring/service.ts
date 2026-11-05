@@ -951,7 +951,8 @@ function visitToken(token: string, now: Date): VisitLink {
   if (cap.kind !== "visit") throw new HiringError(404, onLine("This booking link is no longer active."));
   return cap;
 }
-const bookable = (config: HiringConfig) => config.enabled && config.rubricApproved && runtimeWritesAllowed();
+const bookable = (config: HiringConfig, candidateId: string) =>
+  (config.enabled || config.bookingTestCandidateId === candidateId) && config.rubricApproved && runtimeWritesAllowed();
 const visitRows = (db: Database, candidateId: string) =>
   db
     .select()
@@ -1004,7 +1005,7 @@ export async function visitView(token: string, db: Database = getDb(), now = new
   const cap = visitToken(token, now);
   const { config } = await settings(db);
   const { subject, rows } = await openVisit(db, cap, config, now);
-  const enabled = bookable(config);
+  const enabled = bookable(config, cap.id);
   const exam = examOf(rows);
   const mock = rows.find((b) => b.kind === "mock");
   const refusal = exam ? moveRefusal(rows, now) : null;
@@ -1086,7 +1087,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
   const cap = visitToken(token, now);
   const start = new Date(input.start).getTime();
   const { config } = await settings(db);
-  if (!bookable(config)) throw new HiringError(503, "Booking is temporarily unavailable.");
+  if (!bookable(config, cap.id)) throw new HiringError(503, "Booking is temporarily unavailable.");
   // A retry returns the original visit.
   const prior = examOf(await visitRows(db, cap.id));
   if (prior?.startTime.getTime() === start) return prior;
@@ -1119,7 +1120,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"hiring:paper"},0))`);
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"sit-in:" + slot.interviewerKey},0))`);
     const latest = await settings(tx);
-    if (!bookable(latest.config)) throw new HiringError(503, "Booking has been paused.");
+    if (!bookable(latest.config, cap.id)) throw new HiringError(503, "Booking has been paused.");
     const { candidate, subject, rows } = await openVisit(tx, cap, latest.config, now);
     if (examOf(rows)?.startTime.getTime() === start) return examOf(rows)!;
     refuseChange(rows);

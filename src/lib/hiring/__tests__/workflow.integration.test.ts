@@ -773,6 +773,32 @@ describe("hiring workflow persistence", () => {
       );
     });
 
+    it("opens paused visit booking only for the test candidate and keeps all messages paused", async () => {
+      const test = await invited();
+      const other = await invited();
+      await setVisit({ enabled: false, deliveryEnabled: false, bookingTestCandidateId: test.id });
+      expect((await visitView(link(test), db)).slots.length).toBeGreaterThan(0);
+      expect(await visitView(link(other), db)).toMatchObject({ enabled: false, slots: [] });
+      await expect(bookVisit(link(other), choice(), db)).rejects.toThrow(/unavailable/);
+      await bookVisit(link(test), choice(), db);
+      expect(await rowsOf(test.id)).toHaveLength(2);
+      expect(await rowsOf(other.id)).toHaveLength(0);
+      await deliverBookingMessages(db);
+      expect(sendEmail).not.toHaveBeenCalled();
+      expect(deliverCalendar).not.toHaveBeenCalled();
+      expect(pushLineTextMessage).not.toHaveBeenCalled();
+      expect((await settings(db)).config).toMatchObject({ enabled: false, deliveryEnabled: false });
+    });
+    it("rechecks the test candidate exception after the live availability check", async () => {
+      const test = await invited();
+      await setVisit({ enabled: false, deliveryEnabled: false, bookingTestCandidateId: test.id });
+      vi.mocked(verifyLiveSlot).mockImplementationOnce(async () => {
+        await setVisit({ enabled: false, deliveryEnabled: false });
+        return { source: "test" } as never;
+      });
+      await expect(bookVisit(link(test), choice(), db)).rejects.toThrow(/paused/);
+      expect(await rowsOf(test.id)).toHaveLength(0);
+    });
     it("books an exam row and a mock row with one visit_id", async () => {
       const row = await invited();
       await bookVisit(link(row), choice(), db);
