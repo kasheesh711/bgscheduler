@@ -205,6 +205,8 @@ export const baseConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
     deliveryEnabled: z.boolean().default(false),
+    /** Only this candidate may test visit booking while Automation is paused. Messages stay gated. */
+    bookingTestCandidateId: z.uuid().nullable().default(null),
     rubricApproved: z.boolean().default(true),
     connectedEmail: emailSchema.default("kevhsh7@gmail.com"),
     /** Each SEEK job ad the worker reads. An inactive job keeps its candidates and is not read. */
