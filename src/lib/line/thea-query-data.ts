@@ -168,15 +168,6 @@ function boundedLines(lines: string[]) {
 export async function answerTheaQuery(reader: TheaWiseReader, roster: TheaRoster, query: ReadyTheaQuery) {
   const groups = qualifiedTheaGroups(roster, query);
   if (query.teacher && groups.length !== 1) return `Please use one exact teacher nickname. ${groups.length ? "Matches: " + groups.map(g => g.displayName).join(", ") : "No matching teacher was found."}`;
-  const { data: sessions, checkedAt: sessionsAt } = await reader.read(`day:${query.date}`, 2 * 60_000, async () => {
-    // Include the preceding day so an overnight lesson cannot look like a free morning.
-    const rows = await fetchWiseSessionsForBangkokDates(reader.client, process.env.WISE_INSTITUTE_ID!, [addBangkokDays(query.date, -1), query.date]);
-    if (rows.some(s => isBlockingStatus(s.meetingStatus) && !getWiseSessionTeacherUserId(s))) throw new Error("Some Wise sessions have no verified teacher; availability cannot be confirmed.");
-    // No student names, class titles or contact details enter this cache or the model.
-    return rows.map(s => ({ _id: s._id, userId: getWiseSessionTeacherUserId(s), teacherId: s.teacherId,
-      scheduledStartTime: s.scheduledStartTime, scheduledEndTime: s.scheduledEndTime,
-      meetingStatus: s.meetingStatus, type: s.type, location: s.location }));
-  });
   const availability = new Map<string, WiseAvailabilityResponse>();
   for (const group of groups) for (const member of group.members) {
     if (!member.wiseUserId || availability.has(member.wiseUserId)) continue;
@@ -187,6 +178,16 @@ export async function answerTheaQuery(reader: TheaWiseReader, roster: TheaRoster
     });
     availability.set(member.wiseUserId, data);
   }
+  // Read changing bookings last, after the slower teacher-hours checks.
+  const { data: sessions, checkedAt: sessionsAt } = await reader.read(`day:${query.date}`, 2 * 60_000, async () => {
+    // Include the preceding day so an overnight lesson cannot look like a free morning.
+    const rows = await fetchWiseSessionsForBangkokDates(reader.client, process.env.WISE_INSTITUTE_ID!, [addBangkokDays(query.date, -1), query.date]);
+    if (rows.some(s => isBlockingStatus(s.meetingStatus) && !getWiseSessionTeacherUserId(s))) throw new Error("Some Wise sessions have no verified teacher; availability cannot be confirmed.");
+    // No student names, class titles or contact details enter this cache or the model.
+    return rows.map(s => ({ _id: s._id, userId: getWiseSessionTeacherUserId(s), teacherId: s.teacherId,
+      scheduledStartTime: s.scheduledStartTime, scheduledEndTime: s.scheduledEndTime,
+      meetingStatus: s.meetingStatus, type: s.type, location: s.location }));
+  });
   if (await reader.invalidatedAt() >= sessionsAt) throw new Error("Wise changed while I checked. Please ask again for a fresh result.");
   const now = new Date(), index = buildTheaIndex(roster, query, sessions, availability, now);
   const stamp = formatBangkokDateTime(new Date(Math.min(...reader.checks.map(d => d.getTime()))));
