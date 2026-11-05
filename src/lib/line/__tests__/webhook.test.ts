@@ -18,6 +18,18 @@ function signature(secret: string, body: string): string {
 }
 
 describe("handleLineWebhookPost", () => {
+  it("invokes teacher queries only after a valid tutor-channel signature", async () => {
+    const rawBody = JSON.stringify({ events: [{ type: "message", webhookEventId: "mention-1" }] });
+    const teacherQuery = vi.fn().mockResolvedValue(true);
+    const input = { db: {} as never, rawBody, channelSecret: "secret", progressOnly: true,
+      handleTeacherQuery: teacherQuery, scheduleProcessing: vi.fn() };
+    expect((await handleLineWebhookPost({ ...input, signature: "wrong" })).status).toBe(401);
+    expect(teacherQuery).not.toHaveBeenCalled();
+    await handleLineWebhookPost({ ...input, signature: signature("secret", rawBody) });
+    expect(teacherQuery).toHaveBeenCalledTimes(1);
+    await handleLineWebhookPost({ ...input, progressOnly: false, signature: signature("secret", rawBody) });
+    expect(teacherQuery).toHaveBeenCalledTimes(1);
+  });
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(recordLineWebhookPayload).mockResolvedValue({

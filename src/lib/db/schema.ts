@@ -1,4 +1,5 @@
 import type { WeekendReport } from "@/lib/classrooms/weekend-readiness";
+import type { TheaQuery } from "@/lib/line/thea-query";
 import type { RoomBotEvent, RoomEvidence } from "@/lib/room-booking/model";
 import type { CompletionEvidence, CoverageRevision, LeaveInterpretation, WorkStudent } from "@/lib/leave-requests/work-types";
 import {
@@ -7239,3 +7240,22 @@ export const theaWeekendRequests = pgTable("thea_weekend_requests", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, table => [uniqueIndex("thea_event_idx").on(table.eventId), uniqueIndex("thea_token_idx").on(table.tokenHash),
   index("thea_request_job_idx").on(table.jobId)]);
+
+/** Mentioned staff questions, paid-call reservations and retry-safe replies. */
+export const theaTeacherQueries = pgTable("thea_teacher_queries", {
+  id: uuid("id").primaryKey().defaultRandom(), eventId: text("event_id").notNull().unique(),
+  groupId: text("group_id").notNull(), userId: text("user_id").notNull(), question: text("question").notNull(),
+  status: text("status").notNull().default("pending"), criteria: jsonb("criteria").$type<TheaQuery | null>(),
+  answer: text("answer"), reservedUsd: doublePrecision("reserved_usd").notNull().default(0), costUsd: doublePrecision("cost_usd"),
+  claimToken: uuid("claim_token"), leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex("thea_teacher_single_worker_idx").on(t.status).where(sql`${t.status} = 'running'`),
+  index("thea_teacher_created_idx").on(t.createdAt)]);
+
+/** Shared read cache. Special rows hold session invalidation and Wise cooldown timestamps. */
+export const theaQueryCache = pgTable("thea_query_cache", {
+  key: text("key").primaryKey(), payload: jsonb("payload").$type<unknown>().notNull(),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});

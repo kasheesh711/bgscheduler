@@ -31,6 +31,14 @@ export async function POST(request: NextRequest) {
       if (result.queued) after(async () => { await runTheaWeekendWorker(db); });
       return result.handled;
     } : undefined,
+    handleTeacherQuery: tutorBot ? async event => {
+      const mentions = (event as { message?: { mention?: { mentionees?: Array<{ isSelf?: boolean }> } } } | null)?.message?.mention?.mentionees;
+      if (!Array.isArray(mentions) || !mentions.some(m => m?.isSelf === true)) return false;
+      const { receiveTheaQuery, runTheaQueryWorker } = await import("@/lib/line/thea-query-queue");
+      const result = await receiveTheaQuery(db, event);
+      if (result.queued) after(async () => { await runTheaQueryWorker(db); });
+      return result.handled;
+    } : undefined,
     scheduleRoomCommand: (eventId) => {
       after(async () => {
         const { processRoomEvent } = await import("@/lib/room-booking/bot");

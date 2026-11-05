@@ -55,6 +55,11 @@ export async function POST(request: NextRequest) {
     .returning({ id: schema.wiseWebhookEvents.id });
 
   const eventId = inserted[0]?.id;
+  if (eventId && process.env.THEA_TEACHER_QUERIES_ENABLED === "true"
+    && ["SessionsCreatedEvent", "SessionsUpdatedEvent", "SessionsDeletedEvent"].includes(parsed?.eventName ?? "")) {
+    const { invalidateTheaSessions } = await import("@/lib/line/thea-query-data");
+    await invalidateTheaSessions(db);
+  }
   const sessionId = parsed?.sessionId;
   if (eventId && sessionId && parsed?.eventName && AUTOWRITER_TRIGGER_EVENTS.has(parsed.eventName)) {
     after(async () => {
