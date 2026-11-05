@@ -17,6 +17,7 @@ import {
   loadGateFacts,
   previewDailyMetrics,
   raiseFixFlags,
+  raiseLowAttendanceFlags,
   raiseVerificationFlags,
   recordDailyGate,
   refreshDailyMetrics,
@@ -497,6 +498,20 @@ describe("review inclusion and first shots that landed without verifying", () =>
       verdict: "approve", confirmDowngrade: true, note: "checked in Wise: the text landed as posted",
     }));
     expect(downgraded).toMatchObject({ downgradedFrom: "critical", resolvedFlags: 1 });
+  });
+
+  it("flags a class posted despite low Wise attendance (owner decision, 13 Oct) once, for the owner's review", async () => {
+    const lowAttendance = await seedPosted(35, { metadata: { handover: "low_attendance", lowAttendance: "attendance_0pct" } });
+    await seedPosted(36, { metadata: { handover: "transcript_first" } });
+    await seedPosted(37, { state: "posting", metadata: { handover: "low_attendance", lowAttendance: "attendance_20pct" } });
+    await snapshotFirstShots(db);
+    await assignReviews(db, { now: NOW, draw: () => 0.9 });
+    expect(await raiseLowAttendanceFlags(db)).toBe(1);
+    expect(await raiseLowAttendanceFlags(db)).toBe(0);
+    const flags = await db.select().from(FL);
+    expect(flags).toMatchObject([{ wiseSessionId: lowAttendance.wiseSessionId, source: "system", suggestedSeverity: null }]);
+    expect(flags[0].note).toContain("attendance at 0%");
+    expect((await db.select().from(R).where(eq(R.wiseSessionId, lowAttendance.wiseSessionId)))[0]?.flagSources).toEqual(["system"]);
   });
 
   it("pages a landed-but-unverified first shot it cannot prove, and blocks the gate until it is recorded", async () => {
