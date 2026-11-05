@@ -2,10 +2,10 @@ import { beforeEach, expect, it, vi, type Mock } from "vitest";
 import { NextRequest } from "next/server";
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn(() => ({})) }));
-vi.mock("@/lib/classrooms/room-profiles", async original => ({ ...await original<object>(), listTutorRoomProfiles: vi.fn(), updateTutorRoomProfile: vi.fn() }));
+vi.mock("@/lib/classrooms/room-profiles", async original => ({ ...await original<object>(), listTutorRoomProfilesWithSuggestions: vi.fn(), updateTutorRoomProfile: vi.fn() }));
 vi.mock("@/lib/classrooms/print-report", async original => ({ ...await original<object>(), listPrintRuns: vi.fn() }));
 import { auth } from "@/lib/auth";
-import { RoomProfileError, listTutorRoomProfiles, updateTutorRoomProfile } from "@/lib/classrooms/room-profiles";
+import { RoomProfileError, listTutorRoomProfilesWithSuggestions, updateTutorRoomProfile } from "@/lib/classrooms/room-profiles";
 import { listPrintRuns } from "@/lib/classrooms/print-report";
 import { GET } from "../room-profiles/route";
 import { PATCH } from "../room-profiles/[canonicalKey]/route";
@@ -18,7 +18,7 @@ it("requires authentication for profiles, edits and print manifests", async () =
   expect((await GET()).status).toBe(401);
   expect((await PATCH(request({}), params)).status).toBe(401);
   expect((await getPrintRuns(new NextRequest("http://localhost/api/class-assignments/print-runs?date=2026-09-12"))).status).toBe(401);
-  expect(listTutorRoomProfiles).not.toHaveBeenCalled(); expect(updateTutorRoomProfile).not.toHaveBeenCalled(); expect(listPrintRuns).not.toHaveBeenCalled();
+  expect(listTutorRoomProfilesWithSuggestions).not.toHaveBeenCalled(); expect(updateTutorRoomProfile).not.toHaveBeenCalled(); expect(listPrintRuns).not.toHaveBeenCalled();
 });
 it("validates edits and records the authenticated actor, preserving revision conflicts", async () => {
   expect((await PATCH(request({ roomIds: [] }), params)).status).toBe(400);

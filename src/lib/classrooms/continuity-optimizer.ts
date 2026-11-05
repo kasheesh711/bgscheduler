@@ -50,7 +50,8 @@ export function optimizeClassroomContinuity(input: Input) {
       if (input.savedRooms?.has(id) && physicalRoom(input.savedRooms.get(id)!) !== physicalRoom(room)) changed++;
       preference += input.preferenceCost(byId.get(id)!, roomByName.get(physicalRoom(room))!);
     }
-    return [rows.filter(row => row.status === "no_room").length, metrics.roomChanges, metrics.outsideUsualRooms, changed, metrics.distinctTeacherRooms, preference];
+    // Owner rule (5 Nov 2026): fewer rooms per tutor per day outranks usual-room use.
+    return [rows.filter(row => row.status === "no_room").length, metrics.roomChanges, metrics.distinctTeacherRooms, metrics.outsideUsualRooms, changed, preference];
   };
   const groups = new Map<string, AssignmentResultRow[]>();
   for (const row of rows) {

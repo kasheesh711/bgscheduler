@@ -754,13 +754,14 @@ describe("assignClassrooms", () => {
     const genericFirst = result.rows.find((row) => row.wiseSessionId === "generic-first")!;
     const genericSecond = result.rows.find((row) => row.wiseSessionId === "generic-second")!;
     const mek = result.rows.find((row) => row.wiseSessionId === "mek")!;
-    expect(genericFirst.assignedRoom).toBe("Iconic (TV)");
+    // Fewer rooms per day (continuity-v2) keeps Generic in one room for both classes.
+    expect(genericFirst.assignedRoom).toBe(genericSecond.assignedRoom);
     expect(genericSecond.assignedRoom).not.toBe("Iconic (TV)");
     expect(genericSecond.ruleTrace).not.toContain("assigned by sticky room: Iconic (TV)");
     expect(mek.assignedRoom).toBe("Iconic (TV)");
   });
 
-  it("lets a displaced preferred tutor (Ek) return to OMG on their next session instead of sticking to the fallback room", () => {
+  it("keeps a displaced preferred tutor (Ek) in one room after a gap; the engine alone would return to OMG", () => {
     const result = assignClassrooms(
       [
         session({
@@ -791,8 +792,10 @@ describe("assignClassrooms", () => {
     const ekSecond = result.rows.find((row) => row.wiseSessionId === "ek-second")!;
     expect(ekFirst.assignedRoom).not.toBe("OMG");
     expect(ekSecond.preferredRoom).toBe("OMG");
-    expect(ekSecond.assignedRoom).toBe("OMG");
+    // Owner rule 5 Nov 2026: fewer rooms per tutor per day outranks the usual/preferred room.
+    expect(ekSecond.assignedRoom).toBe(ekFirst.assignedRoom);
     expect(ekSecond.ruleTrace).toContain("assigned preferred room: OMG");
+    expect(ekSecond.ruleTrace.at(-1)).toBe("continuity optimization: OMG → Cool");
   });
 
   it("uses general continuity (not sticky) when the gap is 15 minutes or less", () => {

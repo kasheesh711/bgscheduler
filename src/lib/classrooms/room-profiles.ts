@@ -32,10 +32,8 @@ export function toRoomPolicies(profiles: Awaited<ReturnType<typeof listTutorRoom
 
 function localDate(date: string) { const [y, m, d] = date.split("-").map(Number); return new Date(y, m - 1, d); }
 
-export async function ensureTutorRoomProfiles(db: Database, snapshotId: string, date: string, rooms: ProfileRoom[]) {
-  const current = await listTutorRoomProfiles(db);
-  const policies = toRoomPolicies(current.profiles);
-  const futureEnd = addBangkokDays(date, 28), historyStart = addBangkokDays(date, -28);
+async function upcomingProfileSessions(db: Database, snapshotId: string, date: string) {
+  const futureEnd = addBangkokDays(date, 28);
   const sessions = await db.select({
     canonicalKey: schema.tutorIdentityGroups.canonicalKey, tutorDisplayName: schema.tutorIdentityGroups.displayName,
     groupId: schema.futureSessionBlocks.groupId, wiseSessionId: schema.futureSessionBlocks.wiseSessionId,
@@ -46,7 +44,11 @@ export async function ensureTutorRoomProfiles(db: Database, snapshotId: string, 
   }).from(schema.futureSessionBlocks).innerJoin(schema.tutorIdentityGroups, eq(schema.futureSessionBlocks.groupId, schema.tutorIdentityGroups.id))
     .where(and(eq(schema.futureSessionBlocks.snapshotId, snapshotId), eq(schema.futureSessionBlocks.isBlocking, true),
       gte(schema.futureSessionBlocks.startTime, localDate(date)), lt(schema.futureSessionBlocks.startTime, localDate(futureEnd))));
-  if (!sessions.some(row => !policies.has(row.canonicalKey.toLowerCase()))) return policies;
+  return { sessions, futureEnd };
+}
+
+async function recentRoomUse(db: Database, date: string) {
+  const historyStart = addBangkokDays(date, -28);
   const latest = db.selectDistinctOn([schema.classroomAssignmentRuns.assignmentDate], { id: schema.classroomAssignmentRuns.id })
     .from(schema.classroomAssignmentRuns).where(and(gte(schema.classroomAssignmentRuns.assignmentDate, historyStart), lt(schema.classroomAssignmentRuns.assignmentDate, date)))
     .orderBy(schema.classroomAssignmentRuns.assignmentDate, desc(schema.classroomAssignmentRuns.createdAt));
@@ -55,6 +57,15 @@ export async function ensureTutorRoomProfiles(db: Database, snapshotId: string, 
     minutes: sql<number>`${schema.classroomAssignmentRows.endMinute} - ${schema.classroomAssignmentRows.startMinute}`,
   }).from(schema.classroomAssignmentRows).innerJoin(schema.tutorIdentityGroups, eq(schema.classroomAssignmentRows.groupId, schema.tutorIdentityGroups.id))
     .where(and(inArray(schema.classroomAssignmentRows.runId, latest), eq(schema.classroomAssignmentRows.status, "assigned")));
+  return { history, historyStart };
+}
+
+export async function ensureTutorRoomProfiles(db: Database, snapshotId: string, date: string, rooms: ProfileRoom[]) {
+  const current = await listTutorRoomProfiles(db);
+  const policies = toRoomPolicies(current.profiles);
+  const { sessions, futureEnd } = await upcomingProfileSessions(db, snapshotId, date);
+  if (!sessions.some(row => !policies.has(row.canonicalKey.toLowerCase()))) return policies;
+  const { history, historyStart } = await recentRoomUse(db, date);
   const proposed = proposeRoomProfiles({ sessions, rooms, history, existing: [...policies.values()] });
   if (proposed.length) await db.insert(schema.classroomTutorRoomProfiles).values(proposed.map(profile => ({
     canonicalKey: profile.canonicalKey, tutorDisplayName: profile.tutorDisplayName,
@@ -63,6 +74,23 @@ export async function ensureTutorRoomProfiles(db: Database, snapshotId: string, 
     updatedBy: "automatic",
   }))).onConflictDoNothing();
   return toRoomPolicies((await listTutorRoomProfiles(db)).profiles);
+}
+
+/** Read-only: profiles plus a re-planned set (primary kept) for each tutor whose set would change. Nothing is saved. */
+export async function listTutorRoomProfilesWithSuggestions(db: Database, date: string) {
+  const current = await listTutorRoomProfiles(db);
+  const [snapshot] = await db.select({ id: schema.snapshots.id }).from(schema.snapshots).where(eq(schema.snapshots.active, true)).limit(1);
+  const suggested = new Map<string, string[]>();
+  if (snapshot) {
+    const [{ sessions }, { history }] = await Promise.all([upcomingProfileSessions(db, snapshot.id, date), recentRoomUse(db, date)]);
+    for (const profile of proposeRoomProfiles({ sessions, rooms: current.rooms, history, existing: [...toRoomPolicies(current.profiles).values()], replan: true })) {
+      suggested.set(profile.canonicalKey, profile.roomIds);
+    }
+  }
+  return { ...current, profiles: current.profiles.map(profile => {
+    const roomIds = suggested.get(profile.canonicalKey.toLowerCase());
+    return { ...profile, suggestedRoomIds: roomIds && roomIds.join() !== profile.roomIds.join() ? roomIds : null };
+  }) };
 }
 
 export class RoomProfileError extends Error {

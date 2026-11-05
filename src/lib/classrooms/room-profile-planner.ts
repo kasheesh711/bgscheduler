@@ -1,5 +1,5 @@
 import type { AssignmentSession } from "./assignment-engine";
-import { CORE_TEACHING_ROOM_RANK, DEFAULT_CLASSROOM_ROOMS, getPreferredRoom, getPriorityPreferredRoom, isGiftTutor, TV_REQUIRED_TUTORS, type ClassroomRoomDefinition } from "./rooms";
+import { CORE_TEACHING_ROOM_RANK, DEFAULT_CLASSROOM_ROOMS, getPreferredRoom, getPriorityPreferredRoom, isGiftTutor, ROOM_JOY, TV_REQUIRED_TUTORS, type ClassroomRoomDefinition } from "./rooms";
 import { physicalRoom, type TutorRoomPolicy } from "./room-policy";
 import { isOnsiteSessionType } from "./session-mode";
 import { bangkokDateKey } from "@/lib/room-capacity/dates";
@@ -11,12 +11,16 @@ export interface ProfileRoom extends ClassroomRoomDefinition { id: string }
 export interface RoomUse { canonicalKey: string; room: string; minutes: number }
 export interface ProposedRoomProfile { canonicalKey: string; tutorDisplayName: string; roomIds: string[] }
 
-/** Only resolved snapshot identities become persistent profiles; existing profiles are never rebuilt. */
+/**
+ * Only resolved snapshot identities become persistent profiles. By default existing profiles are never rebuilt.
+ * `replan` also re-plans tutors that have a set, keeping their primary room; the result is a suggestion for review only.
+ */
 export function proposeRoomProfiles(input: {
   sessions: AssignmentSession[];
   rooms: ProfileRoom[];
   history: RoomUse[];
   existing: TutorRoomPolicy[];
+  replan?: boolean;
 }): ProposedRoomProfile[] {
   const existing = new Map(input.existing.map(profile => [profile.canonicalKey.toLowerCase(), profile]));
   const tutors = new Map<string, AssignmentSession[]>();
@@ -42,13 +46,18 @@ export function proposeRoomProfiles(input: {
     return Number(bTv) - Number(aTv) || a.localeCompare(b);
   });
   for (const [canonicalKey, sessions] of sorted) {
-    if (existing.has(canonicalKey)) continue;
+    const current = existing.get(canonicalKey);
+    if (current && !input.replan) continue;
     const tutorDisplayName = sessions[0].tutorDisplayName;
-    const anchor = getPreferredRoom(tutorDisplayName);
     const needsTv = TV_REQUIRED_TUTORS.has(tutorDisplayName);
+    const gift = isGiftTutor(tutorDisplayName);
+    // Joy is Gift's fixed room, so the engine gives it to others only as a last resort.
+    const allowed = (room: ProfileRoom) => gift || room.name !== ROOM_JOY;
+    const keptPrimary = current && standardRooms.find(room => room.name === current.rooms[0] && room.active && allowed(room) && (!needsTv || room.hasTv))?.name;
+    const anchor = getPreferredRoom(tutorDisplayName) ?? keptPrimary;
     const compatible = (row: AssignmentSession, room: ProfileRoom) => room.capacity >= Math.max(1, row.studentCount ?? 1) && (!needsTv || room.hasTv);
     const duration = (row: AssignmentSession) => Math.max(0, row.endMinute - row.startMinute);
-    const roomScores = standardRooms.filter(room => room.active || room.name === anchor).map(room => {
+    const roomScores = standardRooms.filter(room => (room.active || room.name === anchor) && allowed(room)).map(room => {
       let usable = 0, contention = 0;
       for (const row of sessions) {
         if (!room.active || !compatible(row, room)) continue;
@@ -64,7 +73,7 @@ export function proposeRoomProfiles(input: {
       return { room, usable, contention, history };
     }).filter(score => score.room.name === anchor || (score.usable > 0 && (!needsTv || score.room.hasTv)))
       .sort((a, b) => Number(b.room.name === anchor) - Number(a.room.name === anchor) || b.usable - a.usable || a.contention - b.contention || b.history - a.history || a.room.capacity - b.room.capacity || rank(a.room) - rank(b.room) || a.room.sortOrder - b.room.sortOrder || a.room.name.localeCompare(b.room.name));
-    const selected = roomScores.slice(0, isGiftTutor(tutorDisplayName) ? 1 : 3).map(score => score.room);
+    const selected = roomScores.slice(0, gift ? 1 : 3).map(score => score.room);
     if (!selected.length) continue;
     result.push({ canonicalKey, tutorDisplayName, roomIds: selected.map(room => room.id) });
     existing.set(canonicalKey, { canonicalKey, revision: 1, rooms: selected.map(room => room.name) });

@@ -4,7 +4,7 @@ import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-hel
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { DEFAULT_CLASSROOM_ROOMS } from "../rooms";
-import { ensureTutorRoomProfiles, listTutorRoomProfiles, toRoomPolicies, updateTutorRoomProfile } from "../room-profiles";
+import { ensureTutorRoomProfiles, listTutorRoomProfiles, listTutorRoomProfilesWithSuggestions, toRoomPolicies, updateTutorRoomProfile } from "../room-profiles";
 import { notifiedTutorKeys } from "../notification-state";
 import { listPrintRuns, loadClassroomPrintReport } from "../print-report";
 import { ensureDefaultClassroomRooms, runIncrementalClassroomAssignment } from "../data";
@@ -47,7 +47,7 @@ describe("stable room policies and saved print data in Postgres", () => {
       canonicalKey: group.canonicalKey, tutorDisplayName: group.displayName, status: "sent" });
     vi.stubEnv("CLASSROOM_CONTINUITY_ENABLED", "true");
     const protectedRun = await runIncrementalClassroomAssignment(db, input);
-    expect(protectedRun.run?.changeSummary.algorithmVersion).toBe("continuity-v1");
+    expect(protectedRun.run?.changeSummary.algorithmVersion).toBe("continuity-v2");
     expect(protectedRun.run?.changeSummary.roomPolicies).toHaveLength(2);
     const zRooms = (rows: typeof first.rows) => rows.filter(row => row.canonicalKey === "teacher z").map(row => row.assignedRoom);
     expect(zRooms(protectedRun.rows)).toEqual(zRooms(first.rows));
@@ -76,6 +76,11 @@ describe("stable room policies and saved print data in Postgres", () => {
     await ensureTutorRoomProfiles(db, rotated.snapshot.id, "2026-09-12", rooms);
     listed = await listTutorRoomProfiles(db);
     expect(listed.profiles[0]).toMatchObject({ roomIds: wanted, revision: 2, updatedBy: "admin@example.com", source: "admin" });
+    await handle.db.update(s.snapshots).set({ active: true }).where(eq(s.snapshots.id, rotated.snapshot.id));
+    const suggested = (await listTutorRoomProfilesWithSuggestions(db, "2026-09-12")).profiles[0];
+    expect(suggested.suggestedRoomIds?.[0]).toBe(wanted[0]);
+    expect(suggested.suggestedRoomIds).toHaveLength(3);
+    expect((await listTutorRoomProfiles(db)).profiles[0]).toMatchObject({ roomIds: wanted, revision: 2 });
     await handle.db.update(s.classroomRooms).set({ active: false }).where(eq(s.classroomRooms.id, wanted[1]));
     await ensureDefaultClassroomRooms(db);
     expect(toRoomPolicies((await listTutorRoomProfiles(db)).profiles).get("da")?.unavailableRooms).toEqual(["Cool"]);
