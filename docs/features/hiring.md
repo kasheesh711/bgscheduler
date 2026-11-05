@@ -168,6 +168,8 @@ Kevin set these weights. The invitation threshold starts at 60.
 
 For the five professional criteria, `met` earns the full weight, `partial` half, and `unknown` or `not_met` no points. Every scored claim must quote text present in the source. The model cannot set its own total or send a message.
 
+Demonstrated SAT or ISEB teaching, tutoring or test preparation earns full curriculum credit, including SAT Math, SAT Verbal, 11+ and 13+. These are BeGifted service lines. A candidate's own exam score or an intention to teach is not teaching evidence. This rule applies to profile and pre-screen assessments.
+
 **Profile gate.** A candidate at stage `new` gets the pre-screen form only if all of these are true:
 
 - The profile score is at or above the threshold.
@@ -232,6 +234,8 @@ With the initial 20-point weight:
 - Chulalongkorn, Thammasat and Mahidol receive 12 points. No unverified US News rank is assigned to them.
 - Other institutions receive any supported ranking points but no US/UK country bonus.
 - An unverified rank earns no ranking points and is labelled unverified. Institution country is matched to a reference entry or an exact, unambiguous record from the [ROR API](https://ror.readme.io/docs/rest-api). Candidate nationality is not used.
+
+If the source name does not match the ranking catalog, the lookup checks the full names and aliases from one exact ROR institution record. Exactly one catalog match can supply the rank. It does not remove campus names or use approximate matching; multiple matches remain unresolved.
 
 The initial reference list is deliberately limited to ten ranks proved by the release and the three named Thai universities. It is **not a complete ranking dataset**. An administrator can add a verified institution, aliases, country, global rank, edition and source under **University prestige rules and reference data**. Country-only scoring can run automatically for other exact ROR matches; missing rank coverage remains visible.
 
