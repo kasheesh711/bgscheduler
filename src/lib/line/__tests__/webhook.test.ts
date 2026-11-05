@@ -148,4 +148,16 @@ describe("handleLineWebhookPost", () => {
     expect(result.status).toBe(400);
     expect(recordLineWebhookPayload).not.toHaveBeenCalled();
   });
+  it("calls the weekend handler only after a valid tutor-channel signature", async () => {
+    const payload = { events: [{ type: "message", webhookEventId: "weekend-event", message: { type: "text", text: "/จัดตาราง" } }] };
+    const rawBody = JSON.stringify(payload), handler = vi.fn().mockResolvedValue(true);
+    const base = { db: {} as never, rawBody, channelSecret: "secret", progressOnly: true,
+      scheduleProcessing: vi.fn(), handleWeekendCommand: handler };
+    expect((await handleLineWebhookPost({ ...base, signature: "invalid" })).status).toBe(401);
+    expect(handler).not.toHaveBeenCalled();
+    await handleLineWebhookPost({ ...base, signature: signature("secret", rawBody) });
+    expect(handler).toHaveBeenCalledWith(payload.events[0]);
+    expect(recordLineWebhookPayload).toHaveBeenLastCalledWith(expect.anything(), { events: [] }, true);
+  });
+
 });

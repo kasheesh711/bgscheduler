@@ -71,6 +71,15 @@ describe("durable overflow planning", () => {
     await expect(handle.db.insert(s.classroomAssignmentRuns).values({ assignmentDate: date, snapshotId: first.run!.snapshotId,
       automationBatchId: weekendCheckpoint.id, createdBy: WEEKEND_ALLOCATION_ACTOR })).rejects.toThrow();
   });
+  it("keeps an existing saved plan when a staff request races a completed allocation", async () => {
+    const { liveSessions } = await seed(false);
+    const first = await runIncrementalClassroomAssignment(db, { date, liveSessions });
+    vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", "false");
+    const reused = await runIncrementalClassroomAssignment(db, { date, createOnlyIfMissing: true });
+    expect(reused.run!.id).toBe(first.run!.id);
+    expect(reused.allocationReused).toBe(true);
+    expect(await handle.db.select().from(s.classroomAssignmentRuns)).toHaveLength(1);
+  });
   it("refuses changed constraints when resuming a saved checkpoint", async () => {
     const { liveSessions } = await seed(true), weekendCheckpoint = await checkpoint();
     await runIncrementalClassroomAssignment(db, { date, liveSessions, weekendCheckpoint });

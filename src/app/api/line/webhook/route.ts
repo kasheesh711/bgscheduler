@@ -3,7 +3,7 @@ import { getDb } from "@/lib/db";
 import { lineChannelSecret, lineSchedulerEnabled } from "@/lib/line/client";
 import { handleLineWebhookPost } from "@/lib/line/webhook";
 
-export const maxDuration = 60;
+export const maxDuration = 800;
 
 export async function POST(request: NextRequest) {
   const bot = request.nextUrl.searchParams.get("bot");
@@ -23,6 +23,14 @@ export async function POST(request: NextRequest) {
     signature: request.headers.get("x-line-signature"),
     channelSecret: lineChannelSecret(tutorBot),
     progressOnly: tutorBot,
+    handleWeekendCommand: tutorBot ? async event => {
+      const text = (event as { message?: { text?: unknown } } | null)?.message?.text;
+      if (typeof text !== "string" || !["/จัดตะราง", "/จัดตาราง"].includes(text.trim())) return false;
+      const { receiveTheaCommand, runTheaWeekendWorker } = await import("@/lib/classrooms/thea-weekend");
+      const result = await receiveTheaCommand(db, event);
+      if (result.queued) after(async () => { await runTheaWeekendWorker(db); });
+      return result.handled;
+    } : undefined,
     scheduleRoomCommand: (eventId) => {
       after(async () => {
         const { processRoomEvent } = await import("@/lib/room-booking/bot");

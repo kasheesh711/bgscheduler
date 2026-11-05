@@ -14,6 +14,7 @@ import { NextResponse } from "next/server";
 function isPublicRoute(pathname: string) {
   return (
     isTeacherEmailAsset(pathname) ||
+    pathname === "/brand/thea/avatar.png" ||
     isProgressTestBrandAsset(pathname) ||
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/auth") ||
@@ -32,6 +33,7 @@ function isPublicRoute(pathname: string) {
     // see src/lib/student-schedule/links.ts. Note the trailing slash: it keeps
     // the authenticated /student-schedule admin page out of this allowlist.
     pathname.startsWith("/schedule/") ||
+    /^\/weekend-schedule\/[A-Za-z0-9_-]{43}(?:\/print)?$/.test(pathname) ||
     /^\/hiring\/book\/[^/]+$/.test(pathname) ||
     /^\/api\/hiring\/book\/[^/]+$/.test(pathname) ||
     /^\/room\/[^/]+$/.test(pathname) ||

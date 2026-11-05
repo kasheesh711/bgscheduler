@@ -73,8 +73,8 @@ export function ClassroomPrintUnavailable({ message }: { message: string }) {
   return <div role="alert"><p className="my-4">{message}</p><Button onClick={() => window.location.reload()}>Retry roster refresh</Button></div>;
 }
 
-export function ClassroomPrintDocument({ report: initialReport, missingDates = [], view: initialView = "tutors" }: {
-  report: ClassroomPrintReport; missingDates?: string[]; view?: ClassroomPrintView;
+export function ClassroomPrintDocument({ report: initialReport, missingDates = [], view: initialView = "tutors", pdf = false }: {
+  report: ClassroomPrintReport; missingDates?: string[]; view?: ClassroomPrintView; pdf?: boolean;
 }) {
   const [report, setReport] = useState(initialReport);
   const [view, setView] = useState(initialView);
@@ -154,11 +154,11 @@ export function ClassroomPrintDocument({ report: initialReport, missingDates = [
   }
 
   const warning = error ?? layout?.error ?? (report.refreshFailed ? "Some student rosters could not be refreshed from Wise. Retry before printing." : null);
-  return <main ref={root} className={`begifted ${styles.root}`}>
+  return <main ref={root} className={`begifted ${styles.root}`} data-thea-pdf-ready={pdf && ready && !warning ? "true" : undefined} data-print-approved={pdf && ready && !warning ? "true" : undefined}>
     {/* Safari can fall back to the app's unnamed @page rule. Mount this override
         with the report so its landscape margins do not affect other reports. */}
     <style>{"@page { size: A4 landscape; margin: 0; }"}</style>
-    <div className={styles.toolbar}><Link href="/class-assignments">← Class Assignments</Link>
+    <div className={styles.toolbar} hidden={pdf}><Link href="/class-assignments">← Class Assignments</Link>
       <label>Print by <select aria-label="Print grouping" value={view} disabled={refreshing} onChange={event => {
         const next = event.target.value as ClassroomPrintView; setView(next);
         root.current?.removeAttribute("data-print-approved"); pendingPrint.current = null;
@@ -174,8 +174,8 @@ export function ClassroomPrintDocument({ report: initialReport, missingDates = [
     <div className={styles.sheets}>{pages.map((page, index) => <article key={`${page.day.runId}:${index}`} className={styles.sheet} data-print-sheet>
       <header className={styles.pageHeader}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/brand/logo-horizontal.png" alt="BeGifted Education" width="130" height="51" />
-        <div><p className={styles.eyebrow}>DAILY CLASSROOMS · ตารางห้องเรียน</p><h1>{dateLabel(page.day.date)}</h1></div>
+        <img src={pdf ? "/brand/email/v3/logo-horizontal.png" : "/brand/logo-horizontal.png"} alt="BeGifted Education" width="130" height="51" />
+        <div><p className={styles.eyebrow}>{pdf ? (view === "rooms" ? "Weekend schedule by classroom" : "Weekend schedule by tutor") : "DAILY CLASSROOMS · ตารางห้องเรียน"}</p><h1>{dateLabel(page.day.date)}</h1></div>
         <span className={page.day.draft || report.refreshFailed ? styles.draft : styles.approved}>{page.day.draft || report.refreshFailed ? "DRAFT / CHECK ASSIGNMENTS" : "SAVED CLASSROOM PLAN"}</span>
       </header>
       {!page.columns.some(cards => cards.length) ? <p>No classes in this saved run.</p> : <div className={page.fullWidth ? styles.singleColumn : styles.columns}>{page.columns.map((cards, column) => <div key={column}>{cards.map((card, part) => <ClassroomPrintCard key={`${card.id}:${part}`} card={card} />)}</div>)}</div>}
