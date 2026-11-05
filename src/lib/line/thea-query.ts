@@ -22,12 +22,16 @@ export const querySchema = z.object({
 export type TheaQuery = z.infer<typeof querySchema>;
 export type ReadyTheaQuery = TheaQuery & { date: string; start: string; end: string; filters: SearchFilters };
 
-/** LINE's signed mention metadata is authoritative; a typed display name is not. */
+/** Prefer native mentions; desktop clients can explicitly address Thea with a leading @Thea. */
 export function mentionedTheaText(raw: unknown): string | null {
   const event = raw as { type?: string; message?: { type?: string; text?: string; mention?: { mentionees?: Array<{ type?: string; isSelf?: boolean; index?: number; length?: number }> } } } | null;
   if (event?.type !== "message" || event.message?.type !== "text" || typeof event.message.text !== "string") return null;
   const mentions = event.message.mention?.mentionees;
-  if (!Array.isArray(mentions) || !mentions.some(m => m?.type === "user" && m.isSelf === true)) return null;
+  if (!Array.isArray(mentions) || mentions.length === 0) {
+    const prefix = /^\s*@Thea(?:\s*\(BOT\))?(?:\s+|$)/i.exec(event.message.text);
+    return prefix ? event.message.text.slice(prefix[0].length).trim() : null;
+  }
+  if (!mentions.some(m => m?.type === "user" && m.isSelf === true)) return null;
   let text = event.message.text;
   for (const mention of mentions.filter(m => m?.isSelf === true).sort((a, b) => (b.index ?? 0) - (a.index ?? 0))) {
     if (!Number.isInteger(mention.index) || !Number.isInteger(mention.length) || mention.index! < 0

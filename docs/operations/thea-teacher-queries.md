@@ -2,7 +2,7 @@
 
 ## Design
 
-Thea answers teacher availability and named-teacher daily schedule questions in the existing bound BG The Loop group. LINE must mark a real mention of the bot (`mention.mentionees[].isSelf`); text that merely spells its display name does not invoke it. Other tutor commands and the weekend bot remain intact.
+Thea answers teacher availability and named-teacher daily schedule questions in the existing bound BG The Loop group. Native mentions use LINE's `mention.mentionees[].isSelf`. Desktop clients that do not list bots can instead start a message with the exact text `@Thea` or `@Thea (BOT)`, followed by whitespace and their question. Lookalike names and native mentions of someone else are ignored. Both paths still require the signed tutor webhook and the exact bound group. Other tutor commands and the weekend bot remain intact.
 
 Use `deepseek/deepseek-v4.1-flash-1017` through the existing OpenRouter transport to extract a strict query. The model sees the question, recent same-user clarification context and filter vocabulary. It does not receive student rosters or decide availability. Validate date, time, subject, curriculum, level and intent in code. Ask for missing dates, unsupported requests or ambiguous teachers. Format the reply from checked data.
 
