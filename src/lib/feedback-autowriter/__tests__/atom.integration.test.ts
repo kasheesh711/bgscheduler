@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { like, sql } from "drizzle-orm";
+import { like, sql, TransactionRollbackError } from "drizzle-orm";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
@@ -291,7 +291,7 @@ describe("server review accounting", () => {
     const pipeline={formatGuide:{id:"iseb",version:1},styleGuide:{id:"mimi",version:2},lessonEvidenceHash:evidenceHash,qualityReview:"deferred",factualVerdicts:null};
     const base={kind:"first_shot" as const,fields,fieldsSha256:fieldsHash(fields),pipeline,billing:{},actorKind:"autowriter" as const,actor:"test",provenance:"live" as const};
     await db.insert(s.feedbackAutowriterPosts).values([{...base,wiseSessionId:"unknown",outcome:"unknown_outcome"},{...base,wiseSessionId:"verified",outcome:"verified"},{...base,wiseSessionId:"source_missing",outcome:"verified"}]);
-    const call=vi.fn(async ()=>({ok:true as const,content:JSON.stringify({matches:true,problems:[]}),model:"openai/gpt-6.1-sol",provider:"Azure",generationId:"g",finishReason:"stop",usage:{promptTokens:1,completionTokens:1,reasoningTokens:0,cachedTokens:0,costUsd:0},latencyMs:1}));
+    const call=vi.fn(async ()=>({ok:true as const,content:JSON.stringify({matches:true,problems:[]}),model:"openai/gpt-6.1-terra",provider:"Azure",generationId:"g",finishReason:"stop",usage:{promptTokens:1,completionTokens:1,reasoningTokens:0,cachedTokens:0,costUsd:0},latencyMs:1}));
     await reviewIsebPosts(db,Date.now()+200000,call);
     expect(call).toHaveBeenCalledOnce();
     const progress=await isebMonitoringProgress(db);
@@ -315,8 +315,8 @@ describe("server review accounting", () => {
     await db.insert(s.feedbackAutowriterPosts).values(posts);
     const usage={promptTokens:1,completionTokens:1,reasoningTokens:0,cachedTokens:0,costUsd:0};
     const call=vi.fn()
-      .mockResolvedValueOnce({ok:true as const,content:JSON.stringify({matches:false,problems:["Use the numbered layout."]}),model:"openai/gpt-6.1-sol",provider:"Azure",generationId:"g",finishReason:"stop",usage,latencyMs:1})
-      .mockResolvedValueOnce({ok:false as const,error:"rate limited",model:"openai/gpt-6.1-sol",provider:"Azure",latencyMs:1});
+      .mockResolvedValueOnce({ok:true as const,content:JSON.stringify({matches:false,problems:["Use the numbered layout."]}),model:"openai/gpt-6.1-terra",provider:"Azure",generationId:"g",finishReason:"stop",usage,latencyMs:1})
+      .mockResolvedValueOnce({ok:false as const,error:"rate limited",model:"openai/gpt-6.1-terra",provider:"Azure",latencyMs:1});
     await reviewIsebPosts(db,Date.now()+200000,call);
     expect(call).toHaveBeenCalledTimes(2);
     const incidents=(await db.select().from(s.feedbackAutowriterIncidents)).toSorted((a,b)=>String(a.wiseSessionId).localeCompare(String(b.wiseSessionId)));
@@ -341,10 +341,10 @@ describe("server review accounting", () => {
     }
     await db.insert(s.feedbackAutowriterPosts).values(posts);
     const usage={promptTokens:1,completionTokens:1,reasoningTokens:0,cachedTokens:0,costUsd:0.002};
-    const limited={ok:false as const,error:"openai/gpt-6.1-sol is temporarily rate-limited upstream",httpStatus:429,model:"openai/gpt-6.1-sol",provider:"Azure",finishReason:null,usage:{...usage,costUsd:0.0001},latencyMs:1};
+    const limited={ok:false as const,error:"openai/gpt-6.1-terra is temporarily rate-limited upstream",httpStatus:429,model:"openai/gpt-6.1-terra",provider:"Azure",finishReason:null,usage:{...usage,costUsd:0.0001},latencyMs:1};
     const call=vi.fn()
       .mockResolvedValueOnce(limited)
-      .mockResolvedValueOnce({ok:true as const,content:JSON.stringify({matches:true,problems:[]}),model:"openai/gpt-6.1-sol",provider:"Azure",generationId:"g",finishReason:"stop",usage,latencyMs:1})
+      .mockResolvedValueOnce({ok:true as const,content:JSON.stringify({matches:true,problems:[]}),model:"openai/gpt-6.1-terra",provider:"Azure",generationId:"g",finishReason:"stop",usage,latencyMs:1})
       .mockResolvedValue(limited);
     const sleep=vi.fn(async ()=>{});
     await reviewIsebPosts(db,Date.now()+200000,call,sleep);
@@ -357,7 +357,7 @@ describe("server review accounting", () => {
     expect(reviews[posted.recovers]).toMatchObject({status:"passed",costUsd:"0.00210000",result:{error:null,rateLimitRetries:1}});
     expect(reviews[posted.recovers].result).not.toHaveProperty("cause");
     expect(reviews[posted.stays_limited]).toMatchObject({status:"unavailable",costUsd:"0.00040000",result:{error:"style_api_unavailable",
-      cause:"openai/gpt-6.1-sol is temporarily rate-limited upstream",httpStatus:429,rateLimitRetries:3}});
+      cause:"openai/gpt-6.1-terra is temporarily rate-limited upstream",httpStatus:429,rateLimitRetries:3}});
     expect(reviews[posted.next_run]).toBeUndefined();
     expect(await db.select().from(s.feedbackAutowriterIncidents)).toMatchObject([
       {wiseSessionId:"stays_limited",kind:"style_review_unavailable",severity:"info",pushStatus:"not_required"},
@@ -367,24 +367,28 @@ describe("server review accounting", () => {
 
 describe("migration 0110", () => {
   it("relabels incidents recorded under scan_failed by the job that raised them; style results become dashboard-only", async () => {
-    await db.execute(sql`TRUNCATE feedback_autowriter_incidents`);
-    const I=s.feedbackAutowriterIncidents;
-    await db.insert(I).values([
-      {dedupeKey:"atom-collection:2026-10-02:collection_failed",kind:"scan_failed",severity:"critical",summary:"Atom",pushStatus:"pending"},
-      {dedupeKey:"iseb-review-source:p1",kind:"scan_failed",severity:"critical",summary:"Source",pushStatus:"failed"},
-      {dedupeKey:"iseb-style:p2:flagged",kind:"scan_failed",severity:"critical",summary:"Flagged",pushStatus:"pending",nextPushAt:now},
-      {dedupeKey:"iseb-style:p3:unavailable",kind:"scan_failed",severity:"critical",summary:"Unavailable",pushStatus:"sent",pushedAt:now,pushedChannels:["email:owner@example.com"]},
-      {dedupeKey:"forward-scan:x",kind:"scan_failed",severity:"critical",summary:"Scan",pushStatus:"pending"},
-    ]);
-    const file=fs.readFileSync(path.resolve(__dirname,"../../../../drizzle/0110_feedback_autowriter_incident_kinds.sql"),"utf8");
-    for (const statement of file.split("--> statement-breakpoint")) await db.execute(sql.raw(statement));
-    const rows=Object.fromEntries((await db.select().from(I)).map(row=>[row.dedupeKey,row]));
-    expect(rows["atom-collection:2026-10-02:collection_failed"]).toMatchObject({kind:"atom_collection_failed",severity:"critical",pushStatus:"pending"});
-    expect(rows["iseb-review-source:p1"]).toMatchObject({kind:"style_review_source_missing",severity:"critical",pushStatus:"failed"});
-    expect(rows["iseb-style:p2:flagged"]).toMatchObject({kind:"style_review_flagged",severity:"info",pushStatus:"not_required",nextPushAt:null});
-    expect(rows["iseb-style:p3:unavailable"]).toMatchObject({kind:"style_review_unavailable",severity:"info",pushStatus:"not_required",pushedChannels:["email:owner@example.com"]});
-    expect(rows["iseb-style:p3:unavailable"].pushedAt).not.toBeNull();
-    expect(rows["forward-scan:x"]).toMatchObject({kind:"scan_failed",severity:"critical"});
-    await expect(db.insert(I).values({dedupeKey:"bad",kind:"not_a_kind" as never,severity:"info",summary:"x",pushStatus:"not_required"})).rejects.toThrow();
+    // Replaying 0110 puts back its older kind constraint; roll it back so later suites on a shared TEST_DATABASE_URL keep the current one.
+    await expect(h.db.transaction(async (db) => {
+      await db.execute(sql`TRUNCATE feedback_autowriter_incidents`);
+      const I=s.feedbackAutowriterIncidents;
+      await db.insert(I).values([
+        {dedupeKey:"atom-collection:2026-10-02:collection_failed",kind:"scan_failed",severity:"critical",summary:"Atom",pushStatus:"pending"},
+        {dedupeKey:"iseb-review-source:p1",kind:"scan_failed",severity:"critical",summary:"Source",pushStatus:"failed"},
+        {dedupeKey:"iseb-style:p2:flagged",kind:"scan_failed",severity:"critical",summary:"Flagged",pushStatus:"pending",nextPushAt:now},
+        {dedupeKey:"iseb-style:p3:unavailable",kind:"scan_failed",severity:"critical",summary:"Unavailable",pushStatus:"sent",pushedAt:now,pushedChannels:["email:owner@example.com"]},
+        {dedupeKey:"forward-scan:x",kind:"scan_failed",severity:"critical",summary:"Scan",pushStatus:"pending"},
+      ]);
+      const file=fs.readFileSync(path.resolve(__dirname,"../../../../drizzle/0110_feedback_autowriter_incident_kinds.sql"),"utf8");
+      for (const statement of file.split("--> statement-breakpoint")) await db.execute(sql.raw(statement));
+      const rows=Object.fromEntries((await db.select().from(I)).map(row=>[row.dedupeKey,row]));
+      expect(rows["atom-collection:2026-10-02:collection_failed"]).toMatchObject({kind:"atom_collection_failed",severity:"critical",pushStatus:"pending"});
+      expect(rows["iseb-review-source:p1"]).toMatchObject({kind:"style_review_source_missing",severity:"critical",pushStatus:"failed"});
+      expect(rows["iseb-style:p2:flagged"]).toMatchObject({kind:"style_review_flagged",severity:"info",pushStatus:"not_required",nextPushAt:null});
+      expect(rows["iseb-style:p3:unavailable"]).toMatchObject({kind:"style_review_unavailable",severity:"info",pushStatus:"not_required",pushedChannels:["email:owner@example.com"]});
+      expect(rows["iseb-style:p3:unavailable"].pushedAt).not.toBeNull();
+      expect(rows["forward-scan:x"]).toMatchObject({kind:"scan_failed",severity:"critical"});
+      await expect(db.insert(I).values({dedupeKey:"bad",kind:"not_a_kind" as never,severity:"info",summary:"x",pushStatus:"not_required"})).rejects.toThrow();
+      db.rollback();
+    })).rejects.toThrow(TransactionRollbackError);
   });
 });
