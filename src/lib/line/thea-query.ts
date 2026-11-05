@@ -67,7 +67,7 @@ export async function parseTheaQuery(text: string, options: FilterOptions, previ
 
 export function validateTheaQuery(query: TheaQuery, options: FilterOptions, now = new Date()): ReadyTheaQuery | string {
   const thai = query.language === "th";
-  if (query.intent === "clarify") return query.question || (thai ? "กรุณาระบุครูหรือวิชา วันที่ และเวลาที่ต้องการตรวจสอบค่ะ" : "Please give a teacher or subject, date, and time to check.");
+  if (query.intent === "clarify") return thai ? "กรุณาระบุครูหรือวิชา วันที่ และเวลาที่ต้องการตรวจสอบค่ะ" : "Please give a teacher or subject, date, and time to check.";
   if (!query.date) return thai ? "ต้องการตรวจสอบวันที่เท่าไรคะ? กรุณา @Thea พร้อมวันที่ค่ะ" : "Which date should I check? Mention Thea again with the date.";
   const date = new Date(`${query.date}T12:00:00+07:00`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(query.date) || !Number.isFinite(date.getTime()) || todayBangkok(date) !== query.date

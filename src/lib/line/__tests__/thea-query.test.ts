@@ -31,6 +31,7 @@ describe("Thea query boundaries", () => {
   });
   it("asks for missing/invalid dates and times, and does not drop unsupported qualification filters", () => {
     const now = new Date("2026-11-05T01:00:00Z");
+    expect(validateTheaQuery({ ...query, intent: "clarify", question: "Invented availability" }, options, now)).not.toContain("Invented");
     expect(validateTheaQuery({ ...query, date: null }, options, now)).toMatch(/Which date/);
     expect(validateTheaQuery({ ...query, date: "2026-11-31" }, options, now)).toMatch(/choose a date/);
     expect(validateTheaQuery({ ...query, start: "25:00" }, options, now)).toMatch(/start and end/);
