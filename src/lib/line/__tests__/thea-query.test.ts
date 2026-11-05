@@ -34,6 +34,7 @@ describe("Thea query boundaries", () => {
     expect(validateTheaQuery({ ...query, intent: "clarify", question: "Invented availability" }, options, now)).not.toContain("Invented");
     expect(validateTheaQuery({ ...query, date: null }, options, now)).toMatch(/Which date/);
     expect(validateTheaQuery({ ...query, date: "2026-11-31" }, options, now)).toMatch(/choose a date/);
+    expect(validateTheaQuery({ ...query, date: "2026-11-05", start: "07:00", end: "08:00" }, options, now)).toMatch(/already passed/);
     expect(validateTheaQuery({ ...query, start: "25:00" }, options, now)).toMatch(/start and end/);
     expect(validateTheaQuery({ ...query, subject: "Astronomy" }, options, now)).toMatch(/not an active/);
     expect(validateTheaQuery(query, options, now)).toMatchObject({ date: "2026-11-07", filters: { subject: "Math" } });
