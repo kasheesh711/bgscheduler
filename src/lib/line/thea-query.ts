@@ -80,6 +80,9 @@ export function validateTheaQuery(query: TheaQuery, options: FilterOptions, now 
   if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(start) || !/^(?:(?:[01]\d|2[0-3]):[0-5]\d|24:00)$/.test(end) || end <= start) {
     return thai ? "กรุณาระบุเวลาเริ่มและเวลาสิ้นสุด เช่น 09:00–10:00 ค่ะ" : "Please give a start and end time, for example 09:00–10:00.";
   }
+  if (query.intent === "availability" && new Date(`${query.date}T${start}:00+07:00`).getTime() + 60_000 < now.getTime()) {
+    return thai ? "ช่วงเวลานี้ผ่านไปแล้ว กรุณาระบุช่วงเวลาในอนาคตค่ะ" : "That time has already passed. Please choose a future time slot.";
+  }
   const resolved = resolveAcademicFilters({ subject: query.subject ?? undefined, curriculum: query.curriculum ?? undefined,
     level: query.level ?? undefined }, options);
   if (resolved.issues.length) return `${thai ? "กรุณาระบุข้อมูลเพิ่มเติมค่ะ" : "Please clarify"}: ${resolved.issues.join(" ")}`;
