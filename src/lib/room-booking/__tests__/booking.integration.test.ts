@@ -319,26 +319,26 @@ describe("transactional room reservations", () => {
     const setLease = (leaseUntil: Date) =>
       db
         .insert(s.roomDayStates)
-        .values({ date: later, leaseOwner: "stopped-writer", leaseUntil, revision: 5 })
+        .values({ date: later, leaseOwner: "stopped-writer", leaseUntil, revision: 5, checkedAt: now })
         .onConflictDoUpdate({
           target: s.roomDayStates.date,
-          set: { leaseOwner: "stopped-writer", leaseUntil, revision: 5 },
+          set: { leaseOwner: "stopped-writer", leaseUntil, revision: 5, checkedAt: now },
         });
     const stateFor = async () =>
       (await db.select().from(s.roomDayStates).where(eq(s.roomDayStates.date, later)))[0];
 
     it("is taken over by the next operation", async () => {
       await setLease(new Date(now.getTime() - 1));
-      let ownerDuringWork: string | null = null;
+      let during: typeof s.roomDayStates.$inferSelect | undefined;
       await withRoomDayOperation(db, later, async () => {
-        ownerDuringWork = (await stateFor()).leaseOwner;
+        during = await stateFor();
       });
-      expect(ownerDuringWork).not.toBeNull();
-      expect(ownerDuringWork).not.toBe("stopped-writer");
-      const after = await stateFor();
-      expect(after.leaseOwner).toBeNull();
-      expect(after.checkedAt).toBeNull();
-      expect(after.revision).toBeGreaterThan(5);
+      expect(during?.leaseOwner).not.toBeNull();
+      expect(during?.leaseOwner).not.toBe("stopped-writer");
+      // Takeover resets the evidence and bumps the revision once; the new lease bumps it again.
+      expect(during?.checkedAt).toBeNull();
+      expect(during?.revision).toBe(7);
+      expect((await stateFor()).leaseOwner).toBeNull();
     });
 
     it("still blocks while it is live", async () => {
