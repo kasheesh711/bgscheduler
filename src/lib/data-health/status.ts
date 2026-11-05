@@ -191,6 +191,18 @@ function runIsRunning(run: RunEvidence | null): boolean {
   return run?.status === "running";
 }
 
+/**
+ * Health detail for a paused job. The reason is the effective job's
+ * cadenceLabel, which effectiveCronJob sets when it pauses a job; the one
+ * exception is the LINE credit digest, which keeps its own sentence because
+ * pausing it retains the saved alert preferences. A paused job's cron still
+ * fires and is audited as skipped, so the detail says runs are skipped.
+ */
+function pausedHealthDetail(job: CronJobDefinition): string {
+  if (job.key === "line_credit_digest") return "Automatic credit alerts are paused; saved preferences are retained.";
+  return `${job.cadenceLabel}; scheduled runs are skipped until it is enabled.`;
+}
+
 export function evaluateCronJobStatus(input: CronStatusInput): CronStatusResult {
   const { now } = input;
   const job = effectiveCronJob(input.job);
@@ -212,7 +224,7 @@ export function evaluateCronJobStatus(input: CronStatusInput): CronStatusResult 
       durationMs: input.latestInvocation?.durationMs ?? null,
       responseStatus: input.latestInvocation?.responseStatus ?? null,
       errorSummary: input.latestRun?.errorSummary ?? input.latestInvocation?.errorSummary ?? null,
-      healthDetail: job.paused ? "Automatic credit alerts are paused; saved preferences are retained." : disabled ? "Weekend alerts have not been activated." : "Not listed in vercel.json; runs only from manual controls.",
+      healthDetail: job.paused ? pausedHealthDetail(job) : disabled ? "Weekend alerts have not been activated." : "Not listed in vercel.json; runs only from manual controls.",
     };
   }
 
