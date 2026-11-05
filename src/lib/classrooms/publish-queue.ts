@@ -1,3 +1,5 @@
+import { THEA_ACTOR_PREFIX } from "./thea-config";
+import { theaPublishAllowed } from "./thea-publish-access";
 import { isClassroomOperationsOwner, wiseClassroomAutomationEnabled } from "./operations-policy";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
@@ -53,7 +55,7 @@ export async function claimPublishAttempt(db: Database, jobId: string): Promise<
     if (lock.leaseExpiresAt && lock.leaseExpiresAt > now) return null;
     const [job] = await tx.select().from(jobs).where(eq(jobs.id, jobId)).for("update");
     if (!job || !["pending", "running"].includes(job.status)) return null;
-    if (!wiseClassroomAutomationEnabled() && !isClassroomOperationsOwner(job.createdBy)) return null;
+    if ((job.createdBy?.startsWith(THEA_ACTOR_PREFIX) || (!wiseClassroomAutomationEnabled() && !isClassroomOperationsOwner(job.createdBy))) && !await theaPublishAllowed(tx, job)) return null;
     if (job.status === "running" && job.leaseExpiresAt && job.leaseExpiresAt > now) return null;
     if (job.status === "pending" && job.nextAttemptAt > now) return null;
     if (lock.cooldownUntil && lock.cooldownUntil > now) {

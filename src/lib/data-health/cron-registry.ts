@@ -115,7 +115,7 @@ export const CRON_JOBS = [
     dangerous: false, confirmationLabel: null, routeMethod: "GET" },
   { key: "classroom_publish_recovery", label: "Classroom Publish Recovery", feature: "Class Assignments",
     path: "/api/internal/class-assignments/publish-recovery", schedule: "1-56/5 * * * *", cadenceLabel: "Every 5 min; resumes queued room publishing",
-    cadenceMinutes: 5, lateAfterMinutes: 15, maxDurationSeconds: 300, manualOnly: false,
+    cadenceMinutes: 5, lateAfterMinutes: 15, maxDurationSeconds: 800, manualOnly: false,
     dangerous: true, confirmationLabel: "Retries previously requested Wise room publishing with live verification.", routeMethod: "GET" },
   { key: "room_booking", label: "Tutor Room Availability", feature: "Class Assignments",
     path: "/api/internal/room-booking", schedule: "1,5,9,13,17,21,25,29,33,37,41,45,49,53,57 * * * *", cadenceLabel: "Every 4 min; today and tomorrow, 24 hours",

@@ -883,6 +883,13 @@
       "when": 1793775191026,
       "tag": "0124_activate_right_wing_rooms",
       "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "7",
+      "when": 1793865600000,
+      "tag": "0125_thea_weekend_commands",
+      "breakpoints": true
     }
   ]
 }

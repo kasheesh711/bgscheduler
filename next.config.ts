@@ -4,6 +4,8 @@ const nextConfig: NextConfig = {
   cacheComponents: true,
   serverExternalPackages: ["pdfjs-dist", "@napi-rs/canvas", "highs"],
   outputFileTracingIncludes: {
+    "/weekend-schedule/*": ["./node_modules/@sparticuz/chromium/bin/**/*"],
+    "/api/line/webhook": ["./node_modules/highs/build/**/*"],
     "/api/internal/feedback-autowriter/atom": ["./node_modules/@sparticuz/chromium/bin/**/*"],
     "/api/feedback-autowriter/atom/probe": ["./node_modules/@sparticuz/chromium/bin/**/*"],
     "/api/class-assignments": ["./node_modules/highs/build/**/*"],

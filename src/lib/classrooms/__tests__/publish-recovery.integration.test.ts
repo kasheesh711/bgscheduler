@@ -281,6 +281,33 @@ describe("owner shutdown publication fencing", () => {
     expect(f.put).not.toHaveBeenCalled();
   });
 
+  it("lets a live, group-bound Thea request publish while background automation stays paused", async () => {
+    const f = await fixture(["Cool"], ["Do It"]);
+    const groupId = `C${"a".repeat(32)}`, commandId = randomUUID();
+    vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", "false");
+    vi.stubEnv("THEA_WEEKEND_COMMANDS_ENABLED", "true");
+    vi.stubEnv("THEA_LINE_GROUP_ID", groupId);
+    await handle.db.insert(s.theaWeekendJobs).values({ id: commandId, weekendDate: date, groupId,
+      status: "running", claimToken: randomUUID(), runIds: [f.run.id], leaseExpiresAt: new Date(Date.now() + 60000) });
+    const job = await createClassroomPublishJob(db, { runId: f.run.id, createdBy: `thea-weekend:${commandId}` });
+    expect((await runClassroomPublishJob(db, job.jobId, f.client)).progress.status).toBe("succeeded");
+    expect(f.put).toHaveBeenCalledTimes(1);
+    expect(await runClassroomPublishRecovery(db)).toMatchObject({ paused: true });
+  });
+
+  it("stops a disabled Thea job even when general classroom automation is enabled", async () => {
+    const f = await fixture(["Cool"], ["Do It"]);
+    const groupId = `C${"a".repeat(32)}`, commandId = randomUUID();
+    vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", "true");
+    vi.stubEnv("THEA_WEEKEND_COMMANDS_ENABLED", "false");
+    vi.stubEnv("THEA_LINE_GROUP_ID", groupId);
+    await handle.db.insert(s.theaWeekendJobs).values({ id: commandId, weekendDate: date, groupId,
+      status: "running", claimToken: randomUUID(), runIds: [f.run.id], leaseExpiresAt: new Date(Date.now() + 60000) });
+    const job = await createClassroomPublishJob(db, { runId: f.run.id, createdBy: `thea-weekend:${commandId}` });
+    expect((await runClassroomPublishJob(db, job.jobId, f.client)).progress.status).toBe("failed");
+    expect(f.put).not.toHaveBeenCalled();
+  });
+
   it("pauses automatic retries but lets Kevin explicitly retry after the Wise cooldown", async () => {
     const f = await fixture(["Cool"], ["Do It"]);
     vi.stubEnv("WISE_CLASSROOM_AUTOMATION_ENABLED", "false");

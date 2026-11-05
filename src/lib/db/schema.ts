@@ -7206,3 +7206,36 @@ export const progressLineDeliveries = pgTable("progress_line_deliveries", {
  updatedAt: timestamp("updated_at",{withTimezone:true}).notNull().defaultNow(),
 },t=>[uniqueIndex("progress_line_delivery_occurrence_idx").on(t.seriesId,t.cycle,t.stage,t.lessonId,t.scheduledAt,t.groupId),
  index("progress_line_delivery_work_idx").on(t.status,t.reminderDate)]);
+
+
+// Explicit staff requests; this queue never creates work without a signed group command.
+export const theaWeekendJobs = pgTable("thea_weekend_jobs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  weekendDate: date("weekend_date", { mode: "string" }).notNull(),
+  groupId: text("group_id").notNull(),
+  status: text("status").notNull().default("pending"),
+  stage: integer("stage").notNull().default(0),
+  runIds: jsonb("run_ids").$type<string[]>().notNull().default([]),
+  warnings: jsonb("warnings").$type<string[]>().notNull().default([]),
+  attempts: integer("attempts").notNull().default(0),
+  claimToken: uuid("claim_token"),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => [uniqueIndex("thea_weekend_date_idx").on(table.weekendDate)]);
+
+export const theaWeekendRequests = pgTable("thea_weekend_requests", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  eventId: text("event_id").notNull(),
+  jobId: uuid("job_id").notNull().references(() => theaWeekendJobs.id),
+  groupId: text("group_id").notNull(),
+  lineUserId: text("line_user_id").notNull(),
+  tokenHash: text("token_hash").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  runIds: jsonb("run_ids").$type<string[]>().notNull().default([]),
+  deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => [uniqueIndex("thea_event_idx").on(table.eventId), uniqueIndex("thea_token_idx").on(table.tokenHash),
+  index("thea_request_job_idx").on(table.jobId)]);

@@ -1,3 +1,5 @@
+import { THEA_ACTOR_PREFIX } from "./thea-config";
+import { theaPublishAllowed } from "./thea-publish-access";
 import { isClassroomOperationsOwner, wiseClassroomAutomationEnabled } from "./operations-policy";
 import { createHash } from "node:crypto";
 import { stopNonOwnerClassroomPublications } from "./operations-shutdown";
@@ -973,6 +975,7 @@ async function runIncrementalClassroomAssignmentUnlocked(
     snapshotId?: string;
     trustedSnapshotMeta?: ClassroomSnapshotMeta;
     weekendCheckpoint?: WeekendAllocationCheckpoint;
+    createOnlyIfMissing?: boolean;
   },
 ): Promise<ClassroomAssignmentDetail & {
   events: ClassroomAutomationEvent[];
@@ -981,6 +984,10 @@ async function runIncrementalClassroomAssignmentUnlocked(
 }> {
   const date = assertIsoDate(input.date);
   const checkpoint = input.weekendCheckpoint;
+  if (input.createOnlyIfMissing) {
+    const saved = await loadLatestRunForDate(db, date);
+    if (saved) return { ...await getClassroomAssignmentByRunId(db, saved.id), events: [], changeSummary: {}, allocationReused: true };
+  }
   if (checkpoint && !wiseClassroomAutomationEnabled()) throw new Error("Classroom automation is paused");
   const snapshot = input.snapshotId ? await loadSnapshotById(db, input.snapshotId) : await getActiveSnapshot(db);
   if (!snapshot) throw new Error("Wise snapshot not found for classroom assignment");
@@ -988,7 +995,7 @@ async function runIncrementalClassroomAssignmentUnlocked(
     input.trustedSnapshotMeta?.snapshotId === snapshot.id
       ? input.trustedSnapshotMeta
       : await assertFreshClassroomSnapshot(db, snapshot.id);
-  if (checkpoint && snapshotMeta.syncErrorSummary) throw new Error(`Weekend allocation requires verified Wise data: ${snapshotMeta.syncErrorSummary}`);
+  if ((checkpoint || input.createOnlyIfMissing) && snapshotMeta.syncErrorSummary) throw new Error(`Weekend allocation requires verified Wise data: ${snapshotMeta.syncErrorSummary}`);
   const rooms = await listClassroomRooms(db);
   const previousRun = await loadLatestRunForDate(db, date);
   const previousRows = previousRun ? await loadRowsForRun(db, previousRun.id) : [];
@@ -999,11 +1006,11 @@ async function runIncrementalClassroomAssignmentUnlocked(
   let sessions = [...snapshotSessions, ...previousRows.filter(row => startedIds.has(row.wiseSessionId) && !currentIds.has(row.wiseSessionId)).map(rowToSession)];
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
   const liveSessions = input.liveSessions ?? await fetchWiseSessionsForBangkokDates(createWiseClientFromEnv(), instituteId, [input.date]);
-  if (checkpoint) {
+  if (checkpoint || input.createOnlyIfMissing) {
     // Verify old missing lessons before saving: absence is not cancellation.
     const context = await loadClassroomRecoveryContext(db, [date], snapshot.id);
     const prepared = await prepareClassroomRecoveryDay(context, liveSessions, date, createWiseClientFromEnv(), new Date(),
-      checkpoint.claimedAt.getTime() + WEEKEND_CHECK_LEASE_MS - 60_000);
+      checkpoint ? checkpoint.claimedAt.getTime() + WEEKEND_CHECK_LEASE_MS - 60_000 : Date.now() + 120_000);
     if (prepared.findings.length) throw new Error(prepared.findings.map(finding => finding.message).join(" "));
     sessions = sessions.filter(row => !prepared.confirmedInactiveSessionIds.has(row.wiseSessionId));
     const liveById = new Map(prepared.day.map(row => [row._id, row]));
@@ -1567,7 +1574,7 @@ async function moveCycleRowToTemporaryLocation(
 
 export async function runClassroomPublishJob(db: Database, jobId: string, client?: WiseClient) {
   const existing = await loadPublishJob(db, jobId);
-  if (!wiseClassroomAutomationEnabled() && !isClassroomOperationsOwner(existing.createdBy)) {
+  if ((existing.createdBy?.startsWith(THEA_ACTOR_PREFIX) || (!wiseClassroomAutomationEnabled() && !isClassroomOperationsOwner(existing.createdBy))) && !await theaPublishAllowed(db, existing)) {
     await stopNonOwnerClassroomPublications(db, jobId);
     return getClassroomPublishJobProgress(db, existing.runId, jobId);
   }
@@ -1583,6 +1590,9 @@ export async function runClassroomPublishJob(db: Database, jobId: string, client
         const boundedClient = client ?? createWiseClientFromEnv(AbortSignal.timeout(Math.max(1, claim.deadlineAt - Date.now())), async (url, init) => {
           await assertPublishAttemptActive(db);
           if (init.method === "PUT") {
+            if ((existing.createdBy?.startsWith(THEA_ACTOR_PREFIX) || (!wiseClassroomAutomationEnabled() && !isClassroomOperationsOwner(existing.createdBy))) && !await theaPublishAllowed(db, existing)) {
+              throw new Error("Thea publication authorization expired.");
+            }
             const sessionId = /\/sessions\/([^/?]+)/.exec(new URL(url).pathname)?.[1];
             const [target] = await db.select({ startTime: schema.classroomAssignmentRows.startTime }).from(schema.classroomAssignmentRows)
               .where(and(eq(schema.classroomAssignmentRows.runId, run.id), eq(schema.classroomAssignmentRows.wiseSessionId, sessionId ?? ""))).limit(1);
