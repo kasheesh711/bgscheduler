@@ -41,7 +41,7 @@ import {
   withObserverOperation,
   type Observation,
 } from "./repository";
-import { loadSources, suggestionsFor, verifyLiveLesson } from "./sources";
+import { createSuggestionScan, loadSources, suggestionsFor, verifyLiveLesson } from "./sources";
 
 export function eventMatches(observation: Observation, event: CalendarEvent) {
   return (
@@ -776,7 +776,8 @@ export async function runSitInWorker(db: Database = getDb(), now = new Date()) {
         failures++;
         continue;
       }
-      await generateAssignments(q, sources, db);
+      const scan = createSuggestionScan(sources);
+      await generateAssignments(q, sources, db, undefined, scan);
       const assignments = await db
         .select()
         .from(s.tutorSitInAssignments)
@@ -791,7 +792,7 @@ export async function runSitInWorker(db: Database = getDb(), now = new Date()) {
             error: string | null = null;
           let readinessIssues: ReadinessIssue[] = [];
           try {
-            suggestions = await suggestionsFor(assignment, sources, db, now);
+            suggestions = await suggestionsFor(assignment, sources, db, now, scan);
           } catch (e) {
             readinessIssues = [issueFromError(e)];
             error =
@@ -886,16 +887,21 @@ export async function queueDailyDigests(
         "needs_rescheduling",
       ]),
     );
-  for (const row of rows)
-    if (row.email)
+  const queued = new Set<string>();
+  for (const row of rows) {
+    const key = "digest:" + localDate(now) + ":" + row.quarter + ":" + row.email;
+    if (row.email && !queued.has(key)) {
       await queueJob(
         db,
-        "digest:" + localDate(now) + ":" + row.quarter + ":" + row.email,
+        key,
         "digest",
         null,
         row.email,
         { quarter: row.quarter },
       );
+      queued.add(key);
+    }
+  }
 }
 
 export async function reconcileObservation(

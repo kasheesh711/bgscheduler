@@ -1,4 +1,9 @@
 {
+  "git": {
+    "deploymentEnabled": {
+      "codex/sit-ins-scan-reuse": false
+    }
+  },
   "regions": [
     "sin1"
   ],

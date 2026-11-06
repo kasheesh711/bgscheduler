@@ -43,6 +43,8 @@ Dated Wise session student IDs are persisted in the core sync independently of c
 
 The dashboard refreshes sources and suggestions when opened or refreshed. A worker runs every ten minutes. Wise changes appear through the existing approximately thirty-minute sync cadence; confirmation also reads Wise live. Enabling Tutor Sit-ins restores that cadence for shared Credit Control student snapshots even when the Credit Control UI is retired.
 
+Within one loaded source, the worker reuses derived lesson lookups, Bangkok timestamp conversions and snapshot availability checks across allocation and suggestion refreshes. Each run loads sources anew; current observer grants and competing bookings are still read for each suggestion request, and confirmation/reconciliation retain live Wise checks. Daily digests make one enqueue attempt per observer and quarter, with the existing per-day idempotency key.
+
 A cancelled head class releases only its dated occurrence and only if all remaining checks pass. Valid observations remain in place when a better slot appears. A changed/cancelled observed lesson, tutor, location/modality, participants or head conflict invalidates the current observation, queues withdrawal and alerts, and makes replacements available for confirmation. Direct Calendar edits or deletion produce a delivery discrepancy without invalidating the Wise booking or replacing family acknowledgements. Temporary Wise failures retain the booking with a visible availability issue. Wise reconciliation runs even when Calendar is unconnected or external delivery is paused. Completed reports and historical attempts remain intact.
 
 ## Calendar and communications
