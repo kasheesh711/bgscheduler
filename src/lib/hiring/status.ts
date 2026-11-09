@@ -60,8 +60,12 @@ export function preScreenStatus(
   return { status, sentAt, remindedAt, repliedAt };
 }
 
-/** The tracker writes `d/m/yyyy, H:mm:ss` in GMT. Anything else returns null. */
+/** The GMT tracker returns either a Sheets date serial or `d/m/yyyy, H:mm:ss`. */
 export function parseFormTimestamp(value: string) {
+  if (/^\d+(?:\.\d+)?$/.test(value.trim())) {
+    const date = new Date(Date.UTC(1899, 11, 30) + Math.round(Number(value) * 86400000));
+    return Number(value) > 0 && Number.isFinite(date.getTime()) ? date : null;
+  }
   const m = value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
   if (!m) return null;
   const [day, month, year, hour, minute, second] = m.slice(1).map(Number);
