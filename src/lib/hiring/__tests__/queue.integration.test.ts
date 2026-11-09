@@ -776,8 +776,12 @@ describe("university result on a live reply", () => {
   const catalog = sourceHash(config.universities);
   const stored = { name: "Stored", country: "US", rank: 5, edition: "e", fraction: 0.75, reason: "r", sources: [], catalogHash: catalog };
   const inCatalog = config.universities.find((u) => u.rank)!;
-  const scored = (values: Values) =>
-    seed({ stage: "pre_screen", subjects: ["Mathematics"], preScreen: pre, previouslyContacted: true, ...values });
+  // A live reply: the app sent the form, then the reply came.
+  const scored = async (values: Values) => {
+    const row = await seed({ stage: "pre_screen", subjects: ["Mathematics"], preScreen: pre, preScreenRepliedAt: now, previouslyContacted: true, ...values });
+    await formRow(row.id, { sentAt: after(-1) });
+    return row;
+  };
   const assess = async (_s: string, _k: string, kind?: string) => assessment(kind);
   it("keeps the stored fraction when the reply's assessment lists no university", async () => {
     const row = await scored({ universityAssessment: stored });
@@ -860,6 +864,16 @@ describe("reply rule", () => {
     expect(after1.preScreenAssessment).not.toBeNull();
     expect(after1.stage).toBe("onsite_invited");
   });
+  it("keeps a no_reply row unscored when its form was never confirmed sent", async () => {
+    const row = await seed({ stage: "no_reply", subjects: ["Mathematics"] });
+    await formRow(row.id, { status: "uncertain", sentAt: null });
+    tracker({ pre: [preRow(row.email!, "4/11/2026, 05:00:00")] });
+    const assess = vi.fn(async (_s: string, _k: string, kind?: string) => assessment(kind));
+    await runHiringCycle(db, assess);
+    expect(assess).not.toHaveBeenCalled();
+    const saved = await candidate(row.id);
+    expect([saved.stage, saved.preScreenAssessment, saved.preScreen === null]).toEqual(["no_reply", null, false]);
+  });
   it("cancels an unsent reminder when the reply arrives", async () => {
     const row = await seed({ stage: "pre_screen" });
     await formRow(row.id, { sentAt: after(-4) });
@@ -915,10 +929,11 @@ describe("reply rule", () => {
     const result = await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
     expect(result).toMatchObject({ onsite: 0 });
     expect(await invites()).toEqual([]);
-    expect((await candidate(unsent.id)).stage).toBe("review");
-    expect((await candidate(stopped.id)).stage).toBe("stopped");
-    expect((await candidate(early.id)).stage).toBe("review");
-    expect((await candidate(unreadable.id)).stage).toBe("review");
+    // A response with no app send, or older than the send, or with no readable time, is not scored and keeps its stage.
+    for (const [row, stage] of [[unsent, "new"], [stopped, "stopped"], [early, "pre_screen"], [unreadable, "pre_screen"]] as const) {
+      const saved = await candidate(row.id);
+      expect([saved.stage, saved.preScreenAssessment]).toEqual([stage, null]);
+    }
     expect((await candidate(unreadable.id)).preScreenRepliedAt).toBeNull();
     const again = await candidate(resubmit.id);
     expect(again.preScreenResubmitted).toBe(true);
@@ -982,13 +997,27 @@ describe("reply rule", () => {
     expect([b.stage, b.reviewNote]).toEqual(["review", expect.stringMatching(/bachelor/i)]);
     expect(await invites()).toEqual([]);
   });
+  it("never asks the model about a response that answers no app send", async () => {
+    const old = await seed({ stage: "review", preScreen: pre, preScreenRepliedAt: now, reviewNote: "Tracker state: Awaiting Review." });
+    // The form went out after this response arrived.
+    const early = await seed({ stage: "pre_screen", preScreen: pre, preScreenRepliedAt: after(-2) });
+    await formRow(early.id, { sentAt: after(-1) });
+    const assess = vi.fn(async (_s: string, _k: string, kind?: string) => assessment(kind));
+    await assessCandidates(db, config, assess);
+    expect(assess).not.toHaveBeenCalled();
+    for (const [row, stage] of [[old, "review"], [early, "pre_screen"]] as const) {
+      const saved = await candidate(row.id);
+      expect([saved.stage, saved.preScreenAssessment, saved.preScreenHash, saved.revision]).toEqual([stage, null, null, row.revision]);
+    }
+  });
   it("leaves a human note on a review candidate who holds a response", async () => {
-    const row = await seed({ stage: "review", preScreen: pre, reviewNote: "Human note" });
+    const row = await seed({ stage: "review", preScreen: pre, preScreenRepliedAt: now, reviewNote: "Human note" });
+    await formRow(row.id, { sentAt: after(-1) });
     await assessCandidates(db, config, async (_s, _k, kind) => assessment(kind));
     const saved = await candidate(row.id);
     expect(saved.preScreenAssessment).not.toBeNull();
     expect([saved.stage, saved.reviewNote]).toEqual(["review", "Human note"]);
-    expect(await outbox()).toEqual([]);
+    expect((await outbox()).map((o) => o.key)).toEqual([`${row.id}:pre-screen`]);
   });
   it("sets the highest-ranked hiring, supported, unstopped subject, and counts that subject only", async () => {
     await setConfig({
