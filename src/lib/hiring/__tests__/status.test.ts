@@ -95,6 +95,11 @@ describe("preScreenStatus", () => {
 });
 
 describe("form timestamps", () => {
+  it("reads the GMT Sheets serial returned for Aradhana's response", () => {
+    expect(parseFormTimestamp("46335.31536583333")?.toISOString()).toBe("2026-11-09T07:34:07.608Z");
+    for (const invalid of ["", "0", "-1", "Infinity", "1e400", "9999999999999999"])
+      expect(parseFormTimestamp(invalid)).toBeNull();
+  });
   it("reads d/m/yyyy, H:mm:ss as GMT and shows Bangkok time", () => {
     expect(parseFormTimestamp("31/10/2026, 18:30:05")?.toISOString()).toBe("2026-10-31T18:30:05.000Z");
     const note = preScreenNote(

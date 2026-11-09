@@ -956,6 +956,28 @@ describe("reply rule", () => {
     expect(notices).toHaveLength(1);
     expect(notices[0]).toMatchObject({ notice: "form_completed", message: expect.stringContaining(row.name) });
   });
+  it("repairs an unchanged serial response, assesses it and queues one invitation and form notice", async () => {
+    await setConfig({ recruitmentLineGroupId: "C" + "1".repeat(32) });
+    const timestamp = "46335.31536583333";
+    const row = await seed({ stage: "pre_screen" });
+    await formRow(row.id, { sentAt: after(-1) });
+    tracker({ pre: [preRow(row.email!, timestamp)] });
+    await syncTracker(db, config);
+    // Reproduce the already-imported production row whose timestamp could not be parsed.
+    await db.delete(s.hiringRecruitmentDeliveries);
+    await db.update(s.hiringCandidates).set({ preScreenRepliedAt: null }).where(eq(s.hiringCandidates.id, row.id));
+    const result = await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
+    expect(result.onsite).toBe(1);
+    const saved = await candidate(row.id);
+    expect(saved.preScreenRepliedAt?.toISOString()).toBe("2026-11-09T07:34:07.608Z");
+    expect(saved.preScreenResubmitted).toBe(false);
+    expect(saved.preScreenAssessment).not.toBeNull();
+    expect(saved.stage).toBe("onsite_invited");
+    await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
+    expect(await invites()).toHaveLength(1);
+    expect(await forms()).toHaveLength(1);
+    expect(await db.select().from(s.hiringRecruitmentDeliveries)).toHaveLength(1);
+  });
   it("does not call a moved sheet row a resubmission", async () => {
     const row = await replied({ preScreen: { ...pre, submittedAt: "4/11/2026, 05:00:00", sourceRow: 9 } });
     tracker({ pre: [preRow(row.email!, "4/11/2026, 05:00:00")] });

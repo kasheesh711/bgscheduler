@@ -409,7 +409,10 @@ export async function syncTracker(db: Database, config: HiringConfig) {
         .where(eq(s.hiringCandidates.email, email))
         .for("update");
       if (existing) {
-        if (sourceHash(existing.preScreen) === sourceHash(pre)) return;
+        const repliedAt = parseFormTimestamp(pre.submittedAt);
+        // Repair responses imported before Sheets date serials were supported.
+        const repairTimestamp = !!existing.preScreen && !existing.preScreenRepliedAt && !!repliedAt;
+        if (sourceHash(existing.preScreen) === sourceHash(pre) && !repairTimestamp) return;
         const first = !existing.preScreen;
         // A row that only moved in the sheet is the same response.
         const answered =
@@ -417,17 +420,13 @@ export async function syncTracker(db: Database, config: HiringConfig) {
           sourceHash({ ...existing.preScreen, sourceRow: 0 }) !==
             sourceHash({ ...pre, sourceRow: 0 });
         // Only a reply after a confirmed app send wakes a no_reply row. Kevin, 9 Nov 2026.
-        const sentAt = answered ? await formSentAt(tx, existing.id) : null;
-        const repliedAt = parseFormTimestamp(pre.submittedAt);
+        const sentAt = answered || repairTimestamp ? await formSentAt(tx, existing.id) : null;
         await tx
           .update(s.hiringCandidates)
           .set({
             preScreen: pre,
-            ...(first
-              ? { preScreenRepliedAt: parseFormTimestamp(pre.submittedAt) }
-              : answered
-                ? { preScreenResubmitted: true }
-                : {}),
+            ...(first || repairTimestamp ? { preScreenRepliedAt: repliedAt } : {}),
+            ...(!first && answered ? { preScreenResubmitted: true } : {}),
             ...(existing.stage === "no_reply" && sentAt && repliedAt && repliedAt >= sentAt
               ? { stage: "pre_screen" as const }
               : {}),
@@ -437,7 +436,7 @@ export async function syncTracker(db: Database, config: HiringConfig) {
             revision: existing.revision + 1,
           })
           .where(eq(s.hiringCandidates.id, existing.id));
-        if (answered && sentAt && repliedAt && repliedAt >= sentAt)
+        if ((answered || repairTimestamp) && sentAt && repliedAt && repliedAt >= sentAt)
           await queueRecruitmentForm(tx, existing, repliedAt);
         // They answered, so an unsent form or reminder must not follow. An uncertain row may already have left: it stays counted.
         if (answered)
