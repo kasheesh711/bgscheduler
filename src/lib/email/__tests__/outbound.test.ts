@@ -177,3 +177,24 @@ describe("resend transport", () => {
     expect(resendSend).not.toHaveBeenCalled();
   });
 });
+
+describe("candidate audience", () => {
+  it.each([{}, GMAIL, RESEND])("sends as admin@ through Workspace Gmail only (%o)", async (env) => {
+    const sender = createOutboundEmailSender("primary", { strictOutcome: true, audience: "candidate" }, env);
+    expect(await sender.sendEmail({ ...input, subject: "Visit\ninvite " })).toEqual({ id: "gmail-1" });
+    expect(createGmailSender).toHaveBeenCalledWith(expect.any(Function), undefined,
+      { senderName: "BeGifted Education", replyTo: "admin@begiftededucation.com" });
+    expect(gmailSend).toHaveBeenCalledWith({ ...input, subject: "Visit invite" });
+    expect(relay).not.toHaveBeenCalled();
+    expect(createResendSender).not.toHaveBeenCalled();
+  });
+
+  it("never falls back to the relay or Resend when Gmail rejects or is unavailable", async () => {
+    gmailSend.mockRejectedValueOnce(new Rejection("Reconnect the dedicated Gmail sender"));
+    await expect(createOutboundEmailSender("primary", { audience: "candidate" }, GMAIL).sendEmail(input)).rejects.toBeInstanceOf(Rejection);
+    gmailConfig.value = { configured: true, trusted: true, available: false };
+    await expect(createOutboundEmailSender("primary", { audience: "candidate" }, GMAIL).sendEmail(input)).rejects.toBeInstanceOf(Rejection);
+    expect(relaySend).not.toHaveBeenCalled();
+    expect(resendSend).not.toHaveBeenCalled();
+  });
+});
