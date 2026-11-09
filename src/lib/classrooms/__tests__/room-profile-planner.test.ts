@@ -25,7 +25,7 @@ describe("usual room initialization", () => {
     const unavailable = rooms.map(room => room.name === "Do It" ? { ...room, active: false } : room);
     const profiles = proposeRoomProfiles({ sessions: [session("Da")], rooms: unavailable, history: [], existing: [] });
     expect(rooms.find(room => room.id === profiles[0].roomIds[0])!.name).toBe("Do It");
-    expect(profiles[0].roomIds).toHaveLength(3);
+    expect(profiles[0].roomIds).toHaveLength(2);
   });
   it("uses compatibility before history and accounts for competing demand", () => {
     const profiles = proposeRoomProfiles({ sessions: [session("New teacher", 8)], rooms, existing: [], history: [{ canonicalKey: "New teacher", room: "Focus", minutes: 500 }] });
@@ -33,14 +33,23 @@ describe("usual room initialization", () => {
     const catalog = ["A", "B", "C", "D"].map((name, i) => ({ ...rooms[0], name, id: name, sortOrder: i }));
     const contested = proposeRoomProfiles({ sessions: [session("New"), session("Established")], rooms: catalog,
       existing: [{ canonicalKey: "established", revision: 1, rooms: ["A"] }], history: [{ canonicalKey: "New", room: "A", minutes: 500 }] });
-    expect(contested[0].roomIds).toEqual(["B", "C", "D"]);
+    expect(contested[0].roomIds).toEqual(["B", "C"]);
   });
   it("gives a new non-TV tutor right-wing rooms before spare 2-seat TV rooms", () => {
     const names = ["Remember (TV)", "Turn The Page (TV)", "Here There (TV)", "Consistency Wins", "Shift", "Trust the Process"];
     const catalog = rooms.filter(room => names.includes(room.name));
     const profiles = proposeRoomProfiles({ sessions: [session("New teacher")], rooms: catalog, history: [], existing: [] });
-    expect(profiles[0].roomIds.map(id => catalog.find(r => r.id === id)!.name)).toEqual(["Consistency Wins", "Shift", "Turn The Page (TV)"]);
+    expect(profiles[0].roomIds.map(id => catalog.find(r => r.id === id)!.name)).toEqual(["Consistency Wins", "Shift"]);
   });
+  it("spreads overlapping teachers and picks a nearby reserve without using last-resort rooms", () => {
+    const catalog = rooms.filter(room => ["Hakuna Matata", "Think Outside the Box", "Productive", "Dream. Plan. Do.", "Eureka"].includes(room.name));
+    const profiles = proposeRoomProfiles({ sessions: [session("Peat"), session("New")], rooms: catalog, history: [], existing: [] });
+    const names = (key: string) => profiles.find(profile => profile.canonicalKey === key)!.roomIds.map(id => catalog.find(room => room.id === id)!.name);
+    expect(names("peat")).toEqual(["Hakuna Matata", "Think Outside the Box"]);
+    expect(names("new")[0]).not.toBe("Hakuna Matata");
+    expect(profiles.every(profile => profile.roomIds.length <= 2)).toBe(true);
+  });
+
   it("never persists unresolved identities or remote-only teachers", () => {
     expect(proposeRoomProfiles({ sessions: [{ ...session("Unknown"), canonicalKey: null }, { ...session("Remote"), sessionType: "SCHEDULED" }], rooms, history: [], existing: [] })).toEqual([]);
   });

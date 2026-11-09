@@ -17,7 +17,9 @@ import {
 import { repairClassroomAssignments, ROOM_REPAIR_MAX_NODES, type RoomRepairBudget } from "./assignment-repair";
 
 import { optimizeClassroomContinuity, usualRoomPreferenceCost } from "./continuity-optimizer";
-import { assignmentTutorKey, classroomContinuityEnabled, type RoomQualityMetrics, type TutorRoomPolicies } from "./room-policy";
+import { assignmentTutorKey, connectedRoomBlocks, policyForTutor, classroomContinuityEnabled, type RoomQualityMetrics, type TutorRoomPolicies } from "./room-policy";
+
+import { roomProximityScore } from "./floor-plan";
 
 export const REMOTE_NO_ROOM_NEEDED = "REMOTE_NO_ROOM_NEEDED";
 export const ONLINE_CENTER_CONNECTION_GAP_MINUTES = 60;
@@ -487,6 +489,8 @@ export function assignClassrooms(
     preferredRoomClaimBySessionId.add(session.wiseSessionId);
   }
 
+  const blocks = connectedRoomBlocks(sortedSessions.filter(row => factsBySessionId.get(row.wiseSessionId)?.requiresCenterRoom));
+  const blockBySession = new Map(blocks.flatMap(block => block.map(row => [row.wiseSessionId, block] as const)));
   let rows: AssignmentResultRow[] = [];
 
   for (const session of sortedSessions) {
@@ -503,10 +507,7 @@ export function assignClassrooms(
     const requiresCenterRoom = facts.requiresCenterRoom;
 
     const roomOk = (roomName: string): boolean =>
-      roomPassesConstraints(roomByName.get(roomName), session, minCapacity, needsTv)
-      && (roomName === overrideRoom || roomByName.get(roomName)?.category !== "overflow_only"
-        || !activeRooms.some(room => room.category === "standard"
-          && roomPassesConstraints(room, session, minCapacity, needsTv) && roomAvailable(room.name)));
+      roomPassesConstraints(roomByName.get(roomName), session, minCapacity, needsTv);
     const roomAvailable = (roomName: string): boolean =>
       isAvailable(occupancy, roomName, session, session.wiseSessionId) &&
       isAvailable(protectedClaims, roomName, session, session.wiseSessionId);
@@ -579,6 +580,47 @@ export function assignClassrooms(
         ruleTrace.push(`assigned Kevin priority room: ${ROOM_THINK_OUTSIDE_THE_BOX}`);
       } else {
         ruleTrace.push(`assigned priority preferred room: ${priorityPreferredRoom}`);
+      }
+    }
+
+    if (!assignedRoom && !isGift) {
+      const block = blockBySession.get(session.wiseSessionId) ?? [session];
+      const remaining = block.filter(row => row.startMinute >= session.startMinute);
+      const policy = policyForTutor(session, options.roomPolicies);
+      const pair = policy?.rooms.slice(0, 2) ?? [];
+      const last = latestPriorRoomForTutor(tutorNorm, session.startMinute);
+      const connected = last && block.some(row => row.endMinute === last.endMinute)
+        && last.endMinute <= session.startMinute;
+      const fitsBlock = (room: ClassroomRoomDefinition) => remaining.every(row => {
+        const facts = factsBySessionId.get(row.wiseSessionId)!;
+        const fixed = facts.overrideRoom || facts.priorityPreferredRoom;
+        return (!fixed || fixed === room.name)
+          && roomPassesConstraints(room, row, facts.minCapacity, facts.needsTv)
+          && isAvailable(occupancy, room.name, row, row.wiseSessionId)
+          && isAvailable(protectedClaims, room.name, row, row.wiseSessionId);
+      });
+      if (remaining.length > 1 || pair.length || connected) {
+        const candidates = activeRooms.filter(room => room.name !== ROOM_JOY && fitsBlock(room));
+        const primary = pair[0] ?? preferredRoom;
+        candidates.sort((a, b) => {
+          const retainedA = Boolean(connected && a.name === last.room), retainedB = Boolean(connected && b.name === last.room);
+          const pairRank = (name: string) => pair.includes(name) ? pair.indexOf(name) : 2;
+          return Number(retainedB) - Number(retainedA)
+            || Number(a.category === "overflow_only") - Number(b.category === "overflow_only")
+            || pairRank(a.name) - pairRank(b.name)
+            || (primary ? roomProximityScore(primary, a.name) - roomProximityScore(primary, b.name) : 0)
+            || roomPriorityScore(a, minCapacity) - roomPriorityScore(b, minCapacity)
+            || sortByCapacityThenOrder(a, b);
+        });
+        if (candidates[0]) {
+          assignedRoom = candidates[0].name;
+          ruleTrace.push(connected && assignedRoom === last.room
+            ? `assigned by ${isOnlineSession(session.sessionType) ? "online continuity" : "continuity"}: ${assignedRoom}`
+            : `assigned for teaching block: ${assignedRoom}`);
+          for (const next of remaining) {
+            if (next.wiseSessionId !== session.wiseSessionId) addRoomInterval(protectedClaims, assignedRoom, next);
+          }
+        }
       }
     }
 
@@ -758,13 +800,14 @@ export function repairClassroomAssignmentRows(
       && (!locked(row) || room.name === (row.status !== "no_room" ? row.assignedRoom
         : row.overrideRoom || getPriorityPreferredRoom(row.tutorDisplayName) || ROOM_JOY)),
     locked,
-    preferenceCost: (row: AssignmentResultRow, room: ClassroomRoomDefinition) => (room.name === row.preferredRoom ? 0 : 10_000)
+    preferenceCost: (row: AssignmentResultRow, room: ClassroomRoomDefinition) => usualRoomPreferenceCost(row, room, options.roomPolicies) * 100_000
+      + (room.name === row.preferredRoom ? 0 : 10_000)
       + roomPriorityScore(room, row.minCapacity) * 10 + room.sortOrder,
   };
   const repaired = repairClassroomAssignments(repairInput);
   if (!(options.optimizeContinuity ?? classroomContinuityEnabled())) return repaired;
   const optimized = optimizeClassroomContinuity({ ...repairInput, rows: repaired,
-    preferenceCost: (row, room) => usualRoomPreferenceCost(row, room, options.roomPolicies) * 100_000 + repairInput.preferenceCost(row, room),
+    preferenceCost: repairInput.preferenceCost,
     policies: options.roomPolicies, savedRooms: options.savedRooms ?? new Map(rows.map(row => [row.wiseSessionId, row.assignedRoom])), frozenSessionIds: options.frozenSessionIds,
     maxNodes: options.continuityMaxNodes,
   });

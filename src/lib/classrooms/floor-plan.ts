@@ -443,3 +443,10 @@ export function sortRoomsByFloorPlan<T extends Pick<ClassroomRoomDefinition, "na
     return a.name.localeCompare(b.name);
   });
 }
+
+/** Diagram distance, with rooms in the same section preferred. Not a walking-distance measure. */
+export function roomProximityScore(primary: string, candidate: string): number {
+  const a = getFloorPlanGeometry(primary), b = getFloorPlanGeometry(candidate);
+  if (!a || !b) return 1_000_000;
+  return (a.section === b.section ? 0 : 10_000) + Math.hypot(a.labelX - b.labelX, a.labelY - b.labelY);
+}

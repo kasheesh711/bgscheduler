@@ -6,6 +6,8 @@ import { existingPreferredRoom, proposeRoomProfiles, type ProfileRoom } from "./
 import { type TutorRoomPolicy } from "./room-policy";
 import { isGiftTutor, TV_REQUIRED_TUTORS } from "./rooms";
 
+export const ROOM_PAIR_VERSION = 2;
+
 export type RoomProfile = typeof schema.classroomTutorRoomProfiles.$inferSelect;
 const roomIds = (profile: RoomProfile) => [profile.primaryRoomId, profile.secondaryRoomId, profile.thirdRoomId].filter((id): id is string => Boolean(id));
 
@@ -46,7 +48,9 @@ export async function ensureTutorRoomProfiles(db: Database, snapshotId: string, 
   }).from(schema.futureSessionBlocks).innerJoin(schema.tutorIdentityGroups, eq(schema.futureSessionBlocks.groupId, schema.tutorIdentityGroups.id))
     .where(and(eq(schema.futureSessionBlocks.snapshotId, snapshotId), eq(schema.futureSessionBlocks.isBlocking, true),
       gte(schema.futureSessionBlocks.startTime, localDate(date)), lt(schema.futureSessionBlocks.startTime, localDate(futureEnd))));
-  if (!sessions.some(row => !policies.has(row.canonicalKey.toLowerCase()))) return policies;
+  const refresh = new Map(current.profiles.filter(profile => profile.source === "automatic" && profile.provenance.roomPairVersion !== ROOM_PAIR_VERSION)
+    .map(profile => [profile.canonicalKey, profile]));
+  if (!sessions.some(row => !policies.has(row.canonicalKey.toLowerCase()) || refresh.has(row.canonicalKey.toLowerCase()))) return policies;
   const latest = db.selectDistinctOn([schema.classroomAssignmentRuns.assignmentDate], { id: schema.classroomAssignmentRuns.id })
     .from(schema.classroomAssignmentRuns).where(and(gte(schema.classroomAssignmentRuns.assignmentDate, historyStart), lt(schema.classroomAssignmentRuns.assignmentDate, date)))
     .orderBy(schema.classroomAssignmentRuns.assignmentDate, desc(schema.classroomAssignmentRuns.createdAt));
@@ -55,11 +59,22 @@ export async function ensureTutorRoomProfiles(db: Database, snapshotId: string, 
     minutes: sql<number>`${schema.classroomAssignmentRows.endMinute} - ${schema.classroomAssignmentRows.startMinute}`,
   }).from(schema.classroomAssignmentRows).innerJoin(schema.tutorIdentityGroups, eq(schema.classroomAssignmentRows.groupId, schema.tutorIdentityGroups.id))
     .where(and(inArray(schema.classroomAssignmentRows.runId, latest), eq(schema.classroomAssignmentRows.status, "assigned")));
-  const proposed = proposeRoomProfiles({ sessions, rooms, history, existing: [...policies.values()] });
-  if (proposed.length) await db.insert(schema.classroomTutorRoomProfiles).values(proposed.map(profile => ({
+  const proposed = proposeRoomProfiles({ sessions, rooms, history, existing: [...policies.values()].filter(profile => !refresh.has(profile.canonicalKey)) });
+  for (const profile of proposed) {
+    const previous = refresh.get(profile.canonicalKey);
+    if (!previous) continue;
+    await db.update(schema.classroomTutorRoomProfiles).set({
+      primaryRoomId: profile.roomIds[0], secondaryRoomId: profile.roomIds[1] ?? null, thirdRoomId: null,
+      revision: previous.revision + 1, updatedBy: "automatic", updatedAt: new Date(),
+      provenance: { ...previous.provenance, roomPairVersion: ROOM_PAIR_VERSION, snapshotId, historyStart, futureEnd,
+        previousRoomIds: previous.roomIds, previousRevision: previous.revision },
+    }).where(and(eq(schema.classroomTutorRoomProfiles.canonicalKey, profile.canonicalKey),
+      eq(schema.classroomTutorRoomProfiles.revision, previous.revision), eq(schema.classroomTutorRoomProfiles.source, "automatic")));
+  }
+  if (proposed.some(profile => !refresh.has(profile.canonicalKey))) await db.insert(schema.classroomTutorRoomProfiles).values(proposed.filter(profile => !refresh.has(profile.canonicalKey)).map(profile => ({
     canonicalKey: profile.canonicalKey, tutorDisplayName: profile.tutorDisplayName,
     primaryRoomId: profile.roomIds[0], secondaryRoomId: profile.roomIds[1] ?? null, thirdRoomId: profile.roomIds[2] ?? null,
-    provenance: { snapshotId, historyStart, futureEnd, initializedForDate: date, preservedPreferredRoom: existingPreferredRoom(profile.tutorDisplayName) ?? null },
+    provenance: { roomPairVersion: ROOM_PAIR_VERSION, snapshotId, historyStart, futureEnd, initializedForDate: date, preservedPreferredRoom: existingPreferredRoom(profile.tutorDisplayName) ?? null },
     updatedBy: "automatic",
   }))).onConflictDoNothing();
   return toRoomPolicies((await listTutorRoomProfiles(db)).profiles);
@@ -75,7 +90,7 @@ export async function updateTutorRoomProfile(db: Database, input: { canonicalKey
   const profile = profiles.find(row => row.canonicalKey === key);
   if (!profile) throw new RoomProfileError("Teacher room profile not found", 404);
   const selected = input.roomIds.map(id => rooms.find(room => room.id === id));
-  if (selected.length < 1 || selected.length > 3 || new Set(input.roomIds).size !== selected.length || selected.some(room => !room?.active || room.category !== "standard")) throw new RoomProfileError("Choose one to three distinct active teaching rooms", 400);
+  if (selected.length < 1 || selected.length > 2 || new Set(input.roomIds).size !== selected.length || selected.some(room => !room?.active || room.category !== "standard")) throw new RoomProfileError("Choose a primary room and at most one distinct reserve room", 400);
   if (TV_REQUIRED_TUTORS.has(profile.tutorDisplayName) && selected.some(room => !room?.hasTv)) throw new RoomProfileError("This teacher requires TV rooms", 400);
   const anchor = existingPreferredRoom(profile.tutorDisplayName);
   if (anchor && selected[0]?.name !== anchor) throw new RoomProfileError(`Keep the existing preferred room, ${anchor}, first`, 400);

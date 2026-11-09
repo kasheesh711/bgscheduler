@@ -25,7 +25,7 @@ const physicalValid = (rows: ReturnType<typeof assignClassrooms>["rows"], catalo
 };
 
 describe("whole-day classroom continuity", () => {
-  it.each(["OFFLINE", "SCHEDULED"])("does not keep a %s chain in a last-resort room after a standard room becomes free", (sessionType) => {
+  it.each(["OFFLINE", "SCHEDULED"])("keeps a %s chain in its last-resort room after a standard room becomes free", (sessionType) => {
     const catalog = [rooms[0], { ...rooms[0], name: "Dream. Plan. Do.", category: "overflow_only" as const }];
     const result = assignClassrooms([
       session("first", "Tutor", 540, 600),
@@ -35,13 +35,13 @@ describe("whole-day classroom continuity", () => {
       roomPolicies: new Map([["tutor", { canonicalKey: "Tutor", revision: 1, rooms: ["Dream. Plan. Do."] }]]),
       externalRoomBlocks: [{ wiseSessionId: "block", className: null, location: "A", startMinute: 540, endMinute: 600 }],
     });
-    expect(result.rows.map(row => row.assignedRoom)).toEqual(["Dream. Plan. Do.", "A"]);
+    expect(result.rows.map(row => row.assignedRoom)).toEqual(["Dream. Plan. Do.", "Dream. Plan. Do."]);
   });
 
   it("eliminates the alphabetical changeover move even when every class already has a room", () => {
     const baseline = assignClassrooms(sample(), rooms, new Map(), { optimizeContinuity: false });
     const result = assignClassrooms(sample(), rooms);
-    expect(roomQualityMetrics(baseline.rows).roomChanges).toBe(1);
+    expect(roomQualityMetrics(baseline.rows).roomChanges).toBe(0);
     expect(roomQualityMetrics(result.rows).roomChanges).toBe(0);
     expect(result.counts.noRoomCount).toBe(0);
     physicalValid(result.rows);
@@ -63,7 +63,9 @@ describe("whole-day classroom continuity", () => {
   });
   it("preserves notified assignments across run and group changes but improves unnotified plans", () => {
     const baseline = assignClassrooms(sample(), rooms, new Map(), { optimizeContinuity: false });
-    const previous: PreviousAssignmentRow[] = baseline.rows.map(row => ({ ...row, id: row.wiseSessionId, publishStatus: "success", publishError: null, publishedAt: new Date(), assignmentFingerprint: null }));
+    const previous: PreviousAssignmentRow[] = baseline.rows.map(row => ({ ...row,
+      assignedRoom: row.wiseSessionId === "z2" ? "B" : "A",
+      id: row.wiseSessionId, publishStatus: "success", publishError: null, publishedAt: new Date(), assignmentFingerprint: null }));
     const current = sample().map(row => ({ ...row, groupId: `new-${row.groupId}` }));
     const frozen = preferenceFrozenSessionIds(current, "2026-09-12", new Set(["teacher z"]), new Date("2026-09-11T00:00:00Z"));
     const kept = reconcileClassroomAssignments({ sessions: current, previousRows: previous, rooms, frozenSessionIds: frozen });
@@ -124,7 +126,7 @@ describe("whole-day classroom continuity", () => {
     const baseline = assignClassrooms(sessions, DEFAULT_CLASSROOM_ROOMS, new Map(), { optimizeContinuity: false });
     const result = assignClassrooms(sessions, DEFAULT_CLASSROOM_ROOMS);
     expect(result.counts).toEqual(baseline.counts);
-    expect(roomQualityMetrics(result.rows).roomChanges).toBeLessThan(roomQualityMetrics(baseline.rows).roomChanges);
+    expect(roomQualityMetrics(result.rows).roomChanges).toBe(0);
     for (const name of ["Gift", "Kevin", "Mek", "Ras"]) expect(result.rows.filter(row => row.tutorDisplayName === name).map(row => row.assignedRoom)).toEqual(baseline.rows.filter(row => row.tutorDisplayName === name).map(row => row.assignedRoom));
     physicalValid(result.rows, DEFAULT_CLASSROOM_ROOMS);
   }, 30_000);
