@@ -722,8 +722,8 @@ export async function deliverBookingMessages(db: Database = getDb()) {
   }
 }
 
-// A brief retry makes one assessment up to 4 calls at 180 seconds, and `max` counts assessments, so 10 could hold the
-// cycle for two hours. With this budget a cycle stops starting them after 10 minutes, and one already running can add 12.
+// Stop starting assessments after 10 minutes. An in-flight assessment keeps the subscription runner timeout
+// and bounded brief retries, as the review scorer does.
 const ASSESS_BUDGET_MS = 10 * 60000;
 export async function runHiringCycle(db: Database, assess: Assess) {
   const { config } = await settings(db);
