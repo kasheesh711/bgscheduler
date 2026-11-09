@@ -31,6 +31,13 @@ function assertNoOverlap(rows: AssignmentResultRow[]) {
 }
 
 describe("classroom incident regressions", () => {
+  it("moves an unprotected last-resort assignment into a free standard room", () => {
+    const catalog = [...rooms, { ...rooms[0], name: "Dream. Plan. Do.", category: "overflow_only" as const }];
+    const input = [row("saved", "Dream. Plan. Do.")];
+    expect(repairClassroomAssignmentRows(input, catalog, { optimizeContinuity: false })[0].assignedRoom).toBe("A");
+    expect(repairClassroomAssignmentRows([{ ...input[0], overrideRoom: "Dream. Plan. Do." }], catalog)[0].assignedRoom).toBe("Dream. Plan. Do.");
+  });
+
   it("fits September 5 including all five Shop classes without overlaps or relaxed hard constraints", () => {
     // Nicknames retain the code-owned tutor rules; all student and Wise identifiers are synthetic.
     const sessions = fixture.map(r => ({ ...r, startTime: new Date(r.startTime), endTime: new Date(r.endTime) }));

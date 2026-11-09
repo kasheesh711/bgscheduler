@@ -227,6 +227,7 @@ function isRelaxRoom(roomName: string): boolean {
 function roomPriorityScore(room: ClassroomRoomDefinition, minCapacity: number): number {
   const coreRank = CORE_TEACHING_ROOM_RANK.get(room.name);
   if (coreRank !== undefined) return coreRank;
+  if (room.category === "overflow_only") return DEMOTED_ROOM_SCORE + 1;
   if (isRelaxRoom(room.name) && minCapacity <= 3) return DEMOTED_ROOM_SCORE;
   return 1_000;
 }
@@ -502,7 +503,10 @@ export function assignClassrooms(
     const requiresCenterRoom = facts.requiresCenterRoom;
 
     const roomOk = (roomName: string): boolean =>
-      roomPassesConstraints(roomByName.get(roomName), session, minCapacity, needsTv);
+      roomPassesConstraints(roomByName.get(roomName), session, minCapacity, needsTv)
+      && (roomName === overrideRoom || roomByName.get(roomName)?.category !== "overflow_only"
+        || !activeRooms.some(room => room.category === "standard"
+          && roomPassesConstraints(room, session, minCapacity, needsTv) && roomAvailable(room.name)));
     const roomAvailable = (roomName: string): boolean =>
       isAvailable(occupancy, roomName, session, session.wiseSessionId) &&
       isAvailable(protectedClaims, roomName, session, session.wiseSessionId);
@@ -671,7 +675,7 @@ export function assignClassrooms(
     }
 
     if (!assignedRoom) {
-      const picked = pickRoom(activeRooms.filter((room) => room.category === "overflow_only"));
+      const picked = pickRoom(activeRooms.filter((room) => room.category === "overflow_only").sort((a, b) => a.sortOrder - b.sortOrder));
       if (picked) {
         assignedRoom = picked;
         ruleTrace.push(`assigned overflow room: ${picked}`);
@@ -743,7 +747,7 @@ export function assignClassrooms(
 export function repairClassroomAssignmentRows(
   rows: AssignmentResultRow[], rooms: ClassroomRoomDefinition[], options: AssignmentOptions = {},
 ): AssignmentResultRow[] {
-  const locked = (row: AssignmentResultRow) => Boolean(row.overrideRoom) || Boolean(row.overflowReleaseRoom) || isGiftTutor(row.tutorDisplayName)
+  const locked = (row: AssignmentResultRow) => Boolean(options.frozenSessionIds?.has(row.wiseSessionId)) || Boolean(row.overrideRoom) || Boolean(row.overflowReleaseRoom) || isGiftTutor(row.tutorDisplayName)
     || Boolean(getPriorityPreferredRoom(row.tutorDisplayName));
   const repairInput = {
     rows, rooms: rooms.filter(room => room.active), externalBlocks: options.externalRoomBlocks ?? [],

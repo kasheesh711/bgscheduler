@@ -307,12 +307,12 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
   },
   {
     roomName: "Eureka",
-    label: "Eureka",
-    labelLines: ["Eureka"],
+    label: "Eureka (unavailable)",
+    labelLines: ["Eureka", "Unavailable"],
     d: rectPath(1660, 245, 400, 150),
     labelX: 1860,
     labelY: 320,
-    assignable: true,
+    assignable: false,
     section: "right",
   },
   {

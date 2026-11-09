@@ -39,7 +39,7 @@ describe("usual room initialization", () => {
     const names = ["Remember (TV)", "Turn The Page (TV)", "Here There (TV)", "Consistency Wins", "Shift", "Trust the Process"];
     const catalog = rooms.filter(room => names.includes(room.name));
     const profiles = proposeRoomProfiles({ sessions: [session("New teacher")], rooms: catalog, history: [], existing: [] });
-    expect(profiles[0].roomIds.map(id => catalog.find(r => r.id === id)!.name)).toEqual(["Consistency Wins", "Shift", "Trust the Process"]);
+    expect(profiles[0].roomIds.map(id => catalog.find(r => r.id === id)!.name)).toEqual(["Consistency Wins", "Shift", "Turn The Page (TV)"]);
   });
   it("never persists unresolved identities or remote-only teachers", () => {
     expect(proposeRoomProfiles({ sessions: [{ ...session("Unknown"), canonicalKey: null }, { ...session("Remote"), sessionType: "SCHEDULED" }], rooms, history: [], existing: [] })).toEqual([]);

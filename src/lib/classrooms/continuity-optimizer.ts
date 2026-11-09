@@ -45,12 +45,13 @@ export function optimizeClassroomContinuity(input: Input) {
   const scoredRows = (plan: Map<string, string>) => rows.map(row => ({ ...row, assignedRoom: plan.get(row.wiseSessionId) ?? row.assignedRoom }));
   const score = (plan: Map<string, string>) => {
     const metrics = roomQualityMetrics(scoredRows(plan), input.policies);
-    let changed = 0, preference = 0;
+    let overflow = 0, changed = 0, preference = 0;
     for (const [id, room] of plan) {
+      if (roomByName.get(physicalRoom(room))?.category === "overflow_only") overflow++;
       if (input.savedRooms?.has(id) && physicalRoom(input.savedRooms.get(id)!) !== physicalRoom(room)) changed++;
       preference += input.preferenceCost(byId.get(id)!, roomByName.get(physicalRoom(room))!);
     }
-    return [rows.filter(row => row.status === "no_room").length, metrics.roomChanges, metrics.outsideUsualRooms, changed, metrics.distinctTeacherRooms, preference];
+    return [rows.filter(row => row.status === "no_room").length, overflow, metrics.roomChanges, metrics.outsideUsualRooms, changed, metrics.distinctTeacherRooms, preference];
   };
   const groups = new Map<string, AssignmentResultRow[]>();
   for (const row of rows) {

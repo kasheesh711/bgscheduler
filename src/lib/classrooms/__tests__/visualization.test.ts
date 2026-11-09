@@ -46,13 +46,14 @@ function row(overrides: Partial<ClassroomVisualizationRow> = {}): ClassroomVisua
 
 describe("classroom floor plan geometry", () => {
   it("maps all expansion rooms once without replacing existing room identities", () => {
-    const names = ["Possible", "Gain", "Eureka", "Win or Learn", "Momentum", "Trust the Process",
+    const names = ["Possible", "Gain", "Win or Learn", "Momentum", "Trust the Process",
       "Shift", "Try", "Now", "Consistency Wins", "Productive", "Think Different"];
     for (const name of names) {
       expect(getFloorPlanGeometry(name)?.assignable).toBe(true);
       expect(FLOOR_PLAN_ASSIGNABLE_ROOM_NAMES.filter(room => room === name)).toHaveLength(1);
     }
-    expect(FLOOR_PLAN_ASSIGNABLE_ROOM_NAMES).toHaveLength(36);
+    expect(FLOOR_PLAN_ASSIGNABLE_ROOM_NAMES).toHaveLength(35);
+    expect(getFloorPlanGeometry("Eureka")?.assignable).toBe(false);
   });
 
   it("covers every active default room with assignable geometry", () => {

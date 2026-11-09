@@ -59,7 +59,7 @@ export function renderFloorPlanMapSvg(roomNames: string[] = []): string {
   const selected = selectedRoomOrder(roomNames);
 
   const rooms = FLOOR_PLAN_ROOMS.map((geometry) => {
-    const order = selected.get(geometry.roomName);
+    const order = geometry.assignable ? selected.get(geometry.roomName) : undefined;
     const highlighted = Boolean(order);
     const fill = highlighted
       ? BRAND_ORANGE

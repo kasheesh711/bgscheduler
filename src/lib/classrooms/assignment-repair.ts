@@ -87,26 +87,29 @@ export function repairClassroomAssignments(input: RepairInput): AssignmentResult
   positions = protectRetainedLocations(positions);
 
   const score = (plan: Map<string, string>): number[] => {
-    let missing = 0, moved = 0, preference = 0;
+    let missing = 0, overflow = 0, moved = 0, preference = 0;
     for (const row of active) {
       const target = plan.get(row.wiseSessionId);
       if (!target) { missing++; continue; }
       if (baseline.has(row.wiseSessionId) && baseline.get(row.wiseSessionId) !== target) moved++;
       const room = roomByName.get(physical(target));
+      if (room?.category === "overflow_only") overflow++;
       if (room) preference += input.preferenceCost(row, room);
     }
-    return [missing, moved, preference];
+    return [missing, overflow, moved, preference];
   };
   const better = (a: number[], b: number[]) => {
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i];
     return false;
   };
-  const unresolved = active.filter(row => !positions.has(row.wiseSessionId) && !(retainedLocation(row) && !canPublish(row)))
+  const unresolved = active.filter(row => (!positions.has(row.wiseSessionId)
+    || (roomByName.get(physical(positions.get(row.wiseSessionId)!))?.category === "overflow_only" && !immovable(row)))
+    && !(retainedLocation(row) && !canPublish(row)))
     .sort((a, b) => a.startMinute - b.startMinute || a.wiseSessionId.localeCompare(b.wiseSessionId));
   const limited = new Set<string>();
   for (let index = 0; index < unresolved.length; index++) {
     const root = unresolved[index];
-    if (positions.has(root.wiseSessionId)) continue;
+    if (positions.has(root.wiseSessionId) && roomByName.get(physical(positions.get(root.wiseSessionId)!))?.category !== "overflow_only") continue;
     // Reserve work for subsequent unresolved rows rather than spending the whole date on one.
     let allowance = Math.floor(budget.remaining / (unresolved.length - index));
     let hitDepth = false;

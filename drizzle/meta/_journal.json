@@ -904,6 +904,13 @@
       "when": 1794182400000,
       "tag": "0127_hiring_recruitment",
       "breakpoints": true
+    },
+    {
+      "idx": 127,
+      "version": "7",
+      "when": 1794225600000,
+      "tag": "0128_room_allocation_priorities",
+      "breakpoints": true
     }
   ]
 }
