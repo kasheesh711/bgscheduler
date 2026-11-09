@@ -1874,7 +1874,7 @@ describe("hiring workflow persistence", () => {
     });
     await expect(bookInterview(token, input, db, now)).rejects.toThrow();
   });
-  it("keeps uncertain email retries on the same idempotency key and stops retries after provider retention", async () => {
+  it("holds an uncertain email for a person instead of sending it again", async () => {
     const { c } = await candidate();
     await db.insert(s.hiringOutbox).values({
       key: "invitation",
@@ -1884,18 +1884,33 @@ describe("hiring workflow persistence", () => {
     });
     sendEmail.mockRejectedValueOnce(new Error("Acceptance is uncertain"));
     await deliverOutbox(db, config);
-    vi.setSystemTime(new Date(now.getTime() + 120000));
+    vi.setSystemTime(new Date(now.getTime() + 2 * 3600000));
     await deliverOutbox(db, config);
-    expect(sendEmail.mock.calls[0][0].idempotencyKey).toBe(
-      sendEmail.mock.calls[1][0].idempotencyKey,
-    );
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect((await db.select().from(s.hiringOutbox))[0].status).toBe("uncertain");
+  });
+  it("marks an email failed, not uncertain, when it breaks before the send", async () => {
+    const { c } = await candidate();
+    await db.insert(s.hiringOutbox).values({
+      key: "invitation",
+      candidateId: c.id,
+      kind: "email",
+      payload: { to: c.email, subject: "Test", text: "Test" },
+    });
+    // An http logo address makes the HTML build throw before Gmail is called.
+    // Set directly: vi.unstubAllEnvs would also undo the suite's own stubs.
+    process.env.SCHEDULE_EMAIL_PUBLIC_BASE_URL = "http://insecure.example.com";
+    try {
+      await deliverOutbox(db, config);
+    } finally {
+      delete process.env.SCHEDULE_EMAIL_PUBLIC_BASE_URL;
+    }
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect((await db.select().from(s.hiringOutbox))[0].status).toBe("failed");
+    vi.setSystemTime(new Date(now.getTime() + 2 * 3600000));
+    await deliverOutbox(db, config);
+    expect(sendEmail).toHaveBeenCalledTimes(1);
     expect((await db.select().from(s.hiringOutbox))[0].status).toBe("sent");
-    await db
-      .update(s.hiringOutbox)
-      .set({ status: "uncertain", nextAttemptAt: null });
-    vi.setSystemTime(new Date(now.getTime() + 24 * 3600000));
-    await deliverOutbox(db, config);
-    expect(sendEmail).toHaveBeenCalledTimes(2);
   });
   it("changes a decision threshold without sending a duplicate invitation", async () => {
     const app = {

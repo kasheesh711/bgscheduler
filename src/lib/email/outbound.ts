@@ -24,8 +24,11 @@ import {
  * to the Apps Script relay (the kill switch).
  */
 export type OutboundEmailTransport = "apps_script" | "gmail" | "resend";
-/** Who reads the mail. Decides which rollout wave can move it to Resend. */
-export type OutboundEmailAudience = "staff" | "teacher";
+/**
+ * Who reads the mail. Decides which rollout wave can move it to Resend.
+ * `candidate` (hiring applicants) always leaves from the Workspace mailbox admin@begiftededucation.com.
+ */
+export type OutboundEmailAudience = "staff" | "teacher" | "candidate";
 
 export interface OutboundEmailEnvironment {
   readonly [name: string]: string | undefined;
@@ -72,7 +75,10 @@ function gmailSafeInput(input: ScheduleEmailSendInput): ScheduleEmailSendInput {
  * pg/OAuth credential stack out of callers that never take this path.
  * Throws a ScheduleEmailRejection when Gmail cannot be used at all.
  */
-async function loadWorkspaceGmailSender(env: OutboundEmailEnvironment): Promise<ScheduleEmailSender> {
+async function loadWorkspaceGmailSender(
+  env: OutboundEmailEnvironment,
+  headers?: { senderName: string; replyTo: string },
+): Promise<ScheduleEmailSender> {
   try {
     const [{ createGmailSender }, { feedbackGmailAccessToken }, { feedbackEmailConfiguration }] = await Promise.all([
       import("@/lib/post-class-feedback/gmail"),
@@ -83,7 +89,7 @@ async function loadWorkspaceGmailSender(env: OutboundEmailEnvironment): Promise<
     if (!config.available || !config.configured || !config.trusted) {
       throw new ScheduleEmailRejection("The Workspace Gmail sender is not available in this environment.");
     }
-    return createGmailSender((force) => feedbackGmailAccessToken(force), undefined, {
+    return createGmailSender((force) => feedbackGmailAccessToken(force), undefined, headers ?? {
       senderName: env.SCHEDULE_EMAIL_SENDER_NAME?.trim() || "BeGifted",
       replyTo: env.SCHEDULE_EMAIL_REPLY_TO?.trim() || "kevhsh7@gmail.com",
     });
@@ -141,6 +147,7 @@ function createResendFirstSender(env: OutboundEmailEnvironment, next: ScheduleEm
 
 /**
  * Tutor mail always uses the approved Resend identity with no other provider.
+ * Candidate mail always uses Workspace Gmail as admin@ with no other provider.
  * Staff mail retains the transport flag and existing fallback chain.
  */
 export function createOutboundEmailSender(
@@ -150,6 +157,18 @@ export function createOutboundEmailSender(
 ): ScheduleEmailSender {
   const { audience = "teacher", ...relayOptions } = options;
   const transport = outboundEmailTransport(env);
+  // Applicants hear from admin@ only: no Resend, and never the Apps Script relay (a personal account).
+  if (audience === "candidate") {
+    return {
+      async sendEmail(input) {
+        const gmail = await loadWorkspaceGmailSender(env, {
+          senderName: "BeGifted Education",
+          replyTo: "admin@begiftededucation.com",
+        });
+        return gmail.sendEmail(gmailSafeInput(input));
+      },
+    };
+  }
   // Tutor mail must keep the approved sender, including retries and failures.
   if (audience === "teacher") {
     return createResendSender(env, { from: "BeGifted <no-reply@notify.begiftededucation.com>",

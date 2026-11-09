@@ -14,7 +14,6 @@ import {
 import {
   HiringError,
   normalizeSubjects,
-  PRE_SCREEN_URL,
   runtimeWritesAllowed,
   type HiringConfig,
   type Subject,
@@ -32,7 +31,9 @@ import {
   enqueue,
   inviteToPreScreen,
   inviteToVisit,
+  preScreenEmail,
   settings,
+  visitInviteEmail,
   visitLink,
   type Candidate,
 } from "./service";
@@ -442,9 +443,8 @@ export async function runFollowUps(db: Database, now = new Date()) {
           createdAt: now,
           payload: {
             to: row.email,
-            subject: "Reminder: BeGifted tutor pre-screening questionnaire",
             workflowStage: "pre_screen",
-            text: `Dear ${row.name},\n\nWe have not yet received your pre-screening questionnaire. If you are still interested in joining BeGifted, please complete it here:\n${PRE_SCREEN_URL}\n\nUse this application email: ${row.email}. The form takes about 5–7 minutes.\n\nBeGifted Education`,
+            ...preScreenEmail(row.name, row.email, true),
           },
         }))
       ) {
@@ -498,9 +498,13 @@ export async function runFollowUps(db: Database, now = new Date()) {
           createdAt: now,
           payload: {
             to: row.email,
-            subject: "Reminder: book your BeGifted onsite visit",
             workflowStage: "onsite_invited",
-            text: `Dear ${row.name},\n\nYou have not yet booked your onsite visit for ${row.visitSubject}. The visit takes 3 hours: a 2-hour exam, then a 1-hour mock teaching session. Please book here:\n${visitLink(id, row.inviteExpiresAt)}\n\nFor questions, add our LINE Official Account at https://lin.ee/OjMHF41.\n\nBeGifted Education`,
+            ...visitInviteEmail({
+              name: row.name,
+              subject: row.visitSubject ?? "your subject",
+              url: visitLink(id, row.inviteExpiresAt),
+              location: config.location,
+            }),
           },
         }))
       ) {

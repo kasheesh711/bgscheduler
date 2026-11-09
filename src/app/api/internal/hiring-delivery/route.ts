@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db";
 import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import { rejectInvalidCronSecret } from "@/lib/internal/cron-auth";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
+import { hiringEmailHtmlFromText } from "@/lib/hiring/email";
 import { pushLineTextMessage } from "@/lib/line/client";
 import {
   deliveryRequestSchema,
@@ -65,14 +66,15 @@ export async function POST(request: Request) {
     const text = `This is the approved BeGifted hiring automation delivery test for ${email}. No candidate has been contacted. Test ID: ${input.id}`;
     let receipt: Record<string, unknown>;
     if (input.channel === "email") {
+      const subject = `BeGifted hiring automation delivery test [${input.id.slice(0, 8)}]`;
       receipt = await createOutboundEmailSender("primary", {
         strictOutcome: true,
-        audience: "teacher",
+        audience: "candidate",
       }).sendEmail({
         to: email,
-        subject: `BeGifted hiring automation delivery test [${input.id.slice(0, 8)}]`,
+        subject,
         text,
-        html: `<p>${text}</p>`,
+        html: hiringEmailHtmlFromText(subject, text),
         idempotencyKey: `hiring-self-test:${input.id}`,
       });
     } else if (input.channel === "line") {

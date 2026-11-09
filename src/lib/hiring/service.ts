@@ -56,6 +56,7 @@ import { attendanceConfig } from "@/lib/tutor-attendance/data";
 import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
 import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
 import { formatInTimeZone } from "date-fns-tz";
+import { HIRING_LINE_URL, MOCK_PREP, VISIT_LENGTH, hiringEmail } from "./email";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -318,8 +319,23 @@ export async function inviteToMock(
     kind: "email",
     payload: {
       to: candidate.email,
-      subject: "BeGifted mock teaching invitation",
-      text: `Dear ${candidate.name},\n\nYou have passed the recorded paper assessment for ${candidate.paperPassedSubjects.join(", ")}. Please book your onsite mock teaching session:\n${url}\n\nEach subject has a one-hour session. Prepare one IGCSE topic of your choice. The interviewer will also select a topic, which may be from another level. You may use teaching materials or tools.\n\nLocation: ${config.location}\n\nBeGifted Education`,
+      ...hiringEmail({
+        subject: "BeGifted mock teaching invitation",
+        preheader: "Book your onsite mock teaching session.",
+        title: "Book your mock teaching session",
+        tone: "ink",
+        name: candidate.name,
+        paragraphs: [
+          `You have passed the recorded paper assessment for ${candidate.paperPassedSubjects.join(", ")}. Please book your onsite mock teaching session.`,
+        ],
+        details: [
+          { label: "Subjects", value: candidate.paperPassedSubjects.join(", ") },
+          { label: "Session", value: "1 hour for each subject" },
+          { label: "Location", value: config.location },
+        ],
+        action: { label: "Book your session", url },
+        after: [MOCK_PREP],
+      }),
       workflowStage: "paper_passed",
     },
   });
@@ -339,9 +355,8 @@ export async function inviteToPreScreen(db: Database, candidate: Candidate, now 
     createdAt: now,
     payload: {
       to: candidate.email,
-      subject: "BeGifted tutor pre-screening questionnaire",
       workflowStage: "pre_screen",
-      text: `Dear ${candidate.name},\n\nThank you for your interest in joining BeGifted. Please complete our short pre-screening questionnaire:\n${PRE_SCREEN_URL}\n\nUse this application email: ${candidate.email}. The form takes about 5–7 minutes. We will contact you after reviewing your response.\n\nBeGifted Education`,
+      ...preScreenEmail(candidate.name, candidate.email, false),
     },
   });
 }
@@ -350,8 +365,48 @@ export const visitLink = (id: string, expires: Date) =>
     `/hiring/book/${bookingToken(id, "visit", expires)}`,
     process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
   ).toString();
-const LINE_URL = "https://lin.ee/OjMHF41";
-const onLine = (text: string) => `${text} Contact BeGifted on LINE: ${LINE_URL}`;
+/** The form invitation and its reminder. */
+export const preScreenEmail = (name: string, email: string, reminder: boolean) =>
+  hiringEmail({
+    subject: reminder ? "Reminder: BeGifted tutor pre-screening questionnaire" : "BeGifted tutor pre-screening questionnaire",
+    preheader: "A short questionnaire, about 5–7 minutes.",
+    title: reminder ? "Your questionnaire is still open" : "Your pre-screening questionnaire",
+    name,
+    paragraphs: [
+      reminder
+        ? "We have not yet received your pre-screening questionnaire. If you are still interested in joining BeGifted, please complete it."
+        : "Thank you for your interest in joining BeGifted. Please complete our short pre-screening questionnaire.",
+    ],
+    details: [
+      { label: "Use this email", value: email },
+      { label: "Time needed", value: "About 5–7 minutes" },
+    ],
+    action: { label: "Open the questionnaire", url: PRE_SCREEN_URL },
+    after: reminder ? [] : ["We will contact you after reviewing your response."],
+  });
+/** The onsite visit invitation and its reminder. */
+export const visitInviteEmail = (input: { name: string; subject: string; url: string; location: string; expireDays?: number }) =>
+  hiringEmail({
+    subject: input.expireDays === undefined ? "Reminder: book your BeGifted onsite visit" : "BeGifted onsite visit invitation",
+    preheader: `Book one onsite visit for ${input.subject}.`,
+    title: input.expireDays === undefined ? "Your visit is not booked yet" : "Book your onsite visit",
+    tone: "ink",
+    name: input.name,
+    paragraphs: [
+      input.expireDays === undefined
+        ? `You have not yet booked your onsite visit for ${input.subject}.`
+        : `Thank you for your pre-screening response. We invite you to one onsite visit for ${input.subject}.`,
+    ],
+    details: [
+      { label: "Subject", value: input.subject },
+      { label: "Visit", value: VISIT_LENGTH },
+      { label: "Location", value: input.location },
+      ...(input.expireDays === undefined ? [] : [{ label: "Link closes", value: `${input.expireDays} days after this email` }]),
+    ],
+    action: { label: "Book your visit", url: input.url },
+    after: [MOCK_PREP],
+  });
+const onLine = (text: string) => `${text} Contact BeGifted on LINE: ${HIRING_LINE_URL}`;
 const DAY = 86400000;
 const LIMIT_TEXT: Record<LimitName, string> = {
   perDay: "per day",
@@ -421,12 +476,17 @@ export async function inviteToVisit(
     createdAt: now,
     payload: {
       to: c.email,
-      subject: "BeGifted onsite visit invitation",
       workflowStage: "onsite_invited",
       // The follow-up reminder for this link uses this number, so a later change to the row cannot send a second one.
       revision,
       ...(resend ? { resend: true } : {}),
-      text: `Dear ${c.name},\n\nThank you for your pre-screening response. We invite you to one onsite visit for ${subject}. The visit takes 3 hours: a 2-hour exam, then a 1-hour mock teaching session.\n\nPlease book your visit here:\n${visitLink(c.id, expires)}\n\nThis link closes after ${config.onsiteFollowUp.expireDays} days. For the mock teaching session, prepare one IGCSE topic of your choice. The interviewer will also select a topic, which may be from another level. You may use teaching materials or tools.\n\nLocation: ${config.location}\n\nFor questions, add our LINE Official Account at https://lin.ee/OjMHF41.\n\nBeGifted Education`,
+      ...visitInviteEmail({
+        name: c.name,
+        subject,
+        url: visitLink(c.id, expires),
+        location: config.location,
+        expireDays: config.onsiteFollowUp.expireDays,
+      }),
     },
   });
   if (!queued)
@@ -917,8 +977,24 @@ export async function bookInterview(
         kind: "email",
         payload: {
           to: candidate.email,
-          subject: `BeGifted ${cap.kind === "mock" ? "mock teaching" : "paper assessment"} confirmed`,
-          text: `Dear ${candidate.name},\n\nYour ${cap.kind === "mock" ? "mock teaching" : "paper assessment"} appointment is confirmed.\nSubjects: ${input.subjects.join(", ")}\nTime: ${new Date(slot.start).toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })}–${new Date(slot.end).toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok)\nLocation: ${latest.config.location}\n${interviewer ? `Interviewer: ${interviewer.canonicalKey}\n` : ""}\nFor changes, contact BeGifted at https://lin.ee/OjMHF41.\n\nBeGifted Education`,
+          ...hiringEmail({
+            subject: `BeGifted ${cap.kind === "mock" ? "mock teaching" : "paper assessment"} confirmed`,
+            preheader: `Your ${cap.kind === "mock" ? "mock teaching" : "paper assessment"} appointment is confirmed.`,
+            title: `Your ${cap.kind === "mock" ? "mock teaching" : "paper assessment"} is confirmed`,
+            tone: "ink",
+            name: candidate.name,
+            paragraphs: [`Your ${cap.kind === "mock" ? "mock teaching" : "paper assessment"} appointment is confirmed.`],
+            details: [
+              { label: "Subjects", value: input.subjects.join(", ") },
+              {
+                label: "Time",
+                value: `${bangkok(new Date(slot.start))}–${bangkokTime(new Date(slot.end))} (Bangkok)`,
+              },
+              { label: "Location", value: latest.config.location },
+              ...(interviewer ? [{ label: "Interviewer", value: interviewer.canonicalKey }] : []),
+            ],
+            after: ["For changes, message BeGifted on LINE."],
+          }),
         },
       });
     await enqueue(tx, {
@@ -1181,8 +1257,30 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
         kind: "email",
         payload: {
           to: candidate.email,
-          subject: `BeGifted onsite visit ${rows.length ? "moved" : "confirmed"}`,
-          text: `Dear ${candidate.name},\n\nYour onsite visit ${rows.length ? "has moved. The new times are below" : "is confirmed"}.\nSubject: ${subject}\nExam: ${bangkok(exam.startTime)}–${bangkokTime(exam.endTime)} (Bangkok)\nMock teaching: ${bangkok(mock.startTime)}–${bangkokTime(mock.endTime)} (Bangkok), with ${head.canonicalKey}\nLocation: ${latest.config.location}\n\nFor the mock teaching session, prepare one IGCSE topic of your choice. The interviewer will also select a topic, which may be from another level. You may use teaching materials or tools.\n\n${rows.length ? "This visit cannot move again through the link." : `You can move this visit once, up to 24 hours before it starts:\n${visitLink(cap.id, candidate.inviteExpiresAt!)}`}\nFor other changes, contact BeGifted on LINE: ${LINE_URL}\n\nBeGifted Education`,
+          ...hiringEmail({
+            subject: `BeGifted onsite visit ${rows.length ? "moved" : "confirmed"}`,
+            preheader: `Exam ${bangkok(exam.startTime)} (Bangkok), then mock teaching with ${head.canonicalKey}.`,
+            title: rows.length ? "Your visit has moved" : "Your visit is confirmed",
+            tone: "ink",
+            name: candidate.name,
+            paragraphs: [`Your onsite visit ${rows.length ? "has moved. The new times are below" : "is confirmed"}.`],
+            details: [
+              { label: "Subject", value: subject },
+              { label: "Exam", value: `${bangkok(exam.startTime)}–${bangkokTime(exam.endTime)} (Bangkok)` },
+              { label: "Mock teaching", value: `${bangkok(mock.startTime)}–${bangkokTime(mock.endTime)} (Bangkok), with ${head.canonicalKey}` },
+              { label: "Location", value: latest.config.location },
+            ],
+            ...(rows.length
+              ? {}
+              : { action: { label: "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!) } }),
+            after: [
+              rows.length
+                ? "This visit cannot move again through the link."
+                : "You can move this visit once, up to 24 hours before it starts.",
+              MOCK_PREP,
+              "For other changes, message BeGifted on LINE.",
+            ],
+          }),
         },
       });
     for (const row of [exam, mock])

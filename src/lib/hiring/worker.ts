@@ -34,6 +34,7 @@ import { AWAITING_CALL, profileGate } from "./insights";
 import { audit, candidateById, settings, sourceHash } from "./service";
 import { formSentAt, releaseQueues, replyCheck, runFollowUps } from "./queue";
 import { deliverCalendar } from "./google";
+import { hiringEmailHtmlFromText } from "./email";
 import { syncTracker, mirrorTracker } from "./sources";
 import { redactProfile } from "./seek-text";
 import { assessPrestige } from "./prestige";
@@ -46,14 +47,6 @@ export type Assess = (
   /** Pre-screen only: the two written answers as they appear in `source`. */
   written?: string,
 ) => Promise<unknown>;
-const escape = (s: string) =>
-  s.replace(
-    /[&<>"']/g,
-    (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
-        c
-      ]!,
-  );
 type PreScreenRow = NonNullable<typeof s.hiringCandidates.$inferSelect.preScreen>;
 // The candidate's own words. Names and contact details in them are redacted like SEEK text before a model sees them.
 const FREE_TEXT = ["motivation", "teachingApproach", "englishEvidence", "portfolio"];
@@ -543,9 +536,11 @@ export async function deliverOutbox(
       break;
     if (
       job.status === "uncertain" &&
-      !["calendar", "calendar_cancel"].includes(job.kind) &&
-      job.firstAttemptAt &&
-      now.getTime() - job.firstAttemptAt.getTime() > 23 * 3600000
+      // Gmail has no idempotency key, so an email whose acceptance is unknown waits for a person: a retry could send it twice.
+      (job.kind === "email" ||
+        (!["calendar", "calendar_cancel"].includes(job.kind) &&
+          job.firstAttemptAt &&
+          now.getTime() - job.firstAttemptAt.getTime() > 23 * 3600000))
     )
       continue;
     const [claimed] = await db
@@ -564,6 +559,8 @@ export async function deliverOutbox(
       )
       .returning();
     if (!claimed) continue;
+    // An email error before the Gmail call cannot have sent anything, so it retries instead of waiting for a person.
+    let submitted = false;
     try {
       const candidate = await candidateById(db, job.candidateId);
       const [booking] = job.bookingId
@@ -599,13 +596,19 @@ export async function deliverOutbox(
           to: string;
           subject: string;
           text: string;
+          html?: string;
         };
+        // Result emails (edited by a person) and rows queued before the styled builders carry text only.
+        const html = payload.html ?? hiringEmailHtmlFromText(payload.subject, payload.text);
+        submitted = true;
         receipt = await createOutboundEmailSender("primary", {
           strictOutcome: true,
-          audience: "teacher",
+          audience: "candidate",
         }).sendEmail({
-          ...payload,
-          html: `<p>${escape(payload.text).replace(/\n/g, "<br>")}</p>`,
+          to: payload.to,
+          subject: payload.subject,
+          text: payload.text,
+          html,
           idempotencyKey: job.id,
         });
       } else {
@@ -683,7 +686,7 @@ export async function deliverOutbox(
       await db
         .update(s.hiringOutbox)
         .set({
-          status: rejected ? "failed" : "uncertain",
+          status: rejected || (job.kind === "email" && !submitted) ? "failed" : "uncertain",
           error:
             error instanceof Error
               ? error.message.slice(0, 300)
