@@ -33,7 +33,7 @@ import {
 import { AWAITING_CALL, profileGate } from "./insights";
 import { audit, candidateById, settings, sourceHash } from "./service";
 import { formSentAt, releaseQueues, replyCheck, runFollowUps } from "./queue";
-import { deliverRecruitment } from "./recruitment";
+import { deliverRecruitment, queueRecruitmentInvitation } from "./recruitment";
 import { deliverCalendar } from "./google";
 import { hiringEmailHtmlFromText } from "./email";
 import { syncTracker, mirrorTracker } from "./sources";
@@ -672,16 +672,12 @@ export async function deliverOutbox(
           }
         }
       }
-      await db
-        .update(s.hiringOutbox)
-        .set({
-          status: "sent",
-          receipt,
-          sentAt: new Date(),
-          leaseUntil: null,
-          error: null,
-        })
-        .where(eq(s.hiringOutbox.id, job.id));
+      const sentAt = new Date();
+      await withDatabaseTransaction(db, async tx => {
+        await tx.update(s.hiringOutbox).set({ status: "sent", receipt, sentAt, leaseUntil: null, error: null })
+          .where(eq(s.hiringOutbox.id, job.id));
+        await queueRecruitmentInvitation(tx, job, candidate, sentAt);
+      });
       sent++;
     } catch (error) {
       const rejected =
