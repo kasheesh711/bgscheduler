@@ -138,7 +138,7 @@ it("recognizes old mock invitations but excludes reminders and booking confirmat
     ["booking-confirmation", undefined, "00000000-0000-4000-8000-000000000001"],
     ["pre-screen", "pre_screen", null],
   ] as const) {
-    await queueRecruitmentInvitation(db, { id: key, key: `${c.id}:${key}`, kind: "email", payload: { workflowStage }, bookingId } as typeof s.hiringOutbox.$inferSelect, c, now);
+    await queueRecruitmentInvitation(db, { id: key, key: `${c.id}:${key}`, kind: "email", payload: { workflowStage }, bookingId }, c, now);
   }
   const notices = await db.select().from(s.hiringRecruitmentDeliveries);
   expect(notices).toHaveLength(1);
