@@ -42,6 +42,7 @@ async function calendarRequest(
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
+        ...Object.fromEntries(new Headers(init.headers)),
       },
       signal: AbortSignal.timeout(20000),
       cache: "no-store",
@@ -75,6 +76,8 @@ export async function deliverCalendar(
     {},
     db,
   );
+  const staff = booking.kind === "mock"
+    ? ["people@begiftededucation.com", "admin@begiftededucation.com"] : [];
   if (existing) {
     const properties = existing.extendedProperties as
       | { private?: { hiringBookingId?: string } }
@@ -105,12 +108,19 @@ export async function deliverCalendar(
         409,
         "The Calendar copy was changed. Review this appointment.",
       );
+    const attendees = (existing.attendees ?? []) as Array<{ email: string; [key: string]: unknown }>;
+    const missing = staff.filter(email => !attendees.some(a => a.email?.toLowerCase() === email));
+    if (missing.length) {
+      await calendarRequest(booking.calendarOwner, path + "/" + id + "?sendUpdates=all", {
+        method: "PATCH", headers: typeof existing.etag === "string" ? { "If-Match": existing.etag } : {}, body: JSON.stringify({ attendees: [...attendees, ...missing.map(email => ({ email }))] }),
+      }, db);
+    }
     return { id, recovered: true };
   }
   if (cancel) return { id, cancelled: true };
   const attendees = [
     ...new Set(
-      [booking.interviewerEmail, candidate.email].filter(
+      [booking.interviewerEmail, candidate.email, ...staff].filter(
         (v): v is string => !!v,
       ),
     ),

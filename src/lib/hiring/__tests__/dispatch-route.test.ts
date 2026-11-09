@@ -7,6 +7,7 @@ import { getDb } from "@/lib/db";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 
 vi.mock("@/lib/db", () => ({ getDb: vi.fn().mockReturnValue({}) }));
+vi.mock("../recruitment", () => ({ deliverRecruitment: vi.fn().mockResolvedValue(0) }));
 vi.mock("../worker", () => ({ deliverOutbox: vi.fn() }));
 vi.mock("../service", () => ({
   settings: vi
@@ -86,7 +87,7 @@ it("delivers booking rows only on the cron, behind the shared secret", async () 
   vi.mocked(deliverOutbox).mockResolvedValue(3);
   const response = await cron("Bearer cron-secret");
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ sent: 3 });
+  expect(await response.json()).toEqual({ sent: 3, recruitmentSent: 0 });
   expect(deliverOutbox).toHaveBeenCalledWith(expect.anything(), { connectedEmail: "owner@example.com" }, 20, true);
 });
 

@@ -174,6 +174,24 @@ export const hiringOutbox = pgTable(
   },
   (t) => [index("hiring_outbox_work").on(t.status, t.nextAttemptAt)],
 );
+export const hiringRecruitmentDeliveries = pgTable("hiring_recruitment_deliveries", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  key: text("key").notNull().unique(),
+  bookingId: uuid("booking_id").references(() => hiringBookings.id),
+  groupId: text("group_id").notNull(),
+  notice: text("notice").notNull(),
+  message: text("message").notNull(),
+  status: text("status").notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0),
+  firstAttemptAt: timestamp("first_attempt_at", { withTimezone: true }),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  receipt: jsonb("receipt").$type<Record<string, unknown>>(),
+  error: text("error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+}, t => [index("hiring_recruitment_work").on(t.status, t.nextAttemptAt)]);
+
 export const hiringAssessmentFiles = pgTable("hiring_assessment_files", {
   id: uuid("id").primaryKey().defaultRandom(),
   kind: text("kind").$type<"question_paper" | "mark_scheme" | "paper_scan" | "mock_rubric">().notNull(),

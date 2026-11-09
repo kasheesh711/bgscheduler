@@ -205,6 +205,7 @@ export const baseConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
     deliveryEnabled: z.boolean().default(false),
+    recruitmentLineGroupId: z.string().regex(/^C[0-9a-f]{32}$/).nullable().default(null),
     /** Only this candidate may test visit booking while Automation is paused. Messages stay gated. */
     bookingTestCandidateId: z.uuid().nullable().default(null),
     rubricApproved: z.boolean().default(true),

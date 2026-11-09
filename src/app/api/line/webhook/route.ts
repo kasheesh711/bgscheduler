@@ -32,6 +32,8 @@ export async function POST(request: NextRequest) {
       return result.handled;
     } : undefined,
     handleTeacherQuery: tutorBot ? async event => {
+      const { receiveRecruitmentSetup } = await import("@/lib/hiring/recruitment");
+      if (await receiveRecruitmentSetup(db, event)) return true;
       const mentions = (event as { message?: { mention?: { mentionees?: Array<{ isSelf?: boolean }> } } } | null)?.message?.mention?.mentionees;
       const text = (event as { message?: { text?: unknown } } | null)?.message?.text;
       if ((!Array.isArray(mentions) || !mentions.some(m => m?.isSelf === true))

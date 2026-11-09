@@ -9,6 +9,7 @@ import {
   deliveryRequestSchema,
   verifyDeliveryAuthorization,
 } from "@/lib/hiring/dispatch";
+import { deliverRecruitment } from "@/lib/hiring/recruitment";
 import { deliverOutbox } from "@/lib/hiring/worker";
 import { audit, settings, type Candidate } from "@/lib/hiring/service";
 import { deliverCalendar } from "@/lib/hiring/google";
@@ -30,7 +31,7 @@ export async function GET(request: NextRequest) {
       try {
         const db = getDb(),
           { config } = await settings(db);
-        return NextResponse.json({ sent: await deliverOutbox(db, config, 20, true) });
+        return NextResponse.json({ sent: await deliverOutbox(db, config, 20, true), recruitmentSent: await deliverRecruitment(db) });
       } catch (error) {
         return hiringError(error);
       }
@@ -96,7 +97,8 @@ export async function POST(request: Request) {
       const start = instant(businessDates(new Date())[0], 600);
       const booking = {
         id: input.id,
-        kind: "mock",
+        // Keep the organizer-only connection test separate from real mock invitations to HR.
+        kind: "paper",
         subjects: ["Mathematics"],
         calendarOwner: email,
         interviewerEmail: email,

@@ -40,6 +40,7 @@ export type CronJobKey =
   | "feedback_autowriter"
   | "feedback_autowriter_review"
   | "feedback_atom"
+  | "hiring_recruitment"
   | "hiring_delivery"
   | "hiring_resume_retention";
 
@@ -74,6 +75,12 @@ export const CRON_JOBS = [
     path: "/api/internal/post-class-feedback/deduction-report", schedule: null, cadenceLabel: "Daily 08:00 Bangkok",
     cadenceMinutes: 1440, expectedBangkokMinute: 480, lateAfterMinutes: 60, maxDurationSeconds: 300, manualOnly: true,
     dangerous: true, confirmationLabel: "Emails new deduction candidates to the three report recipients.", routeMethod: "GET" },
+  { key: "hiring_recruitment", label: "Hiring Recruitment Summary", feature: "Hiring",
+    path: "/api/internal/hiring-recruitment", schedule: "0 2 * * 1", cadenceLabel: "Monday 09:00 Bangkok",
+    cadenceMinutes: 10080, expectedBangkokMinute: 540, expectedBangkokWeekday: 1, lateAfterMinutes: 60,
+    maxDurationSeconds: 120, manualOnly: false, dangerous: true,
+    manualRunDisabledReason: "The summary runs on Mondays at 09:00 Bangkok. Use Hiring Booking Messages to retry queued delivery.",
+    confirmationLabel: "Sends the weekly recruitment summary to the registered recruitment group when Hiring messages are on.", routeMethod: "GET" },
   { key: "hiring_delivery", label: "Hiring Booking Messages", feature: "Hiring",
     path: "/api/internal/hiring-delivery", schedule: "19,35,48,59 * * * *", cadenceLabel: "About every 15 min",
     cadenceMinutes: 15, lateAfterMinutes: 45, maxDurationSeconds: 120, manualOnly: false,

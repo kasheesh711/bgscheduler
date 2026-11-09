@@ -96,3 +96,14 @@ describe("Gmail reminder transport", () => {
       .rejects.toMatchObject({ definitelyNotAccepted: true, permanent: true });
   });
 });
+
+it("sends a validated CC header and rejects CC header injection before Google", async () => {
+  const fetcher = vi.fn().mockResolvedValue(Response.json({ id: "cc-mail" }));
+  vi.stubGlobal("fetch", fetcher);
+  const sender = createGmailSender(async () => "access");
+  await sender.sendEmail({ ...input, cc: ["people@begiftededucation.com"] });
+  const raw = Buffer.from(JSON.parse(fetcher.mock.calls[0][1].body).raw, "base64url").toString();
+  expect(raw).toContain("Cc: people@begiftededucation.com\r\n");
+  await expect(sender.sendEmail({ ...input, cc: ["hr@example.com\r\nBcc: leak@example.com"] })).rejects.toBeInstanceOf(ScheduleEmailRejection);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});

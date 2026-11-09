@@ -72,11 +72,11 @@ describe("data-health cron registry", () => {
     expect(mismatches).toEqual([]);
   });
 
-  it("excludes retired Progress jobs and the annual promotion job from manual runs", () => {
+  it("excludes retired jobs and scheduled-only reports from manual runs", () => {
     const registry: readonly CronJobDefinition[] = CRON_JOBS;
     const excluded = registry.filter((job) => job.manualRunDisabledReason !== undefined);
 
-    expect(excluded.map((job) => job.key).sort()).toEqual(["progress_tests", "progress_tests_digest", "progress_tests_processing", "student_promotions_july_1"]);
+    expect(excluded.map((job) => job.key).sort()).toEqual(["hiring_recruitment", "progress_tests", "progress_tests_digest", "progress_tests_processing", "student_promotions_july_1"]);
     // The reason is the refusal message a caller sees, so it must say something.
     expect(excluded.every((job) => (job.manualRunDisabledReason ?? "").trim().length > 0)).toBe(true);
   });

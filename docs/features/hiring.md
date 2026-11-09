@@ -545,3 +545,14 @@ These are explicit operating limits, not completed acceptance checks.
 - Changing a head's days in Hiring changes Tutor Attendance for an enrolled head.
 - The Data Health manual **Run** button for booking delivery reports `sent: 0` when an error occurs inside the run. The cron retries.
 - Visits happen on weekdays only. A visit tests one subject only.
+
+
+### HR and recruitment notices
+
+All candidate hiring emails copy `people@begiftededucation.com`. Mock calendar events invite that inbox and `admin@begiftededucation.com`, in addition to the candidate and head. Existing event updates preserve attendees and responses.
+
+In **BeGifted Recruitment**, a LINE schedule-bot admin can send `@Thea recruitment setup`. The signed tutor-channel webhook verifies the group name and saves its ID in Hiring settings. This does not change Thea's other group bindings. No candidate data goes to an unregistered group.
+
+Thea posts when a mock is booked, moved or cancelled. On Mondays at 09:00 Bangkok, starting 16 November 2026, Thea lists initial pre-screen emails recorded as sent in the previous Monday–Sunday and confirmed mocks in the current Monday–Sunday. Reminders and failed or uncertain sends are excluded. Empty sections say “None”. Long reports have numbered parts.
+
+The `hiring_recruitment_deliveries` ledger stores each part, its retry key, status and receipt. The Monday `/api/internal/hiring-recruitment` cron queues the summary; the existing hiring-delivery cron retries notices. Both hiring switches and the production write gate must be on to send. Unknown outcomes keep the same LINE retry key; after 23 hours they need review. A changed group or cancelled booking suppresses old notices. Migration: `0127_hiring_recruitment.sql`.

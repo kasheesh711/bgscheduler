@@ -33,7 +33,7 @@ export interface GmailSenderHeaders {
 const EMAIL_ADDRESS = /^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/;
 
 function mime(input: ScheduleEmailSendInput, headers: GmailSenderHeaders = {}): string {
-  if (!EMAIL_ADDRESS.test(input.to) || /[\r\n]/.test(input.subject) || !input.idempotencyKey) {
+  if (!EMAIL_ADDRESS.test(input.to) || input.cc?.some((email) => !EMAIL_ADDRESS.test(email)) || /[\r\n]/.test(input.subject) || !input.idempotencyKey) {
     throw new GmailRejection("Invalid reminder email headers.", true);
   }
   const senderName = headers.senderName?.replace(/[\r\n"<>\\]/g, "").trim() || "BeGifted";
@@ -46,6 +46,7 @@ function mime(input: ScheduleEmailSendInput, headers: GmailSenderHeaders = {}): 
   const body = (value: string) => Buffer.from(value, "utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n") ?? "";
   return [
     `From: ${displayName} <${FEEDBACK_MAILBOX}>`, `Reply-To: ${replyTo}`, `To: ${input.to}`,
+    ...(input.cc?.length ? [`Cc: ${[...new Set(input.cc)].join(", ")}`] : []),
     `Subject: ${encodedSubject(input.subject)}`, `Message-ID: <${key}@begiftededucation.com>`,
     "MIME-Version: 1.0", `Content-Type: multipart/alternative; boundary="${boundary}"`, "",
     `--${boundary}`, 'Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: base64", "", body(input.text),
