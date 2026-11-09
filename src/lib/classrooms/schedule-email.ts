@@ -93,6 +93,7 @@ export interface ScheduleEmailPreview {
 
 export interface ScheduleEmailSendInput {
   to: string;
+  cc?: string[];
   subject: string;
   html: string;
   text: string;

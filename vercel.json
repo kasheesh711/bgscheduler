@@ -118,6 +118,10 @@
     {
       "path": "/api/internal/progress-line-reminders",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/internal/hiring-recruitment",
+      "schedule": "0 2 * * 1"
     }
   ]
 }

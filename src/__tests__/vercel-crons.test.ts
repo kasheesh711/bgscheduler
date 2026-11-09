@@ -15,6 +15,7 @@ function loadVercelConfig(): VercelConfig {
  * timing, so the only place a stagger regression can be caught is here.
  */
 const EXPECTED_SCHEDULES: Record<string, string> = {
+  "/api/internal/hiring-recruitment": "0 2 * * 1",
   "/api/internal/hiring-delivery": "19,35,48,59 * * * *",
   "/api/internal/hiring-resume-retention": "28 20 * * *",
   "/api/internal/progress-line-reminders": "*/10 * * * *",
@@ -109,10 +110,10 @@ function canCollide(left: FiringSet, right: FiringSet): boolean {
 }
 
 describe("vercel cron configuration", () => {
-  it("registers exactly the 29 known crons, each on its pinned schedule", () => {
+  it("registers exactly the 30 known crons, each on its pinned schedule", () => {
     const crons = loadVercelConfig().crons;
 
-    expect(crons).toHaveLength(29);
+    expect(crons).toHaveLength(30);
     expect(Object.fromEntries(crons.map((cron) => [cron.path, cron.schedule]))).toEqual(EXPECTED_SCHEDULES);
   });
 
@@ -164,13 +165,16 @@ describe("vercel cron configuration", () => {
           [...pair].some(path => ["/api/internal/sync-wise", "/api/internal/sync-unearned-revenue",
             "/api/internal/class-assignments/weekend-check", "/api/internal/class-assignments/morning",
             "/api/internal/class-assignments/admin-email", "/api/internal/tutor-sit-ins/digest"].includes(path));
+        // The approved Monday 09:00 recruitment summary only reads Postgres and pushes LINE.
+        const recruitmentOverlap = pair.has("/api/internal/hiring-recruitment") &&
+          (pair.has("/api/internal/sync-wise") || pair.has("/api/internal/post-class-feedback/reminder-nightly"));
         const progressProcessingOverlap = pair.has("/api/internal/progress-tests/process");
         // The 15-minute Atom reader shares only the paced, usually idle publish recovery
         // (and the separately allowed room reader). It never calls a Wise mutation.
         const atomReadOverlap = pair.has("/api/internal/feedback-autowriter/atom") && pair.has("/api/internal/class-assignments/publish-recovery");
         // The deduction report reads stored evidence and sends email; it never calls Wise.
         const deductionReportOverlap = pair.has("/api/internal/post-class-feedback/deduction-report");
-        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap && !roomAvailabilityOverlap && !publishRecoveryOverlap && !progressProcessingOverlap && !sitInDigestOverlap && !nightlyOverlap && !atomReadOverlap && !deductionReportOverlap) {
+        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap && !roomAvailabilityOverlap && !publishRecoveryOverlap && !progressProcessingOverlap && !sitInDigestOverlap && !nightlyOverlap && !atomReadOverlap && !deductionReportOverlap && !recruitmentOverlap) {
           collisions.push(`${crons[i].path} vs ${crons[j].path}`);
         }
       }

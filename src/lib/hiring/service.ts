@@ -1,3 +1,4 @@
+import { queueRecruitmentMock } from "./recruitment";
 import { createHash, randomUUID } from "node:crypto";
 import { fromZonedTime } from "date-fns-tz";
 import { and, asc, desc, eq, gte, inArray, isNotNull, like, or, sql } from "drizzle-orm";
@@ -1004,6 +1005,10 @@ export async function bookInterview(
       kind: "calendar",
       payload: {},
     });
+    if (cap.kind === "mock") {
+      const [booked] = await tx.select().from(s.hiringBookings).where(eq(s.hiringBookings.id, id));
+      await queueRecruitmentMock(tx, booked, "booked");
+    }
     if (group)
       await enqueue(tx, {
         key: `booking:${id}:line`,
@@ -1132,7 +1137,10 @@ const headNotice = (mock: VisitRow, notice?: "moved" | "cancelled", movedFrom?: 
 });
 
 /** Stops a visit's rows blocking anyone. Unsent messages for them go; events still ahead are cancelled. */
-export async function endVisit(tx: Database, rows: VisitRow[], status: "cancelled" | "no_show", now: Date) {
+export async function endVisit(tx: Database, rows: VisitRow[], status: "cancelled" | "no_show", now: Date, notifyRecruitment = true) {
+  if (notifyRecruitment) for (const row of rows) {
+    if (row.kind === "mock" && row.startTime > now) await queueRecruitmentMock(tx, row, "cancelled");
+  }
   const ids = rows.map((b) => b.id);
   const candidateId = rows[0].candidateId;
   await tx.update(s.hiringBookings).set({ status }).where(inArray(s.hiringBookings.id, ids));
@@ -1213,7 +1221,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
       .where(and(eq(s.progressLineGroups.canonicalKey, fresh.interviewerKey), eq(s.progressLineGroups.enabled, true)));
     if (!head || !group) throw new HiringError(409, onLine("Interviewer notifications are not configured."));
     const oldMock = rows.find((b) => b.kind === "mock");
-    if (rows.length) await endVisit(tx, rows, "cancelled", now);
+    if (rows.length) await endVisit(tx, rows, "cancelled", now, false);
     const visitId = randomUUID();
     const shared = {
       candidateId: cap.id,
@@ -1291,6 +1299,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
         kind: "calendar",
         payload: {},
       });
+    await queueRecruitmentMock(tx, mock, rows.length ? "moved" : "booked", oldMock?.startTime);
     await enqueue(tx, headNotice(mock, rows.length ? "moved" : undefined, oldMock?.startTime));
     // With a new head, the old head still needs to hear that the hour is free.
     if (oldMock && oldMock.interviewerKey !== head.canonicalKey) await enqueue(tx, headNotice(oldMock, "cancelled"));

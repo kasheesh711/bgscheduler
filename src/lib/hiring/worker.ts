@@ -33,6 +33,7 @@ import {
 import { AWAITING_CALL, profileGate } from "./insights";
 import { audit, candidateById, settings, sourceHash } from "./service";
 import { formSentAt, releaseQueues, replyCheck, runFollowUps } from "./queue";
+import { deliverRecruitment } from "./recruitment";
 import { deliverCalendar } from "./google";
 import { hiringEmailHtmlFromText } from "./email";
 import { syncTracker, mirrorTracker } from "./sources";
@@ -611,6 +612,7 @@ export async function deliverOutbox(
           audience: "candidate",
         }).sendEmail({
           to: payload.to,
+          cc: ["people@begiftededucation.com"],
           subject: payload.subject,
           text: payload.text,
           html,
@@ -712,7 +714,8 @@ export async function deliverOutbox(
 export async function deliverBookingMessages(db: Database = getDb()) {
   try {
     const { config } = await settings(db);
-    return await deliverOutbox(db, config, 20, true);
+    const sent = await deliverOutbox(db, config, 20, true);
+    return sent + await deliverRecruitment(db);
   } catch (error) {
     console.error("Hiring booking delivery failed", error instanceof Error ? error.name : "UnknownError");
     return 0;

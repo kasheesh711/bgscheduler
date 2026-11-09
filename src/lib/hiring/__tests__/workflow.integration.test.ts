@@ -800,6 +800,7 @@ describe("hiring workflow persistence", () => {
       expect(await rowsOf(test.id)).toHaveLength(0);
     });
     it("books an exam row and a mock row with one visit_id", async () => {
+      await setVisit({ recruitmentLineGroupId: "C" + "1".repeat(32) });
       const row = await invited();
       await bookVisit(link(row), choice(), db);
       const [exam, mock] = await rowsOf(row.id);
@@ -815,6 +816,9 @@ describe("hiring workflow persistence", () => {
       // A retry returns the same visit.
       await bookVisit(link(row), choice(), db);
       expect(await rowsOf(row.id)).toHaveLength(2);
+      const notices = await db.select().from(s.hiringRecruitmentDeliveries);
+      expect(notices).toHaveLength(1);
+      expect(notices[0].notice).toBe("booked");
     });
     it("sends one email holding both times", async () => {
       const row = await invited();
@@ -828,6 +832,7 @@ describe("hiring workflow persistence", () => {
       expect(text).toContain(LINE);
       await deliverOutbox(db, base);
       expect(sendEmail).toHaveBeenCalledTimes(1);
+      expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ cc: ["people@begiftededucation.com"] }));
       expect(vi.mocked(deliverCalendar)).toHaveBeenCalledTimes(2);
       expect(vi.mocked(pushLineTextMessage)).toHaveBeenCalledTimes(1);
     });
