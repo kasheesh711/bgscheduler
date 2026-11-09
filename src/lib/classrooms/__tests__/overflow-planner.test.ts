@@ -31,6 +31,11 @@ function assertValid(rows: Array<{ wiseSessionId: string; room: string; startMin
 }
 
 describe("minimum-switch overflow optimizer", () => {
+  it("uses a free standard room before preserving a last-resort assignment", async () => {
+    const catalog = [...rooms, { ...rooms[0], name: "B" }, { ...rooms[0], name: "Dream. Plan. Do.", category: "overflow_only" as const }];
+    const result = await planClassroomOverflow(input([row("saved", "Dream. Plan. Do."), row("pending", NO_ROOM_AVAILABLE)], { rooms: catalog }));
+    expect(result.actualRows.every(row => ["A", "B"].includes(row.assignedRoom))).toBe(true);
+  });
   it("does nothing on a clear day", async () => {
     const rows = [row("a")];
     expect(await planClassroomOverflow(input(rows))).toEqual({ actualRows: rows, plan: null });

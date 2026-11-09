@@ -4,6 +4,13 @@ import { renderFloorPlanMapSvg } from "../floor-plan-map";
 import { DEFAULT_CLASSROOM_ROOMS } from "../rooms";
 
 describe("floor plan map email SVG", () => {
+  it("keeps Eureka visible as unavailable without a selected-room marker", () => {
+    const svg = renderFloorPlanMapSvg(["Eureka"]);
+    expect(svg).toContain("Eureka (unavailable)");
+    expect(svg).toContain("Unavailable");
+    expect(svg).not.toContain(">1</text>");
+  });
+
   it("renders highlighted route markers for selected rooms", () => {
     const svg = renderFloorPlanMapSvg(["Focus", "Go All In (TV)"]);
 
@@ -36,6 +43,6 @@ describe("floor plan map email SVG", () => {
 describe("floor plan room catalog", () => {
   it("draws every allocator room and allocates every drawn classroom", () => {
     const drawn = FLOOR_PLAN_ROOMS.filter((room) => room.assignable).map((room) => room.roomName).sort();
-    expect(DEFAULT_CLASSROOM_ROOMS.map((room) => room.name).sort()).toEqual(drawn);
+    expect(DEFAULT_CLASSROOM_ROOMS.filter(room => room.active).map((room) => room.name).sort()).toEqual(drawn);
   });
 });

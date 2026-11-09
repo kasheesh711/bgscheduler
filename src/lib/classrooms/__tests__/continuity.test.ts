@@ -25,6 +25,19 @@ const physicalValid = (rows: ReturnType<typeof assignClassrooms>["rows"], catalo
 };
 
 describe("whole-day classroom continuity", () => {
+  it.each(["OFFLINE", "SCHEDULED"])("does not keep a %s chain in a last-resort room after a standard room becomes free", (sessionType) => {
+    const catalog = [rooms[0], { ...rooms[0], name: "Dream. Plan. Do.", category: "overflow_only" as const }];
+    const result = assignClassrooms([
+      session("first", "Tutor", 540, 600),
+      session("next", "Tutor", 600, 660, { sessionType }),
+    ], catalog, new Map(), {
+      optimizeContinuity: true,
+      roomPolicies: new Map([["tutor", { canonicalKey: "Tutor", revision: 1, rooms: ["Dream. Plan. Do."] }]]),
+      externalRoomBlocks: [{ wiseSessionId: "block", className: null, location: "A", startMinute: 540, endMinute: 600 }],
+    });
+    expect(result.rows.map(row => row.assignedRoom)).toEqual(["Dream. Plan. Do.", "A"]);
+  });
+
   it("eliminates the alphabetical changeover move even when every class already has a room", () => {
     const baseline = assignClassrooms(sample(), rooms, new Map(), { optimizeContinuity: false });
     const result = assignClassrooms(sample(), rooms);

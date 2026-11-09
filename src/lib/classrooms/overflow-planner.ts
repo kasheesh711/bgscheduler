@@ -59,6 +59,7 @@ interface Choice {
   missing: number;
   rank: number;
   moved: number;
+  lastResort: number;
   elsewhere: number;
   order: number;
 }
@@ -107,6 +108,7 @@ function choicesFor<T extends AssignmentResultRow>(input: PlannerInput<T>, allow
       choices.push({ row: index, room, occupies, released, converted,
         missing: Number(room === NO_ROOM_AVAILABLE), rank: converted ? ranks.get(row.wiseSessionId)! : 0,
         moved: Number(holdsRoom(row.assignedRoom) && physicalRoom(row.assignedRoom) !== physicalRoom(room)),
+        lastResort: Number(rooms.find(candidate => candidate.name === room)?.category === "overflow_only"),
         elsewhere: Number(released && room === REMOTE_NO_ROOM_NEEDED),
         order: rooms.findIndex(candidate => candidate.name === room) + 1 });
     };
@@ -172,7 +174,7 @@ function solve<T extends AssignmentResultRow>(highs: Highs, input: PlannerInput<
   const model = buildModel(highs, input.rows, choices);
   let best: Solution | null = null;
   const phases: Array<(choice: Choice) => number> = [choice => choice.missing, choice => Number(choice.converted),
-    choice => choice.rank, choice => choice.elsewhere, choice => choice.moved, choice => choice.order];
+    choice => choice.lastResort, choice => choice.rank, choice => choice.elsewhere, choice => choice.moved, choice => choice.order];
   try {
     model.options.set({ output_flag: false, random_seed: 0, mip_rel_gap: 0, mip_abs_gap: 0 });
     for (let phase = 0; phase < phases.length; phase++) {

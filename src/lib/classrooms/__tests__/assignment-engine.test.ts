@@ -59,6 +59,26 @@ function roomsFor(...names: string[]): ClassroomRoomDefinition[] {
 }
 
 describe("assignClassrooms", () => {
+  it.each(["Dream. Plan. Do.", "Trust the Process"])("uses %s only after suitable standard rooms, unless overridden", (name) => {
+    for (const standard of ["Focus", "Relax (TV)", ROOM_JOY]) {
+      const catalog = roomsFor(name, standard);
+      expect(assignClassrooms([session()], catalog).rows[0].assignedRoom).toBe(standard);
+      expect(assignClassrooms([session()], catalog, new Map([["session-1", name]])).rows[0].assignedRoom).toBe(name);
+      expect(assignClassrooms([session()], [roomByName(name)]).rows[0].assignedRoom).toBe(name);
+    }
+  });
+
+  it("rejects Eureka allocations and overrides", () => {
+    const result = assignClassrooms([session()], roomsFor("Eureka", "Focus"), new Map([["session-1", "Eureka"]]));
+    expect(result.rows[0].assignedRoom).toBe("Focus");
+    expect(result.rows[0].warnings).toContain("invalid_override_room");
+    expect(assignClassrooms([session()], roomsFor("Eureka")).rows[0].status).toBe("no_room");
+  });
+
+  it("uses Dream. Plan. Do. before Trust the Process when only last-resort rooms remain", () => {
+    expect(assignClassrooms([session()], roomsFor("Dream. Plan. Do.", "Trust the Process")).rows[0].assignedRoom).toBe("Dream. Plan. Do.");
+  });
+
   it("uses Wise studentCount for capacity and selects the smallest sufficient room", () => {
     const result = assignClassrooms([
       session({ studentCount: 8, classType: "GROUP" }),
@@ -522,7 +542,7 @@ describe("assignClassrooms", () => {
     expect(result.rows[0].assignedRoom).toBe("Iconic (TV)");
   });
 
-  it("treats Dream. Plan. Do. as a priority standard room before non-core rooms", () => {
+  it("uses a standard room before Dream. Plan. Do.", () => {
     const result = assignClassrooms(
       [session({ studentCount: 1 })],
       [
@@ -531,7 +551,7 @@ describe("assignClassrooms", () => {
       ],
     );
 
-    expect(result.rows[0].assignedRoom).toBe("Dream. Plan. Do.");
+    expect(result.rows[0].assignedRoom).toBe("Side Room");
   });
 
   it("gives Kevin Think Outside the Box over overlapping automatic preferred-room sessions", () => {
@@ -1015,8 +1035,8 @@ describe("assignClassrooms", () => {
   });
 
   it("fills the right-wing rooms before spare TV rooms when the core rooms are busy", () => {
-    // 14 core + 12 right-wing rooms take 26 simultaneous 1:1 classes without a spare TV room or Relax.
-    const sessions = Array.from({ length: 26 }, (_, index) => session({
+    // The active core and right-wing rooms fill before spare TV rooms.
+    const sessions = Array.from({ length: CORE_TEACHING_ROOM_PRIORITY.length }, (_, index) => session({
       groupId: `group-${index}`,
       tutorDisplayName: `Plain Tutor ${index}`,
       wiseTeacherId: `teacher-${index}`,
@@ -1031,12 +1051,12 @@ describe("assignClassrooms", () => {
   });
 
   it("fills every original core room before the first right-wing room", () => {
-    const sessions = Array.from({ length: 15 }, (_, index) => session({
+    const sessions = Array.from({ length: 14 }, (_, index) => session({
       groupId: `group-${index}`, tutorDisplayName: `Plain Tutor ${index}`, wiseTeacherId: `teacher-${index}`,
       wiseSessionId: `session-${index}`, wiseClassId: `class-${index}`,
     }));
     const used = assignClassrooms(sessions, DEFAULT_CLASSROOM_ROOMS).rows.map((row) => row.assignedRoom);
 
-    expect(used.filter((room) => !CORE_TEACHING_ROOM_PRIORITY.slice(0, 14).includes(room as never))).toEqual(["Consistency Wins"]);
+    expect(used.filter((room) => !CORE_TEACHING_ROOM_PRIORITY.slice(0, 13).includes(room as never))).toEqual(["Consistency Wins"]);
   });
 });

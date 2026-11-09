@@ -630,7 +630,7 @@ async function loadLatestRunForDate(db: Database, date: string): Promise<Classro
 }
 
 async function loadRowsForRun(db: Database, runId: string): Promise<ClassroomRow[]> {
-  return db
+  const rows = await db
     .select()
     .from(schema.classroomAssignmentRows)
     .where(eq(schema.classroomAssignmentRows.runId, runId))
@@ -638,6 +638,11 @@ async function loadRowsForRun(db: Database, runId: string): Promise<ClassroomRow
       schema.classroomAssignmentRows.startTime,
       schema.classroomAssignmentRows.tutorDisplayName,
     );
+  return rows.map(row => row.assignedRoom === "Eureka" ? {
+    ...row,
+    status: "needs_review" as const,
+    warnings: [...new Set([...row.warnings, "assigned_room_unavailable"])],
+  } : row);
 }
 
 export function isPublishJobTerminal(status: ClassroomPublishJob["status"]): boolean {
@@ -1327,6 +1332,7 @@ export function isClassroomPublishEligible(
   if (row.status === "remote" || row.assignedRoom === REMOTE_NO_ROOM_NEEDED) {
     return { eligible: false, reason: "Remote online session has no Wise location to publish" };
   }
+  if (row.assignedRoom === "Eureka") return { eligible: false, reason: "Eureka is unavailable; review the room assignment" };
   if (row.status !== "assigned") return { eligible: false, reason: "Only assigned rows can publish" };
   if (!row.assignedRoom || row.assignedRoom === NO_ROOM_AVAILABLE) {
     return { eligible: false, reason: "No assigned room to publish" };
