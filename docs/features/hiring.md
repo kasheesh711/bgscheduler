@@ -251,7 +251,7 @@ The DSCTE pentagon shows five corners: Degree, Subject, Curriculum, Teaching and
 2. It imports existing tracker decisions and the latest pre-screen response for each normalized email. Existing source IDs, repeated applications and prior contact are retained. Initial historical contact stays in review and receives no invitation.
 3. Claude Code runs through the existing subscription-only runner, with no tools, no MCP access, no API key, a schema and a bounded call. The server validates evidence quotes and computes scores.
 4. A candidate at `new` who passes the profile gate waits in the **pre-screen queue**. A candidate at or above the HR call score waits on the **Calls** tab first (see [HR calls](#hr-calls)). The queue releases a form email only while every limit has room.
-5. When the candidate replies, the worker scores the response. A response that meets the [reply rule](#reply-rule) and the pass score enters the **onsite queue**. The queue releases a booking link only while every limit has room.
+5. When the candidate replies, the worker scores the response. A response that meets the [reply rule](#reply-rule) and the pass score enters the **onsite queue**. The queue releases a booking link only while every limit has room. The worker scores only a response that came after a form the app sent. It does not score any other response, change its stage or send it to review. A person handles those responses. Kevin set this rule on 9 Nov 2026.
 6. The candidate opens the signed link and books one visit for one subject. The server picks the head of department. A visit is a 2-hour exam, then a 1-hour mock with that head.
 7. A response below the pass score, or one that fails a hard stop, goes to review. A person decides. The system sends no rejection.
 

@@ -85,6 +85,11 @@ export async function assessCandidates(
   let calls = 0;
   for (const candidate of rows) {
     if (calls >= max || Date.now() >= stopAt) break;
+    // Kevin, 9 Nov 2026: the cycle scores and moves only a reply to a form this app sent. Any other response stays as it is for a person.
+    if (!scoreOnly && candidate.preScreen) {
+      const sentAt = await formSentAt(db, candidate.id);
+      if (!sentAt || !candidate.preScreenRepliedAt || candidate.preScreenRepliedAt < sentAt) continue;
+    }
     const phase = !scoreOnly && candidate.preScreen ? "pre" : "profile";
     const source =
       phase === "pre" ? preScreenSource(candidate) : candidate.profileText;
