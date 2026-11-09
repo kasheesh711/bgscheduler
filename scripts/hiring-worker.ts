@@ -146,7 +146,6 @@ async function main() {
                 user: source + feedback,
                 schema: z.toJSONSchema(kind === "pre-screen" ? preScreenOutputSchema : assessmentOutputSchema, { target: "draft-07" }),
                 budgetUsd: 3,
-                timeoutMs: 180000,
               },
               {
                 cwd,
