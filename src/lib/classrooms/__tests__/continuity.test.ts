@@ -48,6 +48,22 @@ describe("whole-day classroom continuity", () => {
     expect(z[0].assignedRoom).not.toBe("A");
     physicalValid(result.rows);
   });
+  it("uses one room after a long gap even when that leaves the usual room", () => {
+    const policies = new Map([["teacher z", { canonicalKey: "Teacher Z", revision: 1, rooms: ["A"] }]]);
+    const rows = [session("z1", "Teacher Z", 540, 600), session("z2", "Teacher Z", 720, 780), session("y", "Teacher Y", 720, 780)];
+    const result = assignClassrooms(rows, rooms, new Map([["y", "A"]]), { roomPolicies: policies });
+    expect(new Set(result.rows.filter(row => row.canonicalKey === "Teacher Z").map(row => row.assignedRoom)).size).toBe(1);
+    expect(roomQualityMetrics(result.rows, policies).outsideUsualRooms).toBe(2);
+    physicalValid(result.rows);
+  });
+  it("keeps saved rooms on a re-run instead of moving them to save a room", () => {
+    const rows = [session("z1", "Teacher Z", 540, 600), session("z2", "Teacher Z", 720, 780)];
+    expect(new Set(assignClassrooms(rows, rooms).rows.map(row => row.assignedRoom)).size).toBe(1);
+    const saved = assignClassrooms(rows, rooms, new Map([["z1", "A"], ["z2", "B"]]), { optimizeContinuity: false }).rows;
+    const previous: PreviousAssignmentRow[] = saved.map(row => ({ ...row, overrideRoom: null, id: row.wiseSessionId, publishStatus: "success", publishError: null, publishedAt: new Date(), assignmentFingerprint: null }));
+    const rerun = reconcileClassroomAssignments({ sessions: rows, previousRows: previous, rooms });
+    expect(rerun.rows.map(row => row.assignedRoom)).toEqual(["A", "B"]);
+  });
   it("preserves notified assignments across run and group changes but improves unnotified plans", () => {
     const baseline = assignClassrooms(sample(), rooms, new Map(), { optimizeContinuity: false });
     const previous: PreviousAssignmentRow[] = baseline.rows.map(row => ({ ...row, id: row.wiseSessionId, publishStatus: "success", publishError: null, publishedAt: new Date(), assignmentFingerprint: null }));
