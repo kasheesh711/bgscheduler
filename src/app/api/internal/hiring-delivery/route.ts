@@ -61,6 +61,7 @@ export async function POST(request: Request) {
     if (input.mode !== "test")
       return NextResponse.json({
         sent: await deliverOutbox(db, config, 20, input.mode === "bookings"),
+        recruitmentSent: await deliverRecruitment(db),
       });
     // Test mail addresses only the organizer; LINE permits a confirmed personal ID, never a group ID.
     const email = config.connectedEmail;
