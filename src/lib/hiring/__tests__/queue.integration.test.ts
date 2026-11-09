@@ -108,7 +108,7 @@ beforeEach(async () => {
   vi.stubEnv("VERCEL_ENV", "production");
   vi.clearAllMocks();
   await db.execute(
-    sql`truncate hiring_audit,hiring_outbox,hiring_bookings,hiring_candidates,hiring_settings,progress_line_groups cascade`,
+    sql`truncate hiring_recruitment_deliveries,hiring_audit,hiring_outbox,hiring_bookings,hiring_candidates,hiring_settings,progress_line_groups cascade`,
   );
   await db.insert(s.hiringSettings).values({ id: "default", config, updatedBy: "owner@example.com", workerAt: now });
   sendEmail.mockReset().mockResolvedValue({ id: "email-receipt" });
@@ -939,7 +939,8 @@ describe("reply rule", () => {
     expect(again.preScreenResubmitted).toBe(true);
     expect(again.stage).toBe("review");
   });
-  it("matches an email with different case and spaces", async () => {
+  it("matches a form by email and announces its completion only once", async () => {
+    await setConfig({ recruitmentLineGroupId: "C" + "1".repeat(32) });
     const row = await seed({ stage: "pre_screen", email: "mixed@example.com" });
     await formRow(row.id, { sentAt: after(-1) });
     tracker({ pre: [preRow("  MiXeD@Example.COM ", "4/11/2026, 05:00:00")] });
@@ -948,6 +949,12 @@ describe("reply rule", () => {
     expect(saved.preScreen).not.toBeNull();
     expect(saved.preScreenRepliedAt).not.toBeNull();
     expect(await db.select().from(s.hiringCandidates)).toHaveLength(1);
+    await syncTracker(db, config);
+    tracker({ pre: [preRow(row.email!, "4/11/2026, 06:00:00", "Changed answer")] });
+    await syncTracker(db, config);
+    const notices = await db.select().from(s.hiringRecruitmentDeliveries);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ notice: "form_completed", message: expect.stringContaining(row.name) });
   });
   it("does not call a moved sheet row a resubmission", async () => {
     const row = await replied({ preScreen: { ...pre, submittedAt: "4/11/2026, 05:00:00", sourceRow: 9 } });
