@@ -67,6 +67,27 @@ export async function queueRecruitmentMock(db: Database, booking: typeof booking
   await enqueue(db, `mock:${booking.id}:${notice}`, config.recruitmentLineGroupId, text, booking.id, notice);
 }
 
+/** Only a response to a sent application form reaches this hook. One notice per candidate. */
+export async function queueRecruitmentForm(db: Database, candidate: Pick<typeof candidates.$inferSelect, "id" | "name" | "subjects">, submittedAt: Date) {
+  const { config } = await settings(db);
+  if (!config.recruitmentLineGroupId) return;
+  await enqueue(db, `form-completed:${candidate.id}`, config.recruitmentLineGroupId,
+    `Form completed\n${candidate.name} — ${candidate.subjects.join(", ") || "Subject not recorded"}\n${when(submittedAt)} (Bangkok)`, null, "form_completed");
+}
+
+/** Called with the email's sent receipt in the same database transaction. */
+export async function queueRecruitmentInvitation(db: Database, job: Pick<typeof outbox.$inferSelect, "id" | "key" | "kind" | "payload" | "bookingId">,
+  candidate: typeof candidates.$inferSelect, sentAt: Date) {
+  if (job.kind !== "email" || job.bookingId || job.key.includes(":visit-reminder:")
+    || !["onsite_invited", "paper_passed"].includes(String(job.payload.workflowStage))) return;
+  const { config } = await settings(db);
+  if (!config.recruitmentLineGroupId) return;
+  const subject = job.payload.workflowStage === "paper_passed" ? candidate.paperPassedSubjects.join(", ")
+    : candidate.visitSubject ?? candidate.subjects.join(", ");
+  await enqueue(db, `invite-sent:${job.id}`, config.recruitmentLineGroupId,
+    `Mock trial invite sent\n${candidate.name} — ${subject || "Subject not recorded"}\n${when(sentAt)} (Bangkok)`, null, "invite_sent");
+}
+
 export function recruitmentWeek(now: Date) {
   const date = new Intl.DateTimeFormat("en-CA", { timeZone: ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
   const start = new Date(`${date}T00:00:00+07:00`);

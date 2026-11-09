@@ -6,8 +6,12 @@ import * as s from "@/lib/db/schema";
 import { configSchema } from "../model";
 import { deliverRecruitment, queueRecruitmentMock, queueRecruitmentWeekly, receiveRecruitmentSetup } from "../recruitment";
 import { fetchLineGroupSummary, pushLineTextMessage, replyLineMessage } from "@/lib/line/client";
+import { deliverOutbox } from "../worker";
+import { createOutboundEmailSender } from "@/lib/email/outbound";
+import { queueRecruitmentInvitation } from "../recruitment";
 import { endVisit } from "../service";
 
+vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
 vi.mock("@/lib/line/client", () => ({
   fetchLineGroupSummary: vi.fn(), pushLineTextMessage: vi.fn(), replyLineMessage: vi.fn(),
   LinePushError: class extends Error { status = 500; },
@@ -101,4 +105,42 @@ it("shows None for empty sections and sends nothing when paused or the group cha
   expect(await deliverRecruitment(db)).toBe(0);
   await db.update(s.hiringSettings).set({ config: { ...config, recruitmentLineGroupId: "C" + "3".repeat(32) } });
   expect(await deliverRecruitment(db)).toBe(0); expect(pushLineTextMessage).not.toHaveBeenCalled();
+});
+
+it("announces an invitation only after Gmail accepts it, once across delivery retries", async () => {
+  const c = await candidate();
+  await db.update(s.hiringCandidates).set({ stage: "onsite_invited", visitSubject: "Mathematics" }).where(eq(s.hiringCandidates.id, c.id));
+  await db.insert(s.hiringOutbox).values({ candidateId: c.id, key: `${c.id}:visit-invite`, kind: "email",
+    payload: { workflowStage: "onsite_invited", to: "candidate@example.com", subject: "Onsite invite", text: "Book your visit" } });
+  const send = vi.fn().mockRejectedValueOnce(new Error("Connection lost"));
+  vi.mocked(createOutboundEmailSender).mockReturnValue({ sendEmail: send });
+  await deliverOutbox(db, config);
+  expect(await db.select().from(s.hiringRecruitmentDeliveries)).toHaveLength(0);
+  const [uncertain] = await db.select().from(s.hiringOutbox);
+  expect(uncertain.status).toBe("uncertain");
+  // A person confirms it was not sent before allowing a retry.
+  await db.update(s.hiringOutbox).set({ status: "pending", nextAttemptAt: null }).where(eq(s.hiringOutbox.id, uncertain.id));
+  send.mockResolvedValue({ id: "gmail-receipt" });
+  await deliverOutbox(db, config);
+  await deliverOutbox(db, config);
+  const notices = await db.select().from(s.hiringRecruitmentDeliveries);
+  expect(notices).toHaveLength(1);
+  expect(notices[0]).toMatchObject({ notice: "invite_sent", message: expect.stringContaining("Mock trial invite sent") });
+  expect((await db.select().from(s.hiringOutbox))[0].status).toBe("sent");
+  expect(send).toHaveBeenCalledTimes(2);
+});
+it("recognizes old mock invitations but excludes reminders and booking confirmations", async () => {
+  const c = await candidate();
+  c.paperPassedSubjects = ["Mathematics"];
+  for (const [key, workflowStage, bookingId] of [
+    ["tracker-mock:hash", "paper_passed", null],
+    ["visit-reminder:1", "onsite_invited", null],
+    ["booking-confirmation", undefined, "00000000-0000-4000-8000-000000000001"],
+    ["pre-screen", "pre_screen", null],
+  ] as const) {
+    await queueRecruitmentInvitation(db, { id: key, key: `${c.id}:${key}`, kind: "email", payload: { workflowStage }, bookingId }, c, now);
+  }
+  const notices = await db.select().from(s.hiringRecruitmentDeliveries);
+  expect(notices).toHaveLength(1);
+  expect(notices[0].message).toContain("Mathematics");
 });

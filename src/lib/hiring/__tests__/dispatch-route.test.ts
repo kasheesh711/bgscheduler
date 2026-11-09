@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { GET, POST } from "@/app/api/internal/hiring-delivery/route";
 import { deliveryAuthorization } from "../dispatch";
+import { deliverRecruitment } from "../recruitment";
 import { deliverOutbox } from "../worker";
 import { getDb } from "@/lib/db";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
@@ -106,4 +107,15 @@ it("delivers only the named pre-screen form in send-one mode", async () => {
   const other = JSON.stringify({ mode: "one", key: "00000000-0000-4000-8000-000000000001:visit-invite" });
   expect((await POST(request(other, true))).status).toBe(400);
   expect(deliverOutbox).toHaveBeenCalledTimes(1);
+});
+
+it("delivers recruitment notices after accepted candidate emails", async () => {
+  vi.stubEnv("AUTH_SECRET", "test-secret");
+  vi.stubEnv("VERCEL_ENV", "production");
+  vi.stubEnv("PREVIEW_SANDBOX_ENABLED", "false");
+  vi.mocked(deliverOutbox).mockResolvedValue(3);
+  vi.mocked(deliverRecruitment).mockResolvedValueOnce(1);
+  const response = await POST(request(JSON.stringify({ mode: "all" }), true));
+  expect(await response.json()).toEqual({ sent: 3, recruitmentSent: 1 });
+  expect(vi.mocked(deliverOutbox).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deliverRecruitment).mock.invocationCallOrder[0]);
 });

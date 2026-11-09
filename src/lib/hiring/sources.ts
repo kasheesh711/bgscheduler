@@ -21,6 +21,7 @@ import {
   type HiringConfig,
   type Stage,
 } from "./model";
+import { queueRecruitmentForm } from "./recruitment";
 import { appInvited, formSentAt } from "./queue";
 import { RESUME_MAX_BYTES, sniffResume, storeResume, type ResumeFile } from "./resume-files";
 import { answerKey } from "./scoring";
@@ -416,7 +417,7 @@ export async function syncTracker(db: Database, config: HiringConfig) {
           sourceHash({ ...existing.preScreen, sourceRow: 0 }) !==
             sourceHash({ ...pre, sourceRow: 0 });
         // Only a reply after a confirmed app send wakes a no_reply row. Kevin, 9 Nov 2026.
-        const sentAt = answered && existing.stage === "no_reply" ? await formSentAt(tx, existing.id) : null;
+        const sentAt = answered ? await formSentAt(tx, existing.id) : null;
         const repliedAt = parseFormTimestamp(pre.submittedAt);
         await tx
           .update(s.hiringCandidates)
@@ -427,7 +428,7 @@ export async function syncTracker(db: Database, config: HiringConfig) {
               : answered
                 ? { preScreenResubmitted: true }
                 : {}),
-            ...(sentAt && repliedAt && repliedAt >= sentAt
+            ...(existing.stage === "no_reply" && sentAt && repliedAt && repliedAt >= sentAt
               ? { stage: "pre_screen" as const }
               : {}),
             // A person's score was for the old answers. A changed response is held for a person either way.
@@ -436,6 +437,8 @@ export async function syncTracker(db: Database, config: HiringConfig) {
             revision: existing.revision + 1,
           })
           .where(eq(s.hiringCandidates.id, existing.id));
+        if (answered && sentAt && repliedAt && repliedAt >= sentAt)
+          await queueRecruitmentForm(tx, existing, repliedAt);
         // They answered, so an unsent form or reminder must not follow. An uncertain row may already have left: it stays counted.
         if (answered)
           await tx
