@@ -208,6 +208,23 @@ describe("hiring workflow persistence", () => {
     expect(outbox[0]).not.toHaveProperty("payload");
     expect(JSON.stringify(outbox)).not.toContain("SECRET BODY");
   });
+  it("recovers a citation-format failure in the normal worker and logs the failed answer", async () => {
+    const source = "degree subject curriculum teaching english Mathematics";
+    const [candidate] = await db.insert(s.hiringCandidates).values({ name: "Citation retry", profileText: source }).returning();
+    const good = {
+      criteria: ["degree", "subject", "curriculum", "teaching", "english"].map(id => ({ id, result: "met", evidence: id, reason: "Source" })),
+      subjects: [{ subject: "Mathematics", evidence: "Mathematics", relevant: true }], universities: [], summary: "Evidence",
+    };
+    const bad = { ...good, criteria: good.criteria.map((c, i) => i ? c : { ...c, evidence: '\"degree\"' }) };
+    const assess = vi.fn().mockResolvedValueOnce(bad).mockResolvedValueOnce(good);
+    await assessCandidates(db, config, assess, 1);
+    const [saved] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, candidate.id));
+    expect(saved.profileAssessment).toEqual(good);
+    expect(assess).toHaveBeenCalledTimes(2);
+    const [failure] = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "assessment-validation-failed"));
+    expect(failure.detail).toMatchObject({ phase: "profile", attempt: 1, error: "Assessment evidence does not occur in the source.", assessment: bad });
+    expect(await db.select().from(s.hiringOutbox)).toEqual([]);
+  });
   it("retries a held source only on explicit review retry and preserves its stage", async () => {
     const paused = { ...config, enabled: false, deliveryEnabled: false };
     const source = "degree subject curriculum teaching english Mathematics";
@@ -1781,7 +1798,8 @@ describe("hiring workflow persistence", () => {
     }));
     await assessCandidates(db, config, assess);
     await assessCandidates(db, config, assess);
-    expect(assess).toHaveBeenCalledTimes(2);
+    // Three bounded attempts for the bad source, one for the good source; no repeat next cycle.
+    expect(assess).toHaveBeenCalledTimes(4);
     await releaseQueues(db);
     const rows = await db.select().from(s.hiringCandidates);
     expect(rows.find((c) => c.id === ids[0])?.stage).toBe("review");

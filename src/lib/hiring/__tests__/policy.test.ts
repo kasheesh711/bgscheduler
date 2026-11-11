@@ -24,6 +24,7 @@ import {
   assessmentOutputSchema,
   preScreenOutputSchema,
   assessWithBriefs,
+  assessWithEvidence,
   briefOutputSchema,
   briefProblem,
   validateBriefs,
@@ -229,6 +230,31 @@ describe("hiring decision boundaries", () => {
     calls = 0;
     expect(await assessWithBriefs(async () => (calls++, assessment))).toEqual(assessment);
     expect(calls).toBe(4);
+  });
+  it("retries quote wrappers with validation feedback and retains valid evidence", async () => {
+    const source = "degree subject curriculum teaching english Mathematics";
+    const bad = { ...assessment, criteria: assessment.criteria.map((c, i) => i ? c : { ...c, evidence: '\"degree\"' }) };
+    const feedbacks: string[] = [];
+    const failures: unknown[] = [];
+    const value = await assessWithEvidence(async (feedback, attempt) => {
+      feedbacks.push(feedback);
+      return attempt === 1 ? bad : assessment;
+    }, value => validateAssessment(value, source), async (error, value, attempt) => {
+      failures.push({ error: error.message, value, attempt });
+    });
+    expect(value).toEqual(assessment);
+    expect(feedbacks).toHaveLength(2);
+    expect(feedbacks[1]).toContain("Assessment evidence does not occur in the source.");
+    expect(failures).toEqual([{ error: "Assessment evidence does not occur in the source.", value: bad, attempt: 1 }]);
+  });
+  it("bounds invalid-evidence retries and never accepts the invalid final answer", async () => {
+    const bad = { ...assessment, criteria: assessment.criteria.map(c => ({ ...c, evidence: "invented" })) };
+    const failures: number[] = [];
+    const value = await assessWithEvidence(async () => bad,
+      value => validateAssessment(value, "original source"),
+      async (_error, _value, attempt) => { failures.push(attempt); });
+    expect(failures).toEqual([1, 2, 3]);
+    expect(() => validateAssessment(value, "original source")).toThrow();
   });
   it("does not throw on a broken criterion entry: validation then holds that one candidate", async () => {
     const broken = { ...assessment, criteria: [null, ...assessment.criteria.slice(1)] };
