@@ -3,7 +3,7 @@ import * as s from "@/lib/db/schema";
 import { ensureIndex, type IndexedTutorGroup } from "@/lib/search/index";
 import { fetchWiseSessionsForBangkokDates } from "@/lib/wise/day-sessions";
 import { fetchTeacherAvailability } from "@/lib/wise/fetchers";
-import { availableSlots, verifyLiveSlot } from "../availability";
+import { availableSlots, readLiveBusy, verifyLiveSlot } from "../availability";
 import { configSchema, instant, type Slot } from "../model";
 
 vi.mock("@/lib/search/index", () => ({ ensureIndex: vi.fn() }));
@@ -120,7 +120,7 @@ describe("availableSlots (legacy mock)", () => {
   const week = Array.from({ length: 7 }, (_, d) =>
     d >= 1 && d <= 5 ? { start: "10:00", end: "16:00" } : null,
   );
-  const run = (interviewer: Record<string, unknown>) =>
+  const run = (interviewer: Record<string, unknown>, liveRead?: Awaited<ReturnType<typeof readLiveBusy>>) =>
     availableSlots(
       fakeDb(new Map()),
       configSchema.parse({
@@ -131,6 +131,8 @@ describe("availableSlots (legacy mock)", () => {
       "mock",
       ["Mathematics"],
       NOW,
+      undefined,
+      liveRead,
     );
   beforeEach(() =>
     vi.mocked(ensureIndex).mockResolvedValue(index(group(), new Date(NOW.getTime() - 60_000))),
@@ -142,5 +144,49 @@ describe("availableSlots (legacy mock)", () => {
   });
   it("offers none to a head with no saved hours", async () => {
     expect(await run({})).toEqual([]);
+  });
+  it("with a live read, drops only the hour of a new class and offers no head the read could not check", async () => {
+    const hour = { start: instant(DATE, 720), end: instant(DATE, 780) };
+    const read = (head: object) => ({ checkedAt: "", snapshotId: "snap", heads: new Map([["Peat", head]]) }) as never;
+    const slots = await run({ fallbackWeek: week }, read({ classes: [hour], leaves: [] }));
+    expect(slots).toHaveLength(5 * 6 - 1);
+    expect(slots.some((x) => x.start === hour.start.toISOString())).toBe(false);
+    expect(await run({ fallbackWeek: week }, read({ classes: [], leaves: [hour] }))).toHaveLength(5 * 6 - 1);
+    expect(await run({ fallbackWeek: week }, read({ error: "Interviewer accounts need review." }))).toEqual([]);
+    expect(await run({ fallbackWeek: week }, { checkedAt: "", snapshotId: "snap", heads: new Map() })).toEqual([]);
+  });
+});
+
+describe("readLiveBusy", () => {
+  const db = () => fakeDb(new Map([[s.tutorWiseAccounts, [account]]]));
+  const DATES = [DATE, "2026-11-03", "2026-11-10"];
+  it("reads each date and each 7-day leave window once, and matches a class by teacher id", async () => {
+    vi.mocked(fetchWiseSessionsForBangkokDates).mockImplementation(async (_c, _i, dates) =>
+      dates[0] === DATE ? ([session({ userId: undefined, teacherId: "t1" }), session({ _id: "s2", userId: "u2" })] as never) : [],
+    );
+    const read = await readLiveBusy(db(), ["Peat", "Nobody"], DATES);
+    expect(vi.mocked(fetchWiseSessionsForBangkokDates).mock.calls.map((c) => c[2])).toEqual(DATES.map((d) => [d]));
+    // 2 and 3 Nov share a window. 10 Nov is more than 6 days on, so it gets its own.
+    expect(vi.mocked(fetchTeacherAvailability)).toHaveBeenCalledTimes(2);
+    expect(read.heads.get("Peat")).toMatchObject({ classes: [{ start: instant(DATE, 700) }], leaves: [] });
+    expect(read.heads.get("Nobody")).toEqual({ error: "Interviewer identity needs review." });
+  });
+  it("marks a head whose accounts changed, and does not call Wise for that head", async () => {
+    const read = await readLiveBusy(fakeDb(new Map([[s.tutorWiseAccounts, [{ ...account, lastSnapshotId: "old" }]]])), ["Peat"], [DATE]);
+    expect(read.heads.get("Peat")).toMatchObject({ error: expect.stringMatching(/changed/) });
+    expect(fetchWiseSessionsForBangkokDates).not.toHaveBeenCalled();
+  });
+  it("caches a page read for the given time only, forgets a failed read, and the confirm check clears it", async () => {
+    const page = () => readLiveBusy(db(), ["Peat"], ["2026-11-04"], { cacheMs: 60_000 });
+    await page();
+    await page();
+    expect(fetchWiseSessionsForBangkokDates).toHaveBeenCalledTimes(1);
+    await verify(); // 1 more read, and the cache is cleared
+    await page();
+    expect(fetchWiseSessionsForBangkokDates).toHaveBeenCalledTimes(3);
+    vi.mocked(fetchWiseSessionsForBangkokDates).mockRejectedValueOnce(new Error("Wise down"));
+    const failing = () => readLiveBusy(db(), ["Peat"], ["2026-11-05"], { cacheMs: 60_000 });
+    await expect(failing()).rejects.toThrow("Wise down");
+    await expect(failing()).resolves.toBeTruthy();
   });
 });

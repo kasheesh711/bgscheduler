@@ -29,7 +29,7 @@ import {
   runFollowUps,
 } from "../queue";
 
-vi.mock("../availability", () => ({ availableSlots: vi.fn(), verifyLiveSlot: vi.fn() }));
+vi.mock("../availability", () => ({ availableSlots: vi.fn(), verifyLiveSlot: vi.fn(), readLiveBusy: vi.fn(async () => { throw new Error("no Wise in tests"); }) }));
 vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
 vi.mock("../google", () => ({ deliverCalendar: vi.fn().mockResolvedValue({ id: "calendar-event" }) }));
 vi.mock("@/lib/line/client", () => ({ pushLineTextMessage: vi.fn(), LinePushError: class extends Error {} }));

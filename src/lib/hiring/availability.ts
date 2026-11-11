@@ -179,6 +179,7 @@ export async function availableSlots(
   now = new Date(),
   // ensureIndex reads in parallel, so a caller inside a transaction passes its outer connection here.
   indexDb: Database = db,
+  live?: LiveBusy,
 ): Promise<Slot[]> {
   if (!subjects.length || (kind === "mock" && subjects.length !== 1)) return [];
   const dates = businessDates(now, config.holidays);
@@ -224,6 +225,7 @@ export async function availableSlots(
         );
         if (!group || !indexedSlotAvailable(group, date, start, end)) continue;
         if (!headInOffice(interviewer, date, start, end, calendar)) continue;
+        if (!liveFree(live, interviewer.canonicalKey, range)) continue;
         if (
           bookings.some(
             (b) =>
@@ -269,6 +271,7 @@ export async function availableVisitSlots(
   movingCandidate?: string,
   // ensureIndex reads in parallel, so a caller inside a transaction passes its outer connection here.
   indexDb: Database = db,
+  live?: LiveBusy,
 ): Promise<VisitSlot[]> {
   const heads = config.interviewers.filter((h) => h.subjects.includes(subject));
   if (!heads.length) return [];
@@ -311,6 +314,7 @@ export async function availableVisitSlots(
           weekMocks(head.canonicalKey, date) < config.onsiteLimits.perHeadPerWeek &&
           indexedSlotAvailable(group, date, exam + 120, exam + 180) &&
           headInOffice(head, date, exam + 120, exam + 180, calendar) &&
+          liveFree(live, head.canonicalKey, mock) &&
           !bookings.some(
             (b) =>
               b.interviewerKey === head.canonicalKey &&
@@ -341,100 +345,140 @@ export async function availableVisitSlots(
   return slots;
 }
 
+type Range = { start: Date; end: Date };
+/** Per head: the live Wise classes and leaves on the dates read, or the reason the head cannot be checked. */
+export type LiveBusy = {
+  checkedAt: string;
+  snapshotId: string;
+  heads: Map<string, { classes: Range[]; leaves: Range[] } | { error: string }>;
+};
+const liveCache = ((globalThis as { __bgscheduler_hiringLiveBusy?: Map<string, { at: number; read: Promise<LiveBusy> }> })
+  .__bgscheduler_hiringLiveBusy ??= new Map());
+const WISE_WINDOW_DAYS = 6; // Wise refuses an availability window longer than 7 days.
+
+/**
+ * One live Wise read for several heads and dates: every class of the institute on those dates, and each
+ * head account's leaves. Fail-closed: a class with no teacher, or bad leave data, fails the whole read.
+ * A head whose accounts need review gets an `error` and is never offered.
+ */
+export async function readLiveBusy(
+  db: Database,
+  headKeys: string[],
+  dates: string[],
+  // shortcut: per-instance cache for page reads only (cacheMs > 0); the confirm check never uses it.
+  { cacheMs = 0, deadlineMs = 45_000 }: { cacheMs?: number; deadlineMs?: number } = {},
+): Promise<LiveBusy> {
+  const key = `${[...headKeys].sort().join("|")}@${[...dates].sort().join("|")}`;
+  const hit = liveCache.get(key);
+  if (cacheMs && hit && Date.now() - hit.at < cacheMs) return hit.read;
+  const read = readLive(db, headKeys, [...dates].sort(), deadlineMs);
+  if (cacheMs) {
+    liveCache.set(key, { at: Date.now(), read });
+    read.catch(() => liveCache.delete(key));
+  }
+  return read;
+}
+
+async function readLive(db: Database, headKeys: string[], dates: string[], deadlineMs: number): Promise<LiveBusy> {
+  const index = await ensureIndex(db);
+  const heads: LiveBusy["heads"] = new Map();
+  const ids = new Map<string, string>(); // Wise user or teacher id -> head
+  const users: { key: string; wiseUserId: string }[] = [];
+  for (const key of headKeys) {
+    const group = index.tutorGroups.find((g) => g.canonicalKey === key);
+    if (!group) {
+      heads.set(key, { error: "Interviewer identity needs review." });
+      continue;
+    }
+    const accounts = await db.select().from(s.tutorWiseAccounts).where(eq(s.tutorWiseAccounts.canonicalKey, key));
+    const linked = group.wiseRecords.map((record) => accounts.find((a) => a.wiseTeacherId === record.wiseTeacherId));
+    if (!linked.length || linked.some((a) => !a?.wiseUserId)) {
+      heads.set(key, { error: "Interviewer accounts need review." });
+      continue;
+    }
+    if (
+      linked.some(
+        (a) => a!.lastSnapshotId !== index.snapshotId || !["active", "invalid_email", "email_conflict"].includes(a!.status),
+      )
+    ) {
+      heads.set(key, { error: "Interviewer accounts changed. Refresh Wise before booking." });
+      continue;
+    }
+    heads.set(key, { classes: [], leaves: [] });
+    for (const a of linked) {
+      ids.set(a!.wiseUserId!, key);
+      ids.set(a!.wiseTeacherId, key);
+      users.push({ key, wiseUserId: a!.wiseUserId! });
+    }
+  }
+  const busy = (key: string) => heads.get(key) as { classes: Range[]; leaves: Range[] };
+  if (users.length && dates.length) {
+    const client = createWiseClient({
+      signal: AbortSignal.timeout(deadlineMs + 35_000),
+      maxConcurrency: 3,
+      requestsPerSecond: 3,
+    });
+    const institute = process.env.WISE_INSTITUTE_ID || "696e1f4d90102225641cc413";
+    const deadlineAt = Date.now() + deadlineMs;
+    const windows: [string, string][] = [];
+    for (const date of dates) {
+      const last = windows.at(-1);
+      if (last && Date.parse(date) - Date.parse(last[0]) < WISE_WINDOW_DAYS * 86_400_000) last[1] = date;
+      else windows.push([date, date]);
+    }
+    const [days, leaves] = await Promise.all([
+      Promise.all(dates.map((date) => fetchWiseSessionsForBangkokDates(client, institute, [date], { deadlineAt }))),
+      Promise.all(
+        users.flatMap((user) =>
+          windows.map(async ([from, to]) => ({
+            user,
+            availability: await fetchTeacherAvailability(client, institute, user.wiseUserId, instant(from, 0), instant(to, 1439)),
+          })),
+        ),
+      ),
+    ]);
+    for (const session of days.flat()) {
+      const userId = getWiseSessionTeacherUserId(session);
+      if (!userId) throw new HiringError(409, "Wise returned a class with an unresolved teacher.");
+      // Wise names the teacher by user id or by teacher id, so both match (as the sit-in check does).
+      const key = ids.get(userId) ?? (session.teacherId ? ids.get(session.teacherId) : undefined);
+      if (key && isBlockingStatus(session.meetingStatus))
+        busy(key).classes.push({ start: new Date(session.scheduledStartTime), end: new Date(session.scheduledEndTime) });
+    }
+    for (const { user, availability } of leaves) {
+      if (!Array.isArray(availability.leaves)) throw new HiringError(409, "Wise did not return complete availability.");
+      for (const leave of availability.leaves) {
+        const start = new Date(leave.startTime),
+          end = new Date(leave.endTime);
+        if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start)
+          throw new HiringError(409, "Wise leave data needs review.");
+        busy(user.key).leaves.push({ start, end });
+      }
+    }
+  }
+  return { checkedAt: new Date().toISOString(), snapshotId: index.snapshotId, heads };
+}
+
+/** With a live read, a head is free only when that read shows no class and no leave in the range. */
+const liveFree = (live: LiveBusy | undefined, key: string, range: Range) => {
+  if (!live) return true;
+  const head = live.heads.get(key);
+  return !!head && !("error" in head) && ![...head.classes, ...head.leaves].some((b) => overlap(range, b));
+};
+
+/** The confirm check: one fresh, uncached Wise read for this head and day. */
 export async function verifyLiveSlot(db: Database, slot: Slot) {
   if (!slot.interviewerKey)
     return { checkedAt: new Date().toISOString(), source: "office-capacity" };
-  const index = await ensureIndex(db);
-  const group = index.tutorGroups.find(
-    (g) => g.canonicalKey === slot.interviewerKey,
-  );
-  if (!group) throw new HiringError(409, "Interviewer identity needs review.");
-  const accounts = await db
-    .select()
-    .from(s.tutorWiseAccounts)
-    .where(eq(s.tutorWiseAccounts.canonicalKey, slot.interviewerKey));
-  const linked = group.wiseRecords.map((record) =>
-    accounts.find((a) => a.wiseTeacherId === record.wiseTeacherId),
-  );
-  if (!linked.length || linked.some((a) => !a?.wiseUserId))
-    throw new HiringError(409, "Interviewer accounts need review.");
-  if (
-    linked.some(
-      (a) =>
-        a!.lastSnapshotId !== index.snapshotId ||
-        !["active", "invalid_email", "email_conflict"].includes(a!.status),
-    )
-  )
-    throw new HiringError(
-      409,
-      "Interviewer accounts changed. Refresh Wise before booking.",
-    );
-  const client = createWiseClient({
-    signal: AbortSignal.timeout(80000),
-    maxConcurrency: 3,
-    requestsPerSecond: 3,
-  });
-  const institute = process.env.WISE_INSTITUTE_ID || "696e1f4d90102225641cc413";
-  const start = new Date(slot.start),
-    end = new Date(slot.end);
-  const sessions = await fetchWiseSessionsForBangkokDates(
-    client,
-    institute,
-    [slot.date],
-    { deadlineAt: Date.now() + 45_000 },
-  );
-  for (const session of sessions) {
-    const userId = getWiseSessionTeacherUserId(session);
-    if (!userId)
-      throw new HiringError(
-        409,
-        "Wise returned a class with an unresolved teacher.",
-      );
-    if (
-      linked.some((a) => a!.wiseUserId === userId) &&
-      isBlockingStatus(session.meetingStatus) &&
-      overlap(
-        { start, end },
-        {
-          start: new Date(session.scheduledStartTime),
-          end: new Date(session.scheduledEndTime),
-        },
-      )
-    )
-      throw new HiringError(
-        409,
-        "The interviewer now has a class. Choose another time.",
-      );
-  }
-  for (const account of linked) {
-    const availability = await fetchTeacherAvailability(
-      client,
-      institute,
-      account!.wiseUserId!,
-      instant(slot.date, 0),
-      instant(slot.date, 1439),
-    );
-    if (!Array.isArray(availability.leaves))
-      throw new HiringError(409, "Wise did not return complete availability.");
-    for (const leave of availability.leaves) {
-      const leaveStart = new Date(leave.startTime),
-        leaveEnd = new Date(leave.endTime);
-      if (
-        !Number.isFinite(leaveStart.getTime()) ||
-        !Number.isFinite(leaveEnd.getTime()) ||
-        leaveEnd <= leaveStart
-      )
-        throw new HiringError(409, "Wise leave data needs review.");
-      if (overlap({ start, end }, { start: leaveStart, end: leaveEnd }))
-        throw new HiringError(
-          409,
-          "The interviewer is on leave. Choose another time.",
-        );
-    }
-  }
-  return {
-    checkedAt: new Date().toISOString(),
-    source: "wise-live",
-    snapshotId: index.snapshotId,
-  };
+  // A refusal here must not be followed by a cached list that still shows the same time.
+  liveCache.clear();
+  const live = await readLiveBusy(db, [slot.interviewerKey], [slot.date]);
+  const head = live.heads.get(slot.interviewerKey)!;
+  if ("error" in head) throw new HiringError(409, head.error);
+  const range = { start: new Date(slot.start), end: new Date(slot.end) };
+  if (head.classes.some((b) => overlap(range, b)))
+    throw new HiringError(409, "The interviewer now has a class. Choose another time.");
+  if (head.leaves.some((b) => overlap(range, b)))
+    throw new HiringError(409, "The interviewer is on leave. Choose another time.");
+  return { checkedAt: live.checkedAt, source: "wise-live", snapshotId: live.snapshotId };
 }

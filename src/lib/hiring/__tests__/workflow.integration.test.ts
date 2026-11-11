@@ -41,7 +41,7 @@ import { pushLineTextMessage } from "@/lib/line/client";
 vi.mock("../availability", async (actual) => ({
   ...(await actual<typeof import("../availability")>()),
   availableSlots: vi.fn(),
-  verifyLiveSlot: vi.fn(),
+  verifyLiveSlot: vi.fn(), readLiveBusy: vi.fn(async () => { throw new Error("no Wise in tests"); }),
 }));
 vi.mock("@/lib/search/index", () => ({ ensureIndex: vi.fn() }));
 vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
@@ -794,7 +794,10 @@ describe("hiring workflow persistence", () => {
       const test = await invited();
       const other = await invited();
       await setVisit({ enabled: false, deliveryEnabled: false, bookingTestCandidateId: test.id });
-      expect((await visitView(link(test), db)).slots.length).toBeGreaterThan(0);
+      // The live Wise read fails in tests, so the list comes from the Wise copy and says so.
+      const copy = await visitView(link(test), db);
+      expect(copy.slots.length).toBeGreaterThan(0);
+      expect(copy.checkedAt).toBeNull();
       expect(await visitView(link(other), db)).toMatchObject({ enabled: false, slots: [] });
       await expect(bookVisit(link(other), choice(), db)).rejects.toThrow(/unavailable/);
       await bookVisit(link(test), choice(), db);
