@@ -1,4 +1,5 @@
 import type { AssignmentResultRow, ExternalRoomBlock } from "./assignment-engine";
+import { connectedRoomBlocks } from "./room-policy";
 import { isRoomPublishSessionType } from "./session-mode";
 import { NO_ROOM_AVAILABLE, type ClassroomRoomDefinition } from "./rooms";
 
@@ -86,6 +87,7 @@ export function repairClassroomAssignments(input: RepairInput): AssignmentResult
   };
   positions = protectRetainedLocations(positions);
 
+  const pairs = connectedRoomBlocks(active).flatMap(block => block.slice(1).map((row, index) => [block[index], row]));
   const score = (plan: Map<string, string>): number[] => {
     let missing = 0, overflow = 0, moved = 0, preference = 0;
     for (const row of active) {
@@ -96,7 +98,9 @@ export function repairClassroomAssignments(input: RepairInput): AssignmentResult
       if (room?.category === "overflow_only") overflow++;
       if (room) preference += input.preferenceCost(row, room);
     }
-    return [missing, overflow, moved, preference];
+    const changes = pairs.filter(([a, b]) => plan.has(a.wiseSessionId) && plan.has(b.wiseSessionId)
+      && physical(plan.get(a.wiseSessionId)!) !== physical(plan.get(b.wiseSessionId)!)).length;
+    return [missing, changes, overflow, moved, preference];
   };
   const better = (a: number[], b: number[]) => {
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i];

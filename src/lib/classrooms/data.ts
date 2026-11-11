@@ -1070,7 +1070,7 @@ async function runIncrementalClassroomAssignmentUnlocked(
     externalRoomBlocks: [...externalBlocks, ...reservations],
   });
 
-  const overflow = await improveOverflowAllocation(db, { reconciliation, rooms: rooms.map(toEngineRoom), assignmentDate: date,
+  const overflow = await improveOverflowAllocation(db, { reconciliation, roomPolicies, rooms: rooms.map(toEngineRoom), assignmentDate: date,
     snapshotId: snapshot.id, snapshotFinishedAt: snapshotMeta.latestSyncFinishedAt, liveSessions,
     externalRoomBlocks: [...externalBlocks, ...reservations], frozenSessionIds,
     unverifiedReasons: [snapshotMeta.syncErrorSummary,

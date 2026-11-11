@@ -1,9 +1,10 @@
 import { join } from "node:path";
-import loadHighs, { type Highs, type Model } from "highs";
+import loadHighs, { type Highs } from "highs";
 import { isOnlineSession, isOfflineSession, REMOTE_NO_ROOM_NEEDED, roomPassesConstraints,
   type AssignmentResultRow, type ExternalRoomBlock } from "./assignment-engine";
 import { getPriorityPreferredRoom, isGiftTutor, NO_ROOM_AVAILABLE, ROOM_JOY, type ClassroomRoomDefinition } from "./rooms";
-import { physicalRoom } from "./room-policy";
+import { physicalRoom, connectedRoomBlocks, type TutorRoomPolicies } from "./room-policy";
+import { usualRoomPreferenceCost } from "./continuity-optimizer";
 import { compareStudentEvidence, unknownStudentEvidence } from "./mode-history";
 import type { OverflowAction, OverflowPlacement, OverflowPlan, StudentModeEvidence } from "./overflow-types";
 import { overflowLessonKey } from "./overflow-release";
@@ -36,6 +37,7 @@ export async function checkOverflowSolver() {
 
 interface PlannerInput<T extends AssignmentResultRow> {
   rows: T[];
+  roomPolicies?: TutorRoomPolicies;
   rooms: ClassroomRoomDefinition[];
   assignmentDate: string;
   now?: Date;
@@ -60,6 +62,7 @@ interface Choice {
   rank: number;
   moved: number;
   lastResort: number;
+  preference: number;
   elsewhere: number;
   order: number;
 }
@@ -109,6 +112,8 @@ function choicesFor<T extends AssignmentResultRow>(input: PlannerInput<T>, allow
         missing: Number(room === NO_ROOM_AVAILABLE), rank: converted ? ranks.get(row.wiseSessionId)! : 0,
         moved: Number(holdsRoom(row.assignedRoom) && physicalRoom(row.assignedRoom) !== physicalRoom(room)),
         lastResort: Number(rooms.find(candidate => candidate.name === room)?.category === "overflow_only"),
+        preference: rooms.some(candidate => candidate.name === room)
+          ? Math.round(usualRoomPreferenceCost(row, rooms.find(candidate => candidate.name === room)!, input.roomPolicies) * 100_000) : 0,
         elsewhere: Number(released && room === REMOTE_NO_ROOM_NEEDED),
         order: rooms.findIndex(candidate => candidate.name === room) + 1 });
     };
@@ -142,8 +147,8 @@ function choicesFor<T extends AssignmentResultRow>(input: PlannerInput<T>, allow
   return choices;
 }
 
-function buildModel(highs: Highs, rows: AssignmentResultRow[], choices: Choice[]): Model {
-  const constraints: Array<{ indices: number[]; lower: number; upper: number }> = rows.map((_, index) => ({
+function buildModel(highs: Highs, rows: AssignmentResultRow[], choices: Choice[]) {
+  const constraints: Array<{ indices: number[]; values?: number[]; lower: number; upper: number }> = rows.map((_, index) => ({
     indices: choices.flatMap((choice, col) => choice.row === index ? [col] : []), lower: 1, upper: 1,
   }));
   // Half-open event intervals: a room vacated at 12:00 is available for a 12:00 start.
@@ -158,28 +163,48 @@ function buildModel(highs: Highs, rows: AssignmentResultRow[], choices: Choice[]
       seen.add(key); constraints.push({ indices, lower: 0, upper: 1 });
     }
   }
+  const rowIndex = new Map(rows.map((row, index) => [row.wiseSessionId, index]));
+  const pairs = connectedRoomBlocks(rows).flatMap(block => block.slice(1).map((row, index) => [block[index], row]));
+  for (const [pairIndex, [a, b]] of pairs.entries()) {
+    const left = choices.flatMap((choice, index) => choice.row === rowIndex.get(a.wiseSessionId) ? [index] : []);
+    const right = choices.flatMap((choice, index) => choice.row === rowIndex.get(b.wiseSessionId) ? [index] : []);
+    for (const [own, other] of [[left, right], [right, left]]) {
+      for (const room of new Set(own.map(index => choices[index].occupies).filter(Boolean))) {
+        const positive = own.filter(index => choices[index].occupies === room);
+        const negative = other.filter(index => choices[index].occupies === room || !choices[index].occupies);
+        constraints.push({ indices: [...positive, ...negative, choices.length + pairIndex],
+          values: [...positive.map(() => 1), ...negative.map(() => -1), -1], lower: -Infinity, upper: 0 });
+      }
+    }
+  }
   const starts = [0], indices: number[] = [], values: number[] = [];
-  for (const constraint of constraints) { indices.push(...constraint.indices); values.push(...constraint.indices.map(() => 1)); starts.push(indices.length); }
-  return highs.createModel({ numCols: choices.length, numRows: constraints.length,
-    colCost: choices.map(choice => choice.missing), colLower: choices.map(() => 0), colUpper: choices.map(() => 1),
-    integrality: choices.map(() => highs.constants.variableType.integer),
+  for (const constraint of constraints) { indices.push(...constraint.indices); values.push(...(constraint.values ?? constraint.indices.map(() => 1))); starts.push(indices.length); }
+  const count = choices.length + pairs.length;
+  const model = highs.createModel({ numCols: count, numRows: constraints.length,
+    colCost: [...choices.map(choice => choice.missing), ...pairs.map(() => 0)], colLower: Array(count).fill(0), colUpper: Array(count).fill(1),
+    integrality: Array(count).fill(highs.constants.variableType.integer),
     rowLower: constraints.map(row => row.lower), rowUpper: constraints.map(row => row.upper),
-    matrix: { format: "csr", numRows: constraints.length, numCols: choices.length, starts, indices, values } });
+    matrix: { format: "csr", numRows: constraints.length, numCols: count, starts, indices, values } });
+  return { model, changeVariables: pairs.length };
 }
 
 function solve<T extends AssignmentResultRow>(highs: Highs, input: PlannerInput<T>, allowConversions: boolean, deadline: number): Solution | null {
   if (performance.now() >= deadline) return null;
   const choices = choicesFor(input, allowConversions);
   if (performance.now() >= deadline || !choices.length || input.rows.some((_, index) => !choices.some(choice => choice.row === index))) return null;
-  const model = buildModel(highs, input.rows, choices);
+  const { model, changeVariables } = buildModel(highs, input.rows, choices);
   let best: Solution | null = null;
-  const phases: Array<(choice: Choice) => number> = [choice => choice.missing, choice => Number(choice.converted),
-    choice => choice.lastResort, choice => choice.rank, choice => choice.elsewhere, choice => choice.moved, choice => choice.order];
+  const phases: Array<((choice: Choice) => number) | "roomChanges"> = [choice => choice.missing, choice => Number(choice.converted),
+    "roomChanges", choice => choice.lastResort, choice => choice.rank, choice => choice.elsewhere,
+    choice => choice.moved, choice => choice.preference, choice => choice.order];
   try {
     model.options.set({ output_flag: false, random_seed: 0, mip_rel_gap: 0, mip_abs_gap: 0 });
     for (let phase = 0; phase < phases.length; phase++) {
       if (performance.now() >= deadline) return best;
-      const cost = choices.map(phases[phase]);
+      const objective = phases[phase];
+      const cost = objective === "roomChanges"
+        ? [...choices.map(() => 0), ...Array(changeVariables).fill(1)]
+        : [...choices.map(objective), ...Array(changeVariables).fill(0)];
       if (!cost.some(Boolean) && best) {
         if (phase === 1) { best.switchesProven = best.missingProven; best.lowerBound = 0; }
         if (phase === phases.length - 1) best.rankingComplete = true;

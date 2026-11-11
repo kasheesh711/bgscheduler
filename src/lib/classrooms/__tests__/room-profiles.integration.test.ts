@@ -40,6 +40,11 @@ describe("stable room policies and saved print data in Postgres", () => {
     const input = { date, snapshotId: snapshot.id, liveSessions: [], trustedSnapshotMeta: { snapshotId: snapshot.id, latestSyncFinishedAt: new Date().toISOString(), staleAgeMs: 0, fresh: true } };
     vi.stubEnv("CLASSROOM_CONTINUITY_ENABLED", "false");
     const first = await runIncrementalClassroomAssignment(db, input);
+    // Model a valid older saved plan; the new greedy pass already avoids this changeover.
+    for (const row of first.rows) {
+      row.assignedRoom = row.canonicalKey === "teacher z" && row.startMinute === 600 ? "Hakuna Matata" : "Think Outside the Box";
+      await handle.db.update(s.classroomAssignmentRows).set({ assignedRoom: row.assignedRoom }).where(eq(s.classroomAssignmentRows.id, row.id));
+    }
     expect(roomQualityMetrics(first.rows).roomChanges).toBe(1);
     await handle.db.update(s.classroomAssignmentRows).set({ publishStatus: "success", publishedAt: new Date() }).where(eq(s.classroomAssignmentRows.runId, first.run!.id));
     const [email] = await handle.db.insert(s.classroomScheduleEmailRuns).values({ assignmentRunId: first.run!.id, subject: "test" }).returning();
@@ -47,7 +52,7 @@ describe("stable room policies and saved print data in Postgres", () => {
       canonicalKey: group.canonicalKey, tutorDisplayName: group.displayName, status: "sent" });
     vi.stubEnv("CLASSROOM_CONTINUITY_ENABLED", "true");
     const protectedRun = await runIncrementalClassroomAssignment(db, input);
-    expect(protectedRun.run?.changeSummary.algorithmVersion).toBe("continuity-v1");
+    expect(protectedRun.run?.changeSummary.algorithmVersion).toBe("room-pairs-v2");
     expect(protectedRun.run?.changeSummary.roomPolicies).toHaveLength(2);
     const zRooms = (rows: typeof first.rows) => rows.filter(row => row.canonicalKey === "teacher z").map(row => row.assignedRoom);
     expect(zRooms(protectedRun.rows)).toEqual(zRooms(first.rows));
@@ -72,6 +77,8 @@ describe("stable room policies and saved print data in Postgres", () => {
     const wanted = [rooms.find(r => r.name === "Do It")!.id, rooms.find(r => r.name === "Cool")!.id];
     await updateTutorRoomProfile(db, { canonicalKey: "DA", roomIds: wanted, revision: 1, actor: "admin@example.com" });
     await expect(updateTutorRoomProfile(db, { canonicalKey: "da", roomIds: wanted, revision: 1, actor: "stale@example.com" })).rejects.toMatchObject({ status: 409 });
+    await expect(updateTutorRoomProfile(db, { canonicalKey: "da", roomIds: [wanted[0], rooms.find(room => room.name === "Joy (TV)")!.id], revision: 2, actor: "admin@example.com" }))
+      .rejects.toMatchObject({ status: 400, message: "Joy is reserved for Gift" });
     const rotated = await seed();
     await ensureTutorRoomProfiles(db, rotated.snapshot.id, "2026-09-12", rooms);
     listed = await listTutorRoomProfiles(db);
@@ -82,6 +89,28 @@ describe("stable room policies and saved print data in Postgres", () => {
     await expect(updateTutorRoomProfile(db, { canonicalKey: "da", roomIds: wanted, revision: 2, actor: "admin" })).rejects.toMatchObject({ status: 400 });
     await expect(updateTutorRoomProfile(db, { canonicalKey: "da", roomIds: [rooms[0].id], revision: 2, actor: "admin" })).rejects.toMatchObject({ status: 400 });
   });
+  it("refreshes an automatic legacy triple once and preserves saved rows", async () => {
+    const { snapshot, group, session } = await seed();
+    const rooms = await handle.db.insert(s.classroomRooms).values(DEFAULT_CLASSROOM_ROOMS).returning();
+    await ensureTutorRoomProfiles(db, snapshot.id, "2026-09-12", rooms);
+    await handle.db.update(s.classroomTutorRoomProfiles).set({ provenance: {},
+      primaryRoomId: rooms.find(room => room.name === "Dream. Plan. Do.")!.id,
+      thirdRoomId: rooms.find(room => room.name === "Focus")!.id,
+    }).where(eq(s.classroomTutorRoomProfiles.canonicalKey, group.canonicalKey));
+    const [run] = await handle.db.insert(s.classroomAssignmentRuns).values({ snapshotId: snapshot.id, assignmentDate: "2026-09-12" }).returning();
+    const [saved] = await handle.db.insert(s.classroomAssignmentRows).values({ ...session, id: undefined,
+      runId: run.id, tutorDisplayName: group.displayName, minCapacity: 1, assignedRoom: "Dream. Plan. Do.", status: "assigned",
+      publishStatus: "success", publishedAt: new Date("2026-09-11"),
+    }).returning();
+    await Promise.all([1, 2].map(() => ensureTutorRoomProfiles(db, snapshot.id, "2026-09-12", rooms)));
+    await ensureTutorRoomProfiles(db, snapshot.id, "2026-09-12", rooms);
+    const profile = (await listTutorRoomProfiles(db)).profiles[0];
+    expect(profile).toMatchObject({ revision: 2, thirdRoomId: null, provenance: { roomPairVersion: 2, previousRevision: 1 } });
+    expect(profile.rooms[0].name).toBe("Do It");
+    expect(profile.roomIds).toHaveLength(2);
+    expect((await handle.db.select().from(s.classroomAssignmentRows).where(eq(s.classroomAssignmentRows.id, saved.id)))[0]).toEqual(saved);
+  });
+
   it("recognizes sent schedules and prints exact live students without stored class titles or contact details", async () => {
     const { snapshot, group, session } = await seed("ครูทดสอบ");
     const [oldRun, latest] = await handle.db.insert(s.classroomAssignmentRuns).values([

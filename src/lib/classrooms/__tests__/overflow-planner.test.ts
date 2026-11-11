@@ -36,6 +36,16 @@ describe("minimum-switch overflow optimizer", () => {
     const result = await planClassroomOverflow(input([row("saved", "Dream. Plan. Do."), row("pending", NO_ROOM_AVAILABLE)], { rooms: catalog }));
     expect(result.actualRows.every(row => ["A", "B"].includes(row.assignedRoom))).toBe(true);
   });
+  it("keeps a connected block together in a last-resort room during emergency repair", async () => {
+    const catalog = [rooms[0], { ...rooms[0], name: "Dream. Plan. Do.", category: "overflow_only" as const }];
+    const result = await planClassroomOverflow(input([
+      row("first", "Dream. Plan. Do.", { canonicalKey: "teacher", endMinute: 630 }),
+      row("next", "A", { canonicalKey: "teacher", startMinute: 630 }),
+      row("waiting", NO_ROOM_AVAILABLE, { startMinute: 630 }),
+    ], { rooms: catalog, externalRoomBlocks: [{ wiseSessionId: "external", className: null, location: "A", startMinute: 600, endMinute: 630 }] }));
+    expect(result.actualRows.slice(0, 2).map(row => row.assignedRoom)).toEqual(["Dream. Plan. Do.", "Dream. Plan. Do."]);
+    expect(result.actualRows[2].assignedRoom).toBe("A");
+  });
   it("does nothing on a clear day", async () => {
     const rows = [row("a")];
     expect(await planClassroomOverflow(input(rows))).toEqual({ actualRows: rows, plan: null });

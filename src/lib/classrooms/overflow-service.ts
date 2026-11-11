@@ -4,6 +4,7 @@ import { getWiseSessionClassId, getWiseSessionClassType, getWiseSessionTeacherUs
 import { sessionStudentIds, isBlockingStatus } from "@/lib/normalization/sessions";
 import { getLocalMinuteOfDay } from "@/lib/normalization/timezone";
 import type { AssignmentSession, ExternalRoomBlock } from "./assignment-engine";
+import type { TutorRoomPolicies } from "./room-policy";
 import type { ClassroomRoomDefinition } from "./rooms";
 import { getClassroomSessionMode, isOnlineSessionType } from "./session-mode";
 import { classroomTimestampToWiseIso } from "./timestamps";
@@ -35,6 +36,7 @@ export function liveVerifiedOnlineIds(rows: AssignmentSession[], live: WiseSessi
 
 export async function improveOverflowAllocation(db: Database, input: {
   reconciliation: ReconciliationResult;
+  roomPolicies?: TutorRoomPolicies;
   rooms: ClassroomRoomDefinition[];
   assignmentDate: string;
   snapshotId: string;

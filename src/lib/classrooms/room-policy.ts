@@ -1,6 +1,7 @@
 import { normalizeTutorName } from "./rooms";
+import { isOnlineSessionType } from "./session-mode";
 
-export const CLASSROOM_ALGORITHM_VERSION = "continuity-v1";
+export const CLASSROOM_ALGORITHM_VERSION = "room-pairs-v2";
 export const CONTINUITY_GAP_MINUTES = 15;
 
 export interface TutorRoomPolicy {
@@ -27,6 +28,31 @@ export function policyForTutor(row: { canonicalKey?: string | null }, policies?:
 
 export const physicalRoom = (name: string) => name.trim().toLowerCase().replace(/\s+\(tv\)$/, "");
 
+export function connectedRoomBlocks<T extends {
+  canonicalKey?: string | null; groupId?: string; tutorDisplayName: string;
+  startMinute: number; endMinute: number; sessionType?: string | null;
+}>(rows: T[]): T[][] {
+  const tutors = new Map<string, T[]>();
+  for (const row of rows) {
+    const key = assignmentTutorKey(row);
+    tutors.set(key, [...(tutors.get(key) ?? []), row]);
+  }
+  const blocks: T[][] = [];
+  for (const group of tutors.values()) {
+    group.sort((a, b) => a.startMinute - b.startMinute || a.endMinute - b.endMinute);
+    let block: T[] = [];
+    for (const row of group) {
+      const prior = block.at(-1), gap = prior ? row.startMinute - prior.endMinute : -1;
+      const connected = gap >= 0 && (gap <= CONTINUITY_GAP_MINUTES
+        || (gap < 60 && (isOnlineSessionType(prior?.sessionType) || isOnlineSessionType(row.sessionType))));
+      if (!connected) { if (block.length) blocks.push(block); block = []; }
+      block.push(row);
+    }
+    if (block.length) blocks.push(block);
+  }
+  return blocks;
+}
+
 export interface RoomQualityMetrics {
   consecutivePairs: number;
   roomChanges: number;
@@ -47,6 +73,7 @@ interface QualityRow {
   endMinute: number;
   assignedRoom: string;
   status: string;
+  sessionType?: string | null;
 }
 
 export function roomQualityMetrics(rows: QualityRow[], policies?: TutorRoomPolicies): RoomQualityMetrics {
@@ -66,12 +93,13 @@ export function roomQualityMetrics(rows: QualityRow[], policies?: TutorRoomPolic
       const policy = policyForTutor(row, policies);
       if (policy?.rooms.length) {
         profiledAssignments++;
-        if (!policy.rooms.some(room => physicalRoom(room) === physicalRoom(row.assignedRoom))) outsideUsualRooms++;
+        if (!policy.rooms.slice(0, 2).some(room => physicalRoom(room) === physicalRoom(row.assignedRoom))) outsideUsualRooms++;
       }
       const prior = group[i - 1];
       if (!prior || !holds(prior)) continue;
       const gap = row.startMinute - prior.endMinute;
-      if (gap < 0 || gap > CONTINUITY_GAP_MINUTES) continue;
+      if (gap < 0 || (gap > CONTINUITY_GAP_MINUTES
+        && !(gap < 60 && (isOnlineSessionType(prior.sessionType) || isOnlineSessionType(row.sessionType))))) continue;
       consecutivePairs++;
       if (physicalRoom(prior.assignedRoom) !== physicalRoom(row.assignedRoom)) roomChanges++;
     }

@@ -1,6 +1,7 @@
 import type { AssignmentResultRow, ExternalRoomBlock } from "./assignment-engine";
 import type { ClassroomRoomDefinition } from "./rooms";
-import { assignmentTutorKey, CONTINUITY_GAP_MINUTES, physicalRoom, policyForTutor, roomQualityMetrics, type TutorRoomPolicies } from "./room-policy";
+import { assignmentTutorKey, connectedRoomBlocks, physicalRoom, policyForTutor, roomQualityMetrics, type TutorRoomPolicies } from "./room-policy";
+import { roomProximityScore } from "./floor-plan";
 import { isRoomPublishSessionType } from "./session-mode";
 
 export const CONTINUITY_MAX_NODES = 10_000;
@@ -51,27 +52,10 @@ export function optimizeClassroomContinuity(input: Input) {
       if (input.savedRooms?.has(id) && physicalRoom(input.savedRooms.get(id)!) !== physicalRoom(room)) changed++;
       preference += input.preferenceCost(byId.get(id)!, roomByName.get(physicalRoom(room))!);
     }
-    return [rows.filter(row => row.status === "no_room").length, overflow, metrics.roomChanges, metrics.outsideUsualRooms, changed, metrics.distinctTeacherRooms, preference];
+    return [rows.filter(row => row.status === "no_room").length, metrics.roomChanges, overflow, metrics.outsideUsualRooms, changed, metrics.distinctTeacherRooms, preference];
   };
-  const groups = new Map<string, AssignmentResultRow[]>();
-  for (const row of rows) {
-    const key = assignmentTutorKey(row);
-    groups.set(key, [...(groups.get(key) ?? []), row]);
-  }
-  const chains: AssignmentResultRow[][] = [];
-  for (const group of [...groups.values()].sort((a, b) => assignmentTutorKey(a[0]).localeCompare(assignmentTutorKey(b[0])))) {
-    group.sort((a, b) => a.startMinute - b.startMinute || a.endMinute - b.endMinute || a.wiseSessionId.localeCompare(b.wiseSessionId));
-    let chain: AssignmentResultRow[] = [];
-    for (const row of group) {
-      const prior = chain.at(-1);
-      if (!positions.has(row.wiseSessionId) || (prior && (row.startMinute < prior.endMinute || row.startMinute - prior.endMinute > CONTINUITY_GAP_MINUTES))) {
-        if (chain.length) chains.push(chain);
-        chain = [];
-      }
-      if (positions.has(row.wiseSessionId)) chain.push(row);
-    }
-    if (chain.length) chains.push(chain);
-  }
+  const chains = connectedRoomBlocks(rows.filter(row => positions.has(row.wiseSessionId)))
+    .sort((a, b) => assignmentTutorKey(a[0]).localeCompare(assignmentTutorKey(b[0])));
   // First try the entire chain; pairs allow partial improvements when a long chain cannot fit.
   const roots = [...chains.filter(chain => chain.length > 1).sort((a, b) => b.length - a.length || a[0].startMinute - b[0].startMinute),
     ...chains.flatMap(chain => chain.slice(1).map((row, i) => [chain[i], row])), ...placed.map(row => [row])];
@@ -139,5 +123,6 @@ export function optimizeClassroomContinuity(input: Input) {
 export function usualRoomPreferenceCost(row: AssignmentResultRow, room: ClassroomRoomDefinition, policies?: TutorRoomPolicies): number {
   const policy = policyForTutor(row, policies);
   const rank = policy?.rooms.findIndex(name => physicalRoom(name) === physicalRoom(room.name)) ?? -1;
-  return rank >= 0 ? rank * 100 : policy?.rooms.length ? 1_000 : 0;
+  return rank >= 0 && rank < 2 ? rank * 100 : policy?.rooms.length
+    ? 1_000 + roomProximityScore(policy.rooms[0], room.name) / 100_000 : 0;
 }
