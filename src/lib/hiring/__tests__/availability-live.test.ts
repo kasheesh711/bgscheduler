@@ -176,7 +176,7 @@ describe("readLiveBusy", () => {
     expect(read.heads.get("Peat")).toMatchObject({ error: expect.stringMatching(/changed/) });
     expect(fetchWiseSessionsForBangkokDates).not.toHaveBeenCalled();
   });
-  it("caches a page read for the given time only, forgets a failed read, and the confirm check clears it", async () => {
+  it("caches a page read, keeps a failed read too, and the confirm check clears both", async () => {
     const page = () => readLiveBusy(db(), ["Peat"], ["2026-11-04"], { cacheMs: 60_000 });
     await page();
     await page();
@@ -187,6 +187,10 @@ describe("readLiveBusy", () => {
     vi.mocked(fetchWiseSessionsForBangkokDates).mockRejectedValueOnce(new Error("Wise down"));
     const failing = () => readLiveBusy(db(), ["Peat"], ["2026-11-05"], { cacheMs: 60_000 });
     await expect(failing()).rejects.toThrow("Wise down");
+    // No second Wise call while the failure is remembered: the page falls back at once.
+    await expect(failing()).rejects.toThrow("Wise down");
+    expect(fetchWiseSessionsForBangkokDates).toHaveBeenCalledTimes(4);
+    await verify();
     await expect(failing()).resolves.toBeTruthy();
   });
 });

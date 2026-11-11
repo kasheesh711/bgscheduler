@@ -749,7 +749,8 @@ async function liveForList(db: Database, config: HiringConfig, subjects: Subject
       { cacheMs: 60_000, deadlineMs: 12_000 },
     );
   } catch (error) {
-    console.error("[hiring] live Wise list read failed", error instanceof Error ? error.name : "unknown");
+    // A HiringError message is our own text (for example a class with no teacher), so it is safe to log.
+    console.error("[hiring] live Wise list read failed", error instanceof HiringError ? error.message : error instanceof Error ? error.name : "unknown");
     return null;
   }
 }
@@ -1211,7 +1212,9 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
   if (input.subject !== open.subject)
     throw new HiringError(409, onLine("This visit is for another subject."));
   const unavailable = () => new HiringError(409, "That visit time is no longer available. Choose another time.");
-  const slot = (await offeredSlots(db, config, open.subject, cap, open.rows, now)).find(
+  // The same live read as the list, so the head assigned here is the head the candidate's list was built on.
+  const live = (await liveForList(db, config, [open.subject], now)) ?? undefined;
+  const slot = (await offeredSlots(db, config, open.subject, cap, open.rows, now, db, live)).find(
     (v) => new Date(v.examStart).getTime() === start,
   );
   if (!slot) throw unavailable();
@@ -1234,7 +1237,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
     if (examOf(rows)?.startTime.getTime() === start) return examOf(rows)!;
     refuseChange(rows);
     if (input.subject !== subject) throw new HiringError(409, onLine("This visit is for another subject."));
-    const fresh = (await offeredSlots(tx, latest.config, subject, cap, rows, new Date(), db)).find(
+    const fresh = (await offeredSlots(tx, latest.config, subject, cap, rows, new Date(), db, live)).find(
       (v) => new Date(v.examStart).getTime() === start,
     );
     // Only this head's lock is held, and the live read was for this head.

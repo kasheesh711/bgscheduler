@@ -371,15 +371,18 @@ export async function readLiveBusy(
   const key = `${[...headKeys].sort().join("|")}@${[...dates].sort().join("|")}`;
   const hit = liveCache.get(key);
   if (cacheMs && hit && Date.now() - hit.at < cacheMs) return hit.read;
-  const read = readLive(db, headKeys, [...dates].sort(), deadlineMs);
+  // A page read gives up at its deadline, so a slow Wise cannot hold the public page (or the confirm route) open.
+  const read = readLive(db, headKeys, [...dates].sort(), deadlineMs, cacheMs ? deadlineMs : deadlineMs + 35_000);
   if (cacheMs) {
+    for (const [k, v] of liveCache) if (Date.now() - v.at > 10 * 60_000) liveCache.delete(k);
+    // A failed read stays cached too: while Wise is throttled, page loads fall back at once and add no load.
     liveCache.set(key, { at: Date.now(), read });
-    read.catch(() => liveCache.delete(key));
+    read.catch(() => {});
   }
   return read;
 }
 
-async function readLive(db: Database, headKeys: string[], dates: string[], deadlineMs: number): Promise<LiveBusy> {
+async function readLive(db: Database, headKeys: string[], dates: string[], deadlineMs: number, clientMs: number): Promise<LiveBusy> {
   const index = await ensureIndex(db);
   const heads: LiveBusy["heads"] = new Map();
   const ids = new Map<string, string>(); // Wise user or teacher id -> head
@@ -414,7 +417,7 @@ async function readLive(db: Database, headKeys: string[], dates: string[], deadl
   const busy = (key: string) => heads.get(key) as { classes: Range[]; leaves: Range[] };
   if (users.length && dates.length) {
     const client = createWiseClient({
-      signal: AbortSignal.timeout(deadlineMs + 35_000),
+      signal: AbortSignal.timeout(clientMs),
       maxConcurrency: 3,
       requestsPerSecond: 3,
     });

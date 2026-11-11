@@ -251,6 +251,20 @@ export function VisitBooking({
   const notice =
     view.notice ?? (view.slots.length ? null : `There are no open visit times at the moment. Contact BeGifted on LINE: ${LINE_URL}`);
   const showForm = (!view.visit || moving) && !notice;
+  const keep = moving && (
+    <button
+      type="button"
+      className={c.ghost}
+      disabled={busy}
+      onClick={() => {
+        setMoving(false);
+        setStart("");
+        setError("");
+      }}
+    >
+      Keep my current time
+    </button>
+  );
   return (
     <>
       {saved && <Saved>{saved}</Saved>}
@@ -319,6 +333,8 @@ export function VisitBooking({
           {error}
         </p>
       )}
+      {/* The list can empty while the candidate is moving: the way back stays on the page. */}
+      {!showForm && keep}
       {showForm && (
         <>
           <Picker
@@ -349,20 +365,7 @@ export function VisitBooking({
             )}
           />
           <Checks onsite={onsite} commitment={commitment} setOnsite={setOnsite} setCommitment={setCommitment} />
-          {moving && (
-            <button
-              type="button"
-              className={c.ghost}
-              disabled={busy}
-              onClick={() => {
-                setMoving(false);
-                setStart("");
-                setError("");
-              }}
-            >
-              Keep my current time
-            </button>
-          )}
+          {keep}
           <VisitConfirm
             error={error}
             disabled={busy || !start || !onsite || !commitment}
