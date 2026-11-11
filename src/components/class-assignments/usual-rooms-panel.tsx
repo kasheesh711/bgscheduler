@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ROOM_JOY } from "@/lib/classrooms/rooms";
 import type { ClassroomRoom } from "./types";
 
 interface Profile {
@@ -48,16 +49,20 @@ export function UsualRoomsPanel() {
     {data?.profiles.length === 0 && <p className="py-8 text-sm text-muted-foreground">Room sets will be established automatically the next time assignments are generated.</p>}
     <div className="grid gap-3 lg:grid-cols-2">{data?.profiles.map(profile => <form key={`${profile.canonicalKey}:${profile.revision}`} onSubmit={event => { event.preventDefault(); void save(profile, event.currentTarget); }} className="rounded-lg border p-4">
       <div className="mb-3 flex justify-between gap-3"><h3 className="font-semibold">{profile.tutorDisplayName}</h3><span className="text-xs text-muted-foreground">{profile.source === "admin" ? "Edited by team" : "Automatically selected"}</span></div>
-      <div className="grid gap-2 sm:grid-cols-2">{(profile.preferredRoom === "Joy (TV)" ? ["primary"] : ["primary", "reserve"]).map((key, index) => <label key={key} className="grid gap-1 text-sm">
+      <div className="grid gap-2 sm:grid-cols-2">{(profile.preferredRoom === ROOM_JOY ? ["primary"] : ["primary", "reserve"]).map((key, index) => <label key={key} className="grid gap-1 text-sm">
         {index === 0 ? "Primary room" : "Reserve room"}
         <select name={key} aria-label={index === 0 ? "Primary room" : "Reserve room"} defaultValue={profile.roomIds[index] ?? ""} className="w-full min-w-0 rounded-md border bg-background p-2" required={index === 0}>
           {index > 0 && <option value="">None</option>}
-          {data.rooms.filter(room => (room.category === "standard" && room.active) || profile.roomIds.includes(room.id)).map(room => <option key={room.id} value={room.id} disabled={!room.active || room.category !== "standard"}>{room.name}{!room.active || room.category !== "standard" ? " (unavailable for a pair)" : ""}</option>)}
+          {data.rooms.filter(room => (room.category === "standard" && room.active && (room.name !== ROOM_JOY || profile.preferredRoom === ROOM_JOY)) || profile.roomIds.includes(room.id)).map(room => {
+            const reserved = room.name === ROOM_JOY && profile.preferredRoom !== ROOM_JOY;
+            const unavailable = !room.active || room.category !== "standard" || reserved;
+            return <option key={room.id} value={room.id} disabled={unavailable}>{room.name}{reserved ? " (reserved for Gift)" : unavailable ? " (unavailable for a pair)" : ""}</option>;
+          })}
         </select>
       </label>)}</div>
       {profile.preferredRoom && <p className="mt-2 text-xs text-muted-foreground">Existing preference: {profile.preferredRoom}</p>}
-      {profile.rooms.some(room => !room.active || room.category !== "standard") && <p className="mt-2 text-sm text-amber-800">A stored room is unavailable for a normal pair. Update this pair or generate the next schedule.</p>}
-      <Button className="mt-3" size="sm" disabled={saving !== null} type="submit">{saving === profile.canonicalKey ? "Saving…" : "Save usual rooms"}</Button>
+      {profile.rooms.some(room => !room.active || room.category !== "standard" || (room.name === ROOM_JOY && profile.preferredRoom !== ROOM_JOY)) && <p className="mt-2 text-sm text-amber-800">A stored room is unavailable for a normal pair. Update this pair before generating the next schedule.</p>}
+      <Button className="mt-3" size="sm" disabled={saving !== null} type="submit">{saving === profile.canonicalKey ? "Saving…" : "Save room preferences"}</Button>
     </form>)}</div>
   </div>;
 }

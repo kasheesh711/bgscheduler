@@ -4,7 +4,7 @@ import * as schema from "@/lib/db/schema";
 import { addBangkokDays } from "@/lib/room-capacity/dates";
 import { existingPreferredRoom, proposeRoomProfiles, type ProfileRoom } from "./room-profile-planner";
 import { type TutorRoomPolicy } from "./room-policy";
-import { isGiftTutor, TV_REQUIRED_TUTORS } from "./rooms";
+import { isGiftTutor, ROOM_JOY, TV_REQUIRED_TUTORS } from "./rooms";
 
 export const ROOM_PAIR_VERSION = 2;
 
@@ -91,6 +91,7 @@ export async function updateTutorRoomProfile(db: Database, input: { canonicalKey
   if (!profile) throw new RoomProfileError("Teacher room profile not found", 404);
   const selected = input.roomIds.map(id => rooms.find(room => room.id === id));
   if (selected.length < 1 || selected.length > 2 || new Set(input.roomIds).size !== selected.length || selected.some(room => !room?.active || room.category !== "standard")) throw new RoomProfileError("Choose a primary room and at most one distinct reserve room", 400);
+  if (!isGiftTutor(profile.tutorDisplayName) && selected.some(room => room?.name === ROOM_JOY)) throw new RoomProfileError("Joy is reserved for Gift", 400);
   if (TV_REQUIRED_TUTORS.has(profile.tutorDisplayName) && selected.some(room => !room?.hasTv)) throw new RoomProfileError("This teacher requires TV rooms", 400);
   const anchor = existingPreferredRoom(profile.tutorDisplayName);
   if (anchor && selected[0]?.name !== anchor) throw new RoomProfileError(`Keep the existing preferred room, ${anchor}, first`, 400);

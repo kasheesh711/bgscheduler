@@ -77,6 +77,8 @@ describe("stable room policies and saved print data in Postgres", () => {
     const wanted = [rooms.find(r => r.name === "Do It")!.id, rooms.find(r => r.name === "Cool")!.id];
     await updateTutorRoomProfile(db, { canonicalKey: "DA", roomIds: wanted, revision: 1, actor: "admin@example.com" });
     await expect(updateTutorRoomProfile(db, { canonicalKey: "da", roomIds: wanted, revision: 1, actor: "stale@example.com" })).rejects.toMatchObject({ status: 409 });
+    await expect(updateTutorRoomProfile(db, { canonicalKey: "da", roomIds: [wanted[0], rooms.find(room => room.name === "Joy (TV)")!.id], revision: 2, actor: "admin@example.com" }))
+      .rejects.toMatchObject({ status: 400, message: "Joy is reserved for Gift" });
     const rotated = await seed();
     await ensureTutorRoomProfiles(db, rotated.snapshot.id, "2026-09-12", rooms);
     listed = await listTutorRoomProfiles(db);

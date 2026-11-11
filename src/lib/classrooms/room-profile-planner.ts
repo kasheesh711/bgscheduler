@@ -13,7 +13,7 @@ export interface ProfileRoom extends ClassroomRoomDefinition { id: string }
 export interface RoomUse { canonicalKey: string; room: string; minutes: number }
 export interface ProposedRoomProfile { canonicalKey: string; tutorDisplayName: string; roomIds: string[] }
 
-/** Only resolved snapshot identities become persistent profiles; existing profiles are never rebuilt. */
+/** Only resolved identities receive profiles; callers decide which existing profiles to preserve. */
 export function proposeRoomProfiles(input: {
   sessions: AssignmentSession[];
   rooms: ProfileRoom[];
