@@ -15,6 +15,8 @@ The Hiring workspace follows a candidate from a SEEK application to one onsite v
 
 Open a candidate to read the full extracted profile and résumé text. The text is loaded separately from the candidate list and keeps the extraction's personal-detail redactions. Text unavailable in the source is shown as unavailable. The same panel opens the original résumé file (see [Résumé files](#résumé-files)).
 
+The live worker asks for one continuous source passage in each evidence field. If validation fails, it retries twice with the error and the previous answer. Each failed attempt is stored in `hiring_audit` as `assessment-validation-failed`, with the source hash, attempt, error and returned assessment. After three failed attempts, the candidate stays on Review; unsupported evidence never receives a score. The score-only review command retains its own retry controls below.
+
 ## Review passes before activation
 
 Each pass below runs on the owner Mac. Each pass changes no stage and queues no message. Each pass refuses to run while Automation or Messages is on, and each needs `HIRING_WRITES_ENABLED=true` in the Mac's environment. The exceptions are `--tracker-results-report`, which also reads only, and `--tracker-report`. It is read-only and needs neither.

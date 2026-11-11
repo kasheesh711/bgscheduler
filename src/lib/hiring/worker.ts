@@ -20,6 +20,7 @@ import {
   isDecided, runtimeWritesAllowed, type HiringConfig } from "./model";
 import {
   askForBriefs,
+  assessWithEvidence,
   availabilityFraction,
   preScreenPoints,
   profileScore,
@@ -106,19 +107,25 @@ export async function assessCandidates(
       candidate.universityAssessment?.catalogHash === sourceHash(config.universities)) continue;
     if (!assessment && oldHash === hash && !(scoreOnly && retryInvalid)) continue;
     if (!assessment || oldHash !== hash) {
-      const value = await assess(
-        source,
-        `${candidate.id}:${phase}:${hash}`,
+      const validate = (value: unknown) => phase === "pre"
+        ? validatePreScreenAssessment(value, source, writtenText(candidate.preScreen!, candidate.name))
+        : validateAssessment(value, source);
+      const ask = (feedback: string, attempt: number) => assess(
+        source + feedback,
+        `${candidate.id}:${phase}:${hash}${attempt > 1 ? `:evidence:${attempt}` : ""}`,
         phase === "pre" ? "pre-screen" : "profile",
         phase === "pre" ? writtenText(candidate.preScreen!, candidate.name) : undefined,
       );
+      // The score-only CLI already retries and logs its own invalid answers.
+      const value = scoreOnly ? await ask("", 1) : await assessWithEvidence(ask, validate,
+        async (error, value, attempt) => {
+          await audit(db, "subscription-assessment", "assessment-validation-failed", candidate.id,
+            { phase, sourceHash: hash, attempt, error: error.message, assessment: value });
+        });
       calls++;
       try {
-        assessment =
-          phase === "pre"
-            ? validatePreScreenAssessment(value, source, writtenText(candidate.preScreen!, candidate.name))
-            : validateAssessment(value, source);
-      } catch {
+        assessment = validate(value);
+      } catch (error) {
         await withDatabaseTransaction(db, async (tx) => {
           const [held] = await tx
             .update(s.hiringCandidates)
@@ -145,7 +152,7 @@ export async function assessCandidates(
               "subscription-assessment",
               "invalid-evidence",
               candidate.id,
-              { sourceHash: hash, phase },
+              { sourceHash: hash, phase, validationError: error instanceof Error ? error.message : String(error) },
             );
           else onVoided?.();
         });
@@ -306,9 +313,11 @@ export async function scorePreScreens(
     const value = await assess(source, `${candidate.id}:pre:${hash}`, "pre-screen", written);
     calls++;
     let assessment: PreScreenAssessment | null = null;
+    let validationError: string | undefined;
     try {
       assessment = validatePreScreenAssessment(value, source, written);
-    } catch {
+    } catch (error) {
+      validationError = error instanceof Error ? error.message : String(error);
       // The hash is saved so a bad answer is not paid for twice. The note and the stage stay as they are.
     }
     // Leave the stored university result alone: a person may correct it while the model runs, and a stale copy would
@@ -354,6 +363,7 @@ export async function scorePreScreens(
         candidate.id,
         {
           sourceHash: hash,
+          ...(validationError ? { validationError } : {}),
           ...(assessment
             ? {
                 score: preScreenPoints(
