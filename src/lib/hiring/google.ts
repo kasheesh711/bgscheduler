@@ -137,7 +137,7 @@ export async function deliverCalendar(
             ? "BeGifted mock teaching"
             : "BeGifted exam"
           : `BeGifted ${booking.kind === "mock" ? "mock teaching" : "paper assessment"}: ${candidate.name}`,
-        description: `${booking.visitId ? `Candidate: ${candidate.name}\n` : ""}Subjects: ${booking.subjects.join(", ")}\n${booking.kind === "mock" ? "Prepare an IGCSE topic of your choice and a topic selected by the interviewer." : booking.visitId ? "The 2-hour exam. The mock teaching session follows it." : "Two hours are allocated per subject."}`,
+        description: `${booking.visitId ? `Candidate: ${candidate.name}\n` : ""}Subjects: ${booking.subjects.join(", ")}\n${booking.kind === "mock" ? "The candidate prepares one lesson from an international school syllabus (IGCSE, A Level or IB). The interviewer also selects a topic." : booking.visitId ? "The 2-hour exam. The mock teaching session follows it." : "Two hours are allocated per subject."}`,
         location,
         start: { dateTime: booking.startTime.toISOString(), timeZone: ZONE },
         end: { dateTime: booking.endTime.toISOString(), timeZone: ZONE },
