@@ -16,6 +16,8 @@ vi.mock("@/lib/hiring/service", () => ({
   bookInterview: vi.fn(async () => booking),
   visitView: vi.fn(async () => ({ kind: "visit" })),
   bookVisit: vi.fn(async () => booking),
+  callView: vi.fn(async () => ({ kind: "call" })),
+  bookCall: vi.fn(async () => booking),
   reviewCandidate: vi.fn(),
   saveSettings: vi.fn(),
   candidateById: vi.fn(),
@@ -28,7 +30,7 @@ const booking = {
   startTime: new Date("2026-11-02T03:00:00Z"),
   endTime: new Date("2026-11-02T05:00:00Z"),
 };
-import { bookingView, bookInterview, bookVisit, reviewCandidate, visitView } from "@/lib/hiring/service";
+import { bookCall, bookingView, bookInterview, bookVisit, callView, reviewCandidate, visitView } from "@/lib/hiring/service";
 import { deliverBookingMessages } from "@/lib/hiring/worker";
 import { GET, POST } from "@/app/api/hiring/book/[token]/route";
 import { POST as hiringPost } from "@/app/api/hiring/route";
@@ -85,6 +87,15 @@ describe("/api/hiring/book/[token]", () => {
     expect(response.status).toBe(200);
     expect(bookVisit).toHaveBeenCalledWith(token, { start: "x" });
     expect(bookInterview).not.toHaveBeenCalled();
+  });
+  it("sends a call link to the call functions", async () => {
+    const token = bookingToken(id, "call", later);
+    expect(await (await GET(new Request(url), context(token))).json()).toEqual({ kind: "call" });
+    expect(callView).toHaveBeenCalledWith(token);
+    const response = await POST(post(), context(token));
+    expect(response.status).toBe(200);
+    expect(bookCall).toHaveBeenCalledWith(token, { start: "x" });
+    for (const other of [visitView, bookingView, bookVisit, bookInterview]) expect(other).not.toHaveBeenCalled();
   });
   it("keeps an old link on the old functions", async () => {
     const token = bookingToken(id, "mock", later);

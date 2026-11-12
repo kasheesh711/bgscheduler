@@ -8,6 +8,18 @@ export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/spreadsheets",
   "https://www.googleapis.com/auth/calendar.events.owned",
 ];
+// Reads free and busy time on calendars the connected account can see. It is not in GOOGLE_SCOPES: visit calendar
+// delivery must keep working before the owner connects Google again. Only the HR call needs it.
+export const GOOGLE_FREEBUSY_SCOPE = "https://www.googleapis.com/auth/calendar.events.freebusy";
+// The HR pre-screen call (Kevin's decisions, 12 Nov 2026): the people@ calendar, Monday to Friday, 09:00–18:00 Bangkok,
+// 15 minutes. Fixed in code, so an older worker never meets an unknown settings key.
+export const HR_CALENDAR = "people@begiftededucation.com";
+/** The `interviewer_key` of every call row, so the booking overlap trigger gives HR one call at a time. */
+export const HR_CALL_KEY = "hr-call";
+export const CALL_MINUTES = 15;
+export const CALL_DAY_START = 9 * 60;
+export const CALL_DAY_END = 18 * 60;
+export const CALL_LINK_DAYS = 14;
 export const subscriptionAuthSchema = z.object({
   loggedIn: z.literal(true),
   authMethod: z.literal("claude.ai"),
@@ -79,7 +91,11 @@ export type PaperLevel = (typeof PAPER_LEVELS)[number];
 export type Subject = z.infer<typeof subjectSchema>;
 export type InterviewKind = "paper" | "mock";
 // `brief` is the interviewer's page for one mock booking: its id is a booking id, not a candidate id.
-export const tokenKindSchema = z.enum(["paper", "mock", "visit", "brief"]);
+// `call` is the candidate's link to book the HR pre-screen call.
+export const tokenKindSchema = z.enum(["paper", "mock", "visit", "brief", "call"]);
+/** A booking of the visit flows. A row of kind `call` belongs to the HR call list only. */
+export const isVisitBooking = <T extends { kind: string }>(row: T): row is T & { kind: InterviewKind } =>
+  row.kind !== "call";
 export const stageSchema = z.enum([
   "new",
   "review",
@@ -508,6 +524,17 @@ export const visitBookingSchema = z
     teachingCommitmentConfirmed: z.literal(true),
     move: z.boolean().optional(),
   })
+  .strict();
+
+/** A phone number as typed: spaces, dots, dashes and brackets go; 8 to 15 digits stay, with an optional leading +. */
+export const phoneSchema = z
+  .string()
+  .trim()
+  .max(40)
+  .transform((value) => value.replace(/[\s().-]/g, ""))
+  .pipe(z.string().regex(/^\+?\d{8,15}$/, "Enter a phone number with 8 to 15 digits."));
+export const callBookingSchema = z
+  .object({ start: z.iso.datetime(), phone: phoneSchema, move: z.boolean().optional() })
   .strict();
 
 export function runtimeWritesAllowed() {

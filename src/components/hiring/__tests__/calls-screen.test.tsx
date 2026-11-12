@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { BAD_CALL_REASON, CallsScreen, callCommand, callSubjects, triesText } from "../calls-screen";
+import { BAD_CALL_REASON, CallsScreen, callCommand, callState, callSubjects, triesText } from "../calls-screen";
 import type { HiringData } from "../dashboard";
 
 vi.mock("next/font/google", () => ({ Instrument_Serif: () => ({ variable: "" }) }));
@@ -35,6 +35,8 @@ const data = (patch = {}) =>
   ({
     candidates: [candidate(), candidate({ id: "b", name: "Sample B", profileScore: 92 }), candidate({ id: "c", name: "Not Listed" })],
     callOrder: ["b", "a"],
+    calls: [],
+    inviteOutbox: [],
     config: { callThreshold: 80, subjectPriority: PRIORITY, seekJobs: [{ jobId: "95633167" }] },
     ...patch,
   }) as unknown as HiringData;
@@ -51,9 +53,44 @@ describe("CallsScreen", () => {
     expect(html).toContain('href="https://th.employer.seek.com/candidates/?jobid=95633167&amp;selected=app-1&amp;tab=profile"');
     expect(html).toContain('target="_blank"');
   });
+  it("shows the booked time and the phone number that the candidate gave", () => {
+    const html = screen(
+      data({
+        candidates: [candidate({ phone: "+66812345678" }), candidate({ id: "b", name: "Sample B" })],
+        calls: [{ candidateId: "a", start: "2026-11-16T03:15:00.000Z", end: "2026-11-16T03:30:00.000Z" }],
+        inviteOutbox: [{ key: "b:call-invite", candidateId: "b", status: "sent", sentAt: "2026-11-12T02:00:00.000Z", error: null }],
+      }),
+    );
+    expect(html).toContain("Booked Mon 16 Nov, 10:15");
+    expect(html).toContain('href="tel:+66812345678"');
+    expect(html).toContain("Invited 12 Nov");
+    expect(html).toContain("Call booking");
+  });
   it("says so when nobody is waiting, and when calls are off", () => {
     expect(screen(data({ callOrder: [] }))).toContain("Nobody is waiting for a call.");
     expect(screen(data({ callOrder: [], config: { callThreshold: null } }))).toContain("Calls are off.");
+  });
+});
+
+describe("callState", () => {
+  const invite = (status: string, sentAt: string | null = null) => [{ key: "a:call-invite", status, sentAt }];
+  it("names the newest booked call first, then the state of the link email", () => {
+    const calls = [
+      { candidateId: "a", start: "2026-11-17T02:00:00.000Z" },
+      { candidateId: "a", start: "2026-11-16T03:15:00.000Z" },
+    ];
+    expect(callState("a", calls, invite("sent", "2026-11-12T02:00:00.000Z"))).toBe("Booked Tue 17 Nov, 09:00");
+    expect(callState("a", [], [])).toBe("Not invited");
+    expect(callState("a", [], invite("cancelled"))).toBe("Invitation cancelled. Call from SEEK");
+    // The link lasts 14 days. After that the app sends no other, and the row says so.
+    const sent = invite("sent", "2026-11-12T02:00:00.000Z");
+    expect(callState("a", [], sent, new Date("2026-11-20T02:00:00.000Z"))).toBe("Invited 12 Nov");
+    expect(callState("a", [], sent, new Date("2026-11-27T02:00:00.000Z"))).toBe("Invited 12 Nov. Link ended: call from SEEK");
+    expect(callState("a", [], invite("pending"))).toBe("Invitation queued");
+    expect(callState("a", [], invite("uncertain"))).toBe("Invitation not confirmed");
+    expect(callState("a", [], invite("failed"))).toBe("Invitation not confirmed");
+    // Another candidate's rows never show.
+    expect(callState("b", calls, invite("sent", "2026-11-12T02:00:00.000Z"))).toBe("Not invited");
   });
 });
 

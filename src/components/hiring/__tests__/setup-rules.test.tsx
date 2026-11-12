@@ -55,7 +55,7 @@ const dataFor = (config: HiringConfig, extra: Record<string, unknown> = {}) =>
     visitClashes: { candidateIds: [], stale: false },
     library: [],
     markingSpend: { usd: 0, complete: true },
-    google: { connected: true, email: "x@example.com", lastError: null },
+    google: { connected: true, email: "x@example.com", lastError: null, callCalendar: "readable" },
     ...extra,
   }) as unknown as HiringData;
 const panel = (
@@ -118,6 +118,13 @@ describe("Rules and setup", () => {
     expect(html).toMatch(/<button[^>]*class="[^"]*primary[^"]*"(?![^>]*disabled)/);
   });
 
+  it("says whether Hiring can read the call calendar, and what to do when it cannot", () => {
+    const google = (callCalendar: string) => ({ google: { connected: true, email: "x@example.com", lastError: null, callCalendar } });
+    const row = (html: string) => html.slice(html.indexOf("Call calendar (people@begiftededucation.com)")).slice(0, 400);
+    expect(row(panel(make()))).toContain(">Readable<");
+    expect(row(panel(make(), google("reconnect")))).toContain("Click Connect Google and approve the new permission");
+    expect(row(panel(make(), google("unreadable")))).toContain("Share that calendar with the organizer email");
+  });
   it("explains that a cancel or no-show frees the open places but not the weekly count", () => {
     const html = panel(make());
     expect(html).toContain(

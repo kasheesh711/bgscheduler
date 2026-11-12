@@ -49,6 +49,7 @@ vi.mock("@/lib/search/index", () => ({ ensureIndex: vi.fn() }));
 vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
 vi.mock("../google", () => ({
   deliverCalendar: vi.fn().mockResolvedValue({ id: "calendar-event" }),
+  googleConnectionStatus: vi.fn(async () => ({ connected: true, freeBusy: false, email: "", lastError: null })), readHrBusy: vi.fn(),
 }));
 vi.mock("@/lib/line/client", () => ({
   pushLineTextMessage: vi.fn().mockResolvedValue({
@@ -861,12 +862,14 @@ describe("hiring workflow persistence", () => {
       expect(vi.mocked(deliverCalendar)).toHaveBeenCalledTimes(2);
       expect(vi.mocked(pushLineTextMessage)).toHaveBeenCalledTimes(1);
       // The head's notice carries the candidate's contact line.
-      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\nCandidate: .+\nEmail: \S+@example\.com\nSubject: /);
+      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\nCandidate: .+\nEmail: \S+@example\.com\nPhone: not recorded\nSubject: /);
     });
     it("links the head to the candidate page, and ends the link with the visit", async () => {
-      const row = await invited();
+      const row = await invited({ phone: "+66812345678" });
       await bookVisit(link(row), choice(), db);
       await deliverOutbox(db, base);
+      // The number the candidate gave at the HR call booking reaches the head with the email.
+      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\nEmail: \S+@example\.com\nPhone: \+66812345678\nSubject: /);
       const token = vi.mocked(pushLineTextMessage).mock.calls[0][0].text.match(/\/hiring\/brief\/([\w.-]+)/)![1];
       const [exam, mock] = await rowsOf(row.id);
       expect([exam.kind, mock.kind]).toEqual(["paper", "mock"]);

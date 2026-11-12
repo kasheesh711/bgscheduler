@@ -911,6 +911,13 @@
       "when": 1794225600000,
       "tag": "0128_room_allocation_priorities",
       "breakpoints": true
+    },
+    {
+      "idx": 128,
+      "version": "7",
+      "when": 1794469053000,
+      "tag": "0129_hiring_call_booking",
+      "breakpoints": true
     }
   ]
 }

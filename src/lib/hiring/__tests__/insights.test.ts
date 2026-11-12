@@ -90,6 +90,11 @@ describe("profileGate with the call score", () => {
   it("still sends a contacted candidate with no good call to review", () => {
     expect(profileGate(candidate("a", "new", { ...at80, previouslyContacted: true }), calls).review).toEqual(["There was earlier contact."]);
   });
+  it("keeps a contacted candidate waiting for the call once the app's call link is sent", () => {
+    const gate = profileGate({ ...candidate("a", "new", { ...at80, previouslyContacted: true }), callInvited: true }, calls);
+    expect(gate).toMatchObject({ eligible: false, awaitingCall: true, review: [] });
+    expect(gate.reasons).toHaveLength(1);
+  });
 });
 
 describe("buildInsights", () => {

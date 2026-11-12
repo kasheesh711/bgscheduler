@@ -59,7 +59,7 @@ it("queues each mock notice once and suppresses a cancelled booking's old notice
   await queueRecruitmentMock(db, b, "booked"); await queueRecruitmentMock(db, b, "booked");
   expect(await deliverRecruitment(db)).toBe(1);
   expect(await deliverRecruitment(db)).toBe(0);
-  expect(pushLineTextMessage).toHaveBeenCalledWith(expect.objectContaining({ to: groupId, tutorBot: true, text: expect.stringContaining("Candidate: Candidate\nEmail: candidate@example.com\nSubject") }));
+  expect(pushLineTextMessage).toHaveBeenCalledWith(expect.objectContaining({ to: groupId, tutorBot: true, text: expect.stringContaining("Candidate: Candidate\nEmail: candidate@example.com\nPhone: not recorded\nSubject") }));
   await queueRecruitmentMock(db, b, "moved", new Date("2026-11-16T10:00:00+07:00"));
   await endVisit(db, [b], "cancelled", now);
   expect(await deliverRecruitment(db)).toBe(1);
@@ -130,12 +130,13 @@ it("announces an invitation only after Gmail accepts it, once across delivery re
   expect((await db.select().from(s.hiringOutbox))[0].status).toBe("sent");
   expect(send).toHaveBeenCalledTimes(2);
 });
-it("puts the email in the form notice, or says that none is recorded", async () => {
-  await queueRecruitmentForm(db, await candidate("With"), now);
+it("puts the email and the phone in the form notice, or says that none is recorded", async () => {
+  const withPhone = await candidate("With");
+  await queueRecruitmentForm(db, { ...withPhone, phone: "+66812345678" }, now);
   await queueRecruitmentForm(db, await candidate("Without", null), now);
   const messages = (await db.select().from(s.hiringRecruitmentDeliveries)).map(row => row.message);
-  expect(messages).toContainEqual(expect.stringContaining("Form completed\nWith — Mathematics\nEmail: with@example.com\n"));
-  expect(messages).toContainEqual(expect.stringContaining("Without — Mathematics\nEmail: not recorded\n"));
+  expect(messages).toContainEqual(expect.stringContaining("Form completed\nWith — Mathematics\nEmail: with@example.com\nPhone: +66812345678\n"));
+  expect(messages).toContainEqual(expect.stringContaining("Without — Mathematics\nEmail: not recorded\nPhone: not recorded\n"));
 });
 it("recognizes old mock invitations but excludes reminders and booking confirmations", async () => {
   const c = await candidate();

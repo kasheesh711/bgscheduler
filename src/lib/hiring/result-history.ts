@@ -111,14 +111,14 @@ export async function importResultHistory(db: Database, config: HiringConfig, wr
   const [existingPapers, existingMocks, bookings] = await Promise.all([
     db.select({ candidateId: p.candidateId, subject: p.subject, source: p.source }).from(p),
     db.select({ candidateId: m.candidateId, subject: m.subject, source: m.source }).from(m),
-    db.select({ candidateId: s.hiringBookings.candidateId, status: s.hiringBookings.status }).from(s.hiringBookings),
+    db.select({ candidateId: s.hiringBookings.candidateId, status: s.hiringBookings.status, kind: s.hiringBookings.kind }).from(s.hiringBookings),
   ]);
   const websiteKeys = new Set([...existingPapers.map((r) => ({ ...r, kind: "paper" })), ...existingMocks.map((r) => ({ ...r, kind: "mock" }))].filter((r) => r.source !== "tracker").map((r) => `${r.kind}|${r.candidateId}|${r.subject}`));
   const keyOf = (kind: string, row: { applicantId: string; subject: Subject }) => `${kind}|${find(row.applicantId)}|${row.subject}`;
   // The report's numbers for the person who approves the write.
   counts.keptFromWebsite = papers.filter((row) => websiteKeys.has(keyOf("paper", row))).length + mocks.filter((row) => websiteKeys.has(keyOf("mock", row))).length;
   const matched = new Set([...papers, ...mocks].flatMap((row) => find(row.applicantId) ?? []));
-  counts.matchedWithBooking = new Set(bookings.filter((b) => b.status !== "cancelled" && matched.has(b.candidateId)).map((b) => b.candidateId)).size;
+  counts.matchedWithBooking = new Set(bookings.filter((b) => b.status !== "cancelled" && b.kind !== "call" && matched.has(b.candidateId)).map((b) => b.candidateId)).size;
   if (!write) return counts;
   await withDatabaseTransaction(db, async (tx) => {
     const keep = new Set<string>();

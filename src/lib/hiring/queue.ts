@@ -28,9 +28,13 @@ import {
 } from "./scoring";
 import {
   audit,
+  callCalendarState,
+  cancelComingCall,
   enqueue,
+  inviteToCall,
   inviteToPreScreen,
   inviteToVisit,
+  missStartedCall,
   preScreenEmail,
   settings,
   visitInviteEmail,
@@ -43,6 +47,7 @@ const c = s.hiringCandidates,
   b = s.hiringBookings;
 const DAY = 86400000;
 const isForm = sql`${o.key} = ${o.candidateId}::text || ':pre-screen'`;
+const isCallInvite = sql`${o.key} = ${o.candidateId}::text || ':call-invite'`;
 // A reminder carries the same stage so that a stage change cancels it, but it is not a new invitation.
 const isOnsiteInvite = sql`${o.payload}->>'workflowStage' = 'onsite_invited' and ${o.key} not like '%:visit-reminder:%'`;
 /** Every release, click and follow-up takes this one lock, so they cannot share out the same place. */
@@ -99,7 +104,8 @@ export async function readLimitUsage(db: Database, funnel: Funnel, now: Date): P
   const rows = await db
     .select({ id: c.id, stage: c.stage, subject: c.visitSubject, end: b.endTime })
     .from(c)
-    .leftJoin(b, and(eq(b.candidateId, c.id), eq(b.status, "confirmed")))
+    // A past HR call stays confirmed. It is not a visit, so it must not make an invited person look booked.
+    .leftJoin(b, and(eq(b.candidateId, c.id), eq(b.status, "confirmed"), ne(b.kind, "call")))
     .where(inArray(c.stage, ["onsite_invited", "onsite_booked"]));
   for (const id of new Set(rows.map((r) => r.id))) {
     const own = rows.filter((r) => r.id === id);
@@ -119,6 +125,15 @@ export async function appInvited(db: Database, candidateId: string) {
     .where(and(eq(o.candidateId, candidateId), or(and(isForm, ne(o.status, "cancelled")), isOnsiteInvite)))
     .limit(1);
   return rows.length > 0;
+}
+
+/** When the call booking link was sent. Only a sent row counts: a link that may not have left is not the app's contact. */
+export async function callInviteSentAt(db: Database, candidateId: string) {
+  const [invite] = await db
+    .select({ status: o.status, sentAt: o.sentAt })
+    .from(o)
+    .where(eq(o.key, `${candidateId}:call-invite`));
+  return invite?.status === "sent" ? invite.sentAt : null;
 }
 
 /** The form row's send time. A row not yet sent, or not known to be sent, has no time, so no follow-up clock runs. */
@@ -200,7 +215,7 @@ export const autoInviteEligible = (candidate: Candidate, sentAt: Date | null, co
  * Reads only the columns the gate and the score use, because profile text and the other large fields are not needed to rank.
  * A release locks and reads the full row before it sends anything.
  */
-const formCandidates = (db: Database) =>
+const formCandidates = (db: Database, id?: string) =>
   db
     .select({
       id: c.id,
@@ -212,10 +227,17 @@ const formCandidates = (db: Database) =>
       universityAssessment: c.universityAssessment,
       queueManual: c.queueManual,
       callReview: c.callReview,
+      callInvited: sql<boolean>`${exists(
+        db
+          .select({ id: o.id })
+          .from(o)
+          .where(and(eq(o.candidateId, c.id), isCallInvite, eq(o.status, "sent"))),
+      )}`,
     })
     .from(c)
     .where(
       and(
+        id ? eq(c.id, id) : undefined,
         eq(c.stage, "new"),
         isNull(c.preScreen),
         notExists(db.select({ id: o.id }).from(o).where(and(eq(o.candidateId, c.id), isForm))),
@@ -245,8 +267,8 @@ export async function preScreenQueue(db: Database, config: HiringConfig): Promis
  * Highest score first, then the earlier application. A closed subject or any other gate reason keeps a row out,
  * because the form could not go after the call.
  */
-export async function callQueue(db: Database, config: HiringConfig): Promise<QueueEntry[]> {
-  const rows = await formCandidates(db);
+export async function callQueue(db: Database, config: HiringConfig, id?: string): Promise<QueueEntry[]> {
+  const rows = await formCandidates(db, id);
   return rows
     .flatMap((row) => {
       const gate = profileGate(row, config);
@@ -287,6 +309,10 @@ export async function recordCall(
       throw new HiringError(409, "This candidate has left the call queue. Refresh the page.");
     const at = now.toISOString();
     const review = row.callReview ?? { good: null, tries: [] };
+    // After a good call HR will not make a call that is still ahead. A no answer closes the call that has started, and
+    // the candidate's link then lets them book again.
+    if (result === "good") await cancelComingCall(tx, id, now);
+    else await missStartedCall(tx, id, now);
     await tx
       .update(c)
       .set({
@@ -295,6 +321,68 @@ export async function recordCall(
       })
       .where(eq(c.id, id));
     await audit(tx, actor, result === "good" ? "call-good" : "call-no-answer", id, { tries: review.tries.length + (result === "good" ? 0 : 1) });
+  });
+}
+
+/**
+ * Sends the call booking link to the people HR must call, in the Calls tab's order. One link per candidate, ever: any
+ * earlier row, even a cancelled one, keeps a candidate out. The day's number is the pre-screen per-day limit, counted
+ * apart from the forms, so a go-live cannot become a mass email. Nothing goes unless HR's calendar can be read now:
+ * the link would open a page with no times. That check is a real read, made before the queue lock is taken.
+ */
+export async function releaseCallInvites(db: Database, now = new Date()) {
+  const before = await settings(db);
+  if (!allowed(before.config) || (await callCalendarState(db, before.config, now)) !== "readable") return 0;
+  return withDatabaseTransaction(db, async (tx) => {
+    await lockQueue(tx);
+    const { config } = await settings(tx);
+    if (!allowed(config)) return 0;
+    const earlier = await tx.select({ candidateId: o.candidateId, status: o.status, createdAt: o.createdAt }).from(o).where(isCallInvite);
+    const invited = new Set(earlier.map((row) => row.candidateId));
+    const dayStart = bangkokDayStart(now);
+    // Every status but `cancelled` counts as used, as for the form limits.
+    let room = config.preScreenLimits.perDay - earlier.filter((row) => row.status !== "cancelled" && row.createdAt >= dayStart).length;
+    let sent = 0;
+    for (const entry of await callQueue(tx, config)) {
+      if (room <= 0) break;
+      if (invited.has(entry.id)) continue;
+      const row = await lockCandidate(tx, entry.id);
+      // A person or a SEEK read can act between the queue read and this row lock.
+      if (!(await callQueue(tx, config, entry.id)).length) continue;
+      if (!(await inviteToCall(tx, row, now))) continue;
+      await audit(tx, "hiring-queue", "call-invite-release", row.id, { subject: entry.subject, score: entry.score });
+      room--;
+      sent++;
+    }
+    return sent;
+  });
+}
+
+/**
+ * A call is booked only while HR must call. A candidate can leave the Calls tab in a way that no click covers (the worker
+ * moves them to review, the call score changes, their subject closes). Their call still ahead is then cancelled, so HR is
+ * not sent to call someone with no row to record the result on, and no event stays on the calendar.
+ */
+export async function cancelOrphanCalls(db: Database, now = new Date()) {
+  return withDatabaseTransaction(db, async (tx) => {
+    await lockQueue(tx);
+    const { config } = await settings(tx);
+    const listed = new Set((await callQueue(tx, config)).map((entry) => entry.id));
+    const ahead = await tx
+      .select({ candidateId: b.candidateId })
+      .from(b)
+      .where(and(eq(b.kind, "call"), eq(b.status, "confirmed"), sql`${b.startTime} > ${now.toISOString()}::timestamptz`));
+    let cancelled = 0;
+    for (const id of new Set(ahead.map((row) => row.candidateId))) {
+      if (listed.has(id)) continue;
+      await lockCandidate(tx, id);
+      // A booking or a click can land between the queue read and this row lock.
+      if ((await callQueue(tx, config, id)).length) continue;
+      await cancelComingCall(tx, id, now);
+      await audit(tx, "hiring-queue", "call-cancelled-left-list", id, {});
+      cancelled++;
+    }
+    return cancelled;
   });
 }
 

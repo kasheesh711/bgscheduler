@@ -7,7 +7,7 @@ import { changePaperMarks, changeRubric, clearResultCheck } from "@/lib/hiring/m
 import { RUBRIC_ITEMS, type RubricItem } from "@/lib/hiring/marking-sheet";
 import { configSchema, localDate, subjectSchema } from "@/lib/hiring/model";
 import { headWeek } from "@/lib/hiring/head-schedule";
-import { candidateById, changePreScreenScore, dashboard, reviewCandidate, saveHeadDays, saveSettings, settings } from "@/lib/hiring/service";
+import { callCalendarState, candidateById, changePreScreenScore, dashboard, reviewCandidate, saveHeadDays, saveSettings, settings } from "@/lib/hiring/service";
 import { moveInQueue, recordCall, resetQueueOrder } from "@/lib/hiring/queue";
 import { discardDecision, draftDecision, saveDraft, sendDecision } from "@/lib/hiring/decisions";
 import { deliverBookingMessages, deliverOutbox } from "@/lib/hiring/worker";
@@ -146,10 +146,17 @@ export async function GET(request: Request) {
       );
     }
     const data = await dashboard();
+    // The read of the people@ calendar that the call page uses (kept 60 seconds). A slow Google must not hold the
+    // dashboard, so it gets 4 seconds here; the read itself goes on and the next load finds its answer.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const callCalendar = await Promise.race([
+      callCalendarState(getDb(), data.config),
+      new Promise<"unreadable">((resolve) => (timer = setTimeout(() => resolve("unreadable"), 4000))),
+    ]).finally(() => clearTimeout(timer));
     return NextResponse.json(
       {
         ...data,
-        google: await googleConnectionStatus(data.config.connectedEmail),
+        google: { ...(await googleConnectionStatus(data.config.connectedEmail)), callCalendar },
       },
       { headers: { "Cache-Control": "no-store" } },
     );
