@@ -850,6 +850,9 @@ describe("hiring workflow persistence", () => {
       expect(text).toContain("12:00");
       expect(text).toContain("13:00");
       expect(text).toContain(LINE);
+      // The confirmation repeats what to prepare, with the syllabus links.
+      expect(text).toMatch(/prepare one lesson in \w+/);
+      expect(text).toContain("https://www.cambridgeinternational.org/");
       await deliverOutbox(db, base);
       expect(sendEmail).toHaveBeenCalledTimes(1);
       expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ cc: ["people@begiftededucation.com"] }));

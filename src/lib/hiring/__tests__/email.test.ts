@@ -69,6 +69,11 @@ describe("candidate emails keep their facts", () => {
     }
   });
 
+  it("a text that is not one subject gets the general links only", () => {
+    const general = mockPrep("your subject").links;
+    for (const text of ["Mathematics, Physics", "constructor", "__proto__"]) expect(mockPrep(text).links).toEqual(general);
+  });
+
   it.each(SUBJECTS)("the visit invitation for %s names the subject and links its syllabus", (subject) => {
     const general = mockPrep("your subject").links;
     const { links } = mockPrep(subject);

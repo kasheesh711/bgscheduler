@@ -105,7 +105,8 @@ export function mockPrep(subject: string): { paragraphs: string[]; links: EmailR
       "The interviewer will also select a topic. It may be from another level. You may bring teaching materials or tools.",
       "These links show the syllabuses that international schools use.",
     ],
-    links: [...(SUBJECT_LINKS[subject as Subject] ?? []), ...GENERAL_LINKS],
+    // An own-key check: a name such as "constructor" must not reach an inherited property.
+    links: [...(Object.hasOwn(SUBJECT_LINKS, subject) ? SUBJECT_LINKS[subject as Subject] : []), ...GENERAL_LINKS],
   };
 }
 
