@@ -81,7 +81,11 @@ describe("callState", () => {
     ];
     expect(callState("a", calls, invite("sent", "2026-11-12T02:00:00.000Z"))).toBe("Booked Tue 17 Nov, 09:00");
     expect(callState("a", [], [])).toBe("Not invited");
-    expect(callState("a", [], invite("cancelled"))).toBe("Not invited");
+    expect(callState("a", [], invite("cancelled"))).toBe("Invitation cancelled. Call from SEEK");
+    // The link lasts 14 days. After that the app sends no other, and the row says so.
+    const sent = invite("sent", "2026-11-12T02:00:00.000Z");
+    expect(callState("a", [], sent, new Date("2026-11-20T02:00:00.000Z"))).toBe("Invited 12 Nov");
+    expect(callState("a", [], sent, new Date("2026-11-27T02:00:00.000Z"))).toBe("Invited 12 Nov. Link ended: call from SEEK");
     expect(callState("a", [], invite("pending"))).toBe("Invitation queued");
     expect(callState("a", [], invite("uncertain"))).toBe("Invitation not confirmed");
     expect(callState("a", [], invite("failed"))).toBe("Invitation not confirmed");

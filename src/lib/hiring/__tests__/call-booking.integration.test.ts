@@ -5,8 +5,8 @@ import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { configSchema, HiringError, HR_CALENDAR, HR_CALL_KEY, type HiringConfig } from "../model";
-import { bookCall, bookingView, callView, dashboard, reviewCandidate, visitView } from "../service";
-import { callQueue, readLimitUsage, recordCall, releaseCallInvites, releaseQueues } from "../queue";
+import { bookCall, bookingView, callCalendarState, callView, dashboard, reviewCandidate, visitView } from "../service";
+import { callQueue, cancelOrphanCalls, readLimitUsage, recordCall, releaseCallInvites, releaseQueues } from "../queue";
 import { observeSeekState } from "../sources";
 import { googleConnectionStatus, readHrBusy } from "../google";
 import { bookingToken } from "../tokens";
@@ -73,6 +73,8 @@ beforeEach(async () => {
   await db.insert(s.hiringSettings).values({ id: "default", config, updatedBy: "owner@example.com", workerAt: now });
   connection(true);
   vi.mocked(readHrBusy).mockResolvedValue([]);
+  // The page keeps one calendar answer for 60 seconds on the server instance. Each test starts with none.
+  delete (globalThis as { __bgscheduler_hiringHrBusy?: unknown }).__bgscheduler_hiringHrBusy;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -124,8 +126,17 @@ describe("the call booking link", () => {
     await setConfig({ preScreenLimits: { ...config.preScreenLimits, perDay: 2 } });
     connection(false);
     expect(await releaseCallInvites(db)).toBe(0);
-    expect(await db.select().from(s.hiringOutbox)).toEqual([]);
+    expect(await callCalendarState(db, await settingsConfig())).toBe("reconnect");
+    // The permission is there, but the calendar is not shared with the organizer account: still no link.
     connection(true);
+    vi.mocked(readHrBusy).mockRejectedValueOnce(new HiringError(502, "Google did not return the call calendar."));
+    expect(await releaseCallInvites(db)).toBe(0);
+    expect(await db.select().from(s.hiringOutbox)).toEqual([]);
+    vi.setSystemTime(new Date(now.getTime() + 61_000));
+    expect(await callCalendarState(db, await settingsConfig())).toBe("readable");
+    await setConfig({ preScreenLimits: { ...config.preScreenLimits, perDay: 0 } });
+    expect(await releaseCallInvites(db)).toBe(0);
+    await setConfig({ preScreenLimits: { ...config.preScreenLimits, perDay: 2 } });
     expect(await releaseCallInvites(db)).toBe(2);
     const first = await db.select().from(s.hiringOutbox);
     expect(first.map((job) => job.key).sort()).toEqual([`${a.id}:call-invite`, `${b.id}:call-invite`].sort());
@@ -138,6 +149,7 @@ describe("the call booking link", () => {
     vi.setSystemTime(after(1));
     expect(await releaseCallInvites(db)).toBe(1);
     expect(await releaseCallInvites(db)).toBe(0);
+    vi.setSystemTime(now);
     expect((await jobsOf(c.id)).map((job) => job.key)).toEqual([`${c.id}:call-invite`]);
     expect((await db.select().from(s.hiringAudit)).filter((row) => row.action === "call-invite-release")).toHaveLength(3);
     // The link is not a visit link or an old-flow link.
@@ -158,10 +170,18 @@ describe("the call booking link", () => {
     expect(vi.mocked(readHrBusy).mock.calls.at(-1)!.slice(1, 3)).toEqual([new Date(NINE), new Date("2026-11-11T11:00:00.000Z")]);
     // No stored phone number ever comes back through the link.
     expect(JSON.stringify(await callView(link(b.id), db))).not.toContain("66812345678");
+    // A page read keeps the answer for 60 seconds, so a link cannot flood Google. The answer for a failure is kept too.
+    const reads = vi.mocked(readHrBusy).mock.calls.length;
+    await callView(link(a.id), db);
+    await callView(link(b.id), db);
+    expect(vi.mocked(readHrBusy)).toHaveBeenCalledTimes(reads);
     vi.mocked(readHrBusy).mockRejectedValue(new HiringError(502, "Google did not return the call calendar."));
+    vi.setSystemTime(new Date(now.getTime() + 61_000));
     const closed = await callView(link(a.id), db);
     expect(closed.slots).toEqual([]);
     expect(closed.notice).toMatch(/cannot be shown/);
+    await callView(link(a.id), db);
+    expect(vi.mocked(readHrBusy)).toHaveBeenCalledTimes(reads + 1);
   });
 });
 
@@ -188,10 +208,22 @@ describe("booking a call", () => {
     expect(text).toMatch(/Move your call:\n\S+\/hiring\/book\//);
     const [audit] = await db.select().from(s.hiringAudit);
     expect([audit.action, audit.detail]).toEqual(["call-booked", { start: NINE }]);
-    // A retry returns the same call.
-    expect((await book(a.id)).id).toBe(call.id);
+    // A retry returns the same call, and a corrected number is saved.
+    expect((await bookCall(link(a.id), { start: NINE, phone: "0898765432" }, db)).id).toBe(call.id);
     expect(await callsOf(a.id)).toHaveLength(1);
+    expect((await candidate(a.id)).phone).toBe("0898765432");
     expect(await callView(link(a.id), db)).toMatchObject({ call: { start: NINE, end: QUARTER }, canMove: true });
+  });
+
+  it("gives one time to one candidate when two confirm together", async () => {
+    const [a, b] = [await seed(), await seed()];
+    const results = await Promise.allSettled([book(a.id), book(b.id)]);
+    expect(results.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+    expect((results.find((r) => r.status === "rejected") as PromiseRejectedResult).reason).toMatchObject({ status: 409 });
+    const rows = await db.select().from(s.hiringBookings);
+    expect(rows.map((row) => [row.kind, row.status])).toEqual([["call", "confirmed"]]);
+    // The confirm step never uses the kept calendar answer: each of the two read Google.
+    expect(vi.mocked(readHrBusy)).toHaveBeenCalledTimes(2);
   });
 
   it("refuses a time another candidate holds, and the database refuses a second row for it", async () => {
@@ -270,6 +302,13 @@ describe("call results with a booked call", () => {
     await recordCall(a.id, "good", hr, db);
     expect((await callsOf(a.id)).map((row) => row.status)).toEqual(["confirmed"]);
     expect((await jobsOf(a.id)).filter((job) => job.kind === "calendar_cancel")).toEqual([]);
+    // 09:31: the second call ended and HR has recorded nothing. The candidate cannot book again until HR does.
+    vi.setSystemTime(new Date("2026-11-05T02:31:00.000Z"));
+    expect(await callView(link(b.id), db)).toMatchObject({ call: null, slots: [], notice: expect.stringMatching(/time has passed/) });
+    await expect(bookCall(link(b.id), { start: FRIDAY, phone: "0812345678" }, db)).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringMatching(/time has passed/),
+    });
     await recordCall(b.id, "no_answer", hr, db);
     expect((await callsOf(b.id)).map((row) => row.status)).toEqual(["no_show"]);
     expect((await candidate(b.id)).callReview?.tries).toHaveLength(1);
@@ -298,6 +337,35 @@ describe("call results with a booked call", () => {
     await reviewCandidate(a.id, { revision: a.revision, action: "advance", subjects: ["Mathematics"], reason: "Strong profile" }, "owner@example.com", db);
     expect((await candidate(a.id)).stage).toBe("pre_screen");
     expect((await callsOf(a.id)).map((row) => row.status)).toEqual(["cancelled"]);
+  });
+});
+
+describe("a call whose candidate left the Calls tab", () => {
+  it("is cancelled by the worker when it is still ahead, and left alone when the candidate is still listed", async () => {
+    const [listed, review, noScore] = [await seed(), await seed(), await seed()];
+    for (const row of [listed, review, noScore]) await book(row.id, row === listed ? NINE : row === review ? QUARTER : HALF);
+    expect(await cancelOrphanCalls(db)).toBe(0);
+    // The worker moves one candidate to review.
+    await db.update(s.hiringCandidates).set({ stage: "review" }).where(eq(s.hiringCandidates.id, review.id));
+    expect(await cancelOrphanCalls(db)).toBe(1);
+    expect((await callsOf(review.id)).map((row) => row.status)).toEqual(["cancelled"]);
+    expect((await jobsOf(review.id)).filter((job) => job.kind === "calendar_cancel")).toHaveLength(1);
+    expect((await callsOf(listed.id)).map((row) => row.status)).toEqual(["confirmed"]);
+    // A blank call score turns the step off: every call still ahead goes, and the form queue takes over.
+    await setConfig({ callThreshold: null });
+    expect(await cancelOrphanCalls(db)).toBe(2);
+    expect((await callsOf(listed.id)).map((row) => row.status)).toEqual(["cancelled"]);
+    expect((await db.select().from(s.hiringAudit)).filter((row) => row.action === "call-cancelled-left-list")).toHaveLength(3);
+    expect(await cancelOrphanCalls(db)).toBe(0);
+  });
+
+  it("is left in place when it has started", async () => {
+    const a = await seed();
+    await book(a.id);
+    vi.setSystemTime(new Date("2026-11-05T02:05:00.000Z"));
+    await db.update(s.hiringCandidates).set({ stage: "review" }).where(eq(s.hiringCandidates.id, a.id));
+    expect(await cancelOrphanCalls(db)).toBe(0);
+    expect((await callsOf(a.id)).map((row) => row.status)).toEqual(["confirmed"]);
   });
 });
 

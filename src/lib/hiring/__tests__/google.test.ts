@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { Database } from "@/lib/db";
 import type { hiringBookings } from "@/lib/db/schema";
 import type { Candidate } from "../service";
-import { callCalendarStatus, deliverCalendar, googleConnectionStatus, readHrBusy } from "../google";
+import { deliverCalendar, googleConnectionStatus, readHrBusy } from "../google";
 import { GOOGLE_FREEBUSY_SCOPE, GOOGLE_SCOPES, HR_CALENDAR, HiringError } from "../model";
 
 vi.mock("@/lib/sales-dashboard/google-oauth", () => ({
@@ -140,7 +140,6 @@ it("keeps the visit connection working before the owner grants the call calendar
   const fetcher = vi.fn();
   vi.stubGlobal("fetch", fetcher);
   await expect(readHrBusy("owner@example.com", FROM, TO, grant(GOOGLE_SCOPES))).rejects.toMatchObject({ status: 409 });
-  expect(await callCalendarStatus("owner@example.com", grant(GOOGLE_SCOPES))).toBe("reconnect");
   expect(fetcher).not.toHaveBeenCalled();
 });
 
@@ -153,7 +152,6 @@ it("reads HR's busy time, and refuses every answer that is not complete", async 
   const [url, init] = vi.mocked(fetch).mock.calls[0];
   expect(String(url)).toBe("https://www.googleapis.com/calendar/v3/freeBusy");
   expect(JSON.parse(String(init!.body))).toEqual({ timeMin: FROM.toISOString(), timeMax: TO.toISOString(), items: [{ id: HR_CALENDAR }] });
-  expect(await callCalendarStatus("owner@example.com", withFreeBusy)).toBe("readable");
   // A free calendar is a complete answer.
   answer({ calendars: { [HR_CALENDAR]: { busy: [] } } });
   expect(await readHrBusy("owner@example.com", FROM, TO, withFreeBusy)).toEqual([]);
@@ -168,9 +166,12 @@ it("reads HR's busy time, and refuses every answer that is not complete", async 
   ]) {
     answer(body);
     await expect(readHrBusy("owner@example.com", FROM, TO, withFreeBusy)).rejects.toBeInstanceOf(HiringError);
-    expect(await callCalendarStatus("owner@example.com", withFreeBusy)).toBe("unreadable");
   }
   answer({ error: "forbidden" }, 403);
+  await expect(readHrBusy("owner@example.com", FROM, TO, withFreeBusy)).rejects.toMatchObject({ status: 502 });
+  // A timeout or a network failure is "no answer" too, not a crash: the page then shows its notice.
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("fetch failed"); }));
   await expect(readHrBusy("owner@example.com", FROM, TO, withFreeBusy)).rejects.toMatchObject({ status: 502 });
 });
 

@@ -39,7 +39,12 @@ export async function readHrBusy(owner: string, from: Date, to: Date, db: Databa
       body: JSON.stringify({ timeMin: from.toISOString(), timeMax: to.toISOString(), items: [{ id: HR_CALENDAR }] }),
     },
     db,
-  )) as { calendars?: Record<string, { errors?: unknown[]; busy?: { start?: string; end?: string }[] }> } | null;
+  ).catch((error) => {
+    // A timeout or a network failure is also "no answer": the caller shows no times and says so.
+    if (error instanceof HiringError) throw error;
+    console.error("Hiring call calendar read failed", error instanceof Error ? error.name : "UnknownError");
+    throw new HiringError(502, "Google did not answer for the call calendar.");
+  })) as { calendars?: Record<string, { errors?: unknown[]; busy?: { start?: string; end?: string }[] }> } | null;
   const calendar = result?.calendars?.[HR_CALENDAR];
   if (!calendar || calendar.errors?.length || !Array.isArray(calendar.busy))
     throw new HiringError(502, "Google did not return the call calendar.");
@@ -48,18 +53,6 @@ export async function readHrBusy(owner: string, from: Date, to: Date, db: Databa
     if (!(range.end > range.start)) throw new HiringError(502, "Google returned a busy time that cannot be read.");
     return range;
   });
-}
-/** For Rules and setup: can Hiring read HR's calendar now? `reconnect` makes no network call. */
-export async function callCalendarStatus(owner: string, db: Database = getDb()): Promise<"readable" | "reconnect" | "unreadable"> {
-  if (!(await googleConnectionStatus(owner, db)).freeBusy) return "reconnect";
-  const now = new Date();
-  try {
-    await readHrBusy(owner, now, new Date(now.getTime() + 86400000), db);
-    return "readable";
-  } catch (error) {
-    if (!(error instanceof HiringError)) console.error("Hiring call calendar check failed", error instanceof Error ? error.name : "UnknownError");
-    return "unreadable";
-  }
 }
 async function calendarRequest(
   email: string,

@@ -2,7 +2,6 @@ import { and, asc, desc, eq, exists, inArray, isNotNull, isNull, ne, notExists, 
 import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
-import { googleConnectionStatus } from "./google";
 import { profileGate } from "./insights";
 import {
   bangkokDayStart,
@@ -29,6 +28,7 @@ import {
 } from "./scoring";
 import {
   audit,
+  callCalendarState,
   cancelComingCall,
   enqueue,
   inviteToCall,
@@ -327,14 +327,16 @@ export async function recordCall(
 /**
  * Sends the call booking link to the people HR must call, in the Calls tab's order. One link per candidate, ever: any
  * earlier row, even a cancelled one, keeps a candidate out. The day's number is the pre-screen per-day limit, counted
- * apart from the forms, so a go-live cannot become a mass email. Nothing goes while the Google grant cannot read HR's
- * calendar: the link would open a page with no times.
+ * apart from the forms, so a go-live cannot become a mass email. Nothing goes unless HR's calendar can be read now:
+ * the link would open a page with no times. That check is a real read, made before the queue lock is taken.
  */
 export async function releaseCallInvites(db: Database, now = new Date()) {
+  const before = await settings(db);
+  if (!allowed(before.config) || (await callCalendarState(db, before.config, now)) !== "readable") return 0;
   return withDatabaseTransaction(db, async (tx) => {
     await lockQueue(tx);
     const { config } = await settings(tx);
-    if (!allowed(config) || !(await googleConnectionStatus(config.connectedEmail, tx)).freeBusy) return 0;
+    if (!allowed(config)) return 0;
     const earlier = await tx.select({ candidateId: o.candidateId, status: o.status, createdAt: o.createdAt }).from(o).where(isCallInvite);
     const invited = new Set(earlier.map((row) => row.candidateId));
     const dayStart = bangkokDayStart(now);
@@ -353,6 +355,34 @@ export async function releaseCallInvites(db: Database, now = new Date()) {
       sent++;
     }
     return sent;
+  });
+}
+
+/**
+ * A call is booked only while HR must call. A candidate can leave the Calls tab in a way that no click covers (the worker
+ * moves them to review, the call score changes, their subject closes). Their call still ahead is then cancelled, so HR is
+ * not sent to call someone with no row to record the result on, and no event stays on the calendar.
+ */
+export async function cancelOrphanCalls(db: Database, now = new Date()) {
+  return withDatabaseTransaction(db, async (tx) => {
+    await lockQueue(tx);
+    const { config } = await settings(tx);
+    const listed = new Set((await callQueue(tx, config)).map((entry) => entry.id));
+    const ahead = await tx
+      .select({ candidateId: b.candidateId })
+      .from(b)
+      .where(and(eq(b.kind, "call"), eq(b.status, "confirmed"), sql`${b.startTime} > ${now.toISOString()}::timestamptz`));
+    let cancelled = 0;
+    for (const id of new Set(ahead.map((row) => row.candidateId))) {
+      if (listed.has(id)) continue;
+      await lockCandidate(tx, id);
+      // A booking or a click can land between the queue read and this row lock.
+      if ((await callQueue(tx, config, id)).length) continue;
+      await cancelComingCall(tx, id, now);
+      await audit(tx, "hiring-queue", "call-cancelled-left-list", id, {});
+      cancelled++;
+    }
+    return cancelled;
   });
 }
 

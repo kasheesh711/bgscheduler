@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { formatInTimeZone } from "date-fns-tz";
-import { ZONE, type HiringConfig } from "@/lib/hiring/model";
+import { CALL_LINK_DAYS, ZONE, type HiringConfig } from "@/lib/hiring/model";
 import { topHiringSubject } from "@/lib/hiring/scoring";
 import { universityName } from "@/lib/hiring/seek-view";
 import type { CandidateExtras } from "@/lib/hiring/status";
@@ -31,13 +31,20 @@ export function callState(
   candidateId: string,
   calls: { candidateId: string; start: string | Date }[],
   inviteOutbox: { key: string; status: string; sentAt: string | Date | null }[],
+  now = new Date(),
 ) {
   // `calls` is newest first.
   const call = calls.find((row) => row.candidateId === candidateId);
   if (call) return `Booked ${formatInTimeZone(new Date(call.start), ZONE, "EEE d MMM, HH:mm")}`;
   const invite = inviteOutbox.find((row) => row.key === `${candidateId}:call-invite`);
-  if (!invite || invite.status === "cancelled") return "Not invited";
-  if (invite.status === "sent" && invite.sentAt) return `Invited ${formatInTimeZone(new Date(invite.sentAt), ZONE, "d MMM")}`;
+  if (!invite) return "Not invited";
+  // One link per candidate: neither state gets a new link from the app, so HR phones from SEEK.
+  if (invite.status === "cancelled") return "Invitation cancelled. Call from SEEK";
+  if (invite.status === "sent" && invite.sentAt) {
+    const sent = new Date(invite.sentAt);
+    const ended = now.getTime() - sent.getTime() > CALL_LINK_DAYS * 86400000;
+    return `Invited ${formatInTimeZone(sent, ZONE, "d MMM")}${ended ? ". Link ended: call from SEEK" : ""}`;
+  }
   return invite.status === "pending" || invite.status === "processing" ? "Invitation queued" : "Invitation not confirmed";
 }
 

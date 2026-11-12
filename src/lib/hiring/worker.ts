@@ -33,7 +33,7 @@ import {
 } from "./scoring";
 import { AWAITING_CALL, profileGate } from "./insights";
 import { audit, briefLink, candidateById, settings, sourceHash } from "./service";
-import { callInviteSentAt, formSentAt, releaseCallInvites, releaseQueues, replyCheck, runFollowUps } from "./queue";
+import { callInviteSentAt, cancelOrphanCalls, formSentAt, releaseCallInvites, releaseQueues, replyCheck, runFollowUps } from "./queue";
 import { contactLines, deliverRecruitment, queueRecruitmentInvitation } from "./recruitment";
 import { deliverCalendar } from "./google";
 import { hiringEmailHtmlFromText } from "./email";
@@ -754,6 +754,7 @@ export async function runHiringCycle(db: Database, assess: Assess) {
     );
     const followUps = await runFollowUps(db);
     const released = await releaseQueues(db);
+    await cancelOrphanCalls(db);
     const callInvites = await releaseCallInvites(db);
     await mirrorTracker(db, config);
     await db

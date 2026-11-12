@@ -1378,14 +1378,47 @@ function callMoveRefusal(call: CallRow, now: Date) {
   if (call.startTime <= now) return onLine("This call has started and cannot move.");
   return null;
 }
-/** HR's calendar, read live for the dates on offer. It throws when Google gives no complete answer, so no time is shown. */
-async function hrBusy(db: Database, config: HiringConfig, now: Date) {
+type HrBusyRead = { at: number; key: string; read: ReturnType<typeof readHrBusy> };
+const hrBusyCache = globalThis as { __bgscheduler_hiringHrBusy?: HrBusyRead };
+/**
+ * HR's calendar for the dates on offer. It throws when Google gives no complete answer, so no time is shown.
+ * A page read keeps one answer for 60 seconds on this server instance: every candidate reads the same calendar, and a
+ * link must not be able to flood Google. A failed read stays cached too. `fresh` is the confirm step: it always reads
+ * live, and it drops the kept answer so a refusal is not followed by a list that still shows the same time.
+ */
+async function hrBusy(db: Database, config: HiringConfig, now: Date, fresh = false) {
   const dates = businessDates(now, config.holidays);
-  return {
-    dates,
-    busy: await readHrBusy(config.connectedEmail, instant(dates[0], CALL_DAY_START), instant(dates.at(-1)!, CALL_DAY_END), db),
-  };
+  const from = instant(dates[0], CALL_DAY_START),
+    to = instant(dates.at(-1)!, CALL_DAY_END);
+  const key = `${config.connectedEmail}|${from.toISOString()}|${to.toISOString()}`;
+  const hit = hrBusyCache.__bgscheduler_hiringHrBusy;
+  if (!fresh && hit?.key === key && Date.now() - hit.at < 60_000) return { dates, busy: await hit.read };
+  const read = readHrBusy(config.connectedEmail, from, to, db);
+  hrBusyCache.__bgscheduler_hiringHrBusy = fresh ? undefined : { at: Date.now(), key, read };
+  // The kept promise must not become an unhandled rejection when no later page read awaits it.
+  if (!fresh) read.catch(() => {});
+  return { dates, busy: await read };
 }
+/**
+ * A call whose time has passed with no result from HR. The candidate waits for HR: a "No answer" closes it and opens the
+ * link again. Without this a link could book a new call every time the last one ended.
+ */
+const CALL_PASSED = "Your call time has passed. BeGifted will contact you about a new time.";
+/**
+ * Can the call page show times now? Rules and setup shows this, and no call link leaves unless it says `readable`.
+ * It shares the page's 60-second read, so it reports what a candidate would get.
+ */
+export async function callCalendarState(db: Database, config: HiringConfig, now = new Date()) {
+  if (!(await googleConnectionStatus(config.connectedEmail, db)).freeBusy) return "reconnect" as const;
+  try {
+    await hrBusy(db, config, now);
+    return "readable" as const;
+  } catch (error) {
+    if (!(error instanceof HiringError)) throw error;
+    return "unreadable" as const;
+  }
+}
+const passedCall = (rows: CallRow[], now: Date) => rows.some((b) => b.endTime <= now);
 /** The calls other candidates hold. HR's calendar shows them too once the event exists; this covers the time before that. */
 const otherCalls = async (db: Database, candidateId: string, now: Date) =>
   (
@@ -1400,8 +1433,9 @@ export async function callView(token: string, db: Database = getDb(), now = new 
   const { config } = await settings(db);
   await openCall(db, cap, config);
   const enabled = bookable(config, cap.id);
-  const own = await comingCall(db, cap.id, now);
-  const refusal = own ? callMoveRefusal(own, now) : null;
+  const rows = await callRows(db, cap.id);
+  const own = rows.find((b) => b.endTime > now);
+  const refusal = own ? callMoveRefusal(own, now) : passedCall(rows, now) ? onLine(CALL_PASSED) : null;
   let slots: ReturnType<typeof callSlots> = [];
   let notice: string | null = null;
   if (!enabled) notice = onLine("Booking is temporarily paused.");
@@ -1438,19 +1472,25 @@ export async function bookCall(token: string, value: unknown, db: Database = get
   const start = new Date(input.start).getTime();
   const { config } = await settings(db);
   if (!bookable(config, cap.id)) throw new HiringError(503, "Booking is temporarily unavailable.");
-  // A retry returns the original call.
-  const prior = await comingCall(db, cap.id, now);
-  if (prior?.startTime.getTime() === start) return prior;
   await openCall(db, cap, config);
-  const refuseChange = (own?: CallRow) => {
-    if (!own) return;
+  // A retry returns the original call. It still saves the number, so a corrected number is not lost.
+  const prior = await comingCall(db, cap.id, now);
+  if (prior?.startTime.getTime() === start) {
+    await db.update(s.hiringCandidates).set({ phone: input.phone }).where(eq(s.hiringCandidates.id, cap.id));
+    return prior;
+  }
+  const refuseChange = (own: CallRow | undefined, rows: CallRow[]) => {
+    if (!own) {
+      if (passedCall(rows, now)) throw new HiringError(409, onLine(CALL_PASSED));
+      return;
+    }
     if (!input.move) throw new HiringError(409, "You already have a booked call. Use Move this call to change it.");
     const refusal = callMoveRefusal(own, now);
     if (refusal) throw new HiringError(409, refusal);
   };
-  refuseChange(prior);
+  refuseChange(prior, await callRows(db, cap.id));
   // One live read of HR's calendar, just before the transaction: a Google call inside it would hold HR's lock for seconds.
-  const calendar = await hrBusy(db, config, now).catch((error) => {
+  const calendar = await hrBusy(db, config, now, true).catch((error) => {
     if (!(error instanceof HiringError)) throw error;
     throw new HiringError(503, onLine("Call times cannot be checked at the moment. Please try again later."));
   });
@@ -1462,9 +1502,10 @@ export async function bookCall(token: string, value: unknown, db: Database = get
     const latest = await settings(tx);
     if (!bookable(latest.config, cap.id)) throw new HiringError(503, "Booking has been paused.");
     const subject = await openCall(tx, cap, latest.config);
-    const own = await comingCall(tx, cap.id, now);
+    const rows = await callRows(tx, cap.id);
+    const own = rows.find((b) => b.endTime > now);
     if (own?.startTime.getTime() === start) return own;
-    refuseChange(own);
+    refuseChange(own, rows);
     const slot = callSlots(calendar.dates, [...calendar.busy, ...(await otherCalls(tx, cap.id, now))], new Date()).find(
       (v) => new Date(v.start).getTime() === start && start < cap.exp * 1000,
     );
