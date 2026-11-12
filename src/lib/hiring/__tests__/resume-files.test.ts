@@ -204,12 +204,16 @@ describe("GET /api/hiring/resume/[id]", () => {
 describe("GET /api/hiring/brief/[token]/resume", () => {
   const BOOKING = "00000000-0000-4000-8000-000000000002";
   const later = new Date(Date.now() + 86400000);
+  /** One fake row serves both reads: the confirmed mock joined to its candidate, then the candidate's stored file. */
+  const briefRow = (rows: unknown[] = [{ mock: { candidateId: ID }, stage: "onsite_booked", ...row() }]) => {
+    const db = { select: () => ({ from: () => ({ innerJoin: () => ({ where: async () => rows }), where: async () => rows }) }) };
+    vi.mocked(getDb).mockReturnValue(db as never);
+  };
   const openBrief = (token: string) =>
     readBriefResume(new Request("https://app.example.com/api/hiring/brief/t/resume"), { params: Promise.resolve({ token }) });
 
   it("opens the candidate's file with the admin route's headers, and asks for no session", async () => {
-    // One fake row serves both reads: the confirmed mock, then the candidate's stored file.
-    dbWith([{ candidateId: ID, ...row() }]);
+    briefRow();
     vi.mocked(get).mockResolvedValue(blob() as never);
     const response = await openBrief(bookingToken(BOOKING, "brief", later));
     expect(response.status).toBe(200);
@@ -223,7 +227,7 @@ describe("GET /api/hiring/brief/[token]/resume", () => {
   });
 
   it("refuses a token of another kind, an expired or changed token, and a booking that is not a confirmed mock", async () => {
-    dbWith([{ candidateId: ID, ...row() }]);
+    briefRow();
     const good = bookingToken(BOOKING, "brief", later);
     for (const token of [
       bookingToken(ID, "visit", later),
@@ -234,9 +238,17 @@ describe("GET /api/hiring/brief/[token]/resume", () => {
     ])
       expect((await openBrief(token)).status).toBe(404);
     // The token is valid, but no confirmed mock has that id (cancelled, moved, or never a mock).
-    dbWith([]);
-    expect((await openBrief(good)).status).toBe(404);
+    briefRow([]);
+    const refused = await openBrief(good);
+    expect(refused.status).toBe(404);
     expect(get).not.toHaveBeenCalled();
+    // One plain answer for every refusal, so it does not say why. A file gone from storage reads the same.
+    const body = await refused.text();
+    expect(await (await openBrief("not-a-token")).text()).toBe(body);
+    briefRow();
+    vi.mocked(get).mockResolvedValue(null as never);
+    const gone = await openBrief(good);
+    expect([gone.status, await gone.text(), gone.headers.get("Cache-Control")]).toEqual([404, body, "no-store"]);
   });
 });
 

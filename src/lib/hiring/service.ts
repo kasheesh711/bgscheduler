@@ -1061,21 +1061,24 @@ export const briefLink = (mock: { id: string; endTime: Date }) =>
   ).toString();
 /**
  * The mock behind an interviewer link. Only a confirmed mock opens it, so a cancel, a move or a no-show ends the link at
- * once. Every failure is the same 404, so a link tells nothing about a booking.
+ * once. A stopped candidate or a sent result ends it too: a past mock stays `confirmed`, and a person who asked BeGifted
+ * to stop must not stay readable. Every failure is the same 404, so a link tells nothing about a booking.
  */
 async function briefMock(token: string, db: Database, now: Date) {
   const cap = readBookingToken(token, now);
-  const [mock] =
+  const [row] =
     cap.kind === "brief"
       ? await db
-          .select()
+          .select({ mock: s.hiringBookings, stage: s.hiringCandidates.stage })
           .from(s.hiringBookings)
+          .innerJoin(s.hiringCandidates, eq(s.hiringCandidates.id, s.hiringBookings.candidateId))
           .where(
             and(eq(s.hiringBookings.id, cap.id), eq(s.hiringBookings.kind, "mock"), eq(s.hiringBookings.status, "confirmed")),
           )
       : [];
-  if (!mock) throw new HiringError(404, "This link is invalid or has expired.");
-  return mock;
+  if (!row || row.stage === "stopped" || isDecided(row.stage))
+    throw new HiringError(404, "This link is invalid or has expired.");
+  return row.mock;
 }
 /** The candidate whose stored résumé an interviewer link may open. */
 export async function briefCandidateId(token: string, db: Database = getDb(), now = new Date()) {

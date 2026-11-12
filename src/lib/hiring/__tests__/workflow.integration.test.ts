@@ -886,6 +886,14 @@ describe("hiring workflow persistence", () => {
       await expect(visitView(token, db, now)).rejects.toMatchObject({ status: 404 });
       await expect(bookingView(token, undefined, db, now)).rejects.toMatchObject({ status: 404 });
       await expect(bookVisit(token, choice(), db)).rejects.toMatchObject({ status: 404 });
+      // A stopped candidate and a sent result end the link, though the mock stays confirmed.
+      for (const stage of ["stopped", "rejected", "hired"] as const) {
+        await db.update(s.hiringCandidates).set({ stage }).where(eq(s.hiringCandidates.id, row.id));
+        await expect(briefView(token, db, now)).rejects.toMatchObject({ status: 404 });
+        await expect(briefCandidateId(token, db, now)).rejects.toMatchObject({ status: 404 });
+      }
+      await db.update(s.hiringCandidates).set({ stage: "onsite_booked" }).where(eq(s.hiringCandidates.id, row.id));
+      await expect(briefView(token, db, now)).resolves.toBeTruthy();
       // A cancel ends the link at once, and the cancel notice carries no link.
       vi.mocked(pushLineTextMessage).mockClear();
       await click(row.id, "cancel_visit", [], "Candidate asked on LINE");
@@ -922,6 +930,8 @@ describe("hiring workflow persistence", () => {
       await bookVisit(link(row), choice(), db);
       const before = await rowsOf(row.id);
       await deliverOutbox(db, base);
+      const briefOf = (text: string) => text.match(/\/hiring\/brief\/([\w.-]+)/)![1];
+      const oldBrief = briefOf(vi.mocked(pushLineTextMessage).mock.calls[0][0].text);
       sendEmail.mockClear();
       vi.mocked(pushLineTextMessage).mockClear();
       await expect(bookVisit(link(row), choice(EXAM_TUE), db)).rejects.toThrow(/already/);
@@ -944,6 +954,10 @@ describe("hiring workflow persistence", () => {
       expect(moved).toContain("02/11/2026, 12:00");
       expect(moved).toContain("03/11/2026, 12:00");
       expect(vi.mocked(deliverCalendar).mock.calls.filter((c) => c[4] === true)).toHaveLength(2);
+      // The moved notice carries a new candidate page link, and the old one has ended.
+      expect(briefOf(moved)).not.toBe(oldBrief);
+      await expect(briefView(briefOf(moved), db, now)).resolves.toMatchObject({ name: row.name });
+      await expect(briefView(oldBrief, db, now)).rejects.toMatchObject({ status: 404 });
       // The same link still opens the moved visit.
       const view = await visitView(link(row), db);
       expect(view.visit?.examStart).toBe(EXAM_TUE);
