@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { del, list } from "@vercel/blob";
+import { del, get, list } from "@vercel/blob";
 import { put } from "@vercel/blob/client";
 import { subMonths } from "date-fns";
 import { and, asc, eq, inArray, isNotNull, lt, sql } from "drizzle-orm";
@@ -44,6 +44,45 @@ export function storedResume(candidateId: string, path: string | null, type: str
   const ext = extension[2] as ResumeExtension;
   if (RESUME_TYPES[ext] !== type) return null;
   return { path, extension: ext, type: RESUME_TYPES[ext] };
+}
+
+const GONE = "The original résumé file is gone from storage. The extracted text stays in this panel.";
+/**
+ * The stored original as a response. The admin route and the interviewer's link both use it, so the headers cannot differ.
+ * The caller decides who may ask. It reads only the stored path.
+ */
+export async function resumeResponse(candidateId: string, db: Database = getDb()) {
+  const c = s.hiringCandidates;
+  const [row] = await db
+    .select({ path: c.resumePath, name: c.resumeName, type: c.resumeType, storedAt: c.resumeStoredAt })
+    .from(c)
+    .where(eq(c.id, candidateId));
+  if (!row) throw new HiringError(404, "Candidate not found.");
+  if (!row.path)
+    throw new HiringError(
+      404,
+      row.storedAt
+        ? "The original résumé was deleted by the retention rule. The extracted text stays in this panel."
+        : "No original résumé file is stored for this candidate.",
+    );
+  const stored = storedResume(candidateId, row.path, row.type);
+  if (!stored) throw new HiringError(409, "The stored résumé record is not valid, so the file was not opened.");
+  const blob = await get(stored.path, { access: "private", useCache: false });
+  if (!blob || blob.statusCode !== 200) throw new HiringError(404, GONE);
+  const name = encodeURIComponent(cleanResumeName(row.name ?? "", stored.extension)).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return new Response(blob.stream, {
+    headers: {
+      "Content-Type": stored.type,
+      "Content-Length": String(blob.blob.size),
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "default-src 'none'; frame-ancestors 'self'; sandbox",
+      "Content-Disposition": `${stored.extension === "pdf" ? "inline" : "attachment"}; filename*=UTF-8''${name}`,
+    },
+  });
 }
 
 /** A name safe for display and for a header: no controls, quotes or path parts, and the extension from the true type. */

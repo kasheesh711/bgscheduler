@@ -5,11 +5,13 @@ import { generateClientTokenFromReadWriteToken, put } from "@vercel/blob/client"
 import { auth } from "@/lib/auth";
 import { getDb, type Database } from "@/lib/db";
 import { GET as readResume } from "@/app/api/hiring/resume/[id]/route";
+import { GET as readBriefResume } from "@/app/api/hiring/brief/[token]/resume/route";
 import { POST as requestUpload } from "@/app/api/internal/hiring-resume-upload/route";
 import { saveApplication } from "../../../../scripts/hiring-seek";
 import { deliveryAuthorization, resumeUploadAuthorization, verifyDeliveryAuthorization } from "../dispatch";
 import { RESUME_TYPES } from "../model";
 import { cleanResumeName, keepResume, resumePath, sniffResume, storedResume, storeResume } from "../resume-files";
+import { bookingToken } from "../tokens";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
@@ -196,6 +198,57 @@ describe("GET /api/hiring/resume/[id]", () => {
     const text = await response.text();
     expect(text).not.toContain("vercel");
     expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("vercel_blob_rw");
+  });
+});
+
+describe("GET /api/hiring/brief/[token]/resume", () => {
+  const BOOKING = "00000000-0000-4000-8000-000000000002";
+  const later = new Date(Date.now() + 86400000);
+  /** One fake row serves both reads: the confirmed mock joined to its candidate, then the candidate's stored file. */
+  const briefRow = (rows: unknown[] = [{ mock: { candidateId: ID }, stage: "onsite_booked", ...row() }]) => {
+    const db = { select: () => ({ from: () => ({ innerJoin: () => ({ where: async () => rows }), where: async () => rows }) }) };
+    vi.mocked(getDb).mockReturnValue(db as never);
+  };
+  const openBrief = (token: string) =>
+    readBriefResume(new Request("https://app.example.com/api/hiring/brief/t/resume"), { params: Promise.resolve({ token }) });
+
+  it("opens the candidate's file with the admin route's headers, and asks for no session", async () => {
+    briefRow();
+    vi.mocked(get).mockResolvedValue(blob() as never);
+    const response = await openBrief(bookingToken(BOOKING, "brief", later));
+    expect(response.status).toBe(200);
+    expect(auth).not.toHaveBeenCalled();
+    expect(get).toHaveBeenCalledWith(PDF_PATH, { access: "private", useCache: false });
+    expect(response.headers.get("Content-Type")).toBe("application/pdf");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Content-Security-Policy")).toContain("sandbox");
+    expect(response.headers.get("Content-Disposition")).toMatch(/^inline; /);
+  });
+
+  it("refuses a token of another kind, an expired or changed token, and a booking that is not a confirmed mock", async () => {
+    briefRow();
+    const good = bookingToken(BOOKING, "brief", later);
+    for (const token of [
+      bookingToken(ID, "visit", later),
+      bookingToken(ID, "mock", later),
+      bookingToken(BOOKING, "brief", new Date(Date.now() - 1000)),
+      `${good.slice(0, -2)}xx`,
+      "not-a-token",
+    ])
+      expect((await openBrief(token)).status).toBe(404);
+    // The token is valid, but no confirmed mock has that id (cancelled, moved, or never a mock).
+    briefRow([]);
+    const refused = await openBrief(good);
+    expect(refused.status).toBe(404);
+    expect(get).not.toHaveBeenCalled();
+    // One plain answer for every refusal, so it does not say why. A file gone from storage reads the same.
+    const body = await refused.text();
+    expect(await (await openBrief("not-a-token")).text()).toBe(body);
+    briefRow();
+    vi.mocked(get).mockResolvedValue(null as never);
+    const gone = await openBrief(good);
+    expect([gone.status, await gone.text(), gone.headers.get("Cache-Control")]).toEqual([404, body, "no-store"]);
   });
 });
 

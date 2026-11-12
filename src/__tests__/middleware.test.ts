@@ -26,11 +26,12 @@ function makeReq(pathname: string, isAuth = false, search = "", allowedPages?: s
 
 describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
   it("exposes only token booking routes and keeps hiring administration private",async()=>{
-    for(const path of ["/hiring/book/token","/api/hiring/book/token"]) {
+    for(const path of ["/hiring/book/token","/api/hiring/book/token","/hiring/brief/token","/api/hiring/brief/token/resume"]) {
       const response=await middleware(makeReq(path) as never,{} as never) as Response;
       expect(response.status).toBe(200);expect(response.headers.get("Referrer-Policy")).toBe("no-referrer");
     }
-    for(const path of ["/hiring","/api/hiring","/api/hiring/google/connect","/hiring/book/token/extra"]) {
+    for(const path of ["/hiring","/api/hiring","/api/hiring/google/connect","/hiring/book/token/extra",
+      "/hiring/brief","/hiring/brief/token/extra","/api/hiring/brief/token","/api/hiring/brief/token/resume/extra","/api/hiring/resume/token"]) {
       const response=await middleware(makeReq(path) as never,{} as never) as Response;
       expect([307,401]).toContain(response.status);
     }

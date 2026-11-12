@@ -78,7 +78,8 @@ export const PAPER_LEVELS = ["Key Stage 3", "IGCSE / GCSE", "AS / A-Level", "IB 
 export type PaperLevel = (typeof PAPER_LEVELS)[number];
 export type Subject = z.infer<typeof subjectSchema>;
 export type InterviewKind = "paper" | "mock";
-export const tokenKindSchema = z.enum(["paper", "mock", "visit"]);
+// `brief` is the interviewer's page for one mock booking: its id is a booking id, not a candidate id.
+export const tokenKindSchema = z.enum(["paper", "mock", "visit", "brief"]);
 export const stageSchema = z.enum([
   "new",
   "review",
@@ -385,6 +386,22 @@ export const preScreenSchema = z
   })
   .strict();
 export type PreScreen = z.infer<typeof preScreenSchema>;
+/** The form answers in reading order, for the admin panel and the interviewer's page. */
+export const ANSWER_LABELS: [Exclude<keyof PreScreen, "sourceRow" | "submittedAt">, string][] = [
+  ["degree", "Degree"],
+  ["field", "Field of study"],
+  ["subjects", "Subjects"],
+  ["curricula", "Curricula"],
+  ["yearGroups", "Year groups"],
+  ["english", "English level"],
+  ["englishEvidence", "English evidence"],
+  ["experience", "Teaching experience"],
+  ["portfolio", "Portfolio"],
+  ["availability", "Availability"],
+  ["weeklyHours", "Weekly hours"],
+  ["motivation", "Motivation"],
+  ["teachingApproach", "Teaching approach"],
+];
 /** The only types a stored résumé can have. Type comes from file bytes, never from a name. */
 export const RESUME_TYPES = {
   pdf: "application/pdf",
