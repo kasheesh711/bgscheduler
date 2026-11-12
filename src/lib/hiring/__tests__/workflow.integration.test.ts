@@ -18,6 +18,8 @@ import {
   bookInterview,
   bookingView,
   bookVisit,
+  briefCandidateId,
+  briefView,
   changePreScreenScore,
   dashboard,
   reviewCandidate,
@@ -860,6 +862,39 @@ describe("hiring workflow persistence", () => {
       expect(vi.mocked(pushLineTextMessage)).toHaveBeenCalledTimes(1);
       // The head's notice carries the candidate's contact line.
       expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\nCandidate: .+\nEmail: \S+@example\.com\nSubject: /);
+    });
+    it("links the head to the candidate page, and ends the link with the visit", async () => {
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      await deliverOutbox(db, base);
+      const token = vi.mocked(pushLineTextMessage).mock.calls[0][0].text.match(/\/hiring\/brief\/([\w.-]+)/)![1];
+      const [exam, mock] = await rowsOf(row.id);
+      expect([exam.kind, mock.kind]).toEqual(["paper", "mock"]);
+      const view = await briefView(token, db, now);
+      expect(view).toMatchObject({ name: row.name, subject: "Mathematics", interviewer: "Peat", answers: pre, resume: null });
+      expect(view.exam).toContain("10:00");
+      // No contact details and no scores reach the interviewer's page.
+      expect(JSON.stringify(view)).not.toMatch(/@example\.com|criteria|score/i);
+      expect(await briefCandidateId(token, db, now)).toBe(row.id);
+      // The link ends 7 days after the mock.
+      const end = new Date(mock.endTime.getTime() + 7 * 86400000);
+      await expect(briefView(token, db, new Date(end.getTime() - 1000))).resolves.toBeTruthy();
+      await expect(briefView(token, db, end)).rejects.toMatchObject({ status: 404 });
+      // A visit link, the exam row and a candidate id never open the page, and the page link is not a booking link.
+      for (const bad of [link(row), bookingToken(exam.id, "brief", LINK), bookingToken(row.id, "brief", LINK)])
+        await expect(briefView(bad, db, now)).rejects.toMatchObject({ status: 404 });
+      await expect(visitView(token, db, now)).rejects.toMatchObject({ status: 404 });
+      await expect(bookingView(token, undefined, db, now)).rejects.toMatchObject({ status: 404 });
+      await expect(bookVisit(token, choice(), db)).rejects.toMatchObject({ status: 404 });
+      // A cancel ends the link at once, and the cancel notice carries no link.
+      vi.mocked(pushLineTextMessage).mockClear();
+      await click(row.id, "cancel_visit", [], "Candidate asked on LINE");
+      await expect(briefView(token, db, now)).rejects.toMatchObject({ status: 404 });
+      await expect(briefCandidateId(token, db, now)).rejects.toMatchObject({ status: 404 });
+      await deliverOutbox(db, base);
+      const cancelled = vi.mocked(pushLineTextMessage).mock.calls[0][0].text;
+      expect(cancelled).toMatch(/cancelled/i);
+      expect(cancelled).not.toContain("/hiring/brief/");
     });
     it("candidates cannot pick a head", async () => {
       const row = await invited();

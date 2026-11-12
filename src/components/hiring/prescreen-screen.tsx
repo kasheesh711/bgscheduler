@@ -1,10 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { isDecided } from "@/lib/hiring/model";
+import { ANSWER_LABELS, isDecided } from "@/lib/hiring/model";
 import { PRE_SCREEN_FILTERS, matchesPreScreenList, preScreenFinalScore, visitEmail, wasSentForm, type PreScreenListFilter, type VisitEmail } from "@/lib/hiring/prescreen-view";
 import { preScreenNote, type CandidateExtras } from "@/lib/hiring/status";
-import { ANSWER_LABELS, AssessmentBlock, ONSITE_STAGES } from "./candidate-inspector";
+import { AssessmentBlock, ONSITE_STAGES } from "./candidate-inspector";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
 import { PILL_CLASS } from "./pipeline-charts";
 import css from "./dashboard.module.css";

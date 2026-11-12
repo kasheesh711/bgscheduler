@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { criterionValues, STAGE_LABELS } from "@/lib/hiring/insights";
-import { DEFAULT_PRE_SCREEN_WEIGHTS, isDecided, RESUME_TYPES, SUBJECTS, type HiringConfig, type Subject } from "@/lib/hiring/model";
+import { ANSWER_LABELS, DEFAULT_PRE_SCREEN_WEIGHTS, isDecided, RESUME_TYPES, SUBJECTS, type HiringConfig, type Subject } from "@/lib/hiring/model";
 import type { Assessment, PreScreenAssessment } from "@/lib/hiring/scoring";
 import { preScreenNote, visitText, type CandidateExtras } from "@/lib/hiring/status";
 import type { Command, HiringCandidate } from "./dashboard";
@@ -16,22 +16,6 @@ const FORM_STAGES = ["new", "review"];
 export const ONSITE_STAGES = ["new", "review", "pre_screen", "no_reply", "stopped"];
 const PAPER_PASS_STAGES = ["paper_booked", "paper_invited", "paper_passed", "mock_booked"];
 const SUBJECT_ACTIONS = ["advance", "paper_pass"];
-
-export const ANSWER_LABELS: [keyof NonNullable<HiringCandidate["preScreen"]>, string][] = [
-  ["degree", "Degree"],
-  ["field", "Field of study"],
-  ["subjects", "Subjects"],
-  ["curricula", "Curricula"],
-  ["yearGroups", "Year groups"],
-  ["english", "English level"],
-  ["englishEvidence", "English evidence"],
-  ["experience", "Teaching experience"],
-  ["portfolio", "Portfolio"],
-  ["availability", "Availability"],
-  ["weeklyHours", "Weekly hours"],
-  ["motivation", "Motivation"],
-  ["teachingApproach", "Teaching approach"],
-];
 
 const PRE_SCREEN_PARTS: [Exclude<keyof NonNullable<HiringCandidate["preScreenParts"]>, "total">, string][] = [
   ["degree", "Degree"],

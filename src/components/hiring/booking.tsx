@@ -403,14 +403,15 @@ export const BookingLoading = () => (
   </div>
 );
 
-export function BookingShell({ kind, children }: { kind?: "visit" | "mock" | "paper"; children: ReactNode }) {
+export function BookingShell({ kind, children }: { kind?: "visit" | "mock" | "paper" | "brief"; children: ReactNode }) {
   return (
     <main className={c.page}>
       <header className={c.hero}>
         <div className={c.heroInner}>
           <p className={c.brand}>BeGifted Education</p>
           <h1 className={c.title}>
-            Book your <em>{kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "assessment"}</em>
+            {kind === "brief" ? "Your " : "Book your "}
+            <em>{kind === "brief" ? "interview candidate" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "assessment"}</em>
           </h1>
         </div>
       </header>

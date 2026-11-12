@@ -5,11 +5,13 @@ import { generateClientTokenFromReadWriteToken, put } from "@vercel/blob/client"
 import { auth } from "@/lib/auth";
 import { getDb, type Database } from "@/lib/db";
 import { GET as readResume } from "@/app/api/hiring/resume/[id]/route";
+import { GET as readBriefResume } from "@/app/api/hiring/brief/[token]/resume/route";
 import { POST as requestUpload } from "@/app/api/internal/hiring-resume-upload/route";
 import { saveApplication } from "../../../../scripts/hiring-seek";
 import { deliveryAuthorization, resumeUploadAuthorization, verifyDeliveryAuthorization } from "../dispatch";
 import { RESUME_TYPES } from "../model";
 import { cleanResumeName, keepResume, resumePath, sniffResume, storedResume, storeResume } from "../resume-files";
+import { bookingToken } from "../tokens";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
@@ -196,6 +198,45 @@ describe("GET /api/hiring/resume/[id]", () => {
     const text = await response.text();
     expect(text).not.toContain("vercel");
     expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("vercel_blob_rw");
+  });
+});
+
+describe("GET /api/hiring/brief/[token]/resume", () => {
+  const BOOKING = "00000000-0000-4000-8000-000000000002";
+  const later = new Date(Date.now() + 86400000);
+  const openBrief = (token: string) =>
+    readBriefResume(new Request("https://app.example.com/api/hiring/brief/t/resume"), { params: Promise.resolve({ token }) });
+
+  it("opens the candidate's file with the admin route's headers, and asks for no session", async () => {
+    // One fake row serves both reads: the confirmed mock, then the candidate's stored file.
+    dbWith([{ candidateId: ID, ...row() }]);
+    vi.mocked(get).mockResolvedValue(blob() as never);
+    const response = await openBrief(bookingToken(BOOKING, "brief", later));
+    expect(response.status).toBe(200);
+    expect(auth).not.toHaveBeenCalled();
+    expect(get).toHaveBeenCalledWith(PDF_PATH, { access: "private", useCache: false });
+    expect(response.headers.get("Content-Type")).toBe("application/pdf");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Content-Security-Policy")).toContain("sandbox");
+    expect(response.headers.get("Content-Disposition")).toMatch(/^inline; /);
+  });
+
+  it("refuses a token of another kind, an expired or changed token, and a booking that is not a confirmed mock", async () => {
+    dbWith([{ candidateId: ID, ...row() }]);
+    const good = bookingToken(BOOKING, "brief", later);
+    for (const token of [
+      bookingToken(ID, "visit", later),
+      bookingToken(ID, "mock", later),
+      bookingToken(BOOKING, "brief", new Date(Date.now() - 1000)),
+      `${good.slice(0, -2)}xx`,
+      "not-a-token",
+    ])
+      expect((await openBrief(token)).status).toBe(404);
+    // The token is valid, but no confirmed mock has that id (cancelled, moved, or never a mock).
+    dbWith([]);
+    expect((await openBrief(good)).status).toBe(404);
+    expect(get).not.toHaveBeenCalled();
   });
 });
 

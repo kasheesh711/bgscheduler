@@ -7,7 +7,7 @@ export { VISIT_LINK_DAYS };
 
 export function bookingToken(
   id: string,
-  kind: InterviewKind | "visit",
+  kind: InterviewKind | "visit" | "brief",
   expires: Date,
   secret = process.env.AUTH_SECRET,
 ) {

@@ -32,7 +32,7 @@ import {
   type PreScreenAssessment,
 } from "./scoring";
 import { AWAITING_CALL, profileGate } from "./insights";
-import { audit, candidateById, settings, sourceHash } from "./service";
+import { audit, briefLink, candidateById, settings, sourceHash } from "./service";
 import { formSentAt, releaseQueues, replyCheck, runFollowUps } from "./queue";
 import { contactLines, deliverRecruitment, queueRecruitmentInvitation } from "./recruitment";
 import { deliverCalendar } from "./google";
@@ -654,7 +654,7 @@ export async function deliverOutbox(
               : notice === "cancelled"
                 ? "Mock teaching cancelled"
                 : "Mock teaching interview";
-          const message = `${title}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nTime: ${booking.startTime.toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok)\nPlace: ${current.config.location}\nInterviewer: ${booking.interviewerKey}`;
+          const message = `${title}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nTime: ${booking.startTime.toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok)\nPlace: ${current.config.location}\nInterviewer: ${booking.interviewerKey}${booking.kind === "mock" && notice !== "cancelled" ? `\nCandidate page (answers and résumé): ${briefLink(booking)}` : ""}`;
           receipt = {
             ...(await pushLineTextMessage({
               to: booking.lineGroupId,

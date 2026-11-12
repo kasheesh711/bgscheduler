@@ -40,6 +40,7 @@ import {
 import { googleConnectionStatus } from "./google";
 import { visitClashes } from "./head-schedule";
 import { bookingToken, readBookingToken, VISIT_LINK_DAYS } from "./tokens";
+import { storedResume } from "./resume-files";
 import { blockingLimit, headWeekMocks, releaseQueue, type Funnel, type LimitName, type QueueHold } from "./limits";
 import {
   inviteRows,
@@ -735,7 +736,7 @@ export async function dashboard(db: Database = getDb()) {
 }
 function oldFlowToken(token: string, now: Date) {
   const cap = readBookingToken(token, now);
-  if (cap.kind === "visit")
+  if (cap.kind !== "paper" && cap.kind !== "mock")
     throw new HiringError(404, "This booking link is no longer active.");
   return { ...cap, kind: cap.kind };
 }
@@ -1050,6 +1051,72 @@ export async function bookInterview(
     });
     return booking;
   });
+}
+const BRIEF_DAYS = 7;
+/** The interviewer's page for one mock: the form answers and the résumé. The link ends BRIEF_DAYS after the mock. */
+export const briefLink = (mock: { id: string; endTime: Date }) =>
+  new URL(
+    `/hiring/brief/${bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + BRIEF_DAYS * 86400000))}`,
+    process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
+  ).toString();
+/**
+ * The mock behind an interviewer link. Only a confirmed mock opens it, so a cancel, a move or a no-show ends the link at
+ * once. Every failure is the same 404, so a link tells nothing about a booking.
+ */
+async function briefMock(token: string, db: Database, now: Date) {
+  const cap = readBookingToken(token, now);
+  const [mock] =
+    cap.kind === "brief"
+      ? await db
+          .select()
+          .from(s.hiringBookings)
+          .where(
+            and(eq(s.hiringBookings.id, cap.id), eq(s.hiringBookings.kind, "mock"), eq(s.hiringBookings.status, "confirmed")),
+          )
+      : [];
+  if (!mock) throw new HiringError(404, "This link is invalid or has expired.");
+  return mock;
+}
+/** The candidate whose stored résumé an interviewer link may open. */
+export async function briefCandidateId(token: string, db: Database = getDb(), now = new Date()) {
+  return (await briefMock(token, db, now)).candidateId;
+}
+/** What the interviewer sees. No contact details and no scores (Kevin's decision, 12 Nov 2026). */
+export async function briefView(token: string, db: Database = getDb(), now = new Date()) {
+  const mock = await briefMock(token, db, now);
+  const [candidate] = await db
+    .select({
+      name: s.hiringCandidates.name,
+      preScreen: s.hiringCandidates.preScreen,
+      resumePath: s.hiringCandidates.resumePath,
+      resumeType: s.hiringCandidates.resumeType,
+    })
+    .from(s.hiringCandidates)
+    .where(eq(s.hiringCandidates.id, mock.candidateId));
+  if (!candidate) throw new HiringError(404, "This link is invalid or has expired.");
+  const [exam] = mock.visitId
+    ? await db
+        .select({ startTime: s.hiringBookings.startTime, endTime: s.hiringBookings.endTime })
+        .from(s.hiringBookings)
+        .where(
+          and(
+            eq(s.hiringBookings.visitId, mock.visitId),
+            eq(s.hiringBookings.kind, "paper"),
+            eq(s.hiringBookings.status, "confirmed"),
+          ),
+        )
+    : [];
+  const { config } = await settings(db);
+  return {
+    name: candidate.name,
+    subject: mock.subjects.join(", "),
+    exam: exam ? `${bangkok(exam.startTime)}–${bangkokTime(exam.endTime)}` : null,
+    mock: `${bangkok(mock.startTime)}–${bangkokTime(mock.endTime)}`,
+    interviewer: mock.interviewerKey,
+    location: config.location,
+    answers: candidate.preScreen,
+    resume: storedResume(mock.candidateId, candidate.resumePath, candidate.resumeType)?.extension ?? null,
+  };
 }
 type VisitLink = { id: string; exp: number };
 function visitToken(token: string, now: Date): VisitLink {
