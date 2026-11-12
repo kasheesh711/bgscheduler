@@ -5,7 +5,7 @@ import { and, asc, desc, eq, gte, inArray, isNotNull, like, or, sql } from "driz
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
-import { availableSlots, availableVisitSlots, verifyLiveSlot } from "./availability";
+import { availableSlots, availableVisitSlots, readLiveBusy, verifyLiveSlot, type LiveBusy } from "./availability";
 import {
   baseConfigSchema,
   withSeekJobs,
@@ -23,6 +23,7 @@ import {
   localDate,
   visitBookingSchema,
   ZONE,
+  businessDates,
   type HiringConfig,
   type Stage,
   type Subject,
@@ -735,6 +736,24 @@ function oldFlowToken(token: string, now: Date) {
     throw new HiringError(404, "This booking link is no longer active.");
   return { ...cap, kind: cap.kind };
 }
+/**
+ * The live Wise read for a time list. On any failure the list falls back to the 30-minute Wise copy
+ * (owner decision, 11 Nov 2026): the confirm step still reads Wise live, so no clash can be booked.
+ */
+async function liveForList(db: Database, config: HiringConfig, subjects: Subject[], now: Date): Promise<LiveBusy | null> {
+  try {
+    return await readLiveBusy(
+      db,
+      config.interviewers.filter((h) => subjects.every((v) => h.subjects.includes(v))).map((h) => h.canonicalKey),
+      businessDates(now, config.holidays),
+      { cacheMs: 60_000, deadlineMs: 12_000 },
+    );
+  } catch (error) {
+    // A HiringError message is our own text (for example a class with no teacher), so it is safe to log.
+    console.error("[hiring] live Wise list read failed", error instanceof HiringError ? error.message : error instanceof Error ? error.name : "unknown");
+    return null;
+  }
+}
 export async function bookingView(
   token: string,
   subjects?: Subject[],
@@ -780,8 +799,11 @@ export async function bookingView(
   );
   const canBook =
     config.enabled && config.rubricApproved && runtimeWritesAllowed();
+  const open = canBook && remaining.length === chosen.length;
+  const live = open && cap.kind === "mock" ? await liveForList(db, config, chosen, now) : null;
   return {
     kind: cap.kind,
+    checkedAt: live?.checkedAt ?? null,
     subjects: permitted,
     selectedSubjects: chosen,
     location: config.location,
@@ -795,8 +817,8 @@ export async function bookingView(
       interviewer: b.interviewerKey,
     })),
     slots:
-      canBook && remaining.length === chosen.length
-        ? (await availableSlots(db, config, cap.kind, chosen, now)).filter(
+      open
+        ? (await availableSlots(db, config, cap.kind, chosen, now, db, live ?? undefined)).filter(
             (slot) =>
               !booked.some((b) =>
                 overlap(
@@ -1076,8 +1098,8 @@ function moveRefusal(rows: VisitRow[], now: Date) {
 }
 
 /** The current time is not a choice, and every time starts inside the link's life, so the link outlasts the wait for any booked visit. */
-const offeredSlots = async (db: Database, config: HiringConfig, subject: Subject, cap: VisitLink, rows: VisitRow[], now: Date, indexDb = db) =>
-  (await availableVisitSlots(db, config, subject, now, cap.id, indexDb)).filter((slot) => {
+const offeredSlots = async (db: Database, config: HiringConfig, subject: Subject, cap: VisitLink, rows: VisitRow[], now: Date, indexDb = db, live?: LiveBusy) =>
+  (await availableVisitSlots(db, config, subject, now, cap.id, indexDb, live)).filter((slot) => {
     const start = new Date(slot.examStart).getTime();
     return start < cap.exp * 1000 && start !== examOf(rows)?.startTime.getTime();
   });
@@ -1092,11 +1114,13 @@ export async function visitView(token: string, db: Database = getDb(), now = new
   const refusal = exam ? moveRefusal(rows, now) : null;
   let slots: Awaited<ReturnType<typeof offeredSlots>> = [];
   let notice: string | null = null;
+  let live: LiveBusy | null = null;
   if (!enabled) notice = onLine("Booking is temporarily paused.");
   else if (refusal) notice = refusal;
   else {
     try {
-      slots = await offeredSlots(db, config, subject, cap, rows, now);
+      live = await liveForList(db, config, [subject], now);
+      slots = await offeredSlots(db, config, subject, cap, rows, now, db, live ?? undefined);
       if (!slots.length) notice = onLine("There are no open visit times at the moment. Please try again later.");
     } catch (error) {
       // A stale Wise snapshot. Anything else is not a state the candidate can act on.
@@ -1121,6 +1145,8 @@ export async function visitView(token: string, db: Database = getDb(), now = new
         : null,
     canMove: enabled && !!exam && !refusal,
     notice,
+    // When the times were checked against live Wise. Null means the 30-minute Wise copy was used.
+    checkedAt: live?.checkedAt ?? null,
   };
 }
 
@@ -1186,7 +1212,9 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
   if (input.subject !== open.subject)
     throw new HiringError(409, onLine("This visit is for another subject."));
   const unavailable = () => new HiringError(409, "That visit time is no longer available. Choose another time.");
-  const slot = (await offeredSlots(db, config, open.subject, cap, open.rows, now)).find(
+  // The same live read as the list, so the head assigned here is the head the candidate's list was built on.
+  const live = (await liveForList(db, config, [open.subject], now)) ?? undefined;
+  const slot = (await offeredSlots(db, config, open.subject, cap, open.rows, now, db, live)).find(
     (v) => new Date(v.examStart).getTime() === start,
   );
   if (!slot) throw unavailable();
@@ -1209,7 +1237,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
     if (examOf(rows)?.startTime.getTime() === start) return examOf(rows)!;
     refuseChange(rows);
     if (input.subject !== subject) throw new HiringError(409, onLine("This visit is for another subject."));
-    const fresh = (await offeredSlots(tx, latest.config, subject, cap, rows, new Date(), db)).find(
+    const fresh = (await offeredSlots(tx, latest.config, subject, cap, rows, new Date(), db, live)).find(
       (v) => new Date(v.examStart).getTime() === start,
     );
     // Only this head's lock is held, and the live read was for this head.

@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { HiringBooking } from "@/components/hiring/booking";
+import { BookingLoading, BookingShell, HiringBooking } from "@/components/hiring/booking";
 export const metadata = {
   title: "Book your assessment | BeGifted",
   robots: { index: false, follow: false },
@@ -13,9 +13,9 @@ export default function Page(props: { params: Promise<{ token: string }> }) {
   return (
     <Suspense
       fallback={
-        <p role="status" className="p-6">
-          Loading booking…
-        </p>
+        <BookingShell>
+          <BookingLoading />
+        </BookingShell>
       }
     >
       <Body {...props} />
