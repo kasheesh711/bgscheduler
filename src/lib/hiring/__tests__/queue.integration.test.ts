@@ -931,6 +931,12 @@ describe("reply rule", () => {
     expect(autoInviteEligible(c({ preScreenRepliedAt: after(-2) }), sent, config)).toBe(false);
     expect(autoInviteEligible(c({ preScreenRepliedAt: null }), sent, config)).toBe(false);
     expect(autoInviteEligible(c({ previouslyContacted: true }), sent, config)).toBe(false);
+    // Pass score 0 (Kevin's rule, 12 Nov 2026): the score is not a gate. A reply with every criterion not met still passes
+    // when its named subject is supported; a blank pass score still waits.
+    const weak = { ...six(), criteria: six().criteria.map((row) => ({ ...row, result: "not_met" })) } as never;
+    expect(autoInviteEligible(c({ preScreenAssessment: weak }), sent, config)).toBe(false);
+    expect(autoInviteEligible(c({ preScreenAssessment: weak }), sent, { ...config, preScreenThreshold: 0 })).toBe(true);
+    expect(autoInviteEligible(c({ preScreenAssessment: weak }), sent, { ...config, preScreenThreshold: null })).toBe(false);
     // HR's good call is the contact, so a SEEK message after it does not hold the reply.
     expect(
       autoInviteEligible(c({ previouslyContacted: true, callReview: { good: { at: now.toISOString(), by: "hr" }, tries: [] } }), sent, config),

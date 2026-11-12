@@ -865,9 +865,11 @@ describe("hiring workflow persistence", () => {
       expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\nCandidate: .+\nEmail: \S+@example\.com\nPhone: not recorded\nSubject: /);
     });
     it("links the head to the candidate page, and ends the link with the visit", async () => {
-      const row = await invited();
+      const row = await invited({ phone: "+66812345678" });
       await bookVisit(link(row), choice(), db);
       await deliverOutbox(db, base);
+      // The number the candidate gave at the HR call booking reaches the head with the email.
+      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\nEmail: \S+@example\.com\nPhone: \+66812345678\nSubject: /);
       const token = vi.mocked(pushLineTextMessage).mock.calls[0][0].text.match(/\/hiring\/brief\/([\w.-]+)/)![1];
       const [exam, mock] = await rowsOf(row.id);
       expect([exam.kind, mock.kind]).toEqual(["paper", "mock"]);
