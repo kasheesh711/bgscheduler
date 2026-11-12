@@ -34,7 +34,7 @@ import {
 import { AWAITING_CALL, profileGate } from "./insights";
 import { audit, candidateById, settings, sourceHash } from "./service";
 import { formSentAt, releaseQueues, replyCheck, runFollowUps } from "./queue";
-import { deliverRecruitment, queueRecruitmentInvitation } from "./recruitment";
+import { contactLines, deliverRecruitment, queueRecruitmentInvitation } from "./recruitment";
 import { deliverCalendar } from "./google";
 import { hiringEmailHtmlFromText } from "./email";
 import { syncTracker, mirrorTracker } from "./sources";
@@ -654,7 +654,7 @@ export async function deliverOutbox(
               : notice === "cancelled"
                 ? "Mock teaching cancelled"
                 : "Mock teaching interview";
-          const message = `${title}\nCandidate: ${candidate.name}\nSubject: ${booking.subjects.join(", ")}\nTime: ${booking.startTime.toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok)\nPlace: ${current.config.location}\nInterviewer: ${booking.interviewerKey}`;
+          const message = `${title}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nTime: ${booking.startTime.toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok)\nPlace: ${current.config.location}\nInterviewer: ${booking.interviewerKey}`;
           receipt = {
             ...(await pushLineTextMessage({
               to: booking.lineGroupId,

@@ -740,7 +740,7 @@ describe("follow-ups", () => {
     expect(text).toMatch(/1-hour mock/);
     expect(text).toContain("Mathematics");
     expect(text).toContain("https://lin.ee/OjMHF41");
-    expect(text).toMatch(/IGCSE topic/);
+    expect(text).toMatch(/prepare one lesson in Mathematics/);
     // The link: a fixed 30-day life, and the same second on the row and in the token.
     const token = text.match(/\/hiring\/book\/([\w.-]+)/)![1];
     const payload = JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString());
@@ -906,6 +906,10 @@ describe("reply rule", () => {
     expect(autoInviteEligible(c({ preScreenRepliedAt: after(-2) }), sent, config)).toBe(false);
     expect(autoInviteEligible(c({ preScreenRepliedAt: null }), sent, config)).toBe(false);
     expect(autoInviteEligible(c({ previouslyContacted: true }), sent, config)).toBe(false);
+    // HR's good call is the contact, so a SEEK message after it does not hold the reply.
+    expect(
+      autoInviteEligible(c({ previouslyContacted: true, callReview: { good: { at: now.toISOString(), by: "hr" }, tries: [] } }), sent, config),
+    ).toBe(true);
     expect(parseFormTimestamp("next Tuesday")).toBeNull();
     expect(parseFormTimestamp("29/9/2026, 14:38:38")?.toISOString()).toBe("2026-09-29T14:38:38.000Z");
     // The same cases through the tracker and the worker: nothing is invited.

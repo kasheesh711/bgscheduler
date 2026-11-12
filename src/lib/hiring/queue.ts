@@ -176,7 +176,9 @@ export function replyCheck(
     return hold("No named subject is supported by the assessment.");
   if (!sentAt) return hold("This response has no matching form send. A person decides.");
   if (!candidate.email) return hold("There is no usable email.");
-  if (candidate.previouslyContacted) return hold("There was earlier contact. A person decides.");
+  // HR's good call is the contact, as in `profileGate`.
+  if (candidate.previouslyContacted && !candidate.callReview?.good)
+    return hold("There was earlier contact. A person decides.");
   if (candidate.preScreenResubmitted) return hold("This is a changed response. A person decides.");
   if (!candidate.preScreenRepliedAt) return hold("The response time could not be read. A person decides.");
   if (candidate.preScreenRepliedAt < sentAt) return hold("This response is older than the form send. A person decides.");

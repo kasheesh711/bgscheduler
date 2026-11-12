@@ -58,7 +58,7 @@ import { attendanceConfig } from "@/lib/tutor-attendance/data";
 import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
 import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
 import { formatInTimeZone } from "date-fns-tz";
-import { HIRING_LINE_URL, MOCK_PREP, VISIT_LENGTH, hiringEmail } from "./email";
+import { HIRING_LINE_URL, VISIT_LENGTH, hiringEmail, mockPrep } from "./email";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -315,6 +315,7 @@ export async function inviteToMock(
     `/hiring/book/${token}`,
     process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
   ).toString();
+  const prep = mockPrep(candidate.paperPassedSubjects.join(", "));
   await enqueue(db, {
     key,
     candidateId: candidate.id,
@@ -336,7 +337,8 @@ export async function inviteToMock(
           { label: "Location", value: config.location },
         ],
         action: { label: "Book your session", url },
-        after: [MOCK_PREP],
+        after: prep.paragraphs,
+        links: prep.links,
       }),
       workflowStage: "paper_passed",
     },
@@ -406,7 +408,8 @@ export const visitInviteEmail = (input: { name: string; subject: string; url: st
       ...(input.expireDays === undefined ? [] : [{ label: "Link closes", value: `${input.expireDays} days after this email` }]),
     ],
     action: { label: "Book your visit", url: input.url },
-    after: [MOCK_PREP],
+    after: mockPrep(input.subject).paragraphs,
+    links: mockPrep(input.subject).links,
   });
 const onLine = (text: string) => `${text} Contact BeGifted on LINE: ${HIRING_LINE_URL}`;
 const DAY = 86400000;
@@ -1313,9 +1316,10 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
               rows.length
                 ? "This visit cannot move again through the link."
                 : "You can move this visit once, up to 24 hours before it starts.",
-              MOCK_PREP,
               "For other changes, message BeGifted on LINE.",
+              ...mockPrep(subject).paragraphs,
             ],
+            links: mockPrep(subject).links,
           }),
         },
       });
