@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { googleOAuthTokens, hiringBookings } from "@/lib/db/schema";
 import { getGoogleSheetsAccessToken } from "@/lib/sales-dashboard/google-oauth";
-import { GOOGLE_SCOPES, HiringError, ZONE } from "./model";
+import { GOOGLE_FREEBUSY_SCOPE, GOOGLE_SCOPES, HR_CALENDAR, HiringError, ZONE } from "./model";
 import type { Candidate } from "./service";
 
 export async function googleConnectionStatus(
@@ -14,13 +14,52 @@ export async function googleConnectionStatus(
     .select()
     .from(googleOAuthTokens)
     .where(eq(googleOAuthTokens.email, email));
+  const scopes = row?.scope?.split(" ") ?? [];
+  const connected = !!row?.refreshTokenCiphertext && GOOGLE_SCOPES.every((scope) => scopes.includes(scope));
   return {
-    connected:
-      !!row?.refreshTokenCiphertext &&
-      GOOGLE_SCOPES.every((scope) => row.scope?.split(" ").includes(scope)),
+    connected,
+    // The HR call needs one more permission. It is apart from `connected`, so visit delivery works before the re-connect.
+    freeBusy: connected && scopes.includes(GOOGLE_FREEBUSY_SCOPE),
     email,
     lastError: row?.lastError ?? null,
   };
+}
+/**
+ * The busy time on HR's calendar, read live. It throws unless Google returned a complete answer for that calendar, so a
+ * caller can never show a time it could not prove free.
+ */
+export async function readHrBusy(owner: string, from: Date, to: Date, db: Database = getDb()) {
+  if (!(await googleConnectionStatus(owner, db)).freeBusy)
+    throw new HiringError(409, "Connect Google again to let Hiring read the call calendar.");
+  const result = (await calendarRequest(
+    owner,
+    "freeBusy",
+    {
+      method: "POST",
+      body: JSON.stringify({ timeMin: from.toISOString(), timeMax: to.toISOString(), items: [{ id: HR_CALENDAR }] }),
+    },
+    db,
+  )) as { calendars?: Record<string, { errors?: unknown[]; busy?: { start?: string; end?: string }[] }> } | null;
+  const calendar = result?.calendars?.[HR_CALENDAR];
+  if (!calendar || calendar.errors?.length || !Array.isArray(calendar.busy))
+    throw new HiringError(502, "Google did not return the call calendar.");
+  return calendar.busy.map((entry) => {
+    const range = { start: new Date(entry.start ?? ""), end: new Date(entry.end ?? "") };
+    if (!(range.end > range.start)) throw new HiringError(502, "Google returned a busy time that cannot be read.");
+    return range;
+  });
+}
+/** For Rules and setup: can Hiring read HR's calendar now? `reconnect` makes no network call. */
+export async function callCalendarStatus(owner: string, db: Database = getDb()): Promise<"readable" | "reconnect" | "unreadable"> {
+  if (!(await googleConnectionStatus(owner, db)).freeBusy) return "reconnect";
+  const now = new Date();
+  try {
+    await readHrBusy(owner, now, new Date(now.getTime() + 86400000), db);
+    return "readable";
+  } catch (error) {
+    if (!(error instanceof HiringError)) console.error("Hiring call calendar check failed", error instanceof Error ? error.name : "UnknownError");
+    return "unreadable";
+  }
 }
 async function calendarRequest(
   email: string,
@@ -125,6 +164,8 @@ export async function deliverCalendar(
       ),
     ),
   ].map((email) => ({ email }));
+  // The HR call: the guests are HR (`interviewerEmail`) and the candidate, by the same rule as a visit.
+  const call = booking.kind === "call";
   const result = await calendarRequest(
     booking.calendarOwner,
     path + "?sendUpdates=all",
@@ -132,13 +173,17 @@ export async function deliverCalendar(
       method: "POST",
       body: JSON.stringify({
         id,
-        summary: booking.visitId
+        summary: call
+          ? `BeGifted pre-screen call: ${candidate.name}`
+          : booking.visitId
           ? booking.kind === "mock"
             ? "BeGifted mock teaching"
             : "BeGifted exam"
           : `BeGifted ${booking.kind === "mock" ? "mock teaching" : "paper assessment"}: ${candidate.name}`,
-        description: `${booking.visitId ? `Candidate: ${candidate.name}\n` : ""}Subjects: ${booking.subjects.join(", ")}\n${booking.kind === "mock" ? "The candidate prepares one lesson from an international school syllabus (IGCSE, A Level or IB). The interviewer also selects a topic." : booking.visitId ? "The 2-hour exam. The mock teaching session follows it." : "Two hours are allocated per subject."}`,
-        location,
+        description: call
+          ? `Candidate: ${candidate.name}\nSubject: ${booking.subjects.join(", ")}\nPhone: ${candidate.phone ?? "not recorded"}\nEmail: ${candidate.email ?? "not recorded"}\nBeGifted calls the candidate at this time.`
+          : `${booking.visitId ? `Candidate: ${candidate.name}\n` : ""}Subjects: ${booking.subjects.join(", ")}\n${booking.kind === "mock" ? "The candidate prepares one lesson from an international school syllabus (IGCSE, A Level or IB). The interviewer also selects a topic." : booking.visitId ? "The 2-hour exam. The mock teaching session follows it." : "Two hours are allocated per subject."}`,
+        location: call ? "Phone call" : location,
         start: { dateTime: booking.startTime.toISOString(), timeZone: ZONE },
         end: { dateTime: booking.endTime.toISOString(), timeZone: ZONE },
         attendees,

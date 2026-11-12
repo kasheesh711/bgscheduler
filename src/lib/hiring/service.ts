@@ -5,15 +5,23 @@ import { and, asc, desc, eq, gte, inArray, isNotNull, like, or, sql } from "driz
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
-import { availableSlots, availableVisitSlots, readLiveBusy, verifyLiveSlot, type LiveBusy } from "./availability";
+import { availableSlots, availableVisitSlots, callSlots, readLiveBusy, verifyLiveSlot, type LiveBusy } from "./availability";
 import {
   baseConfigSchema,
   withSeekJobs,
   bookingSchema,
+  CALL_DAY_END,
+  CALL_DAY_START,
+  CALL_LINK_DAYS,
+  CALL_MINUTES,
+  callBookingSchema,
   configRuleErrors,
   configSchema,
   HiringError,
+  HR_CALENDAR,
+  HR_CALL_KEY,
   instant,
+  isVisitBooking,
   PRE_SCREEN_URL,
   normalizeSubjects,
   overlap,
@@ -37,7 +45,7 @@ import {
   topHiringSubject,
   workRightsAccepted,
 } from "./scoring";
-import { googleConnectionStatus } from "./google";
+import { googleConnectionStatus, readHrBusy } from "./google";
 import { visitClashes } from "./head-schedule";
 import { bookingToken, readBookingToken, VISIT_LINK_DAYS } from "./tokens";
 import { storedResume } from "./resume-files";
@@ -370,6 +378,50 @@ export const visitLink = (id: string, expires: Date) =>
     `/hiring/book/${bookingToken(id, "visit", expires)}`,
     process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
   ).toString();
+export const callLink = (id: string, expires: Date) =>
+  new URL(
+    `/hiring/book/${bookingToken(id, "call", expires)}`,
+    process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
+  ).toString();
+/** The invitation to book the HR call. It holds no times: the page reads HR's calendar when it opens. */
+export const callInviteEmail = (input: { name: string; url: string }) =>
+  hiringEmail({
+    subject: "BeGifted tutor application: book your call",
+    preheader: `Choose a time for a ${CALL_MINUTES}-minute phone call with our team.`,
+    title: "Book your call with BeGifted",
+    name: input.name,
+    paragraphs: [
+      "Thank you for your application to BeGifted. The next step is a short phone call with our HR team. Please choose a time.",
+    ],
+    details: [
+      { label: "Call", value: `${CALL_MINUTES} minutes, by phone` },
+      { label: "Times", value: "Monday to Friday, 09:00–18:00 (Bangkok time)" },
+      { label: "Link closes", value: `${CALL_LINK_DAYS} days after this email` },
+    ],
+    action: { label: "Book your call", url: input.url },
+    after: ["The booking page asks for your phone number. We call that number at the time that you choose."],
+  });
+/**
+ * Queues the call booking link, once per candidate. `workflowStage` cancels it if the candidate leaves `new` before it
+ * is sent, and a SEEK contact or a stop cancels it while it waits, like any other invitation.
+ */
+export async function inviteToCall(db: Database, candidate: Candidate, now = new Date()) {
+  if (!candidate.email)
+    throw new HiringError(409, "A verified application email is required.");
+  const expires = new Date((Math.floor(now.getTime() / 1000) + CALL_LINK_DAYS * 86400) * 1000);
+  return enqueue(db, {
+    key: `${candidate.id}:call-invite`,
+    candidateId: candidate.id,
+    kind: "email",
+    // The day limit reads this time, so it comes from the same clock as the limit check.
+    createdAt: now,
+    payload: {
+      to: candidate.email,
+      workflowStage: "new",
+      ...callInviteEmail({ name: candidate.name, url: callLink(candidate.id, expires) }),
+    },
+  });
+}
 /** The form invitation and its reminder. */
 export const preScreenEmail = (name: string, email: string, reminder: boolean) =>
   hiringEmail({
@@ -557,7 +609,7 @@ export async function dashboard(db: Database = getDb()) {
   const [
     { row, config },
     candidates,
-    bookings,
+    allBookings,
     outbox,
     contacts,
     groups,
@@ -597,6 +649,11 @@ export async function dashboard(db: Database = getDb()) {
       .orderBy(desc(s.hiringAudit.createdAt))
       .limit(50),
   ]);
+  // The visit screens never see an HR call. The Calls tab reads `calls`.
+  const bookings = allBookings.filter(isVisitBooking);
+  const calls = allBookings
+    .filter((b) => b.kind === "call" && b.status === "confirmed")
+    .map((b) => ({ candidateId: b.candidateId, start: b.startTime, end: b.endTime }));
   if (!row) {
     const suggested: Record<string, Subject[]> = {
       Peat: ["Mathematics", "Physics"],
@@ -635,7 +692,14 @@ export async function dashboard(db: Database = getDb()) {
   };
   const holds: Record<string, QueueHold> = {};
   let preScreenOrder: string[] = [];
-  const callOrder = (await callQueue(db, config)).map((entry) => entry.id);
+  // Booked calls first, in time order (the newest booking of a candidate decides); then the automatic order.
+  const callAt = new Map<string, number>();
+  for (const call of [...calls].reverse()) callAt.set(call.candidateId, call.start.getTime());
+  const toCall = (await callQueue(db, config)).map((entry) => entry.id);
+  const callOrder = [
+    ...toCall.filter((id) => callAt.has(id)).sort((a, b) => callAt.get(a)! - callAt.get(b)!),
+    ...toCall.filter((id) => !callAt.has(id)),
+  ];
   for (const funnel of ["pre_screen", "onsite"] as const satisfies Funnel[]) {
     const entries = funnel === "pre_screen" ? await preScreenQueue(db, config) : await onsiteQueue(db, config);
     const { release, held, order } = releaseQueue(funnel, entries, funnel === "pre_screen" ? usage.preScreen : usage.onsite, config);
@@ -655,7 +719,7 @@ export async function dashboard(db: Database = getDb()) {
     })
     .from(s.hiringOutbox)
     .where(
-      sql`${s.hiringOutbox.key} = ${s.hiringOutbox.candidateId}::text || ':pre-screen' or ${s.hiringOutbox.key} like ${s.hiringOutbox.candidateId}::text || ':visit-invite%' or ${s.hiringOutbox.key} like ${s.hiringOutbox.candidateId}::text || ':result:%'`,
+      sql`${s.hiringOutbox.key} = ${s.hiringOutbox.candidateId}::text || ':pre-screen' or ${s.hiringOutbox.key} = ${s.hiringOutbox.candidateId}::text || ':call-invite' or ${s.hiringOutbox.key} like ${s.hiringOutbox.candidateId}::text || ':visit-invite%' or ${s.hiringOutbox.key} like ${s.hiringOutbox.candidateId}::text || ':result:%'`,
     )
     .orderBy(desc(s.hiringOutbox.createdAt));
   const assessment = await assessmentData(db, now);
@@ -716,9 +780,12 @@ export async function dashboard(db: Database = getDb()) {
           c.workRightsAnswer,
           config.acceptedWorkRights,
         ),
+        // The gate on the screen must agree with the worker: a sent call link lifts the earlier-contact hold.
+        callInvited: inviteOutbox.some((o) => o.key === `${c.id}:call-invite` && o.status === "sent"),
       };
     }),
     bookings,
+    calls,
     visitClashes: clashes,
     outbox,
     // The capped list above holds every kind of row, so the pre-screen screen reads its proof from this full read.
@@ -1264,6 +1331,203 @@ export async function endVisit(tx: Database, rows: VisitRow[], status: "cancelle
       });
 }
 
+// ---- The HR pre-screen call that a candidate books (Kevin's decisions, 12 Nov 2026) ----
+
+type CallLink = { id: string; exp: number };
+function callToken(token: string, now: Date): CallLink {
+  const cap = readBookingToken(token, now);
+  if (cap.kind !== "call") throw new HiringError(404, onLine("This booking link is no longer active."));
+  return cap;
+}
+const callRows = (db: Database, candidateId: string) =>
+  db
+    .select()
+    .from(s.hiringBookings)
+    .where(
+      and(
+        eq(s.hiringBookings.candidateId, candidateId),
+        eq(s.hiringBookings.kind, "call"),
+        eq(s.hiringBookings.status, "confirmed"),
+      ),
+    );
+type CallRow = Awaited<ReturnType<typeof callRows>>[number];
+/** The candidate's call that has not ended. A call that ended with no result stays in the past and does not stop a new one. */
+const comingCall = async (db: Database, candidateId: string, now: Date) =>
+  (await callRows(db, candidateId)).find((b) => b.endTime > now);
+/** After a good call, a stop or a hand invite, HR will not make a call that is still ahead. */
+export async function cancelComingCall(tx: Database, candidateId: string, now: Date) {
+  const rows = (await callRows(tx, candidateId)).filter((b) => b.startTime > now);
+  if (rows.length) await endVisit(tx, rows, "cancelled", now, false);
+}
+/** HR's "No answer" for a call that has started. The slot is closed as a no-show, and the link lets the candidate book again. */
+export async function missStartedCall(tx: Database, candidateId: string, now: Date) {
+  const rows = (await callRows(tx, candidateId)).filter((b) => b.startTime <= now);
+  if (rows.length) await endVisit(tx, rows, "no_show", now, false);
+}
+/**
+ * The link works only while HR must still call this candidate: the same rule as the Calls tab. A good call, a stop, a
+ * move to review or a closed subject ends it. Returns the subject the form would go for.
+ */
+async function openCall(db: Database, cap: CallLink, config: HiringConfig) {
+  const [entry] = await callQueue(db, config, cap.id);
+  if (!entry) throw new HiringError(404, onLine("This booking link is no longer active."));
+  return entry.subject;
+}
+function callMoveRefusal(call: CallRow, now: Date) {
+  if (call.rescheduleOf) return onLine("This call has already moved once.");
+  if (call.startTime <= now) return onLine("This call has started and cannot move.");
+  return null;
+}
+/** HR's calendar, read live for the dates on offer. It throws when Google gives no complete answer, so no time is shown. */
+async function hrBusy(db: Database, config: HiringConfig, now: Date) {
+  const dates = businessDates(now, config.holidays);
+  return {
+    dates,
+    busy: await readHrBusy(config.connectedEmail, instant(dates[0], CALL_DAY_START), instant(dates.at(-1)!, CALL_DAY_END), db),
+  };
+}
+/** The calls other candidates hold. HR's calendar shows them too once the event exists; this covers the time before that. */
+const otherCalls = async (db: Database, candidateId: string, now: Date) =>
+  (
+    await db
+      .select({ candidateId: s.hiringBookings.candidateId, start: s.hiringBookings.startTime, end: s.hiringBookings.endTime })
+      .from(s.hiringBookings)
+      .where(and(eq(s.hiringBookings.kind, "call"), eq(s.hiringBookings.status, "confirmed"), gte(s.hiringBookings.endTime, now)))
+  ).filter((b) => b.candidateId !== candidateId);
+
+export async function callView(token: string, db: Database = getDb(), now = new Date()) {
+  const cap = callToken(token, now);
+  const { config } = await settings(db);
+  await openCall(db, cap, config);
+  const enabled = bookable(config, cap.id);
+  const own = await comingCall(db, cap.id, now);
+  const refusal = own ? callMoveRefusal(own, now) : null;
+  let slots: ReturnType<typeof callSlots> = [];
+  let notice: string | null = null;
+  if (!enabled) notice = onLine("Booking is temporarily paused.");
+  else if (refusal) notice = refusal;
+  else {
+    try {
+      const { dates, busy } = await hrBusy(db, config, now);
+      slots = callSlots(dates, [...busy, ...(await otherCalls(db, cap.id, now))], now).filter(
+        (slot) => new Date(slot.start).getTime() < cap.exp * 1000 && slot.start !== own?.startTime.toISOString(),
+      );
+      if (!slots.length) notice = onLine("There are no open call times at the moment. Please try again later.");
+    } catch (error) {
+      // The calendar could not be read. A time that cannot be proved free is not shown.
+      if (!(error instanceof HiringError)) throw error;
+      notice = onLine("Call times cannot be shown at the moment. Please try again later.");
+    }
+  }
+  // The stored phone number is never returned: the link is the only check, and a link can be forwarded.
+  return {
+    kind: "call" as const,
+    minutes: CALL_MINUTES,
+    enabled,
+    slots,
+    call: own ? { start: own.startTime.toISOString(), end: own.endTime.toISOString() } : null,
+    canMove: enabled && !!own && !refusal,
+    notice,
+  };
+}
+
+/** The candidate chooses a call time and gives the number to call. A move is this with `move: true`, once. */
+export async function bookCall(token: string, value: unknown, db: Database = getDb(), now = new Date()) {
+  const input = callBookingSchema.parse(value);
+  const cap = callToken(token, now);
+  const start = new Date(input.start).getTime();
+  const { config } = await settings(db);
+  if (!bookable(config, cap.id)) throw new HiringError(503, "Booking is temporarily unavailable.");
+  // A retry returns the original call.
+  const prior = await comingCall(db, cap.id, now);
+  if (prior?.startTime.getTime() === start) return prior;
+  await openCall(db, cap, config);
+  const refuseChange = (own?: CallRow) => {
+    if (!own) return;
+    if (!input.move) throw new HiringError(409, "You already have a booked call. Use Move this call to change it.");
+    const refusal = callMoveRefusal(own, now);
+    if (refusal) throw new HiringError(409, refusal);
+  };
+  refuseChange(prior);
+  // One live read of HR's calendar, just before the transaction: a Google call inside it would hold HR's lock for seconds.
+  const calendar = await hrBusy(db, config, now).catch((error) => {
+    if (!(error instanceof HiringError)) throw error;
+    throw new HiringError(503, onLine("Call times cannot be checked at the moment. Please try again later."));
+  });
+  return withDatabaseTransaction(db, async (tx) => {
+    await tx.execute(sql`select id from hiring_candidates where id=${cap.id} for update`);
+    // The booking trigger takes these two locks as well. Taking them here, in its order, serialises every call booking.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"hiring-candidate:" + cap.id},0))`);
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"sit-in:" + HR_CALL_KEY},0))`);
+    const latest = await settings(tx);
+    if (!bookable(latest.config, cap.id)) throw new HiringError(503, "Booking has been paused.");
+    const subject = await openCall(tx, cap, latest.config);
+    const own = await comingCall(tx, cap.id, now);
+    if (own?.startTime.getTime() === start) return own;
+    refuseChange(own);
+    const slot = callSlots(calendar.dates, [...calendar.busy, ...(await otherCalls(tx, cap.id, now))], new Date()).find(
+      (v) => new Date(v.start).getTime() === start && start < cap.exp * 1000,
+    );
+    if (!slot) throw new HiringError(409, "That call time is no longer available. Choose another time.");
+    const candidate = await candidateById(tx, cap.id);
+    if (own) await endVisit(tx, [own], "cancelled", now, false);
+    const [call] = await tx
+      .insert(s.hiringBookings)
+      .values({
+        candidateId: cap.id,
+        kind: "call",
+        subjects: [subject],
+        interviewerKey: HR_CALL_KEY,
+        interviewerEmail: HR_CALENDAR,
+        calendarOwner: latest.config.connectedEmail,
+        startTime: new Date(slot.start),
+        endTime: new Date(slot.end),
+        rescheduleOf: own?.id,
+        evidence: { checkedAt: new Date().toISOString(), source: "google-freebusy" },
+      })
+      .returning();
+    // No revision change: HR's next click on an open Calls tab sends the revision it loaded.
+    await tx.update(s.hiringCandidates).set({ phone: input.phone }).where(eq(s.hiringCandidates.id, cap.id));
+    if (candidate.email)
+      await enqueue(tx, {
+        key: `booking:${call.id}:email`,
+        candidateId: cap.id,
+        bookingId: call.id,
+        kind: "email",
+        payload: {
+          to: candidate.email,
+          ...hiringEmail({
+            subject: `BeGifted call ${own ? "moved" : "confirmed"}`,
+            preheader: `${bangkok(call.startTime)} (Bangkok). We will call you by phone.`,
+            title: own ? "Your call has moved" : "Your call is confirmed",
+            name: candidate.name,
+            paragraphs: [`Your call with BeGifted ${own ? "has moved. The new time is below" : "is confirmed"}.`],
+            details: [
+              { label: "Time", value: `${bangkok(call.startTime)}–${bangkokTime(call.endTime)} (Bangkok)` },
+              { label: "We will call", value: input.phone },
+            ],
+            ...(own ? {} : { action: { label: "Move your call", url: callLink(cap.id, new Date(cap.exp * 1000)) } }),
+            after: [
+              own ? "This call cannot move again through the link." : "You can move this call once, before it starts.",
+              "Please keep your phone near you at this time.",
+              "For other changes, message BeGifted on LINE.",
+            ],
+          }),
+        },
+      });
+    await enqueue(tx, {
+      key: `booking:${call.id}:calendar`,
+      candidateId: cap.id,
+      bookingId: call.id,
+      kind: "calendar",
+      payload: {},
+    });
+    // The phone number stays out of the audit row.
+    await audit(tx, "candidate", own ? "call-moved" : "call-booked", cap.id, { start: slot.start });
+    return call;
+  });
+}
+
 /** The candidate chooses a time and the server assigns the head. A move is this with `move: true`, once. */
 export async function bookVisit(token: string, value: unknown, db: Database = getDb(), now = new Date()) {
   const input = visitBookingSchema.parse(value);
@@ -1537,6 +1801,8 @@ export async function reviewCandidate(
       detail = { visitId: exam.visitId, examStart: exam.startTime.toISOString() };
     } else if (input.action === "stop") {
       if (isDecided(c.stage)) throw new HiringError(409, "A result was already sent to this candidate. Send a new decision to change it.");
+      // HR's bad call is this action, so a booked call never refuses it: one still ahead is cancelled first.
+      await cancelComingCall(tx, id, now);
       const appointments = await tx
         .select()
         .from(s.hiringBookings)
@@ -1546,7 +1812,7 @@ export async function reviewCandidate(
             eq(s.hiringBookings.status, "confirmed"),
           ),
         );
-      if (appointments.some((b) => b.endTime > new Date()))
+      if (appointments.some((b) => b.kind !== "call" && b.endTime > new Date()))
         throw new HiringError(
           409,
           "This candidate has a future appointment. Resolve it with the hiring coordinator before stopping processing.",
@@ -1645,6 +1911,7 @@ export async function reviewCandidate(
         // Kevin's rule: a click past the call queue counts as HR's good call.
         const skippedCall = profileGate(c, config).awaitingCall;
         if (skippedCall) detail = { goodCall: "manual" };
+        await cancelComingCall(tx, id, now);
         await tx
           .update(s.hiringCandidates)
           .set({

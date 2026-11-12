@@ -33,7 +33,7 @@ import {
 } from "./scoring";
 import { AWAITING_CALL, profileGate } from "./insights";
 import { audit, briefLink, candidateById, settings, sourceHash } from "./service";
-import { formSentAt, releaseQueues, replyCheck, runFollowUps } from "./queue";
+import { callInviteSentAt, formSentAt, releaseCallInvites, releaseQueues, replyCheck, runFollowUps } from "./queue";
 import { contactLines, deliverRecruitment, queueRecruitmentInvitation } from "./recruitment";
 import { deliverCalendar } from "./google";
 import { hiringEmailHtmlFromText } from "./email";
@@ -233,6 +233,8 @@ export async function assessCandidates(
             ...fresh,
             profileAssessment: assessment as Assessment,
             universityAssessment: prestige,
+            // A candidate who holds the app's call link stays on the Calls tab when HR writes to them on SEEK.
+            callInvited: !!(await callInviteSentAt(tx, candidate.id)),
           },
           current.config,
         );
@@ -752,12 +754,13 @@ export async function runHiringCycle(db: Database, assess: Assess) {
     );
     const followUps = await runFollowUps(db);
     const released = await releaseQueues(db);
+    const callInvites = await releaseCallInvites(db);
     await mirrorTracker(db, config);
     await db
       .update(s.hiringSettings)
       .set({ workerAt: new Date(), workerError: null })
       .where(eq(s.hiringSettings.id, "default"));
-    return { ...imported, calls, ...followUps, ...released };
+    return { ...imported, calls, ...followUps, ...released, callInvites };
   } catch (error) {
     await db
       .update(s.hiringSettings)

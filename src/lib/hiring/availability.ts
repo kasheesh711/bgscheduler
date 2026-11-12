@@ -14,7 +14,11 @@ import { getWiseSessionTeacherUserId } from "@/lib/wise/types";
 import { isBlockingStatus } from "@/lib/normalization/sessions";
 import {
   businessDates,
+  CALL_DAY_END,
+  CALL_DAY_START,
+  CALL_MINUTES,
   instant,
+  isVisitBooking,
   localDate,
   overlap,
   weekStart,
@@ -157,10 +161,10 @@ function assertFreshIndex(index: { syncedAt: Date }, now: Date) {
 
 // One at a time: `db` can be a transaction on one connection, and pg@9 refuses overlapping queries on a connection.
 export const readCalendar = async (db: Database) => {
-  const bookings = await db
-    .select()
-    .from(s.hiringBookings)
-    .where(eq(s.hiringBookings.status, "confirmed"));
+  // An HR call is not a visit: it takes no office place and no head's hour.
+  const bookings = (
+    await db.select().from(s.hiringBookings).where(eq(s.hiringBookings.status, "confirmed"))
+  ).filter(isVisitBooking);
   const observations = await db
     .select()
     .from(s.tutorSitInObservations)
@@ -484,4 +488,20 @@ export async function verifyLiveSlot(db: Database, slot: Slot) {
   if (head.leaves.some((b) => overlap(range, b)))
     throw new HiringError(409, "The interviewer is on leave. Choose another time.");
   return { checkedAt: live.checkedAt, source: "wise-live", snapshotId: live.snapshotId };
+}
+
+/**
+ * The times a candidate can book the HR call: every CALL_MINUTES step of the call day on each date, without the past and
+ * without any time that touches `busy` (HR's calendar and the calls already booked). `dates` are business dates, so a
+ * weekend or a closed date never appears. It proves nothing itself: the caller must pass a complete busy list or none.
+ */
+export function callSlots(dates: string[], busy: { start: Date; end: Date }[], now: Date) {
+  const slots: { date: string; start: string; end: string }[] = [];
+  for (const date of dates)
+    for (let minute = CALL_DAY_START; minute + CALL_MINUTES <= CALL_DAY_END; minute += CALL_MINUTES) {
+      const range = { start: instant(date, minute), end: instant(date, minute + CALL_MINUTES) };
+      if (range.start > now && !busy.some((other) => overlap(range, other)))
+        slots.push({ date, start: range.start.toISOString(), end: range.end.toISOString() });
+    }
+  return slots;
 }

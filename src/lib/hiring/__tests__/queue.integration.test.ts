@@ -31,7 +31,11 @@ import {
 
 vi.mock("../availability", () => ({ availableSlots: vi.fn(), verifyLiveSlot: vi.fn(), readLiveBusy: vi.fn(async () => { throw new Error("no Wise in tests"); }) }));
 vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
-vi.mock("../google", () => ({ deliverCalendar: vi.fn().mockResolvedValue({ id: "calendar-event" }) }));
+// The grant cannot read HR's calendar unless a test says so, so no call booking link leaves in the other tests.
+vi.mock("../google", () => ({
+  deliverCalendar: vi.fn().mockResolvedValue({ id: "calendar-event" }),
+  googleConnectionStatus: vi.fn(async () => ({ connected: true, freeBusy: false, email: "", lastError: null })), readHrBusy: vi.fn(),
+}));
 vi.mock("@/lib/line/client", () => ({ pushLineTextMessage: vi.fn(), LinePushError: class extends Error {} }));
 vi.mock("@/lib/sales-dashboard/sheets", () => ({
   fetchGoogleSheetRange: vi.fn(),
@@ -621,6 +625,27 @@ describe("form queue", () => {
     await assessCandidates(db, config, async () => five());
     expect((await candidate(low.id)).stage).toBe("review");
     expect(await outbox()).toEqual([]);
+  });
+  it("keeps a contacted candidate on the Calls tab once the app's call link is sent, and not while it waits", async () => {
+    await setConfig({ callThreshold: 80 });
+    const link = (id: string, status: "sent" | "pending") =>
+      db.insert(s.hiringOutbox).values({
+        key: `${id}:call-invite`,
+        candidateId: id,
+        kind: "email",
+        status,
+        sentAt: status === "sent" ? now : null,
+        createdAt: now,
+        payload: { to: "x@example.com", subject: "s", text: "t", workflowStage: "new" },
+      });
+    const invited = await seed({ profileAssessment: null, previouslyContacted: true });
+    const waiting = await seed({ profileAssessment: null, previouslyContacted: true });
+    await link(invited.id, "sent");
+    await link(waiting.id, "pending");
+    await assessCandidates(db, await settingsConfig(), async () => five());
+    expect((await candidate(invited.id)).stage).toBe("new");
+    expect((await candidate(waiting.id)).stage).toBe("review");
+    expect((await callQueue(db, await settingsConfig())).map((e) => e.id)).toEqual([invited.id]);
   });
   it("adds no row over four days while delivery is paused, and starts at the daily limit on resume", async () => {
     await setConfig({ deliveryEnabled: false });

@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { BookOpen, Check, CircleCheck, Info, MapPin } from "lucide-react";
-import type { Subject, Slot } from "@/lib/hiring/model";
-import type { bookingView, visitView } from "@/lib/hiring/service";
+import { BookOpen, Check, CircleCheck, Info, MapPin, Phone } from "lucide-react";
+import { phoneSchema, type Subject, type Slot } from "@/lib/hiring/model";
+import type { bookingView, callView, visitView } from "@/lib/hiring/service";
 import c from "./booking.module.css";
 type View = Awaited<ReturnType<typeof bookingView>>;
 type VisitView = Awaited<ReturnType<typeof visitView>>;
+type CallView = Awaited<ReturnType<typeof callView>>;
 const LINE_URL = "https://lin.ee/OjMHF41";
 const ZONE = { timeZone: "Asia/Bangkok" } as const;
 const time = (value: string) =>
@@ -109,9 +110,12 @@ function Picker<T extends { date: string }>({
   selected,
   onSelect,
   tile,
+  compact,
 }: {
   legend: string;
   checkedAt: string | null;
+  /** Many short times in a day (the HR call): three time-only tiles in a row. */
+  compact?: boolean;
   items: T[];
   keyOf: (item: T) => string;
   selected: string;
@@ -144,7 +148,7 @@ function Picker<T extends { date: string }>({
           );
         })}
       </div>
-      <div className={c.tiles}>
+      <div className={compact ? `${c.tiles} ${c.tilesCompact}` : c.tiles}>
         {items
           .filter((i) => i.date === active)
           .map((item) => (
@@ -389,6 +393,170 @@ export function VisitBooking({
   );
 }
 
+/** The HR pre-screen call: one short time, and the number that HR calls. */
+export function CallBooking({ token, view, reload }: { token: string; view: CallView; reload: () => Promise<void> }) {
+  const [moving, setMoving] = useState(false),
+    [chosen, setStart] = useState(""),
+    [phone, setPhone] = useState(""),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState(""),
+    [saved, setSaved] = useState("");
+  // The list reloads on its own, so a chosen time that has gone is no longer chosen.
+  const slot = view.slots.find((s) => s.start === chosen);
+  const start = slot?.start ?? "";
+  // The server checks the number again; this only keeps the button off until it can pass.
+  const phoneOk = phoneSchema.safeParse(phone).success;
+  async function book() {
+    setBusy(true);
+    setError("");
+    setSaved("");
+    try {
+      const r = await fetch(`/api/hiring/book/${token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start, phone, ...(view.call ? { move: true } : {}) }),
+      });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.error);
+      await reload();
+      setSaved(
+        view.call
+          ? "Your call has moved. The new time is below. A confirmation email and a calendar invitation will follow."
+          : "Your call is confirmed. The time is below. A confirmation email and a calendar invitation will follow.",
+      );
+      setMoving(false);
+      setStart("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not confirm.");
+      // That time may be gone, so the candidate chooses again from the fresh list.
+      setStart("");
+      await reload().catch(() => {});
+    } finally {
+      setBusy(false);
+    }
+  }
+  // The server sends a notice for an empty list. The fallback keeps the page from ever showing nothing.
+  const notice =
+    view.notice ?? (view.slots.length ? null : `There are no open call times at the moment. Contact BeGifted on LINE: ${LINE_URL}`);
+  const showForm = (!view.call || moving) && !notice;
+  const keep = moving && (
+    <button
+      type="button"
+      className={c.ghost}
+      disabled={busy}
+      onClick={() => {
+        setMoving(false);
+        setStart("");
+        setError("");
+      }}
+    >
+      Keep my current time
+    </button>
+  );
+  return (
+    <>
+      {saved && <Saved>{saved}</Saved>}
+      <div className={c.facts}>
+        <Fact icon={<Phone aria-hidden />} label="Phone call">
+          {view.minutes} minutes with our HR team
+        </Fact>
+        <p className={c.note}>We call the phone number that you give on this page. All times are Bangkok time.</p>
+      </div>
+      {view.call && (
+        <section>
+          <div className={c.stepHead}>
+            <h2 className={c.stepTitle}>Your booked call</h2>
+            <span className={c.badge}>
+              <Check aria-hidden size={14} /> Confirmed
+            </span>
+          </div>
+          <div className={c.ticket}>
+            <div className={c.ticketDate}>
+              <span>{part(view.call.start, { weekday: "short" })}</span>
+              <b>{part(view.call.start, { day: "numeric" })}</b>
+              <span>{part(view.call.start, { month: "short" })}</span>
+            </div>
+            <div className={c.ticketBody}>
+              <span>{day(view.call.start)}</span>
+              <div className={c.ticketRow}>
+                <span>Phone call</span>
+                <strong>
+                  {time(view.call.start)}–{time(view.call.end)}
+                </strong>
+              </div>
+            </div>
+          </div>
+          {view.canMove && !moving && (
+            <div className={c.move}>
+              <p className={c.note}>You can move this call once, before it starts.</p>
+              <button type="button" className={c.ghost} disabled={busy || !view.slots.length} onClick={() => setMoving(true)}>
+                Move this call
+              </button>
+              {!view.slots.length && <p className={c.note}>You cannot move it now, because no other time is open.</p>}
+            </div>
+          )}
+        </section>
+      )}
+      {notice && <VisitNotice text={notice} />}
+      {/* With no form on the page, a failed booking still shows its error here. */}
+      {!showForm && error && (
+        <p role="alert" className={c.alert}>
+          {error}
+        </p>
+      )}
+      {/* The list can empty while the candidate is moving: the way back stays on the page. */}
+      {!showForm && keep}
+      {showForm && (
+        <>
+          <Picker
+            compact
+            legend={view.call ? "Choose a new time" : "Choose a time"}
+            checkedAt={null}
+            items={view.slots}
+            keyOf={(s) => s.start}
+            selected={start}
+            onSelect={(s) => setStart(s.start)}
+            tile={(s) => <span className={c.tileTime}>{time(s.start)}</span>}
+          />
+          <label className={c.field}>
+            <span className={c.stepTitle}>Your phone number</span>
+            <input
+              className={c.input}
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              required
+              maxLength={40}
+              placeholder="+66 81 234 5678"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+            />
+            <span className={c.note}>We call this number at the time that you choose. Include the country code if it is not a Thai number.</span>
+          </label>
+          {keep}
+          <VisitConfirm
+            error={error}
+            disabled={busy || !start || !phoneOk}
+            label={busy ? "Confirming…" : view.call ? "Confirm new time" : "Confirm call"}
+            onConfirm={book}
+            summary={
+              slot && (
+                <p className={c.summary}>
+                  <span>{day(slot.start)}</span>
+                  <b>
+                    {time(slot.start)}–{time(slot.end)}
+                  </b>
+                </p>
+              )
+            }
+          />
+        </>
+      )}
+      {!notice && <Help />}
+    </>
+  );
+}
+
 const slotKey = (s: Slot) => `${s.start}:${s.interviewerKey}:${s.subjects.join(",")}`;
 
 export const BookingLoading = () => (
@@ -403,7 +571,7 @@ export const BookingLoading = () => (
   </div>
 );
 
-export function BookingShell({ kind, children }: { kind?: "visit" | "mock" | "paper" | "brief"; children: ReactNode }) {
+export function BookingShell({ kind, children }: { kind?: "visit" | "mock" | "paper" | "brief" | "call"; children: ReactNode }) {
   return (
     <main className={c.page}>
       <header className={c.hero}>
@@ -411,7 +579,7 @@ export function BookingShell({ kind, children }: { kind?: "visit" | "mock" | "pa
           <p className={c.brand}>BeGifted Education</p>
           <h1 className={c.title}>
             {kind === "brief" ? "Your " : "Book your "}
-            <em>{kind === "brief" ? "interview candidate" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "assessment"}</em>
+            <em>{kind === "brief" ? "interview candidate" : kind === "call" ? "call with BeGifted" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "assessment"}</em>
           </h1>
         </div>
       </header>
@@ -423,7 +591,7 @@ export function BookingShell({ kind, children }: { kind?: "visit" | "mock" | "pa
 }
 
 export function HiringBooking({ token }: { token: string }) {
-  const [view, setView] = useState<View | VisitView | null>(null),
+  const [view, setView] = useState<View | VisitView | CallView | null>(null),
     [subjects, setSubjects] = useState<Subject[]>([]),
     [slot, setSlot] = useState<Slot | null>(null),
     [onsite, setOnsite] = useState(false),
@@ -448,7 +616,8 @@ export function HiringBooking({ token }: { token: string }) {
     load().catch((e) => setError(e.message));
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
   // A page left open shows old times, so the list reloads when the candidate comes back to the tab.
-  const visit = view?.kind === "visit";
+  // One list with no subject choice: the visit and the HR call.
+  const visit = view?.kind === "visit" || view?.kind === "call";
   useEffect(() => {
     const refresh = () => {
       if (document.visibilityState !== "visible" || !view || (!visit && !subjects.length)) return;
@@ -496,7 +665,7 @@ export function HiringBooking({ token }: { token: string }) {
       setBusy(false);
     }
   }
-  const old = view && view.kind !== "visit" ? view : null;
+  const old = view && view.kind !== "visit" && view.kind !== "call" ? view : null;
   const selectionBooked =
     !!old && subjects.some((subject) => old.bookings.some((booking) => booking.kind === old.kind && booking.subjects.includes(subject)));
   const form = !!old && old.enabled && !selectionBooked;
@@ -517,6 +686,8 @@ export function HiringBooking({ token }: { token: string }) {
         )
       ) : view.kind === "visit" ? (
         <VisitBooking token={token} view={view} reload={() => load()} />
+      ) : view.kind === "call" ? (
+        <CallBooking token={token} view={view} reload={() => load()} />
       ) : (
         <>
           <div className={c.facts}>

@@ -12,7 +12,7 @@ import { moveInQueue, recordCall, resetQueueOrder } from "@/lib/hiring/queue";
 import { discardDecision, draftDecision, saveDraft, sendDecision } from "@/lib/hiring/decisions";
 import { deliverBookingMessages, deliverOutbox } from "@/lib/hiring/worker";
 import { getDb } from "@/lib/db";
-import { googleConnectionStatus } from "@/lib/hiring/google";
+import { callCalendarStatus, googleConnectionStatus } from "@/lib/hiring/google";
 
 // A dashboard or head-schedule load can trigger a cold Wise index build.
 export const maxDuration = 120;
@@ -149,7 +149,14 @@ export async function GET(request: Request) {
     return NextResponse.json(
       {
         ...data,
-        google: await googleConnectionStatus(data.config.connectedEmail),
+        google: {
+          ...(await googleConnectionStatus(data.config.connectedEmail)),
+          // A live probe of the people@ calendar. A slow Google must not hold the dashboard, so it gets 4 seconds.
+          callCalendar: await Promise.race([
+            callCalendarStatus(data.config.connectedEmail),
+            new Promise<"unreadable">((resolve) => setTimeout(() => resolve("unreadable"), 4000)),
+          ]),
+        },
       },
       { headers: { "Cache-Control": "no-store" } },
     );

@@ -1,6 +1,6 @@
 "use client";
 
-import { localDate, SUBJECTS, type HiringConfig } from "@/lib/hiring/model";
+import { HR_CALENDAR, localDate, SUBJECTS, type HiringConfig } from "@/lib/hiring/model";
 import {
   daysOf,
   fullPriority,
@@ -25,6 +25,13 @@ import {
 import type { Command, HiringData } from "./dashboard";
 import { PaperLibrary, PassRules } from "./assessment-setup";
 import css from "./dashboard.module.css";
+
+/** What the owner must do for each state of the live read of HR's calendar. */
+export const CALL_CALENDAR_TEXT: Record<HiringData["google"]["callCalendar"], string> = {
+  readable: "Readable",
+  reconnect: "Click Connect Google and approve the new permission",
+  unreadable: "Not readable now. Share that calendar with the organizer email (see only free/busy), then reload",
+};
 
 const dayText = (date: string) =>
   new Date(`${date}T12:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
@@ -251,6 +258,13 @@ export function SetupPanel({
             <span>Google</span>
             <span className={data.google.connected ? css.goodWord : css.warnWord}>
               {data.google.connected ? "Calendar and Sheets connected" : "Calendar consent needed"}
+            </span>
+          </p>
+          {/* The HR call list needs a live read of the people@ calendar. Call booking links wait until this says Readable. */}
+          <p className={css.statusRow}>
+            <span>Call calendar ({HR_CALENDAR})</span>
+            <span className={data.google.callCalendar === "readable" ? css.goodWord : css.warnWord}>
+              {CALL_CALENDAR_TEXT[data.google.callCalendar]}
             </span>
           </p>
           <button type="button" className={css.secondary} disabled={busy} onClick={connect}>

@@ -23,6 +23,24 @@ export function callCommand(candidate: Pick<HiringCandidate, "id" | "revision" |
     : { action: "call_result", id: candidate.id, result };
 }
 
+/**
+ * Where the candidate stands with the call booking link: the booked time, else the state of the link email.
+ * A booked time that has passed still shows, so HR sees a call that was missed.
+ */
+export function callState(
+  candidateId: string,
+  calls: { candidateId: string; start: string | Date }[],
+  inviteOutbox: { key: string; status: string; sentAt: string | Date | null }[],
+) {
+  // `calls` is newest first.
+  const call = calls.find((row) => row.candidateId === candidateId);
+  if (call) return `Booked ${formatInTimeZone(new Date(call.start), ZONE, "EEE d MMM, HH:mm")}`;
+  const invite = inviteOutbox.find((row) => row.key === `${candidateId}:call-invite`);
+  if (!invite || invite.status === "cancelled") return "Not invited";
+  if (invite.status === "sent" && invite.sentAt) return `Invited ${formatInTimeZone(new Date(invite.sentAt), ZONE, "d MMM")}`;
+  return invite.status === "pending" || invite.status === "processing" ? "Invitation queued" : "Invitation not confirmed";
+}
+
 export function triesText(review: HiringCandidate["callReview"]) {
   const tries = review?.tries ?? [];
   if (!tries.length) return "Not called yet";
@@ -71,7 +89,7 @@ export function CallsScreen({
           <p className={css.activeFilters}>
             {threshold === null
               ? "Calls are off. Set an HR call score in Rules and setup to use this list."
-              : `${rows.length} to call. Highest SEEK score first. A candidate at or above ${threshold} gets the pre-screen form only after a good call.`}
+              : `${rows.length} to call. Booked calls first, by time; then the highest SEEK score. A candidate at or above ${threshold} gets the pre-screen form only after a good call.`}
           </p>
           <div className={css.tableScroll}>
             <table className={css.table}>
@@ -82,6 +100,7 @@ export function CallsScreen({
                   <th>Subject</th>
                   <th>University</th>
                   <th>Score</th>
+                  <th>Call booking</th>
                   <th>Calls</th>
                   <th>SEEK</th>
                   <th>Result</th>
@@ -112,6 +131,14 @@ export function CallsScreen({
                       </td>
                       <td>{universityName(c)}</td>
                       <td className={css.num}>{c.profileScore === null ? "–" : Math.round(c.profileScore * 10) / 10}</td>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        {callState(c.id, data.calls, data.inviteOutbox)}
+                        {c.phone && (
+                          <a className={css.email} href={`tel:${c.phone}`}>
+                            {c.phone}
+                          </a>
+                        )}
+                      </td>
                       <td className={css.mutedCell}>{triesText(c.callReview)}</td>
                       <td onClick={(e) => e.stopPropagation()}>
                         <SeekLinks candidate={c} fallbackJobId={data.config.seekJobs[0].jobId} className={css.seekButton} />

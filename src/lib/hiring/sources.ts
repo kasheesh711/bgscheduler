@@ -22,11 +22,11 @@ import {
   type Stage,
 } from "./model";
 import { queueRecruitmentForm } from "./recruitment";
-import { appInvited, formSentAt } from "./queue";
+import { appInvited, callInviteSentAt, formSentAt } from "./queue";
 import { RESUME_MAX_BYTES, sniffResume, storeResume, type ResumeFile } from "./resume-files";
 import { answerKey } from "./scoring";
 import { resultColumns } from "./result-history";
-import { audit, inviteToMock, settings, sourceHash } from "./service";
+import { audit, cancelComingCall, inviteToMock, settings, sourceHash } from "./service";
 // The one copy stays in status.ts: client components import that file, and this one reaches the database.
 import { parseFormTimestamp } from "./status";
 
@@ -245,7 +245,10 @@ export async function observeSeekState(
     const stopped = seekStop && !held;
     // Kevin's rule: after HR's good call, a SEEK move or a SEEK message does not hold the pre-screen form.
     const called = !!candidate.callReview?.good;
-    const externallyAdvanced = status !== "Inbox" && candidate.stage === "new" && !called;
+    // Once the app's call booking link is sent, a SEEK move is HR working the candidate, not a contact the app missed.
+    // A link still waiting gives no exemption: a person who acted in SEEK first still wins.
+    const callInvited = !!(await callInviteSentAt(tx, candidate.id));
+    const externallyAdvanced = status !== "Inbox" && candidate.stage === "new" && !called && !callInvited;
     // This runs for every known candidate each cycle. A repeated write would raise the revision and break panel clicks.
     if (
       !newlyContacted &&
@@ -283,6 +286,8 @@ export async function observeSeekState(
           ),
         );
     }
+    // Not Suitable or Accept in SEEK: HR will not make a call that is still ahead.
+    if (stopped) await cancelComingCall(tx, candidate.id, new Date());
     await audit(tx, "seek-import", "source-status", candidate.id, {
       applicationId,
       status,

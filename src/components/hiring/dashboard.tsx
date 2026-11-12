@@ -4,7 +4,7 @@ import { startTransition, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Instrument_Serif } from "next/font/google";
 import { signIn } from "next-auth/react";
-import { GOOGLE_SCOPES, type HiringConfig, type Stage, type Subject } from "@/lib/hiring/model";
+import { GOOGLE_FREEBUSY_SCOPE, GOOGLE_SCOPES, type HiringConfig, type Stage, type Subject } from "@/lib/hiring/model";
 import { buildInsights, readyToInvite } from "@/lib/hiring/insights";
 import { dedupePriority, headDaysNotice } from "@/lib/hiring/rules";
 import { candidateExtras, holdNote } from "@/lib/hiring/status";
@@ -30,7 +30,7 @@ const serif = Instrument_Serif({
 });
 
 export type HiringData = Awaited<ReturnType<typeof dashboard>> & {
-  google: { connected: boolean; email: string; lastError: string | null };
+  google: { connected: boolean; email: string; lastError: string | null; callCalendar: "readable" | "reconnect" | "unreadable" };
 };
 export type HiringCandidate = HiringData["candidates"][number];
 export type PreScreenFilter = "all" | "Queued" | "Sent" | "Replied" | "No reply" | "Visit booked";
@@ -145,6 +145,8 @@ export function HiringDashboard() {
             "profile",
             "https://www.googleapis.com/auth/drive.file",
             ...GOOGLE_SCOPES,
+            // Lets Hiring read free and busy time on the people@ calendar for the HR call list.
+            GOOGLE_FREEBUSY_SCOPE,
           ].join(" "),
         },
       );

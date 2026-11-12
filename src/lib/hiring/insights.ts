@@ -124,7 +124,7 @@ export function profileGate(
   candidate: Pick<
     InsightCandidate,
     "email" | "previouslyContacted" | "workRightsAnswer" | "profileAssessment" | "universityAssessment"
-  > & { callReview?: CallReview | null },
+  > & { callReview?: CallReview | null; /** The app's call booking link reached the candidate. */ callInvited?: boolean },
   config: GateConfig,
 ): {
   eligible: boolean;
@@ -165,8 +165,9 @@ export function profileGate(
   if (!workRightsAccepted(candidate.workRightsAnswer, config.acceptedWorkRights))
     add("The work-rights answer is missing or not accepted.", "Work-rights answer not accepted");
   if (!candidate.email) final("There is no usable email.", "No usable email");
-  // HR's good call is the contact, so a SEEK message after it does not hold the form.
-  if (candidate.previouslyContacted && !called) final("There was earlier contact.", "Earlier contact");
+  // HR's good call is the contact, so a SEEK message after it does not hold the form. The same holds once the app's own
+  // call booking link is sent: HR may write to the candidate on SEEK while the call is still ahead.
+  if (candidate.previouslyContacted && !called && !candidate.callInvited) final("There was earlier contact.", "Earlier contact");
   // Last, so a reason a call cannot fix shows first.
   if (awaitingCall) add(AWAITING_CALL, "Waiting for a call");
   return { eligible: reasons.length === 0, reasons, short, review, subject, awaitingCall };

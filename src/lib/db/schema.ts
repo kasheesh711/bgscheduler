@@ -56,6 +56,8 @@ export const hiringCandidates = pgTable(
     trackerHash: text("tracker_hash"),
     name: text("name").notNull(),
     email: text("email"),
+    // The number HR calls. The candidate types it when booking the pre-screen call; SEEK text never holds one.
+    phone: text("phone"),
     stage: text("stage").$type<Stage>().notNull().default("new"),
     previouslyContacted: boolean("previously_contacted")
       .notNull()
@@ -115,7 +117,8 @@ export const hiringBookings = pgTable(
     candidateId: uuid("candidate_id")
       .notNull()
       .references(() => hiringCandidates.id),
-    kind: text("kind").$type<"paper" | "mock">().notNull(),
+    // `call` is the HR pre-screen call a candidate books (migration 0129): interviewer key `hr-call`, no visit id.
+    kind: text("kind").$type<"paper" | "mock" | "call">().notNull(),
     subjects: jsonb("subjects").$type<Subject[]>().notNull(),
     interviewerKey: text("interviewer_key"),
     interviewerEmail: text("interviewer_email"),
