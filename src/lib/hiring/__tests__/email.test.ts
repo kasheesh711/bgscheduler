@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { hiringEmail, hiringEmailHtmlFromText, HIRING_LINE_URL } from "../email";
+import { hiringEmail, hiringEmailHtmlFromText, HIRING_LINE_URL, mockPrep } from "../email";
+import { SUBJECTS } from "../model";
 import { preScreenEmail, visitInviteEmail } from "../service";
 
 describe("hiringEmail", () => {
@@ -64,7 +65,20 @@ describe("candidate emails keep their facts", () => {
       expect(e.text).toContain("Visit: 3 hours: a 2-hour exam, then a 1-hour mock teaching session");
       expect(e.text).toContain("Location: Gaysorn Amarin Tower");
       expect(e.text).toContain("Book your visit:\nhttps://bgscheduler.vercel.app/hiring/book/t");
-      expect(e.text).toContain("prepare one IGCSE topic");
+      expect(e.text).toContain("prepare one lesson in Physics");
+    }
+  });
+
+  it.each(SUBJECTS)("the visit invitation for %s names the subject and links its syllabus", (subject) => {
+    const general = mockPrep("your subject").links;
+    const { links } = mockPrep(subject);
+    expect(links.length).toBeGreaterThan(general.length);
+    const email = visitInviteEmail({ name: "Ann", subject, url: "https://bgscheduler.vercel.app/hiring/book/t", location: "L", expireDays: 7 });
+    expect(email.text).toContain(`prepare one lesson in ${subject}`);
+    for (const link of links) {
+      expect(link.url).toMatch(/^https:\/\//);
+      expect(email.text).toContain(`${link.title}:\n${link.url}`);
+      expect(email.html).toContain(`href="${link.url}"`);
     }
   });
 });

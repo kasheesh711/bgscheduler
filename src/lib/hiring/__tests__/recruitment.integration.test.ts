@@ -4,7 +4,7 @@ import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { configSchema } from "../model";
-import { deliverRecruitment, queueRecruitmentMock, queueRecruitmentWeekly, receiveRecruitmentSetup } from "../recruitment";
+import { deliverRecruitment, queueRecruitmentForm, queueRecruitmentMock, queueRecruitmentWeekly, receiveRecruitmentSetup } from "../recruitment";
 import { fetchLineGroupSummary, pushLineTextMessage, replyLineMessage } from "@/lib/line/client";
 import { deliverOutbox } from "../worker";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
@@ -32,8 +32,8 @@ beforeEach(async () => {
   await db.insert(s.hiringSettings).values({ config, updatedBy: "test" });
 });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
-async function candidate(name = "Candidate") {
-  const [row] = await db.insert(s.hiringCandidates).values({ name, subjects: ["Mathematics"] }).returning(); return row;
+async function candidate(name = "Candidate", email: string | null = `${name.toLowerCase().replace(/\W/g, "")}@example.com`) {
+  const [row] = await db.insert(s.hiringCandidates).values({ name, email, subjects: ["Mathematics"] }).returning(); return row;
 }
 async function mock() {
   const c = await candidate();
@@ -59,7 +59,7 @@ it("queues each mock notice once and suppresses a cancelled booking's old notice
   await queueRecruitmentMock(db, b, "booked"); await queueRecruitmentMock(db, b, "booked");
   expect(await deliverRecruitment(db)).toBe(1);
   expect(await deliverRecruitment(db)).toBe(0);
-  expect(pushLineTextMessage).toHaveBeenCalledWith(expect.objectContaining({ to: groupId, tutorBot: true, text: expect.stringContaining("Candidate") }));
+  expect(pushLineTextMessage).toHaveBeenCalledWith(expect.objectContaining({ to: groupId, tutorBot: true, text: expect.stringContaining("Candidate: Candidate\nEmail: candidate@example.com\nSubject") }));
   await queueRecruitmentMock(db, b, "moved", new Date("2026-11-16T10:00:00+07:00"));
   await endVisit(db, [b], "cancelled", now);
   expect(await deliverRecruitment(db)).toBe(1);
@@ -126,8 +126,16 @@ it("announces an invitation only after Gmail accepts it, once across delivery re
   const notices = await db.select().from(s.hiringRecruitmentDeliveries);
   expect(notices).toHaveLength(1);
   expect(notices[0]).toMatchObject({ notice: "invite_sent", message: expect.stringContaining("Mock trial invite sent") });
+  expect(notices[0].message).toContain("Email: candidate@example.com");
   expect((await db.select().from(s.hiringOutbox))[0].status).toBe("sent");
   expect(send).toHaveBeenCalledTimes(2);
+});
+it("puts the email in the form notice, or says that none is recorded", async () => {
+  await queueRecruitmentForm(db, await candidate("With"), now);
+  await queueRecruitmentForm(db, await candidate("Without", null), now);
+  const messages = (await db.select().from(s.hiringRecruitmentDeliveries)).map(row => row.message);
+  expect(messages).toContainEqual(expect.stringContaining("Form completed\nWith — Mathematics\nEmail: with@example.com\n"));
+  expect(messages).toContainEqual(expect.stringContaining("Without — Mathematics\nEmail: not recorded\n"));
 });
 it("recognizes old mock invitations but excludes reminders and booking confirmations", async () => {
   const c = await candidate();

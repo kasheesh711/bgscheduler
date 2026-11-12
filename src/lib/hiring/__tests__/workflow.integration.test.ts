@@ -855,6 +855,8 @@ describe("hiring workflow persistence", () => {
       expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ cc: ["people@begiftededucation.com"] }));
       expect(vi.mocked(deliverCalendar)).toHaveBeenCalledTimes(2);
       expect(vi.mocked(pushLineTextMessage)).toHaveBeenCalledTimes(1);
+      // The head's notice carries the candidate's contact line.
+      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\nCandidate: .+\nEmail: \S+@example\.com\nSubject: /);
     });
     it("candidates cannot pick a head", async () => {
       const row = await invited();

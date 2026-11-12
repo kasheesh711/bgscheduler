@@ -10,6 +10,8 @@ import { audit, settings } from "./service";
 
 const GROUP_NAME = "BeGifted Recruitment";
 const when = (date: Date) => date.toLocaleString("en-GB", { timeZone: ZONE, dateStyle: "medium", timeStyle: "short" });
+/** The contact lines of a LINE notice about one candidate. */
+export const contactLines = (candidate: { email: string | null }) => `Email: ${candidate.email ?? "not recorded"}`;
 
 /** LINE limits each text message to 5,000 UTF-16 units. Leave space for the part number. */
 export function recruitmentParts(text: string): string[] {
@@ -61,18 +63,18 @@ export async function queueRecruitmentMock(db: Database, booking: typeof booking
   if (booking.kind !== "mock") return;
   const { config } = await settings(db);
   if (!config.recruitmentLineGroupId) return;
-  const [candidate] = await db.select({ name: candidates.name }).from(candidates).where(eq(candidates.id, booking.candidateId));
+  const [candidate] = await db.select({ name: candidates.name, email: candidates.email }).from(candidates).where(eq(candidates.id, booking.candidateId));
   if (!candidate) throw new Error("The mock candidate is missing.");
-  const text = `Mock teaching ${notice}\nCandidate: ${candidate.name}\nSubject: ${booking.subjects.join(", ")}\nInterviewer: ${booking.interviewerKey ?? "To be confirmed"}\nTime: ${when(booking.startTime)}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: ZONE, hour: "2-digit", minute: "2-digit" })} (Bangkok)\nPlace: ${config.location}${movedFrom ? `\nPrevious time: ${when(movedFrom)} (cancelled)` : ""}`;
+  const text = `Mock teaching ${notice}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nInterviewer: ${booking.interviewerKey ?? "To be confirmed"}\nTime: ${when(booking.startTime)}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: ZONE, hour: "2-digit", minute: "2-digit" })} (Bangkok)\nPlace: ${config.location}${movedFrom ? `\nPrevious time: ${when(movedFrom)} (cancelled)` : ""}`;
   await enqueue(db, `mock:${booking.id}:${notice}`, config.recruitmentLineGroupId, text, booking.id, notice);
 }
 
 /** Only a response to a sent application form reaches this hook. One notice per candidate. */
-export async function queueRecruitmentForm(db: Database, candidate: Pick<typeof candidates.$inferSelect, "id" | "name" | "subjects">, submittedAt: Date) {
+export async function queueRecruitmentForm(db: Database, candidate: Pick<typeof candidates.$inferSelect, "id" | "name" | "email" | "subjects">, submittedAt: Date) {
   const { config } = await settings(db);
   if (!config.recruitmentLineGroupId) return;
   await enqueue(db, `form-completed:${candidate.id}`, config.recruitmentLineGroupId,
-    `Form completed\n${candidate.name} — ${candidate.subjects.join(", ") || "Subject not recorded"}\n${when(submittedAt)} (Bangkok)`, null, "form_completed");
+    `Form completed\n${candidate.name} — ${candidate.subjects.join(", ") || "Subject not recorded"}\n${contactLines(candidate)}\n${when(submittedAt)} (Bangkok)`, null, "form_completed");
 }
 
 /** Called with the email's sent receipt in the same database transaction. */
@@ -85,7 +87,7 @@ export async function queueRecruitmentInvitation(db: Database, job: Pick<typeof 
   const subject = job.payload.workflowStage === "paper_passed" ? candidate.paperPassedSubjects.join(", ")
     : candidate.visitSubject ?? candidate.subjects.join(", ");
   await enqueue(db, `invite-sent:${job.id}`, config.recruitmentLineGroupId,
-    `Mock trial invite sent\n${candidate.name} — ${subject || "Subject not recorded"}\n${when(sentAt)} (Bangkok)`, null, "invite_sent");
+    `Mock trial invite sent\n${candidate.name} — ${subject || "Subject not recorded"}\n${contactLines(candidate)}\n${when(sentAt)} (Bangkok)`, null, "invite_sent");
 }
 
 export function recruitmentWeek(now: Date) {
