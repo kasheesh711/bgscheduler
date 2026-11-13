@@ -873,6 +873,7 @@ describe("hiring workflow persistence", () => {
       const token = vi.mocked(pushLineTextMessage).mock.calls[0][0].text.match(/\/hiring\/brief\/([\w.-]+)/)![1];
       const [, mock] = await rowsOf(row.id);
       const rubric = (score: number | null) => ({ items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, score])), comments: "Clear lesson." }) as MockRubric;
+      const queued = (await db.select().from(s.hiringOutbox)).length;
       const before = new Date(mock.startTime.getTime() - 1);
       expect(await briefView(token, db, before)).toMatchObject({ form: "wait", rubric: null });
       await expect(saveBriefRubric(token, rubric(7), db, before)).rejects.toMatchObject({ status: 409 });
@@ -890,6 +891,7 @@ describe("hiring workflow persistence", () => {
       expect(audits.map((a) => a.actor)).toEqual(["interviewer:Peat", "interviewer:Peat"]);
       expect(audits.map((a) => (a.detail as { replaced: { rubric: unknown } | null }).replaced?.rubric ?? null)).toEqual([null, rubric(7)]);
       // The candidate's stage did not move, and no message was queued.
+      expect(await db.select().from(s.hiringOutbox)).toHaveLength(queued);
       expect((await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id)))[0].stage).toBe("onsite_booked");
       // The page never carries the row it would replace.
       expect(Object.keys(await briefView(token, db, during))).not.toContain("replaced");
