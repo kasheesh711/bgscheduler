@@ -9,6 +9,10 @@ export type PaperQuestion = {
   reason: string;
   attempted: boolean;
   readable: boolean;
+  /** The scan page where the answer starts, from 1. Results marked before 13 November 2026 do not have it. */
+  page?: number | null;
+  /** What the marks were given for, one entry per mark scheme point or level. Older results do not have it. */
+  points?: { point: string; awarded: number }[];
 };
 export type PaperMarks = { questions: PaperQuestion[]; comment: string; missingPages: string | null };
 /** What the tracker holds for a past paper: an outcome and levels, with no question detail. */

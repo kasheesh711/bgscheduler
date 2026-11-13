@@ -340,34 +340,62 @@ export function PaperSheetView({ paper, taken = [], config, command, reload, bus
               Change marks
             </button>
           )}
-          <details className={css.sourceText}>
-            <summary>Marks for each question, beside the scan</summary>
-            <div className={css.scanSplit}>
-              {paper.fileId && <p className={css.inspectorMeta}>A link in a file can open another site. Do not sign in on a page that opens from a file.</p>}
-              {paper.fileId && <iframe className={css.resumeFrame} src={`/api/hiring/file/${encodeURIComponent(paper.fileId)}`} title={`Scan of the ${paper.subject} paper`} />}
-              <table className={css.sheetTable}>
-                <thead>
-                  <tr>
-                    <th>Question</th>
-                    <th>Marks</th>
-                    <th>Why</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {paper.marks.questions.map((q) => (
-                    <tr key={q.id}>
-                      <td>
-                        {q.id}
-                        <span className={css.pillNote}>{q.level}</span>
-                      </td>
-                      <td className={css.num}>{q.marks === null ? <span className={css.warnWord}>Unreadable</span> : `${q.marks} / ${q.max}`}</td>
-                      <td>{q.attempted ? q.reason : "Not tried"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </details>
+          <h4 className={css.inspectorHeading}>{paper.markSchemeUsed ? "Marking against the mark scheme" : "Marking, question by question"}</h4>
+          {!paper.marks.questions.some((q) => q.points?.length) && (
+            <p className={css.inspectorNote}>This paper was marked before the point-by-point marking. Use Replace scan with the same file to mark it again and see each mark scheme point.</p>
+          )}
+          <table className={css.sheetTable}>
+            <thead>
+              <tr>
+                <th>Question</th>
+                <th>Marks</th>
+                <th>What the marks were given for</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paper.marks.questions.map((q) => (
+                <tr key={q.id}>
+                  <td>
+                    {q.id}
+                    <span className={css.pillNote}>{q.level}</span>
+                    {q.page ? <span className={css.pillNote}>Scan page {q.page}</span> : null}
+                  </td>
+                  <td className={css.num}>{q.marks === null ? <span className={css.warnWord}>Unreadable</span> : `${q.marks} / ${q.max}`}</td>
+                  <td>
+                    {q.points?.length ? (
+                      <ul className={css.pointList}>
+                        {q.points.slice(0, 40).map((point, index) => (
+                          <li key={index} className={point.awarded > 0 ? css.pointGiven : css.pointMissed}>
+                            <span className={css.num}>{point.awarded > 0 ? `+${point.awarded}` : "0"}</span> {point.point}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {q.attempted ? q.reason : "Not tried"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {paper.fileId && (
+            <details className={css.sourceText} open>
+              <summary>The marked paper: the scan with the marking beside each page</summary>
+              <div className={css.scanSplit}>
+                <p className={css.inspectorMeta}>
+                  <a className={css.sourceLink} href={`/api/hiring/marked/${encodeURIComponent(paper.id)}`} target="_blank" rel="noopener noreferrer">
+                    Open the marked paper to print
+                  </a>
+                  {" · "}
+                  <a className={css.sourceLink} href={`/api/hiring/file/${encodeURIComponent(paper.fileId)}`} target="_blank" rel="noopener noreferrer">
+                    Open the scan with no marking
+                  </a>
+                </p>
+                <p className={css.inspectorMeta}>A link in a file can open another site. Do not sign in on a page that opens from a file.</p>
+                {/* The key makes the frame load again after a mark changes. */}
+                <iframe key={String(paper.updatedAt)} loading="lazy" className={css.resumeFrame} src={`/api/hiring/marked/${encodeURIComponent(paper.id)}`} title={`Marked scan of the ${paper.subject} paper`} />
+              </div>
+            </details>
+          )}
         </>
       )}
     </section>

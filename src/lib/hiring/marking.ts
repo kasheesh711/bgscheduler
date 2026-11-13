@@ -9,7 +9,7 @@ import { checkPaperMarks, checkRubric, paperNeedsCheck, RUBRIC, RUBRIC_ITEMS, ru
 import { HiringError, PAPER_LEVELS, runtimeWritesAllowed, type Subject } from "./model";
 import { audit, MARKING_STUCK_AFTER_MS } from "./service";
 
-export const MARKING_PROMPT_VERSION = "hiring-marking-2026-11-02.1";
+export const MARKING_PROMPT_VERSION = "hiring-marking-2026-11-13.1";
 // One deadline for the whole run, below the route's 300 seconds, so a slow run can still save its result.
 const RUN_BUDGET_MS = 285_000;
 // Send only to hosts that keep nothing and do not train on it: a scan holds a candidate's name and handwriting.
@@ -35,6 +35,9 @@ const paperAnswer = z
             reason: z.string().max(1000),
             attempted: z.boolean(),
             readable: z.boolean(),
+            page: z.number().int().nullable(),
+            // No length limits here: a long point must not lose a paid answer. The screen and the marked paper cut what they show.
+            points: z.array(z.object({ point: z.string(), awarded: z.number() }).strict()),
           })
           .strict(),
       )
@@ -53,7 +56,9 @@ For each question or part on the paper, give:
 - marks: the marks earned. Give 0 for a wrong or blank answer. Give null only when an answer is written but you cannot read it.
 - attempted: false when the candidate left it blank.
 - readable: false when an answer is written but you cannot read it.
-- reason: one short plain sentence, in English, on why it earned these marks.
+- points: the marking, point by point, so a person can check it against the mark scheme. Give one entry for each mark scheme point or level descriptor you considered, in the mark scheme's order: "point" is that point in a few plain English words (name the level for a levels-of-response question), and "awarded" is the marks you gave for it, 0 when the answer did not earn it. The awarded values must add up to marks. With no mark scheme, use the points a mark scheme would have. Give an empty list for a blank or unreadable answer.
+- reason: one or two short plain sentences, in English, written to the candidate as a marker's comment: what earned marks and what was missing.
+- page: the page of the scanned answers file where this answer starts, counted from 1, or null when you cannot tell.
 missingPages: name any page or section of the question paper with no answers page in the scan, or null. A blank answer is not a missing page.
 comment: in English, in at most 4 short sentences: strengths, areas to develop, the level this person should teach, and whether to call them for a mock lesson.
 Do not add up totals and do not decide a pass. The system does that.`;
@@ -314,7 +319,8 @@ export async function changePaperMarks(id: string, input: { updatedAt: string; m
     // The AI names the ids, so "constructor" must not read a value from the object's prototype.
     if (!Object.hasOwn(input.marks, q.id) || input.marks[q.id] === q.marks) return q;
     const value = input.marks[q.id];
-    return value === null ? { ...q, marks: null, readable: false } : { ...q, marks: value, readable: true, attempted: true };
+    // The AI's points no longer add up to a mark that a person set, so they go. The AI's first answer keeps them.
+    return value === null ? { ...q, marks: null, readable: false, points: [] } : { ...q, marks: value, readable: true, attempted: true, points: [] };
   });
   const marks: PaperMarks = { ...row.marks, questions, comment: input.comment };
   const problems = checkPaperMarks(marks);

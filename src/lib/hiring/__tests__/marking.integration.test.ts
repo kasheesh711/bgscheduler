@@ -15,7 +15,7 @@ vi.mock("@vercel/blob/client", () => ({ handleUpload: vi.fn(), put: vi.fn() }));
 
 let handle: Awaited<ReturnType<typeof startTestDb>>, db: Database;
 const PDF = Buffer.from("%PDF-1.4 fixture");
-const question = (id: string, marks: number | null, patch = {}) => ({ id, level: "IGCSE / GCSE", marks, max: 10, reason: "Seen", attempted: true, readable: marks !== null, ...patch });
+const question = (id: string, marks: number | null, patch = {}) => ({ id, level: "IGCSE / GCSE", marks, max: 10, reason: "Seen", attempted: true, readable: marks !== null, page: 1, points: marks ? [{ point: "Method", awarded: marks }] : [], ...patch });
 const answer = (patch = {}) => JSON.stringify({ questions: [question("1", 7), question("2", 3)], comment: "Solid.", missingPages: null, ...patch });
 const reply = (content: string, costUsd: number | null = 0.42) => ({
   ok: true as const, content, model: "test/model", provider: "host", generationId: "g", finishReason: "stop",
@@ -263,7 +263,8 @@ describe("a person's change", () => {
     await markPaper(id, "owner", db, model(answer({ questions: [question("1", null), question("2", 3)] })));
     await changePaperMarks(id, { updatedAt: (await result(id)).updatedAt.toISOString(), marks: { "1": 8 }, comment: "Read by a person." }, "person", db);
     const row = await result(id);
-    expect(row.marks!.questions[0]).toMatchObject({ marks: 8, readable: true });
+    expect(row.marks!.questions[0]).toMatchObject({ marks: 8, readable: true, points: [] });
+    expect(row.marks!.questions[1].points).toEqual([{ point: "Method", awarded: 3 }]);
     expect(row.aiMarks!.questions[0].marks).toBeNull();
     expect(row).toMatchObject({ changedBy: "person", status: "needs_check" });
     await expect(changePaperMarks(id, { updatedAt: row.updatedAt.toISOString(), marks: { "1": 99 }, comment: "" }, "person", db)).rejects.toThrow(/99 marks of 10/);
