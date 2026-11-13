@@ -66,6 +66,7 @@ import { attendanceAccessForEmail } from "@/lib/tutor-attendance/access";
 import { attendanceConfig } from "@/lib/tutor-attendance/data";
 import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
 import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
+import { checkRubric, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
 import { HIRING_LINE_URL, VISIT_LENGTH, hiringEmail, mockPrep } from "./email";
 
@@ -1186,7 +1187,62 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     location: config.location,
     answers: candidate.preScreen,
     resume: storedResume(mock.candidateId, candidate.resumePath, candidate.resumeType)?.extension ?? null,
+    // The interviewer's own scores for this mock, to show again. Never an AI score or another person's.
+    rubric: await briefRubric(mock, db),
+    // No score before the lesson starts.
+    formOpen: now >= mock.startTime,
   };
+}
+const briefSubject = (mock: { subjects: Subject[] }) => mock.subjects[0];
+async function briefRubric(mock: { id: string; candidateId: string; subjects: Subject[] }, db: Database) {
+  const m = s.hiringMockResults;
+  const subject = briefSubject(mock);
+  const [row] = subject ? await db.select().from(m).where(and(eq(m.candidateId, mock.candidateId), eq(m.subject, subject))) : [];
+  return row?.source === "person" && row.bookingId === mock.id ? row.rubric : null;
+}
+/**
+ * The interviewer's scores for one mock, sent from the interviewer link (Kevin's decision, 13 Nov 2026: a score form,
+ * not a file). The link is the only access check, as for the page. The result counts at once and replaces any earlier
+ * rubric for the candidate and subject; the audit row keeps what it replaced. It changes no stage and queues no message.
+ */
+export async function saveBriefRubric(token: string, rubric: MockRubric, db: Database = getDb(), now = new Date()) {
+  if (!runtimeWritesAllowed()) throw new HiringError(503, "Scores can be saved only on the live site.");
+  const mock = await briefMock(token, db, now);
+  const subject = briefSubject(mock);
+  if (!subject || now < mock.startTime) throw new HiringError(409, "You can send scores after the mock lesson starts.");
+  const problems = checkRubric(rubric);
+  if (problems.length || rubricNeedsCheck(rubric)) throw new HiringError(400, "Give every item a whole score from 1 to 10.");
+  const m = s.hiringMockResults;
+  const [before] = await db.select().from(m).where(and(eq(m.candidateId, mock.candidateId), eq(m.subject, subject)));
+  const fresh = {
+    bookingId: mock.id,
+    source: "person" as const,
+    status: "done" as const,
+    fileId: null,
+    aiRubric: null,
+    rubric,
+    history: null,
+    model: null,
+    promptVersion: null,
+    costUsd: null,
+    costKnown: true,
+    error: null,
+    checkedBy: null,
+    checkedAt: null,
+    changedBy: null,
+    changedAt: null,
+    updatedAt: now,
+  };
+  await db
+    .insert(m)
+    .values({ candidateId: mock.candidateId, subject, ...fresh })
+    .onConflictDoUpdate({ target: [m.candidateId, m.subject], set: fresh });
+  await audit(db, `interviewer:${mock.interviewerKey ?? "unknown"}`, "mock-rubric-submitted", mock.candidateId, {
+    subject,
+    bookingId: mock.id,
+    replaced: before ? { source: before.source, status: before.status, rubric: before.rubric, history: before.history } : null,
+  });
+  return rubricTotals(rubric).total;
 }
 type VisitLink = { id: string; exp: number };
 function visitToken(token: string, now: Date): VisitLink {

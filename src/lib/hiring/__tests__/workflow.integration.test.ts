@@ -19,6 +19,7 @@ import {
   bookingView,
   bookVisit,
   briefCandidateId,
+  saveBriefRubric,
   briefView,
   changePreScreenScore,
   dashboard,
@@ -38,6 +39,7 @@ import { deliverCalendar } from "../google";
 import { ensureIndex } from "@/lib/search/index";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { pushLineTextMessage } from "@/lib/line/client";
+import { RUBRIC_ITEMS, type MockRubric } from "../marking-sheet";
 
 // The visit tests use the real availableVisitSlots against this database. Only the Wise index and the live read are fake.
 vi.mock("../availability", async (actual) => ({
@@ -863,6 +865,38 @@ describe("hiring workflow persistence", () => {
       expect(vi.mocked(pushLineTextMessage)).toHaveBeenCalledTimes(1);
       // The head's notice carries the candidate's contact line.
       expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\nCandidate: .+\nEmail: \S+@example\.com\nPhone: not recorded\nSubject: /);
+    });
+    it("saves the head's scores from the link after the mock starts, and keeps what a resend replaced", async () => {
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      await deliverOutbox(db, base);
+      const token = vi.mocked(pushLineTextMessage).mock.calls[0][0].text.match(/\/hiring\/brief\/([\w.-]+)/)![1];
+      const [, mock] = await rowsOf(row.id);
+      const rubric = (score: number | null) => ({ items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, score])), comments: "Clear lesson." }) as MockRubric;
+      const before = new Date(mock.startTime.getTime() - 1);
+      expect(await briefView(token, db, before)).toMatchObject({ formOpen: false, rubric: null });
+      await expect(saveBriefRubric(token, rubric(7), db, before)).rejects.toMatchObject({ status: 409 });
+      const during = mock.startTime;
+      for (const bad of [rubric(null), rubric(11), rubric(7.5), { ...rubric(7), items: { ...rubric(7).items, accuracy: 0 } }])
+        await expect(saveBriefRubric(token, bad, db, during)).rejects.toMatchObject({ status: 400 });
+      expect(await db.select().from(s.hiringMockResults)).toHaveLength(0);
+      expect(await saveBriefRubric(token, rubric(7), db, during)).toBe(70);
+      const [saved] = await db.select().from(s.hiringMockResults);
+      expect(saved).toMatchObject({ candidateId: row.id, subject: "Mathematics", source: "person", status: "done", bookingId: mock.id, fileId: null, rubric: rubric(7) });
+      expect(await briefView(token, db, during)).toMatchObject({ formOpen: true, rubric: rubric(7) });
+      expect(await saveBriefRubric(token, rubric(10), db, during)).toBe(100);
+      expect(await db.select().from(s.hiringMockResults)).toHaveLength(1);
+      const audits = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "mock-rubric-submitted")).orderBy(s.hiringAudit.createdAt);
+      expect(audits.map((a) => a.actor)).toEqual(["interviewer:Peat", "interviewer:Peat"]);
+      expect(audits.map((a) => (a.detail as { replaced: { rubric: unknown } | null }).replaced?.rubric ?? null)).toEqual([null, rubric(7)]);
+      // The candidate's stage did not move, and no message was queued.
+      expect((await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id)))[0].stage).toBe("onsite_booked");
+      // Another person's result is never shown on the page.
+      await db.update(s.hiringMockResults).set({ source: "ai" });
+      expect((await briefView(token, db, during)).rubric).toBeNull();
+      // A sent result ends the link for scores too.
+      await db.update(s.hiringCandidates).set({ stage: "rejected" }).where(eq(s.hiringCandidates.id, row.id));
+      await expect(saveBriefRubric(token, rubric(7), db, during)).rejects.toMatchObject({ status: 404 });
     });
     it("links the head to the candidate page, and ends the link with the visit", async () => {
       const row = await invited({ phone: "+66812345678" });

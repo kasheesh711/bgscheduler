@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { RUBRIC, RUBRIC_ITEMS } from "@/lib/hiring/marking-sheet";
 import { ANSWER_LABELS } from "@/lib/hiring/model";
 import { BriefGone, InterviewerBrief } from "../brief";
 
@@ -13,9 +14,11 @@ const brief = {
   location: "BeGifted office",
   answers: { sourceRow: 2, submittedAt: "x", ...answers, motivation: "Line one\nLine two", portfolio: "" },
   resume: "pdf",
+  rubric: null,
+  formOpen: true,
 } as unknown as Parameters<typeof InterviewerBrief>[0]["brief"];
 const html = (patch = {}) =>
-  renderToStaticMarkup(<InterviewerBrief brief={{ ...brief, ...patch }} resumeUrl="/api/hiring/brief/t/resume" />);
+  renderToStaticMarkup(<InterviewerBrief brief={{ ...brief, ...patch }} resumeUrl="/api/hiring/brief/t/resume" rubricUrl="/api/hiring/brief/t/rubric" />);
 
 describe("InterviewerBrief", () => {
   it("shows the visit facts, every answer with its label, and a résumé link that opens a new tab", () => {
@@ -39,6 +42,24 @@ describe("InterviewerBrief", () => {
     expect(html()).toContain(">Exam<");
     expect(html({ exam: null })).not.toContain(">Exam<");
     expect(html({ answers: null })).toContain("no pre-screen reply");
+  });
+
+  it("shows the score form only after the mock starts, with one choice for each of the 10 items", () => {
+    expect(html({ formOpen: false })).toContain("opens here when the mock lesson starts");
+    expect(html({ formOpen: false })).not.toContain("<select");
+    const page = html();
+    expect(page.match(/<select/g)).toHaveLength(RUBRIC_ITEMS.length);
+    for (const { part, items } of RUBRIC) for (const text of [part, ...items.map(([, label]) => label)]) expect(page).toContain(text);
+    expect(page).toContain("Send scores");
+    expect(page).not.toContain("Scores sent");
+  });
+
+  it("shows the interviewer's own sent scores again, with the total", () => {
+    const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 7])), comments: "Clear lesson." };
+    const page = html({ rubric });
+    expect(page).toContain("Scores sent. Total 70 / 100");
+    expect(page).toContain("Clear lesson.");
+    expect(page.match(/<option[^>]*selected=""[^>]*>7</g)).toHaveLength(RUBRIC_ITEMS.length);
   });
 
   it("gives one message for a dead link", () => {
