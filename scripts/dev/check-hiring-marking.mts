@@ -1,6 +1,6 @@
 // A technical check of the hiring marking route with a made-up handwritten paper. It proves the route reads a scan and
 // measures the cost. It is not an accuracy test. It uses no candidate data and writes nothing to a database.
-// Run: ANTHROPIC_HIRING_API_KEY=... npx tsx scripts/dev/check-hiring-marking.ts (or OPENROUTER_HIRING_API_KEY; the Claude key wins)
+// Run: ANTHROPIC_HIRING_API_KEY=... npx tsx scripts/dev/check-hiring-marking.mts (or OPENROUTER_HIRING_API_KEY; the Claude key wins)
 import { PDFDocument } from "pdf-lib";
 import sharp from "sharp";
 import { callModelForCheck, markingRoute } from "../../src/lib/hiring/marking";
