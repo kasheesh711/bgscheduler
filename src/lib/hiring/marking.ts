@@ -108,6 +108,7 @@ export const callModelForCheck = (route: NonNullable<ReturnType<typeof markingRo
 function callFailureText(call: Extract<OpenRouterCallResult, { ok: false }>) {
   if (isCreditExhausted(call)) return "The monthly AI limit is reached. The upload is saved. Raise the limit in OpenRouter, then retry.";
   // Claude gives no code for an empty balance, so its own words reach the screen through the last line.
+  if (call.httpStatus === 413) return "The files are too large for the AI service. The upload is saved. Scan at a lower resolution, then replace the scan.";
   if (call.httpStatus === 429) return "The AI service is busy. The upload is saved. Retry in a few minutes.";
   return `The AI could not finish (${call.error}). The upload is saved. Retry.`;
 }

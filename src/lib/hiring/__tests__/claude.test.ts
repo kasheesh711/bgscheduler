@@ -58,7 +58,7 @@ describe("callClaude", () => {
   });
 
   it("gives no cost for a model with no listed price", async () => {
-    const call = await callClaude(input(reply({ model: "claude-next", stop_reason: "end_turn", content: [{ type: "text", text: "{}" }], usage: { input_tokens: 1, output_tokens: 1 } })));
+    const call = await callClaude({ ...input(reply({ model: "claude-next", stop_reason: "end_turn", content: [{ type: "text", text: "{}" }], usage: { input_tokens: 1, output_tokens: 1 } })), model: "claude-next" });
     expect(call).toMatchObject({ ok: true, usage: { costUsd: null } });
   });
 });

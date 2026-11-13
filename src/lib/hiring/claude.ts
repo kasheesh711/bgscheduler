@@ -77,7 +77,8 @@ export async function callClaude(input: Parameters<typeof callOpenRouter>[0]): P
   }
   if (!body) return { ok: false, error: "invalid_json_response", httpStatus: response.status, ...none, latencyMs };
   const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : 0);
-  const price = PRICES[body.model ?? ""];
+  // The reply can name the model with a date added.
+  const price = PRICES[body.model ?? ""] ?? PRICES[input.model];
   const usage = body.usage
     ? {
         promptTokens: count(body.usage.input_tokens),
