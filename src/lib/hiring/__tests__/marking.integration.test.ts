@@ -15,7 +15,7 @@ vi.mock("@vercel/blob/client", () => ({ handleUpload: vi.fn(), put: vi.fn() }));
 
 let handle: Awaited<ReturnType<typeof startTestDb>>, db: Database;
 const PDF = Buffer.from("%PDF-1.4 fixture");
-const question = (id: string, marks: number | null, patch = {}) => ({ id, level: "IGCSE / GCSE", marks, max: 10, reason: "Seen", attempted: true, readable: marks !== null, ...patch });
+const question = (id: string, marks: number | null, patch = {}) => ({ id, level: "IGCSE / GCSE", marks, max: 10, reason: "Seen", attempted: true, readable: marks !== null, page: 1, points: marks ? [{ point: "Method", awarded: marks }] : [], ...patch });
 const answer = (patch = {}) => JSON.stringify({ questions: [question("1", 7), question("2", 3)], comment: "Solid.", missingPages: null, ...patch });
 const reply = (content: string, costUsd: number | null = 0.42) => ({
   ok: true as const, content, model: "test/model", provider: "host", generationId: "g", finishReason: "stop",
