@@ -15,7 +15,7 @@ const brief = {
   answers: { sourceRow: 2, submittedAt: "x", ...answers, motivation: "Line one\nLine two", portfolio: "" },
   resume: "pdf",
   rubric: null,
-  formOpen: true,
+  form: "open",
 } as unknown as Parameters<typeof InterviewerBrief>[0]["brief"];
 const html = (patch = {}) =>
   renderToStaticMarkup(<InterviewerBrief brief={{ ...brief, ...patch }} resumeUrl="/api/hiring/brief/t/resume" rubricUrl="/api/hiring/brief/t/rubric" />);
@@ -45,8 +45,10 @@ describe("InterviewerBrief", () => {
   });
 
   it("shows the score form only after the mock starts, with one choice for each of the 10 items", () => {
-    expect(html({ formOpen: false })).toContain("opens here when the mock lesson starts");
-    expect(html({ formOpen: false })).not.toContain("<select");
+    expect(html({ form: "wait" })).toContain("after the mock lesson starts");
+    expect(html({ form: "wait" })).not.toContain("<select");
+    expect(html({ form: "closed" })).toContain("already recorded");
+    expect(html({ form: "closed" })).not.toContain("<select");
     const page = html();
     expect(page.match(/<select/g)).toHaveLength(RUBRIC_ITEMS.length);
     for (const { part, items } of RUBRIC) for (const text of [part, ...items.map(([, label]) => label)]) expect(page).toContain(text);

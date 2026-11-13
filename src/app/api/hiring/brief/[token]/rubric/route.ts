@@ -18,7 +18,7 @@ const body = z
 export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
   try {
     requireSameOrigin(request);
-    const rubric = body.parse(await request.json()) as MockRubric;
+    const rubric = body.parse(await request.json().catch(() => null)) as MockRubric;
     return NextResponse.json({ total: await saveBriefRubric((await context.params).token, rubric) }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return hiringError(error);

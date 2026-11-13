@@ -70,7 +70,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl }: { brief: Brief
       </section>
       <section className={c.facts}>
         <h2 className={c.stepTitle}>Mock lesson scores</h2>
-        <BriefRubric saved={brief.rubric} formOpen={brief.formOpen} url={rubricUrl} />
+        <BriefRubric saved={brief.rubric} form={brief.form} url={rubricUrl} />
       </section>
     </>
   );

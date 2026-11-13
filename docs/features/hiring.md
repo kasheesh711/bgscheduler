@@ -135,7 +135,9 @@ There are two ways to record the head's scores.
 
 - `POST /api/hiring/brief/{token}/rubric` saves the scores (`saveBriefRubric`). The link is the only access check, with the same rules as the page: a cancel, a move, a stopped candidate, a sent result or the 7-day end closes it.
 - The result is stored with source `person` and status `done`, so it counts at once. The server calculates the total out of 100.
-- The head can send again while the link works. A new send replaces the earlier rubric for that candidate and subject, also one from an upload. The audit row `mock-rubric-submitted` keeps what was replaced and names the head.
+- The head can send again while the link works, to correct the head's own scores. A send can replace only that head's own earlier send or a past tracker result. The audit row `mock-rubric-submitted` keeps what was replaced and names the head.
+- The form closes, and a send is refused, when an uploaded rubric is recorded, when a person with `/hiring` access has changed or confirmed the scores, or when a decision is drafted. The page then shows no scores.
+- A mock with more than one subject stores the scores under its first subject, the same subject the **Mock and paper** row uses.
 - It changes no stage and queues no message. The page shows the head only that head's own sent scores for this mock.
 - A person with `/hiring` access can still change a score afterward.
 

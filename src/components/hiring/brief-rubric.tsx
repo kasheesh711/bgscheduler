@@ -7,13 +7,14 @@ import c from "./booking.module.css";
 const SCORES = Array.from({ length: ITEM_MAX }, (_, i) => ITEM_MAX - i);
 
 /** The interviewer's score form for one mock. The server checks the scores again and calculates the total. */
-export function BriefRubric({ saved, formOpen, url }: { saved: MockRubric | null; formOpen: boolean; url: string }) {
+export function BriefRubric({ saved, form, url }: { saved: MockRubric | null; form: "wait" | "open" | "closed"; url: string }) {
   const [items, setItems] = useState<Partial<Record<RubricItem, number>>>(() => Object.fromEntries(RUBRIC_ITEMS.flatMap((id) => (saved?.items[id] ? [[id, saved.items[id]]] : []))));
   const [comments, setComments] = useState(saved?.comments ?? "");
   const [state, setState] = useState<"idle" | "sending">("idle");
   const [sentTotal, setSentTotal] = useState<number | null>(saved ? rubricTotals(saved).total : null);
   const [error, setError] = useState("");
-  if (!formOpen) return <p className={c.note}>The score form opens here when the mock lesson starts.</p>;
+  if (form === "wait") return <p className={c.note}>The score form is here after the mock lesson starts. Refresh this page then.</p>;
+  if (form === "closed") return <p className={c.note}>Scores for this mock are already recorded. Ask BeGifted admin to change them.</p>;
   const complete = RUBRIC_ITEMS.every((id) => items[id]);
   async function send() {
     setState("sending");
