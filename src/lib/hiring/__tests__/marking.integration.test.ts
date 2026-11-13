@@ -6,7 +6,7 @@ import * as s from "@/lib/db/schema";
 import { get } from "@vercel/blob";
 import { createFileIntent, finishFile } from "../assessment-files";
 import { computeSheet } from "../marking-sheet";
-import { changePaperMarks, changeRubric, clearResultCheck, markPaper, readMockRubric } from "../marking";
+import { changePaperMarks, changePaperSubject, changeRubric, clearResultCheck, markPaper, readMockRubric } from "../marking";
 import { deleteExpiredAssessmentFiles } from "../resume-files";
 import { del } from "@vercel/blob";
 
@@ -214,6 +214,46 @@ describe("uploads", () => {
     expect(await result(first)).toMatchObject({ status: "uploaded", marks: null, aiMarks: null });
     const other = await uploaded(c.id, "Physics");
     expect(other).not.toBe(first);
+  });
+});
+
+describe("a scan stored under the wrong subject", () => {
+  const stamp = async (id: string) => (await result(id)).updatedAt.toISOString();
+  it("moves to the right subject with empty marks, and the next run names that subject", async () => {
+    const id = await uploaded((await candidate()).id);
+    await markPaper(id, "owner", db, model());
+    expect(await changePaperSubject(id, { updatedAt: await stamp(id), subject: "Physics", expect: "move" }, "person", db, new Date(Date.now() + 1000))).toEqual({ removed: false });
+    const row = await result(id);
+    expect(row).toMatchObject({ subject: "Physics", status: "uploaded", marks: null, aiMarks: null, markSchemeUsed: null });
+    expect((await db.select().from(s.hiringAssessmentFiles).where(eq(s.hiringAssessmentFiles.id, row.fileId!)))[0].subject).toBe("Physics");
+    const call = model();
+    expect(await markPaper(id, "owner", db, call)).toEqual({ status: "done", error: null });
+    expect(JSON.stringify(call.mock.calls[0][0].messages)).toContain("scanned answers for Physics");
+    const [log] = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "paper-subject-changed"));
+    expect(log.detail).toMatchObject({ from: "Mathematics", to: "Physics", marks: [["1", 7], ["2", 3]] });
+  });
+  it("removes the wrong result when the right subject already has one, and keeps that one", async () => {
+    const c = await candidate();
+    const wrong = await uploaded(c.id);
+    const right = await uploaded(c.id, "Physics");
+    await markPaper(right, "owner", db, model());
+    await expect(changePaperSubject(wrong, { updatedAt: await stamp(wrong), subject: "Physics", expect: "move" }, "person", db)).rejects.toThrow(/Refresh/);
+    expect(await changePaperSubject(wrong, { updatedAt: await stamp(wrong), subject: "Physics", expect: "remove" }, "person", db)).toEqual({ removed: true });
+    expect(await result(wrong)).toBeUndefined();
+    expect(await result(right)).toMatchObject({ subject: "Physics", status: "done" });
+    expect(await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "paper-result-removed"))).toHaveLength(1);
+  });
+  it("refuses an old form, the same subject, a tracker result in the way, and a result with no scan", async () => {
+    const c = await candidate();
+    const id = await uploaded(c.id);
+    const opened = await stamp(id);
+    await expect(changePaperSubject(id, { updatedAt: opened, subject: "Mathematics", expect: "move" }, "person", db)).rejects.toThrow(/different subject/);
+    await markPaper(id, "owner", db, model());
+    await expect(changePaperSubject(id, { updatedAt: opened, subject: "Physics", expect: "move" }, "person", db)).rejects.toThrow(/Refresh/);
+    const [tracker] = await db.insert(s.hiringPaperResults).values({ candidateId: c.id, subject: "Physics", source: "tracker", status: "done", history: { outcome: "Passed", passedSubjects: "", levels: "", date: null } }).returning();
+    await expect(changePaperSubject(id, { updatedAt: await stamp(id), subject: "Physics", expect: "move" }, "person", db)).rejects.toThrow(/tracker/);
+    await expect(changePaperSubject(tracker.id, { updatedAt: tracker.updatedAt.toISOString(), subject: "Chemistry", expect: "move" }, "person", db)).rejects.toThrow(/cannot change subject/);
+    expect(await result(id)).toMatchObject({ subject: "Mathematics", status: "done" });
   });
 });
 

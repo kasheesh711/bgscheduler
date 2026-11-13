@@ -138,6 +138,50 @@ function RetryMarking({ kind, id, reload }: { kind: ResultKind; id: string; relo
   );
 }
 
+/** For a scan stored under the wrong subject. The server moves the result, or removes it when the right subject already has one. */
+export function ChangeSubject({ paper, taken, command, reload, busy }: { paper: Paper; taken: string[]; command: Command; reload: Reload; busy: boolean }) {
+  const options = SUBJECTS.filter((subject) => subject !== paper.subject);
+  const [subject, setSubject] = useState<Subject>(options[0]);
+  const [error, setError] = useState("");
+  const keep = taken.includes(subject);
+  return (
+    <details className={css.sourceText}>
+      <summary>Wrong subject?</summary>
+      <div className={css.decisionActions}>
+        <label className={css.filterSelect}>
+          Correct subject
+          <select value={subject} onChange={(e) => setSubject(e.target.value as Subject)}>
+            {options.map((value) => (
+              <option key={value}>{value}</option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          className={css.secondary}
+          disabled={busy}
+          onClick={async () => {
+            const warning = keep
+              ? `${subject} already has a result. This removes the ${paper.subject} result and keeps the ${subject} one. Continue?`
+              : `This moves the result to ${subject} and removes these marks. The AI then marks the scan again with the ${subject} paper. Continue?`;
+            if (!window.confirm(warning)) return;
+            setError("");
+            if (!(await command({ action: "paper_subject", id: paper.id, updatedAt: new Date(paper.updatedAt).toISOString(), subject, expect: keep ? "remove" : "move" })) || keep) return;
+            try {
+              await markAgain("paper", paper.id, reload);
+            } catch (e) {
+              setError(e instanceof Error ? e.message : "Marking failed.");
+            }
+          }}
+        >
+          {keep ? `Remove this ${paper.subject} result` : `Change to ${subject}`}
+        </button>
+      </div>
+      {error && <p role="alert" className={css.errorText}>{error}</p>}
+    </details>
+  );
+}
+
 function MarksEditor({ paper, command, busy, onDone }: { paper: Paper; command: Command; busy: boolean; onDone: () => void }) {
   const [marks, setMarks] = useState<Record<string, string>>(() => Object.fromEntries(paper.marks!.questions.map((q) => [q.id, q.marks === null ? "" : String(q.marks)])));
   const [comment, setComment] = useState(paper.marks!.comment);
@@ -190,7 +234,7 @@ function MarksEditor({ paper, command, busy, onDone }: { paper: Paper; command: 
   );
 }
 
-export function PaperSheetView({ paper, config, command, reload, busy }: { paper: Paper; config: HiringData["config"]; command: Command; reload: Reload; busy: boolean }) {
+export function PaperSheetView({ paper, taken = [], config, command, reload, busy }: { paper: Paper; taken?: string[]; config: HiringData["config"]; command: Command; reload: Reload; busy: boolean }) {
   const stuck = paper.stuck;
   const sheet = paper.marks ? computeSheet(paper.marks, passRulesFor(config, paper.subject)) : null;
   const [editing, setEditing] = useState(false);
@@ -235,6 +279,7 @@ export function PaperSheetView({ paper, config, command, reload, busy }: { paper
           />
         </p>
       )}
+      {paper.source === "ai" && paper.status !== "marking" && paper.fileId && <ChangeSubject key={String(paper.updatedAt)} paper={paper} taken={taken} command={command} reload={reload} busy={busy} />}
       {paper.status === "needs_check" && (
         <p className={css.inspectorNote}>
           The AI could not read part of this paper, and an unreadable answer counts as no marks. Read it beside the scan, change any marks, then confirm.{" "}
@@ -676,7 +721,7 @@ function AssessmentPanel({
       <div className={css.inspectorBody}>
         {!papers.length && <p className={css.inspectorText}>No paper result yet.</p>}
         {papers.map((paper) => (
-          <PaperSheetView key={paper.id} paper={paper} config={data.config} command={command} reload={reload} busy={busy} />
+          <PaperSheetView key={paper.id} paper={paper} taken={papers.filter((other) => other.id !== paper.id && other.source !== "tracker").map((other) => other.subject)} config={data.config} command={command} reload={reload} busy={busy} />
         ))}
         {!row.history && <AddPaper candidateId={candidate.id} first={row.subject} taken={papers.filter((paper) => paper.source !== "tracker").map((paper) => paper.subject)} reload={reload} />}
         {!mocks.some((mock) => mock.subject === row.subject && mock.source !== "tracker") && !row.history && (

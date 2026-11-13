@@ -1,4 +1,4 @@
-import { and, eq, inArray, lt, or } from "drizzle-orm";
+import { and, eq, inArray, lt, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
@@ -6,7 +6,7 @@ import { callOpenRouter, isCreditExhausted, type OpenRouterCallResult } from "@/
 import { readAssessmentBytes } from "./assessment-files";
 import { callClaude } from "./claude";
 import { checkPaperMarks, checkRubric, paperNeedsCheck, RUBRIC, RUBRIC_ITEMS, rubricNeedsCheck, type MockRubric, type PaperMarks } from "./marking-sheet";
-import { HiringError, PAPER_LEVELS, runtimeWritesAllowed } from "./model";
+import { HiringError, PAPER_LEVELS, runtimeWritesAllowed, type Subject } from "./model";
 import { audit, MARKING_STUCK_AFTER_MS } from "./service";
 
 export const MARKING_PROMPT_VERSION = "hiring-marking-2026-11-02.1";
@@ -343,6 +343,45 @@ export async function changeRubric(id: string, input: { updatedAt: string; items
     .returning({ id: m.id });
   if (!saved.length) throw new HiringError(409, "These scores changed while you were editing. Refresh the page.");
   await audit(db, actor, "mock-rubric-changed", row.candidateId, { subject: row.subject, before: row.rubric.items, after: rubric.items });
+}
+
+/**
+ * A scan stored under the wrong subject. With no result in the right subject, this result moves there with empty marks,
+ * and the caller runs the AI again with that subject's paper and mark scheme. If the right subject already has a result,
+ * the wrong result is removed and that one stays. The stored scan file is kept in both cases.
+ */
+export async function changePaperSubject(id: string, input: { updatedAt: string; subject: Subject; expect: "move" | "remove" }, actor: string, db: Database, now = new Date()) {
+  const [row] = await db.select().from(p).where(eq(p.id, id));
+  if (!row || row.source !== "ai" || !row.fileId || row.status === "marking") throw new HiringError(409, "This paper cannot change subject now. Refresh the page.");
+  if (row.subject === input.subject) throw new HiringError(400, "Choose a different subject.");
+  // The form must be from the latest version, so a new upload or a running read is never moved or removed.
+  const mine = and(eq(p.id, id), eq(p.updatedAt, new Date(input.updatedAt)), eq(p.fileId, row.fileId), ne(p.status, "marking"));
+  const gone = new HiringError(409, "This paper changed while you were choosing. Refresh the page.");
+  const before = { from: row.subject, to: input.subject, status: row.status, marks: row.marks?.questions.map((q) => [q.id, q.marks]) ?? null, ai: row.aiMarks?.questions.map((q) => [q.id, q.marks]) ?? null, checkedBy: row.checkedBy, changedBy: row.changedBy };
+  const [other] = await db.select({ source: p.source }).from(p).where(and(eq(p.candidateId, row.candidateId), eq(p.subject, input.subject)));
+  if (other?.source === "tracker") throw new HiringError(409, `${input.subject} has a result from the tracker. Upload the scan there with Add a paper.`);
+  // The person agreed to one of the two outcomes on a page that can be old. The other outcome needs a new answer.
+  if ((other ? "remove" : "move") !== input.expect) throw gone;
+  if (other) {
+    const removed = await db.delete(p).where(mine).returning({ id: p.id });
+    if (!removed.length) throw gone;
+    await audit(db, actor, "paper-result-removed", row.candidateId, before);
+    return { removed: true };
+  }
+  const moved = await db
+    .update(p)
+    .set({ subject: input.subject, status: "uploaded", marks: null, aiMarks: null, markSchemeUsed: null, error: null, checkedBy: null, checkedAt: null, changedBy: null, changedAt: null, updatedAt: now })
+    .where(mine)
+    .returning({ id: p.id })
+    .catch((error: { code?: string; cause?: { code?: string } }) => {
+      // An upload made a result in that subject after the check above: one result per subject.
+      if ((error.code ?? error.cause?.code) === "23505") throw gone;
+      throw error;
+    });
+  if (!moved.length) throw gone;
+  await db.update(f).set({ subject: input.subject }).where(eq(f.id, row.fileId));
+  await audit(db, actor, "paper-subject-changed", row.candidateId, before);
+  return { removed: false };
 }
 
 /** A person has read a result that needed a check, and it now counts. */

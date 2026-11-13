@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { PrintPaper } from "../assessment-screen";
+import { ChangeSubject, PrintPaper } from "../assessment-screen";
 
 const library = [
   { id: "11111111-1111-4111-8111-111111111111", kind: "question_paper", subject: "Economics", name: "Econs QP.pdf", createdAt: new Date() },
@@ -19,5 +19,15 @@ describe("PrintPaper", () => {
     const html = renderToStaticMarkup(<PrintPaper library={library} subject="Physics" />);
     expect(html).toContain("No paper to print");
     expect(html).not.toContain("href");
+  });
+});
+
+describe("ChangeSubject", () => {
+  const paper = { id: "p", subject: "Economics", updatedAt: new Date() } as never;
+  const html = (taken: string[]) => renderToStaticMarkup(<ChangeSubject paper={paper} taken={taken} command={async () => true} reload={async () => undefined} busy={false} />);
+  it("offers every other subject, and says it removes the result when the first choice already has one", () => {
+    expect(html([])).toContain("Change to Mathematics");
+    expect(html([])).not.toContain("<option>Economics</option>");
+    expect(html(["Mathematics"])).toContain("Remove this Economics result");
   });
 });
