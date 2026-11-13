@@ -1,4 +1,4 @@
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
+import { PDFDocument, StandardFonts, popGraphicsState, pushGraphicsState, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import type { PaperMarks, PaperQuestion } from "./marking-sheet";
 
 export type MarkedPaperInput = {
@@ -37,6 +37,7 @@ function wrap(text: string, font: PDFFont, size: number, width: number) {
     while (font.widthOfTextAtSize(rest, size) > width) {
       let cut = rest.length - 1;
       while (cut > 1 && font.widthOfTextAtSize(rest.slice(0, cut), size) > width) cut--;
+      cut = Math.max(1, cut);
       if (line) lines.push(line);
       lines.push(rest.slice(0, cut));
       line = "";
@@ -61,6 +62,8 @@ const score = (q: PaperQuestion) => (!q.attempted ? `Not tried, 0 / ${q.max}` : 
  */
 export async function buildMarkedPaper(input: MarkedPaperInput) {
   const source = await PDFDocument.load(input.scan, { ignoreEncryption: true });
+  // The pages of a locked file would copy as noise with no error.
+  if (source.isEncrypted) throw new Error("The scan is locked with a password.");
   const doc = await PDFDocument.create();
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
@@ -83,15 +86,17 @@ export async function buildMarkedPaper(input: MarkedPaperInput) {
     const gap = (points: number) => void (col.y -= points * col.unit);
     // One line with its second part at the right edge, as on a marked paper.
     const pair = (left: string, right: string, font: PDFFont, size: number) => {
+      const end = clean(right);
+      // A long question name gets its own line, so the two parts never overlap.
+      if (font.widthOfTextAtSize(`${clean(left)}  ${end}`, size * col.unit) > col.width) return void [left, right].forEach((part) => line(part, font, size));
       if (col.y - size * col.unit * 1.3 < col.bottom) col = col.more();
       col.y -= size * col.unit * 1.3;
-      const end = clean(right);
       col.page.drawText(clean(left), { x: col.x, y: col.y, size: size * col.unit, font, color: INK });
       col.page.drawText(end, { x: col.x + col.width - font.widthOfTextAtSize(end, size * col.unit), y: col.y, size: size * col.unit, font, color: INK });
     };
     const question = (q: PaperQuestion) => {
       pair(q.id, score(q), bold, 13);
-      for (const point of q.points ?? []) line(`[${point.awarded > 0 ? "+" : " "}${point.awarded}] ${point.point}`, regular, 10.5, point.awarded > 0 ? GOOD : BAD, 4);
+      for (const point of (q.points ?? []).slice(0, 40)) line(`[${point.awarded > 0 ? "+" : " "}${point.awarded}] ${point.point.slice(0, 400)}`, regular, 10.5, point.awarded > 0 ? GOOD : BAD, 4);
       if (q.attempted && q.reason) line(q.reason, regular, 10, MUTED, 4);
       if (first.has(q.id) && first.get(q.id) !== q.marks) line(`Changed by a person. The AI gave ${first.get(q.id) ?? "no mark"}.`, regular, 10, BAD, 4);
       gap(10);
@@ -131,7 +136,8 @@ export async function buildMarkedPaper(input: MarkedPaperInput) {
     doc.addPage(page);
     const questions = onPage(index + 1);
     if (!questions.length) return;
-    const box = page.getMediaBox();
+    // The visible part of the page. A scanner can crop inside the media box.
+    const box = page.getCropBox();
     const unit = Math.min(box.width, box.height) / A4[0];
     const title = `Marking for scan page ${index + 1}`;
     const size: [number, number] = [box.width, box.height];
@@ -140,6 +146,9 @@ export async function buildMarkedPaper(input: MarkedPaperInput) {
     const strip = box.width * 0.45;
     page.setMediaBox(box.x, box.y, box.width + strip, box.height);
     page.setCropBox(box.x, box.y, box.width + strip, box.height);
+    // The scan's own drawing can leave a shift or a clip in force, which would move or hide the strip.
+    page.node.normalize();
+    page.node.wrapContentStreams(doc.context.register(doc.context.contentStream([pushGraphicsState()])), doc.context.register(doc.context.contentStream([popGraphicsState()])));
     const left = box.x + box.width;
     page.drawRectangle({ x: left, y: box.y, width: strip, height: box.height, color: rgb(1, 1, 1) });
     page.drawLine({ start: { x: left, y: box.y }, end: { x: left, y: box.y + box.height }, thickness: unit, color: MUTED });

@@ -36,7 +36,8 @@ const paperAnswer = z
             attempted: z.boolean(),
             readable: z.boolean(),
             page: z.number().int().nullable(),
-            points: z.array(z.object({ point: z.string().max(400), awarded: z.number() }).strict()).max(40),
+            // No length limits here: a long point must not lose a paid answer. The screen and the marked paper cut what they show.
+            points: z.array(z.object({ point: z.string(), awarded: z.number() }).strict()),
           })
           .strict(),
       )
@@ -318,7 +319,8 @@ export async function changePaperMarks(id: string, input: { updatedAt: string; m
     // The AI names the ids, so "constructor" must not read a value from the object's prototype.
     if (!Object.hasOwn(input.marks, q.id) || input.marks[q.id] === q.marks) return q;
     const value = input.marks[q.id];
-    return value === null ? { ...q, marks: null, readable: false } : { ...q, marks: value, readable: true, attempted: true };
+    // The AI's points no longer add up to a mark that a person set, so they go. The AI's first answer keeps them.
+    return value === null ? { ...q, marks: null, readable: false, points: [] } : { ...q, marks: value, readable: true, attempted: true, points: [] };
   });
   const marks: PaperMarks = { ...row.marks, questions, comment: input.comment };
   const problems = checkPaperMarks(marks);

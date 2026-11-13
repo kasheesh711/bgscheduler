@@ -54,4 +54,11 @@ describe("buildMarkedPaper", () => {
     expect(pages.at(-1)!.text).toMatch(/continued.*Point 39/);
     expect(pages[0].text).toContain('"Smart" - quotes');
   });
+  it("gives a long question name its own line, and measures from the visible part of a cropped page", async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([700, 900]).setCropBox(50, 50, 595, 800);
+    const pages = await read(await buildMarkedPaper(input({ questions: [q("Section B question 12 part (iii) continued over", 1)], comment: "", missingPages: null }, await doc.save())));
+    expect(pages[1].width).toBe(Math.round(595 * 1.45));
+    expect(pages[1].text).toMatch(/continued over\s+1 \/ 4/);
+  });
 });

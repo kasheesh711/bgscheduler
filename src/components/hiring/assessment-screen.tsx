@@ -364,7 +364,7 @@ export function PaperSheetView({ paper, taken = [], config, command, reload, bus
                   <td>
                     {q.points?.length ? (
                       <ul className={css.pointList}>
-                        {q.points.map((point, index) => (
+                        {q.points.slice(0, 40).map((point, index) => (
                           <li key={index} className={point.awarded > 0 ? css.pointGiven : css.pointMissed}>
                             <span className={css.num}>{point.awarded > 0 ? `+${point.awarded}` : "0"}</span> {point.point}
                           </li>
@@ -392,7 +392,7 @@ export function PaperSheetView({ paper, taken = [], config, command, reload, bus
                 </p>
                 <p className={css.inspectorMeta}>A link in a file can open another site. Do not sign in on a page that opens from a file.</p>
                 {/* The key makes the frame load again after a mark changes. */}
-                <iframe key={String(paper.updatedAt)} className={css.resumeFrame} src={`/api/hiring/marked/${encodeURIComponent(paper.id)}`} title={`Marked scan of the ${paper.subject} paper`} />
+                <iframe key={String(paper.updatedAt)} loading="lazy" className={css.resumeFrame} src={`/api/hiring/marked/${encodeURIComponent(paper.id)}`} title={`Marked scan of the ${paper.subject} paper`} />
               </div>
             </details>
           )}

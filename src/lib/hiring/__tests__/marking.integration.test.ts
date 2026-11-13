@@ -263,7 +263,8 @@ describe("a person's change", () => {
     await markPaper(id, "owner", db, model(answer({ questions: [question("1", null), question("2", 3)] })));
     await changePaperMarks(id, { updatedAt: (await result(id)).updatedAt.toISOString(), marks: { "1": 8 }, comment: "Read by a person." }, "person", db);
     const row = await result(id);
-    expect(row.marks!.questions[0]).toMatchObject({ marks: 8, readable: true });
+    expect(row.marks!.questions[0]).toMatchObject({ marks: 8, readable: true, points: [] });
+    expect(row.marks!.questions[1].points).toEqual([{ point: "Method", awarded: 3 }]);
     expect(row.aiMarks!.questions[0].marks).toBeNull();
     expect(row).toMatchObject({ changedBy: "person", status: "needs_check" });
     await expect(changePaperMarks(id, { updatedAt: row.updatedAt.toISOString(), marks: { "1": 99 }, comment: "" }, "person", db)).rejects.toThrow(/99 marks of 10/);
