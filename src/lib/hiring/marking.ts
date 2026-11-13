@@ -100,7 +100,7 @@ function callModelWithFiles(input: { apiKey: string; model: string; name: string
   });
 }
 
-/** The same call as a real marking run, for `scripts/dev/check-hiring-marking.ts`. */
+/** The same call as a real marking run, for `scripts/dev/check-hiring-marking.mts`. */
 export const callModelForCheck = (route: NonNullable<ReturnType<typeof markingRoute>>, files: ModelFile[]) =>
   callModelWithFiles({ ...route, name: "paper_marks", schema: paperAnswer, instructions: PAPER_INSTRUCTIONS, files, timeoutMs: RUN_BUDGET_MS });
 
