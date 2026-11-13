@@ -3,7 +3,7 @@ import { after, NextResponse } from "next/server";
 import { requireHiringAdmin } from "@/lib/hiring/access";
 import { createFileIntent, finishFile } from "@/lib/hiring/assessment-files";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
-import { changePaperMarks, changeRubric, clearResultCheck } from "@/lib/hiring/marking";
+import { changePaperMarks, changePaperSubject, changeRubric, clearResultCheck } from "@/lib/hiring/marking";
 import { RUBRIC_ITEMS, type RubricItem } from "@/lib/hiring/marking-sheet";
 import { configSchema, localDate, subjectSchema } from "@/lib/hiring/model";
 import { headWeek } from "@/lib/hiring/head-schedule";
@@ -101,6 +101,7 @@ const command = z.discriminatedUnion("action", [
       emailBody: z.string().trim().min(1).max(10000),
     })
     .strict(),
+  z.object({ action: z.literal("paper_subject"), id: z.uuid(), updatedAt: z.iso.datetime(), subject: subjectSchema }).strict(),
   z.object({ action: z.literal("result_check"), kind: z.enum(["paper", "mock"]), id: z.uuid() }).strict(),
   z
     .object({
@@ -200,6 +201,7 @@ export async function POST(request: Request) {
       await changePaperMarks(input.id, input, actor, getDb());
       return NextResponse.json({ ok: true });
     }
+    if (input.action === "paper_subject") return NextResponse.json({ ok: true, ...(await changePaperSubject(input.id, input, actor, getDb())) });
     if (input.action === "mock_edit") {
       await changeRubric(input.id, input, actor, getDb());
       return NextResponse.json({ ok: true });

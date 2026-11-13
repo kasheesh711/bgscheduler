@@ -97,6 +97,8 @@ The dated list has one row per visit, soonest first, then past visits, newest fi
 
 Before the visit, a row with no paper result shows **Print paper**. The link opens the subject's question paper from the [paper library](#rules-and-setup) as a PDF, ready to print. It never opens the mark scheme. With no question paper in the library, the row says so.
 
+If a scan is stored under the wrong subject, open the candidate's panel and use **Wrong subject?** on that paper result. Select the correct subject. With no result in that subject, the result moves there, its marks are removed, and the AI marks the scan again with that subject's paper and mark scheme. If that subject already has a result, the wrong result is removed and that one stays. The audit log keeps the old subject and marks. A result from the tracker, a result with no scan, and a scan that the AI is reading cannot change subject. The mock stays under the booking's subject.
+
 A person uploads one scanned PDF for each subject, up to 25 MB, on the row or in the panel. The browser sends it to private Blob. The server then checks that the bytes are a PDF of the size chosen, and deletes a refused file.
 
 `markPaper` sends the scan to the AI service (see [AI service](#ai-service)), with the question paper and mark scheme from the [paper library](#rules-and-setup) when they exist. The model returns marks for each question. **The server calculates all totals, percentages, results and the "can teach up to" line** (`marking-sheet.ts`), from the marks and the current pass marks.
