@@ -477,7 +477,8 @@ These variables are not in the counts at the top of this page. Read [the feature
 | `HIRING_SCORE_UNTIL` | Owner Mac, per run | ISO time at which `npm run hiring:score` stops starting model calls. Optional, except that `--briefs` refuses to start without it. |
 | `HIRING_BACKFILL_UNTIL` | Owner Mac, per run | ISO time at which `npm run hiring:backfill -- --seek` stops. Required for that mode. It must be in the future when the pass starts. |
 | `OPENROUTER_HIRING_API_KEY` | Vercel Production only | The key for paper and mock marking, with a $30 monthly limit set in OpenRouter, so hiring cannot use the feedback autowriter's credit. With no key, an upload is saved and the screen says marking is not set up. |
-| `HIRING_MARKING_MODEL` | Vercel, optional | The OpenRouter model for marking. Default `openai/gpt-6.1-sol`. |
+| `HIRING_MARKING_MODEL` | Vercel, optional | The OpenRouter model for marking. Default `openai/gpt-6.1-sol`. Not used on the Claude route. |
+| `ANTHROPIC_HIRING_API_KEY` | Vercel Production only | A Claude API key for paper and mock marking. When it is set, marking calls the Claude API direct with `claude-opus-5-5` and does not use OpenRouter. Set a monthly limit on its workspace in the Claude Console. Anthropic keeps the data for up to 30 days. |
 | `BLOB_READ_WRITE_TOKEN` | Vercel only | Private Blob store for original résumé files, scanned papers, mock rubrics and the paper library (see [Tutor Progress Tests](#tutor-progress-tests) for the same variable). The Mac holds no Blob key. It asks `/api/internal/hiring-resume-upload` for a 5-minute token for one path. |
 
 The Mac also needs `DATABASE_URL`, `AUTH_SECRET` (it signs the worker's requests) and optionally `APP_BASE_URL` (default `https://bgscheduler.vercel.app`). The Mac holds no Resend or LINE key.

@@ -1,9 +1,9 @@
 // A technical check of the hiring marking route with a made-up handwritten paper. It proves the route reads a scan and
 // measures the cost. It is not an accuracy test. It uses no candidate data and writes nothing to a database.
-// Run: OPENROUTER_HIRING_API_KEY=... npx tsx scripts/dev/check-hiring-marking.ts
+// Run: ANTHROPIC_HIRING_API_KEY=... npx tsx scripts/dev/check-hiring-marking.ts (or OPENROUTER_HIRING_API_KEY; the Claude key wins)
 import { PDFDocument } from "pdf-lib";
 import sharp from "sharp";
-import { callModelForCheck, markingModel } from "../../src/lib/hiring/marking";
+import { callModelForCheck, markingRoute } from "../../src/lib/hiring/marking";
 import { checkPaperMarks, computeSheet, type PaperMarks } from "../../src/lib/hiring/marking-sheet";
 
 const handwritten = (lines: string[]) =>
@@ -51,9 +51,9 @@ const answers = await pdf([
   ]),
 ]);
 
-const key = process.env.OPENROUTER_HIRING_API_KEY?.trim();
-if (!key) throw new Error("Set OPENROUTER_HIRING_API_KEY.");
-const call = await callModelForCheck(key, [
+const route = markingRoute();
+if (!route) throw new Error("Set ANTHROPIC_HIRING_API_KEY or OPENROUTER_HIRING_API_KEY.");
+const call = await callModelForCheck(route, [
   { label: "The question paper:", name: "question-paper.pdf", bytes: questionPaper },
   { label: "The mark scheme:", name: "mark-scheme.pdf", bytes: markScheme },
   { label: "The candidate's scanned answers for Mathematics:", name: "answers.pdf", bytes: answers },
@@ -68,7 +68,7 @@ console.log(
     {
       model: call.model,
       provider: call.provider,
-      asked: markingModel(),
+      asked: route.model,
       seconds: Math.round(call.latencyMs / 1000),
       costUsd: call.usage.costUsd,
       tokens: { prompt: call.usage.promptTokens, completion: call.usage.completionTokens, reasoning: call.usage.reasoningTokens },

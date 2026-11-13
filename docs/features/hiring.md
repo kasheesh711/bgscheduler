@@ -97,7 +97,7 @@ The dated list has one row per visit, soonest first, then past visits, newest fi
 
 A person uploads one scanned PDF for each subject, up to 25 MB, on the row or in the panel. The browser sends it to private Blob. The server then checks that the bytes are a PDF of the size chosen, and deletes a refused file.
 
-`markPaper` sends the scan through OpenRouter, with the question paper and mark scheme from the [paper library](#rules-and-setup) when they exist. The model returns marks for each question. **The server calculates all totals, percentages, results and the "can teach up to" line** (`marking-sheet.ts`), from the marks and the current pass marks.
+`markPaper` sends the scan to the AI service (see [AI service](#ai-service)), with the question paper and mark scheme from the [paper library](#rules-and-setup) when they exist. The model returns marks for each question. **The server calculates all totals, percentages, results and the "can teach up to" line** (`marking-sheet.ts`), from the marks and the current pass marks.
 
 | Rule | Detail |
 |---|---|
@@ -108,9 +108,24 @@ A person uploads one scanned PDF for each subject, up to 25 MB, on the row or in
 | Can teach up to | The highest level passed. A failed lower level does not change it. AS / A-Level, IB and AP are peers, so a pass in more than one names them all. |
 | Refused answers | A mark above its maximum, a repeated question, marks on a question not tried, or any added total. The row fails with a plain message, and the upload stays. |
 | Old flow | An AI pass changes no stage and writes no `paperPassedSubjects`, because a difference there can queue a mock invitation. A person clicks the existing button. |
-| Privacy | Calls use `OPENROUTER_HIRING_API_KEY`, zero data retention and `data_collection: deny`. No file content is logged. A preview never sends a scan. Scans follow the resume retention rule, and the marks stay. |
+| Privacy | See [AI service](#ai-service) for where a scan goes and how long it is kept. No file content is logged. A preview never sends a scan. Scans follow the resume retention rule, and the marks stay. |
 
 **Known risk, accepted by the owner:** a misread mark on a readable paper raises no flag, including a score close to the pass mark. A person sees it only by opening the marks beside the scan. A Reject email can follow from it. If this happens, the first fix is a "close to pass mark" flag.
+
+### AI service
+
+`markingRoute` in `marking.ts` chooses the service for paper marking and the mock rubric. The Claude key wins when both keys are set.
+
+| Key | Service | Model | Data kept by the service | Largest set of files | Spend limit |
+|---|---|---|---|---|---|
+| `ANTHROPIC_HIRING_API_KEY` | Claude API, direct (`claude.ts`) | `claude-opus-5-5`, fixed in code | Up to 30 days, not used for training. Kevin accepted this on 13 November 2026. | 22 MB (Claude takes 32 MB for one request, and the encoding adds a third) | The workspace limit in the Claude Console |
+| `OPENROUTER_HIRING_API_KEY` | OpenRouter | `HIRING_MARKING_MODEL`, default `openai/gpt-6.1-sol` | Nothing: zero data retention and `data_collection: deny` | 45 MB | The key's monthly limit in OpenRouter |
+
+- With no key, a run stops with "AI marking is not set up yet", and the upload stays.
+- The Claude route calculates the cost from the token counts and the price of `claude-opus-5-5` ($4 input, $20 output for each million tokens). OpenRouter reports its own cost.
+- A refusal or a cut-off answer from Claude is a failed run. A person retries. No second model is tried.
+- To go back to OpenRouter, remove `ANTHROPIC_HIRING_API_KEY` in Vercel and redeploy.
+- No live call has run on either route. The technical check in [Go-live for the revamp](#go-live-for-the-revamp) is the first one.
 
 ### Mock rubric
 
@@ -535,7 +550,13 @@ Do these in order. Each step needs Kevin's approval. Automation and Messages can
 2. **Merge #246 to #254 in order.** Who: Kevin. Stacked pull requests start required CI only when based on `main`, so retarget each one and close and reopen it.
 3. **Check the page.** Who: Claude, signed in, on production or the preview: all five tabs, the Back button, a filter, and opening a resume. The offline check replaces `next/navigation`, so this is the first real check of tab addresses. Open one real PDF in the frame.
 4. **Update the Mac checkout before anyone saves settings.** The config schema is strict, so older code refuses a saved `paperPassRules` key. For the same reason, a Vercel rollback after a settings save needs a config repair. An old worker process also ignores the drag order, so restart it.
-5. **Create the OpenRouter key.** Who: Kevin.
+5. **Create the AI key.** Who: Kevin. Use one of two services ([AI service](#ai-service)). For the Claude API credits:
+   1. Go to [platform.claude.com/settings/keys](https://platform.claude.com/settings/keys) and click **Create Key**. Name it `BGScheduler hiring marking`, and copy the key.
+   2. In the Claude Console, open **Settings**, then **Limits**, and set a monthly spend limit for the workspace of the key.
+   3. In Vercel, add the key as `ANTHROPIC_HIRING_API_KEY`, **Production** only, then redeploy (sub-steps 3 to 5 below, with this name).
+   4. In step 6, use the name `ANTHROPIC_HIRING_API_KEY` in the two commands.
+
+   For OpenRouter instead:
    1. Go to [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) and click **Create Key**.
    2. Name it `BGScheduler hiring marking`. Set **Credit limit** to `30`, and set **Reset limit every** to **Month**. Click **Create**, and copy the key.
    3. Go to vercel.com, open the **bgscheduler** project, then **Settings**, then **Environment Variables**.
