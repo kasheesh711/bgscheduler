@@ -95,6 +95,8 @@ The dated list has one row per visit, soonest first, then past visits, newest fi
 
 ### Paper marking
 
+Before the visit, a row with no paper result shows **Print paper**. The link opens the subject's question paper from the [paper library](#rules-and-setup) as a PDF, ready to print. It never opens the mark scheme. With no question paper in the library, the row says so.
+
 A person uploads one scanned PDF for each subject, up to 25 MB, on the row or in the panel. The browser sends it to private Blob. The server then checks that the bytes are a PDF of the size chosen, and deletes a refused file.
 
 `markPaper` sends the scan to the AI service (see [AI service](#ai-service)), with the question paper and mark scheme from the [paper library](#rules-and-setup) when they exist. The model returns marks for each question. **The server calculates all totals, percentages, results and the "can teach up to" line** (`marking-sheet.ts`), from the marks and the current pass marks.

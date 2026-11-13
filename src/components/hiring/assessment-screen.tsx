@@ -62,6 +62,17 @@ export function mockCell(mock: Mock) {
 type Reload = () => Promise<void>;
 
 /** The file picker for a candidate's scan. It stays on the row or the panel while the upload and the marking run. */
+/** The blank question paper from the paper library, for the person who prepares the visit. It opens as a PDF to print. */
+export function PrintPaper({ library, subject }: { library: HiringData["library"]; subject: string }) {
+  const file = library.find((item) => item.subject === subject && item.kind === "question_paper");
+  if (!file) return <span className={css.warnWord}>No paper to print. Add it in Rules and setup. </span>;
+  return (
+    <a className={css.sourceLink} href={`/api/hiring/file/${encodeURIComponent(file.id)}`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+      Print paper
+    </a>
+  );
+}
+
 export function ResultUpload({ kind, candidateId, subject, reload, label, disabled, warning }: { kind: ResultKind; candidateId: string; subject: Subject; reload: Reload; label: string; disabled?: boolean; warning?: string }) {
   const [state, setState] = useState<"idle" | "working">("idle");
   const [error, setError] = useState("");
@@ -815,7 +826,10 @@ export function AssessmentScreen({
                           {rowPapers.length ? (
                             rowPapers.map((paper) => <span key={paper.id} className={css.pillNote}>{paperCell(paper, data.config)}</span>)
                           ) : row.kinds.includes("paper") && row.subject ? (
-                            <ResultUpload kind="paper" candidateId={row.candidateId} subject={row.subject as Subject} reload={reload} label="Upload PDF" />
+                            <>
+                              <PrintPaper library={data.library} subject={row.subject} />
+                              <ResultUpload kind="paper" candidateId={row.candidateId} subject={row.subject as Subject} reload={reload} label="Upload PDF" />
+                            </>
                           ) : (
                             <span className={css.mutedCell}>–</span>
                           )}
