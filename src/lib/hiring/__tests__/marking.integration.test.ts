@@ -222,7 +222,7 @@ describe("a scan stored under the wrong subject", () => {
   it("moves to the right subject with empty marks, and the next run names that subject", async () => {
     const id = await uploaded((await candidate()).id);
     await markPaper(id, "owner", db, model());
-    expect(await changePaperSubject(id, { updatedAt: await stamp(id), subject: "Physics" }, "person", db, new Date(Date.now() + 1000))).toEqual({ removed: false });
+    expect(await changePaperSubject(id, { updatedAt: await stamp(id), subject: "Physics", expect: "move" }, "person", db, new Date(Date.now() + 1000))).toEqual({ removed: false });
     const row = await result(id);
     expect(row).toMatchObject({ subject: "Physics", status: "uploaded", marks: null, aiMarks: null, markSchemeUsed: null });
     expect((await db.select().from(s.hiringAssessmentFiles).where(eq(s.hiringAssessmentFiles.id, row.fileId!)))[0].subject).toBe("Physics");
@@ -237,7 +237,8 @@ describe("a scan stored under the wrong subject", () => {
     const wrong = await uploaded(c.id);
     const right = await uploaded(c.id, "Physics");
     await markPaper(right, "owner", db, model());
-    expect(await changePaperSubject(wrong, { updatedAt: await stamp(wrong), subject: "Physics" }, "person", db)).toEqual({ removed: true });
+    await expect(changePaperSubject(wrong, { updatedAt: await stamp(wrong), subject: "Physics", expect: "move" }, "person", db)).rejects.toThrow(/Refresh/);
+    expect(await changePaperSubject(wrong, { updatedAt: await stamp(wrong), subject: "Physics", expect: "remove" }, "person", db)).toEqual({ removed: true });
     expect(await result(wrong)).toBeUndefined();
     expect(await result(right)).toMatchObject({ subject: "Physics", status: "done" });
     expect(await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "paper-result-removed"))).toHaveLength(1);
@@ -246,12 +247,12 @@ describe("a scan stored under the wrong subject", () => {
     const c = await candidate();
     const id = await uploaded(c.id);
     const opened = await stamp(id);
-    await expect(changePaperSubject(id, { updatedAt: opened, subject: "Mathematics" }, "person", db)).rejects.toThrow(/different subject/);
+    await expect(changePaperSubject(id, { updatedAt: opened, subject: "Mathematics", expect: "move" }, "person", db)).rejects.toThrow(/different subject/);
     await markPaper(id, "owner", db, model());
-    await expect(changePaperSubject(id, { updatedAt: opened, subject: "Physics" }, "person", db)).rejects.toThrow(/Refresh/);
+    await expect(changePaperSubject(id, { updatedAt: opened, subject: "Physics", expect: "move" }, "person", db)).rejects.toThrow(/Refresh/);
     const [tracker] = await db.insert(s.hiringPaperResults).values({ candidateId: c.id, subject: "Physics", source: "tracker", status: "done", history: { outcome: "Passed", passedSubjects: "", levels: "", date: null } }).returning();
-    await expect(changePaperSubject(id, { updatedAt: await stamp(id), subject: "Physics" }, "person", db)).rejects.toThrow(/tracker/);
-    await expect(changePaperSubject(tracker.id, { updatedAt: tracker.updatedAt.toISOString(), subject: "Chemistry" }, "person", db)).rejects.toThrow(/cannot change subject/);
+    await expect(changePaperSubject(id, { updatedAt: await stamp(id), subject: "Physics", expect: "move" }, "person", db)).rejects.toThrow(/tracker/);
+    await expect(changePaperSubject(tracker.id, { updatedAt: tracker.updatedAt.toISOString(), subject: "Chemistry", expect: "move" }, "person", db)).rejects.toThrow(/cannot change subject/);
     expect(await result(id)).toMatchObject({ subject: "Mathematics", status: "done" });
   });
 });

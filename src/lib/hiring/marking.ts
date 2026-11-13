@@ -350,16 +350,18 @@ export async function changeRubric(id: string, input: { updatedAt: string; items
  * and the caller runs the AI again with that subject's paper and mark scheme. If the right subject already has a result,
  * the wrong result is removed and that one stays. The stored scan file is kept in both cases.
  */
-export async function changePaperSubject(id: string, input: { updatedAt: string; subject: Subject }, actor: string, db: Database, now = new Date()) {
+export async function changePaperSubject(id: string, input: { updatedAt: string; subject: Subject; expect: "move" | "remove" }, actor: string, db: Database, now = new Date()) {
   const [row] = await db.select().from(p).where(eq(p.id, id));
   if (!row || row.source !== "ai" || !row.fileId || row.status === "marking") throw new HiringError(409, "This paper cannot change subject now. Refresh the page.");
   if (row.subject === input.subject) throw new HiringError(400, "Choose a different subject.");
   // The form must be from the latest version, so a new upload or a running read is never moved or removed.
   const mine = and(eq(p.id, id), eq(p.updatedAt, new Date(input.updatedAt)), eq(p.fileId, row.fileId), ne(p.status, "marking"));
   const gone = new HiringError(409, "This paper changed while you were choosing. Refresh the page.");
-  const before = { from: row.subject, to: input.subject, status: row.status, marks: row.marks?.questions.map((q) => [q.id, q.marks]) ?? null };
+  const before = { from: row.subject, to: input.subject, status: row.status, marks: row.marks?.questions.map((q) => [q.id, q.marks]) ?? null, ai: row.aiMarks?.questions.map((q) => [q.id, q.marks]) ?? null, checkedBy: row.checkedBy, changedBy: row.changedBy };
   const [other] = await db.select({ source: p.source }).from(p).where(and(eq(p.candidateId, row.candidateId), eq(p.subject, input.subject)));
   if (other?.source === "tracker") throw new HiringError(409, `${input.subject} has a result from the tracker. Upload the scan there with Add a paper.`);
+  // The person agreed to one of the two outcomes on a page that can be old. The other outcome needs a new answer.
+  if ((other ? "remove" : "move") !== input.expect) throw gone;
   if (other) {
     const removed = await db.delete(p).where(mine).returning({ id: p.id });
     if (!removed.length) throw gone;
@@ -370,7 +372,12 @@ export async function changePaperSubject(id: string, input: { updatedAt: string;
     .update(p)
     .set({ subject: input.subject, status: "uploaded", marks: null, aiMarks: null, markSchemeUsed: null, error: null, checkedBy: null, checkedAt: null, changedBy: null, changedAt: null, updatedAt: now })
     .where(mine)
-    .returning({ id: p.id });
+    .returning({ id: p.id })
+    .catch((error: { code?: string; cause?: { code?: string } }) => {
+      // An upload made a result in that subject after the check above: one result per subject.
+      if ((error.code ?? error.cause?.code) === "23505") throw gone;
+      throw error;
+    });
   if (!moved.length) throw gone;
   await db.update(f).set({ subject: input.subject }).where(eq(f.id, row.fileId));
   await audit(db, actor, "paper-subject-changed", row.candidateId, before);

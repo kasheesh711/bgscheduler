@@ -101,7 +101,7 @@ const command = z.discriminatedUnion("action", [
       emailBody: z.string().trim().min(1).max(10000),
     })
     .strict(),
-  z.object({ action: z.literal("paper_subject"), id: z.uuid(), updatedAt: z.iso.datetime(), subject: subjectSchema }).strict(),
+  z.object({ action: z.literal("paper_subject"), id: z.uuid(), updatedAt: z.iso.datetime(), subject: subjectSchema, expect: z.enum(["move", "remove"]) }).strict(),
   z.object({ action: z.literal("result_check"), kind: z.enum(["paper", "mock"]), id: z.uuid() }).strict(),
   z
     .object({

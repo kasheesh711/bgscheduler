@@ -166,7 +166,7 @@ export function ChangeSubject({ paper, taken, command, reload, busy }: { paper: 
               : `This moves the result to ${subject} and removes these marks. The AI then marks the scan again with the ${subject} paper. Continue?`;
             if (!window.confirm(warning)) return;
             setError("");
-            if (!(await command({ action: "paper_subject", id: paper.id, updatedAt: new Date(paper.updatedAt).toISOString(), subject })) || keep) return;
+            if (!(await command({ action: "paper_subject", id: paper.id, updatedAt: new Date(paper.updatedAt).toISOString(), subject, expect: keep ? "remove" : "move" })) || keep) return;
             try {
               await markAgain("paper", paper.id, reload);
             } catch (e) {
@@ -721,7 +721,7 @@ function AssessmentPanel({
       <div className={css.inspectorBody}>
         {!papers.length && <p className={css.inspectorText}>No paper result yet.</p>}
         {papers.map((paper) => (
-          <PaperSheetView key={paper.id} paper={paper} taken={papers.filter((other) => other.id !== paper.id).map((other) => other.subject)} config={data.config} command={command} reload={reload} busy={busy} />
+          <PaperSheetView key={paper.id} paper={paper} taken={papers.filter((other) => other.id !== paper.id && other.source !== "tracker").map((other) => other.subject)} config={data.config} command={command} reload={reload} busy={busy} />
         ))}
         {!row.history && <AddPaper candidateId={candidate.id} first={row.subject} taken={papers.filter((paper) => paper.source !== "tracker").map((paper) => paper.subject)} reload={reload} />}
         {!mocks.some((mock) => mock.subject === row.subject && mock.source !== "tracker") && !row.history && (
