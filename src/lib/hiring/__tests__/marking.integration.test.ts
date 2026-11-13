@@ -171,6 +171,15 @@ describe("limits", () => {
     expect((await markPaper(id, "owner", db, call)).error).toMatch(/45 MB/);
     expect(call).not.toHaveBeenCalled();
   });
+  it("uses the smaller limit of the Claude route when the Claude key is set", async () => {
+    vi.stubEnv("ANTHROPIC_HIRING_API_KEY", "synthetic-claude-key");
+    const id = await uploaded((await candidate()).id);
+    await db.execute(sql`update hiring_assessment_files set size = 30000000`);
+    const call = model();
+    expect((await markPaper(id, "owner", db, call)).error).toMatch(/22 MB/);
+    expect(call).not.toHaveBeenCalled();
+    vi.stubEnv("ANTHROPIC_HIRING_API_KEY", "");
+  });
   it("does not send a scan from a preview", async () => {
     const id = await uploaded((await candidate()).id);
     vi.stubEnv("VERCEL_ENV", "preview");
