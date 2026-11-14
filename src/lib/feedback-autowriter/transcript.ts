@@ -533,6 +533,23 @@ function evidenceFromSegments(input: {
   };
 }
 
+/**
+ * Owner decision, 13 Oct 2026: a class Wise shows under the attendance bar (often a student on another device or link,
+ * so their Wise account reads 0%) is written only when its transcript shows the student clearly speaking. Both:
+ * - per-speaker labels Zoom confirmed (`zoom_alignment`: a second named person's cues cover the STUDENT voice, which
+ *   carries ≥ 5% of the talk). Talk share and phrase timing are inferred, never enough here;
+ * - the STUDENT lines hold at least `AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS` (800) characters: the floor a whole
+ *   transcript needs to be written from, met by the student alone. All 17 aligned classes in the 12 Oct zoom-timing
+ *   set clear it (lowest 1,169, median ~4,200); a tutor talking to an empty room cannot.
+ */
+export function studentClearlyHeard(evidence: Pick<TranscriptEvidence, "rendered" | "speakers">): boolean {
+  if (evidence.speakers.method !== "zoom_alignment") return false;
+  const prefix = /^\[[^\]]*\] STUDENT: /u;
+  const characters = evidence.rendered.split("\n").filter((line) => prefix.test(line))
+    .reduce((sum, line) => sum + [...line.replace(prefix, "")].length, 0);
+  return characters >= AUTOWRITER_MIN_TRANSCRIPT_CHARACTERS;
+}
+
 // ---------------------------------------------------------------------------
 // English lessons from Zoom's captions (FEEDBACK_AUTOWRITER_ZOOM_ENGLISH)
 // ---------------------------------------------------------------------------
