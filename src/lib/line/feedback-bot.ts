@@ -254,7 +254,8 @@ export function feedbackReply(
   return url ? top : [top, ...blocks].join("\n\n");
 }
 
-const likeSafe = (value: string) => value.replace(/_/g, "\\_");
+/** Codes read back from Wise names are not limited to the command characters, so escape every ILIKE wildcard. */
+const likeSafe = (value: string) => value.replace(/[\\%_]/g, "\\$&");
 
 export type StudentCodeChoice =
   | { status: "ok"; code: string }
