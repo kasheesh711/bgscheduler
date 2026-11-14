@@ -1,6 +1,7 @@
 import { loadAtomLessonEvidence, retainIsebEvidence, storedIsebEvidenceMatches, eligibleForIseb } from "./atom/data";
 import { hasAtomEvidenceWording } from "./atom/statistics";
 import { detectNoShow } from "./no-show";
+import { postDeadlineFallback } from "./deadline-fallback";
 import { matchingFormatStamp } from "./format";
 import { approvedFormatGuide, atomRolloutApproved } from "./iseb-rollout";
 import { MIMI_STYLE_GUIDE_V2 } from "./style";
@@ -16,6 +17,7 @@ import { sendAlertDigest } from "./alerts";
 import { resolveBilling } from "./billing";
 import {
   AUTOWRITER_EVENT_DEADLINE_MS,
+  AUTOWRITER_FALLBACK_MAX_PER_SWEEP,
   AUTOWRITER_GENERATION_LEASE_MS,
   AUTOWRITER_JUDGE_ERRORS_ALERT,
   AUTOWRITER_JUDGE_STAGE_ERRORS_ALERT,
@@ -83,6 +85,7 @@ import {
   flagNoRecording,
   haltAutowriter,
   listDueRows,
+  listFallbackRows,
   listPendingAlerts,
   listRowsInState,
   listSonioxCleanup,
@@ -1468,6 +1471,8 @@ export interface SweepResult {
   processed: Record<string, number>;
   reconciled: Record<string, number>;
   expired: number;
+  /** The 48-hour fallback notes this sweep tried, by `DeadlineFallbackOutcome.result`. */
+  fallback: Record<string, number>;
   alertsSent: number;
   alertsSuppressed: number;
   infraErrors: string[];
@@ -1517,6 +1522,7 @@ function sweepOrder(due: readonly AutowriterSessionRow[], now: Date, zoomEnglish
 /**
  * 1. Reconcile POSTs whose outcome is not final (every mode, reads only).
  * 2. Expire what can no longer land before its deadline (not in `off`).
+ * 2b. Post the 48-hour fallback note of held classes nobody wrote (`deadline-fallback.ts`; live and not halted).
  * 3. Queue and process due sessions (not in `off`, not while halted), in `sweepOrder`: the rows close to their
  *    deadline, then the rows that call no model, then the rows that may need the writer. So the classes about to
  *    expire get the sweep's start window first; after them, the rows that call no model are not kept waiting by a
@@ -1532,7 +1538,7 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
   const { db } = deps;
   const control = await readControl(db);
   const base = {
-    mode: control.mode, halted: Boolean(control.haltedAt), processed: {}, reconciled: {}, expired: 0,
+    mode: control.mode, halted: Boolean(control.haltedAt), processed: {}, reconciled: {}, expired: 0, fallback: {},
     alertsSent: 0, alertsSuppressed: 0, infraErrors: [] as string[],
   };
   if (!deps.writesAllowedHere) return { ...base, ok: true, skipped: true, reason: "Preview deployment: the autowriter never runs here." };
@@ -1540,6 +1546,7 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
   if (!lease) return { ...base, ok: true, skipped: true, reason: "Another autowriter sweep holds the lease." };
   const processed: Record<string, number> = {};
   const reconciled: Record<string, number> = {};
+  const fallback: Record<string, number> = {};
   const infraErrors: string[] = [];
   let expired = 0;
   let alertError: string | null = null;
@@ -1564,6 +1571,26 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
         disabledTutors: control.disabledTutors,
       });
       expired = settled.expired;
+
+      // 2b. Owner rule: a held class nobody wrote is published within 48 h of its end (`deadline-fallback.ts`).
+      // Before the due rows, at most `AUTOWRITER_FALLBACK_MAX_PER_SWEEP` of them, so the due rows keep most of the start
+      // window; the claim re-checks live, halt, tutor and the window atomically.
+      const fallbackRows = control.mode === "live" && !control.haltedAt && deps.apiActorId
+        ? (await listFallbackRows(db)).filter((row) => !row.wiseTeacherUserId || !control.disabledTutors.includes(row.wiseTeacherUserId))
+          .slice(0, AUTOWRITER_FALLBACK_MAX_PER_SWEEP)
+        : [];
+      const fallbackMappings = fallbackRows.length > 0 ? await loadFieldMappings(db) : [];
+      for (const row of fallbackRows) {
+        if (!deps.apiActorId || remaining(deps) < AUTOWRITER_SWEEP_MIN_REMAINING_MS) break;
+        const current = await readControl(db);
+        if (current.haltedAt || current.mode !== "live") break;
+        const result = await postDeadlineFallback(db, {
+          row, ops: deps.ops, apiActorId: deps.apiActorId, mappings: fallbackMappings, now: clock(deps),
+          remainingMs: () => remaining(deps), sleep: deps.sleep,
+        });
+        tally(fallback, result.result);
+        if (/read_failed/u.test(result.reason)) infraErrors.push(`${row.wiseSessionId}: Wise read failed for the 48-hour fallback note`);
+      }
 
       // 3. New and due sessions for roster tutors that are switched on.
       const enabledTutors = AUTOWRITER_ROSTER.map((tutor) => tutor.wiseUserId)
@@ -1651,6 +1678,7 @@ export async function runSweep(deps: AutowriterDeps): Promise<SweepResult> {
     processed,
     reconciled,
     expired,
+    fallback,
     alertsSent,
     alertsSuppressed,
     infraErrors,
