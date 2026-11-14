@@ -20,8 +20,6 @@ import Image from "next/image";
 import { Suspense } from "react";
 import { BookOpen, Clock, GraduationCap, NotebookPen, School, Sparkles, Target } from "lucide-react";
 
-// Static import: served from /_next/static, which needs no login (public/brand does).
-import logo from "../../../../public/brand/logo-horizontal.png";
 import { getDb } from "@/lib/db";
 import {
   loadFeedbackClasses,
@@ -31,6 +29,7 @@ import {
   type FeedbackClassRow,
 } from "@/lib/line/feedback-bot";
 import { parseStudentDisplay } from "@/lib/student-schedule/data";
+import { TEACHER_EMAIL_LOGO_PATH } from "@/lib/teacher-emails/brand";
 
 export const metadata: Metadata = {
   title: { absolute: "BeGifted — Class feedback" },
@@ -43,6 +42,9 @@ export const viewport: Viewport = {
   viewportFit: "cover",
   themeColor: "#FAF8F4",
 };
+
+/** The one logo path that src/proxy.ts serves without a login (720×250). */
+const LOGO = TEACHER_EMAIL_LOGO_PATH;
 
 type Params = Promise<{ token: string }>;
 
@@ -84,7 +86,7 @@ function ExpiredNotice() {
     <Shell>
       <div className="flex min-h-full items-center justify-center px-6 py-10">
         <div className="w-full max-w-sm rounded-3xl bg-white px-7 py-9 text-center shadow-[0_10px_40px_-12px_rgba(20,20,20,0.18)] ring-1 ring-[#E8E3DA]">
-          <Image src={logo} alt="BeGifted Tutor & Education" className="mx-auto h-10 w-auto" />
+          <Image src={LOGO} alt="BeGifted Tutor & Education" width={720} height={250} className="mx-auto h-10 w-auto" />
           <h1 className="mt-5 text-lg font-semibold tracking-tight">This link has expired</h1>
           <p className="mt-2 text-sm leading-relaxed text-[#6B6B6B]">
             Feedback links work for 24 hours. Type <span className="font-mono text-[#3A3A3A]">/feedback</span> in the
@@ -173,7 +175,7 @@ async function FeedbackBody({ params }: { params: Params }) {
       <div className="bg-gradient-to-b from-[#F1EDE7] to-[#FAF8F4] px-4 pt-[max(1.75rem,env(safe-area-inset-top))] pb-6 sm:px-6">
         <div className="mx-auto w-full max-w-2xl">
           <div className="flex items-center justify-between gap-3">
-            <Image src={logo} alt="BeGifted Tutor & Education" priority className="h-9 w-auto" />
+            <Image src={LOGO} alt="BeGifted Tutor & Education" width={720} height={250} preload className="h-9 w-auto" />
             <span className="rounded-full bg-[#FF7518] px-3 py-1 text-xs font-semibold text-[#141414] shadow-sm shadow-[#FF7518]/30">
               {selection.subject}
             </span>
