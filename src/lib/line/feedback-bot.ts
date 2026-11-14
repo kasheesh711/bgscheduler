@@ -21,8 +21,9 @@
 //              chat. The bot check also means that one bot answers when both
 //              bots are in the same chat.
 //
-//   FB-BOT-L1  Link. The reply carries a link to /feedback/<token>, a public
-//              page with the same classes and the full text. The token is
+//   FB-BOT-L1  Link. The reply is a link to /feedback/<token>, a public page
+//              with the classes and the full text; the feedback text itself
+//              is not posted in the chat. The token is
 //              signed with AUTH_SECRET, names one student code and one
 //              subject, and expires after 24 hours (owner decision
 //              2026-11-14). The page reads the data again on each visit.
@@ -238,9 +239,11 @@ export function feedbackReply(
   const top = [
     header,
     [profile.school && `School: ${profile.school}`, profile.year && `Year: ${profile.year}`].filter(Boolean).join(" · "),
-    url && `Full view (link works for ${LINK_HOURS} hours): ${url}`,
+    url && `Open the feedback (link works for ${LINK_HOURS} hours): ${url}`,
   ].filter(Boolean).join("\n");
-  return [top, ...blocks].join("\n\n");
+  // Owner decision 2026-11-14: with a link, the chat gets the link only. The
+  // feedback text is posted only when no link can be made (AUTH_SECRET not set).
+  return url ? top : [top, ...blocks].join("\n\n");
 }
 
 /** The student's recent ended classes (newest first) and the Wise title of each. */

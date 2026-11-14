@@ -104,7 +104,9 @@ describe("handleFeedbackGroupCommand", () => {
     expect(await handleFeedbackGroupCommand({ ...base, db: makeDb([GROUP, [math, chemCover, chem], titles]).db, reply })).toBe("feedback_reply");
     const text = reply.mock.calls[0][0].text as string;
     expect(text).toContain("· Chemistry (last 2 classes, all tutors)");
-    expect(text).toContain("Lukas\nTopics: Moles");
+    // The chat gets the link only, never the feedback text.
+    expect(text).not.toContain("Moles");
+    expect(text).not.toContain("Topics");
     // FB-BOT-L1: the link token names this student code and subject.
     const token = /\/feedback\/(\S+)/.exec(text)?.[1] ?? "";
     expect(readFeedbackLinkToken(token)).toMatchObject({ code: "Arav.Sr", subject: "Chemistry" });
@@ -112,8 +114,7 @@ describe("handleFeedbackGroupCommand", () => {
 
     // A typed subject overrides the chat teacher's subject.
     expect(await handleFeedbackGroupCommand({ ...base, text: "/feedback Arav.Sr mat", db: makeDb([GROUP, [math, chemCover, chem], titles]).db, reply })).toBe("feedback_reply");
-    expect(reply.mock.calls[1][0].text).toContain("Algebra");
-    expect(reply.mock.calls[1][0].text).not.toContain("Moles");
+    expect(reply.mock.calls[1][0].text).toContain("· Math (last 1 class, all tutors)");
   });
 
   it("FB-BOT-S1: lists the subjects when no subject can be selected", async () => {
@@ -156,8 +157,7 @@ describe("feedbackReply", () => {
 
   it("keeps five long feedback entries under the LINE text limit", () => {
     const long = "x".repeat(3000);
-    const url = `https://bgscheduler.vercel.app/feedback/${feedbackLinkToken("Arav.Sr", "Chemistry", new Date())}`;
-    const text = feedbackReply("Chemistry", Array.from({ length: 5 }, () => row({ topics: long, performance: long })), url, {
+    const text = feedbackReply("Chemistry", Array.from({ length: 5 }, () => row({ topics: long, performance: long })), null, {
       school: "s".repeat(80), year: "y".repeat(80),
     });
     expect(text.length).toBeLessThan(5000);
