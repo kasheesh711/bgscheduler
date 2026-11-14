@@ -9,6 +9,7 @@ import {
   feedbackReply,
   handleFeedbackGroupCommand,
   loadStudentProfile,
+  pickStudentCode,
   readFeedbackLinkToken,
   selectSubjectClasses,
   titleSubject,
@@ -26,7 +27,7 @@ function makeDb(selectResults: unknown[][]) {
     node.then = (resolve: (value: unknown[]) => unknown) => Promise.resolve(result).then(resolve);
     return node;
   });
-  return { db: { select } as unknown as Database, select };
+  return { db: { select, selectDistinct: select } as unknown as Database, select };
 }
 
 let nextId = 0;
@@ -47,6 +48,8 @@ const row = (overrides: Partial<FeedbackClassRow> = {}): FeedbackClassRow => ({
 const NO_PROFILE = { school: "", year: "" };
 const base = { groupId: "Cgroup1", replyToken: "token", text: "/feedback Arav.Sr", profile: async () => NO_PROFILE };
 const GROUP = [{ canonicalKey: "Mimi" }];
+/** FB-BOT-N1 candidate lookup result for the typed word "Arav.Sr". */
+const CANDS = [{ studentName: "Aarak (Arav.Sr) Srikueja", tutorKey: "Mimi" }];
 
 beforeEach(() => vi.stubEnv("AUTH_SECRET", "test-secret"));
 afterEach(() => vi.unstubAllEnvs());
@@ -75,7 +78,7 @@ describe("handleFeedbackGroupCommand", () => {
     const titles = [{ wiseSessionId: cls.wiseSessionId, title: "Live Session - Chemistry" }];
     expect(await handleFeedbackGroupCommand({ ...base, db: makeDb([GROUP]).db, reply })).toBe("feedback_silent_chat");
     expect(reply).not.toHaveBeenCalled();
-    expect(await handleFeedbackGroupCommand({ ...base, db: makeDb([GROUP, [cls], titles]).db, tutorBot: true, reply })).toBe("feedback_reply");
+    expect(await handleFeedbackGroupCommand({ ...base, db: makeDb([GROUP, CANDS, [cls], titles]).db, tutorBot: true, reply })).toBe("feedback_reply");
     expect(reply).toHaveBeenCalledWith(expect.objectContaining({ replyToken: "token", tutorBot: true }));
   });
 
@@ -101,7 +104,7 @@ describe("handleFeedbackGroupCommand", () => {
       { wiseSessionId: chemCover.wiseSessionId, title: "In-Person Session- Chemistry" },
       { wiseSessionId: chem.wiseSessionId, title: "Live Session - Chemistry" },
     ];
-    expect(await handleFeedbackGroupCommand({ ...base, db: makeDb([GROUP, [math, chemCover, chem], titles]).db, reply })).toBe("feedback_reply");
+    expect(await handleFeedbackGroupCommand({ ...base, db: makeDb([GROUP, CANDS, [math, chemCover, chem], titles]).db, reply })).toBe("feedback_reply");
     const text = reply.mock.calls[0][0].text as string;
     expect(text).toContain("· Chemistry (last 2 classes, all tutors)");
     // The chat gets the link only, never the feedback text.
@@ -113,7 +116,7 @@ describe("handleFeedbackGroupCommand", () => {
     expect(text).not.toContain("Algebra");
 
     // A typed subject overrides the chat teacher's subject.
-    expect(await handleFeedbackGroupCommand({ ...base, text: "/feedback Arav.Sr mat", db: makeDb([GROUP, [math, chemCover, chem], titles]).db, reply })).toBe("feedback_reply");
+    expect(await handleFeedbackGroupCommand({ ...base, text: "/feedback Arav.Sr mat", db: makeDb([GROUP, CANDS, [math, chemCover, chem], titles]).db, reply })).toBe("feedback_reply");
     expect(reply.mock.calls[1][0].text).toContain("· Math (last 1 class, all tutors)");
   });
 
@@ -121,9 +124,9 @@ describe("handleFeedbackGroupCommand", () => {
     const reply = vi.fn();
     const math = row({ tutorKey: "Aey" });
     const titles = [{ wiseSessionId: math.wiseSessionId, title: "In-Person Session-Math" }];
-    expect(await handleFeedbackGroupCommand({ ...base, db: makeDb([GROUP, [math], titles]).db, reply })).toBe("feedback_no_subject");
+    expect(await handleFeedbackGroupCommand({ ...base, db: makeDb([GROUP, CANDS, [math], titles]).db, reply })).toBe("feedback_no_subject");
     expect(reply.mock.calls[0][0].text).toContain("/feedback Arav.Sr Math");
-    expect(await handleFeedbackGroupCommand({ ...base, text: "/feedback Arav.Sr physics", db: makeDb([GROUP, [math], titles]).db, reply })).toBe("feedback_no_subject");
+    expect(await handleFeedbackGroupCommand({ ...base, text: "/feedback Arav.Sr physics", db: makeDb([GROUP, CANDS, [math], titles]).db, reply })).toBe("feedback_no_subject");
     expect(reply.mock.calls[1][0].text).toContain("Subjects: Math");
   });
 });
@@ -227,8 +230,56 @@ describe("school and year (FB-BOT-P1)", () => {
     const cls = row();
     const titles = [{ wiseSessionId: cls.wiseSessionId, title: "Live Session - Chemistry" }];
     const profile = vi.fn(async () => ({ school: "NIST", year: "Y9" }));
-    await handleFeedbackGroupCommand({ ...base, db: makeDb([GROUP, [cls], titles]).db, reply, profile });
+    await handleFeedbackGroupCommand({ ...base, db: makeDb([GROUP, CANDS, [cls], titles]).db, reply, profile });
     expect(profile).toHaveBeenCalledWith("stu1");
     expect(reply.mock.calls[0][0].text).toContain("School: NIST · Year: Y9");
+  });
+});
+
+describe("first name (FB-BOT-N1)", () => {
+  const titanVo = { studentName: "Thanakorn (Titan.Vo) Vongsa", tutorKey: "Kevin" };
+  const titanCh = { studentName: "Chayut (Titan.Ch) Chan", tutorKey: "Mimi" };
+
+  it("selects the student that the chat's tutor has taught", () => {
+    expect(pickStudentCode([titanVo, titanCh], "titan", "Kevin")).toEqual({ status: "ok", code: "Titan.Vo" });
+    expect(pickStudentCode([titanVo, titanCh], "Titan", "Mimi")).toEqual({ status: "ok", code: "Titan.Ch" });
+  });
+
+  it("uses the only match when the chat's tutor has taught none", () => {
+    expect(pickStudentCode([titanVo], "Titan", "Aey")).toEqual({ status: "ok", code: "Titan.Vo" });
+  });
+
+  it("the tutor's own student wins over an exact code; an exact code wins in a group", () => {
+    const pat = { studentName: "Pat (Pat) Lee", tutorKey: "Aey" };
+    const patIn = { studentName: "Pattarapon (Pat.In) Intra", tutorKey: "Kevin" };
+    expect(pickStudentCode([pat, patIn], "pat", "Kevin")).toEqual({ status: "ok", code: "Pat.In" });
+    expect(pickStudentCode([pat, patIn], "pat", "Mimi")).toEqual({ status: "ok", code: "Pat" });
+    expect(pickStudentCode([titanVo, titanCh], "TITAN.CH", "Kevin")).toEqual({ status: "ok", code: "Titan.Ch" });
+  });
+
+  it("never guesses: lists the codes when more than one student stays", () => {
+    expect(pickStudentCode([titanVo, titanCh], "Titan", "Aey")).toEqual({ status: "ambiguous", codes: ["Titan.Ch", "Titan.Vo"] });
+    expect(pickStudentCode([titanVo, { ...titanCh, tutorKey: "Kevin" }], "Titan", "Kevin"))
+      .toEqual({ status: "ambiguous", codes: ["Titan.Ch", "Titan.Vo"] });
+    expect(pickStudentCode([], "Titan", "Kevin")).toEqual({ status: "none" });
+    expect(pickStudentCode([{ studentName: "Titan No Code", tutorKey: "Kevin" }], "Titan", "Kevin")).toEqual({ status: "none" });
+  });
+
+  it("the handler replies with the codes and no link when the name is ambiguous", async () => {
+    const reply = vi.fn();
+    const { db, select } = makeDb([[{ canonicalKey: "Aey" }], [titanVo, titanCh]]);
+    expect(await handleFeedbackGroupCommand({ ...base, text: "/feedback Titan", db, reply })).toBe("feedback_ambiguous");
+    expect(reply.mock.calls[0][0].text).toContain("Codes: Titan.Ch, Titan.Vo");
+    expect(reply.mock.calls[0][0].text).not.toContain("/feedback/");
+    expect(select).toHaveBeenCalledTimes(2); // no class lookup
+  });
+
+  it("the handler resolves a first name to the code for the link", async () => {
+    const reply = vi.fn();
+    const cls = row({ studentName: titanCh.studentName });
+    const titles = [{ wiseSessionId: cls.wiseSessionId, title: "Live Session - Chemistry" }];
+    expect(await handleFeedbackGroupCommand({ ...base, text: "/feedback titan", db: makeDb([GROUP, [titanVo, titanCh], [cls], titles]).db, reply })).toBe("feedback_reply");
+    const token = /\/feedback\/(\S+)/.exec(reply.mock.calls[0][0].text)?.[1] ?? "";
+    expect(readFeedbackLinkToken(token)).toMatchObject({ code: "Titan.Ch", subject: "Chemistry" });
   });
 });
