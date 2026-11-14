@@ -206,6 +206,13 @@ The DM router (`src/lib/line/schedule-bot.ts`) and group router (`src/lib/line/s
 - Both dispatch after the admin gate and skip the classifier (`schedule-bot.ts:261-288`; `schedule-bot-group.ts:353-378`). In a group every `/credit` or `/report` command, help included, requires the stored audience to be exactly `"staff"` read raw — a missing row or `family` produces **no reply at all** (CRED-BOT-G1 / REP-BOT-G1, `credit-bot.ts:114-121`, `:322-329`; `report-bot.ts:112-114`).
 - `/credit setup [on|off]` toggles `creditDigestEnabled` on the group's settings row and is refused in a DM (`credit-bot.ts:301-347`). The daily digest re-checks `audience = 'staff' AND creditDigestEnabled` at send time, records one terminal `lineCreditDigestRuns` row per Bangkok date as its single-flight guard, and uses a per-(date, group) retry key (`credit-digest.ts:265-267`, `:306-314`, `:368-385`). No active credit-control snapshot leaves no terminal row so a later same-day re-run can still send (`:269-274`).
 
+### Teacher feedback command
+
+`/feedback <code> [subject]` (`src/lib/line/feedback-bot.ts`) is dispatched from the webhook route before the other group commands, for both bots. Any member of the chat may use it; it is not gated by the admin allowlist.
+
+- **FB-BOT-G1** — the bot replies only in a registered teacher chat: an enabled `progress_line_groups` row (made by an admin with `/progress setup <key>`), and only through the bot that serves that tutor (`PROGRESS_LINE_TUTOR_BOT_KEYS`). All other chats get no reply, help included.
+- **FB-BOT-S1** — the reply holds the student's five most recent `ENDED` classes in one subject, from all tutors, with the latest stored feedback version. Without a subject word the subject is that of the chat tutor's most recent class with the student. The subject is read from the Wise class title in `classroom_assignment_rows`; a class with no stored title is left out, and different spellings of a subject ("Econ", "Economics") are different subjects.
+
 ### Access model
 
 - Middleware exempts exactly three LINE paths from the session redirect — the webhook and the two resolver-token endpoints (`src/middleware.ts:10-26`). For page-restricted users, `allowedPages` is matched as `/x` or `/api/x`; the pages are `/line-review` and `/scheduler` while the APIs live under `/api/line`, so a restricted user whose list names the page is still 403'd on every `/api/line/**` call (`:36-66`). In practice only full-access admins (`allowedPages === null`) can drive this feature.
