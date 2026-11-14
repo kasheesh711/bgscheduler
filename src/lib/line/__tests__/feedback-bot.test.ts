@@ -156,7 +156,10 @@ describe("feedbackReply", () => {
 
   it("keeps five long feedback entries under the LINE text limit", () => {
     const long = "x".repeat(3000);
-    const text = feedbackReply("Chemistry", Array.from({ length: 5 }, () => row({ topics: long, performance: long })));
+    const url = `https://bgscheduler.vercel.app/feedback/${feedbackLinkToken("Arav.Sr", "Chemistry", new Date())}`;
+    const text = feedbackReply("Chemistry", Array.from({ length: 5 }, () => row({ topics: long, performance: long })), url, {
+      school: "s".repeat(80), year: "y".repeat(80),
+    });
     expect(text.length).toBeLessThan(5000);
     expect(text).toContain("…");
   });

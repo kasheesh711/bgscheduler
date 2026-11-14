@@ -49,8 +49,8 @@ import { fetchWiseStudentRegistrationData } from "@/lib/wise/fetchers";
 const CLASS_LIMIT = 5;
 /** Recent classes scanned for the subject match. shortcut: a subject older than this many classes is not found; raise if teachers report it. */
 const SCAN_LIMIT = 200;
-/** 5 classes × (this + a short header) stays under LINE's 5,000-character text limit. */
-const MAX_FEEDBACK_CHARS = 800;
+/** 5 classes × (this + a short header), plus the link and the school line, stays under LINE's 5,000-character text limit. */
+const MAX_FEEDBACK_CHARS = 700;
 
 const LINK_HOURS = 24;
 
@@ -207,7 +207,7 @@ export async function loadStudentProfile(
   if (!wiseStudentId) return { school: "", year: "" };
   try {
     const fields = await fetchFields(wiseStudentId);
-    const answer = (id: string) => String(fields.find((field) => field.questionId === id)?.answer ?? "").trim();
+    const answer = (id: string) => String(fields.find((field) => field.questionId === id)?.answer ?? "").trim().slice(0, 80);
     return { school: answer(WISE_SCHOOL_FIELD_ID), year: answer(WISE_YEAR_FIELD_ID) };
   } catch (error) {
     console.error("LINE feedback: Wise student profile read failed", error instanceof Error ? error.name : "Error");
