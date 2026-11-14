@@ -279,6 +279,9 @@ export function pickStudentCode(
     all.set(code.toLowerCase(), code);
     if (candidate.tutorKey === chatTutorKey) taught.set(code.toLowerCase(), code);
   }
+  // A typed full code ("Titan.Ch") names one student: it always wins.
+  const fullCode = query.includes(".") ? all.get(query.toLowerCase()) : undefined;
+  if (fullCode) return { status: "ok", code: fullCode };
   const pool = taught.size > 0 ? taught : all;
   if (pool.size === 0) return { status: "none" };
   if (pool.size === 1) return { status: "ok", code: [...pool.values()][0] };
