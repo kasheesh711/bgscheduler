@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { WiseApiError } from "@/lib/wise/client";
 import type { FeedbackFieldAnswers, FeedbackFieldMapping } from "@/lib/post-class-feedback/types";
 import { POST_CLASS_FEEDBACK_FIELDS } from "@/lib/post-class-feedback/types";
 import { AUTOWRITER_MIN_POST_BUDGET_MS, AUTOWRITER_POST_TIMEOUT_MS } from "./config";
@@ -252,7 +253,7 @@ export async function submitFeedbackGuarded(input: {
 
   if (plan.expected.kind !== "auto_blank") return abort(`expected_${plan.expected.kind}_not_supported`);
   if (plan.billing.source !== "auto_blank_reuse" || plan.billing.expectedConsumedDelta !== 0) return abort("billing_plan_not_reuse");
-  // Checked before the three reads below as well as before the claim: each read may take 45 s, and a POST that can
+  // Checked before the four reads below as well as before the claim: each read may take 45 s, and a POST that can
   // no longer be claimed needs none of them. The caller keeps the judged draft for the next run.
   const budgetTooSmall = () => !input.dryRun && input.remainingMs() < AUTOWRITER_MIN_POST_BUDGET_MS;
   if (budgetTooSmall()) return abort("function_budget_too_small_for_post");
@@ -274,6 +275,13 @@ export async function submitFeedbackGuarded(input: {
     baseline = creditProblems(await ops.getSessionCreditEntries(plan.classId, student.wiseUserId, plan.sessionId), plan.billing);
   } catch (error) {
     return abort(`credits_read_failed:${error instanceof Error ? error.name : "Error"}`);
+  }
+
+  // A known event outage must block the POST, not leave another submitted class unverifiable.
+  try {
+    await ops.findFeedbackEvents(plan.classId, plan.sessionId, new Date());
+  } catch (error) {
+    return abort(`events_read_failed:${error instanceof WiseApiError ? `HTTP_${error.status}` : error instanceof Error ? error.name : "Error"}`);
   }
 
   const freshReadAt = new Date();

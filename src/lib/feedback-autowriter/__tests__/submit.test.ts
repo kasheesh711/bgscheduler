@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { WiseApiError } from "@/lib/wise/client";
 import { DEFAULT_FEEDBACK_FIELD_MAPPINGS } from "@/lib/post-class-feedback/wise";
 import { AUTOWRITER_MIN_POST_BUDGET_MS } from "../config";
 import { AUTOWRITER_TEACHER_ALLOWLIST } from "../roster";
@@ -131,6 +132,17 @@ describe("submitFeedbackGuarded", () => {
     expect(store.halts).toEqual([]);
   });
 
+  it("does not claim or post when the activity endpoint returns 404", async () => {
+    const ops = fakeWise();
+    vi.mocked(ops.findFeedbackEvents).mockRejectedValue(new WiseApiError(404, "Not found", "/events"));
+    const store = memoryStore();
+    expect(await submitFeedbackGuarded({ ...base, ops, store }))
+      .toEqual({ status: "aborted_precheck", reason: "events_read_failed:HTTP_404" });
+    expect(store.claims).toBe(0);
+    expect(ops.posts).toHaveLength(0);
+    expect(store.halts).toEqual([]);
+  });
+
   it("preflight (dry run) reads and gates but never claims or posts", async () => {
     const ops = fakeWise();
     const store = memoryStore();
@@ -169,7 +181,7 @@ describe("submitFeedbackGuarded", () => {
     expect(await submitFeedbackGuarded({ ...base, ops, store, remainingMs: () => AUTOWRITER_MIN_POST_BUDGET_MS - 1 }))
       .toEqual({ status: "aborted_precheck", reason: "function_budget_too_small_for_post" });
     expect(store.claims).toBe(0);
-    // Each of the three reads may take 45 s: a POST that cannot be claimed spends none of them.
+    // Each of the four reads may take 45 s: a POST that cannot be claimed spends none of them.
     expect(ops.getSessionDetail).not.toHaveBeenCalled();
     expect(ops.getSessionCreditEntries).not.toHaveBeenCalled();
     expect(ops.posts).toHaveLength(0);
@@ -301,7 +313,7 @@ describe("submitFeedbackGuarded", () => {
     const remainingMs = () => (calls++ < 2 ? 300_000 : 50_000);
     const store = memoryStore();
     expect((await submitFeedbackGuarded({ ...base, ops, store, remainingMs, eventWaitMs: 20_000 })).status).toBe("awaiting_event");
-    expect(ops.findFeedbackEvents).toHaveBeenCalledTimes(1);
+    expect(ops.findFeedbackEvents).toHaveBeenCalledTimes(2); // One precheck and one post-submit read; no polling.
     expect(store.finishes[0].detail).toMatchObject({ postStartedAt: expect.any(String), postFinishedAt: expect.any(String) });
   });
 

@@ -306,6 +306,19 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     expect(incident.summary).not.toContain("https://");
   });
 
+  it("keeps the draft pending when event access fails before posting", async () => {
+    await seedRow();
+    const wise = fakeWise();
+    vi.mocked(wise.ops.findFeedbackEvents).mockRejectedValue(new Error("Event service unavailable"));
+    const callModel = vi.fn(async () => ({ ...sol(writerJson), model: AUTOWRITER_MODELS.writer.model }));
+    expect(await processSession(deps(wise.ops, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
+      .toMatchObject({ result: "retry", detail: "events_read_failed:Error" });
+    expect(wise.posts).toHaveLength(0);
+    expect(await readSessionRow(db, SESSION_ID))
+      .toMatchObject({ state: "pending", reason: "events_read_failed:Error", fields: expect.objectContaining({ topics: GOOD_FIELDS.topics }), postStartedAt: null });
+    expect((await readControl(db)).haltedAt).toBeNull();
+  });
+
   it("does nothing at all while halted: no Wise read, no model call, no row", async () => {
     await updateControl(db, { haltedAt: new Date(), haltReason: "test halt" }, "t@x.com");
     const wise = fakeWise();
