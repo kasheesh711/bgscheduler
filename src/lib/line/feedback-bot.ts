@@ -21,21 +21,38 @@
 //              chat. The bot check also means that one bot answers when both
 //              bots are in the same chat.
 //
-// Reads Postgres only (never Wise, never the credit snapshot).
+//   FB-BOT-L1  Link. The reply carries a link to /feedback/<token>, a public
+//              page with the same classes and the full text. The token is
+//              signed with AUTH_SECRET, names one student code and one
+//              subject, and expires after 24 hours (owner decision
+//              2026-11-14). The page reads the data again on each visit.
+//
+//   FB-BOT-P1  School and year. Read live from the student's Wise registration
+//              form (one GET, 8 s limit). They are extra context only: when
+//              Wise does not answer, the reply and the page leave them out.
+//
+// The classes come from Postgres only (never the credit snapshot).
 // ----------------------------------------------------------------------------
+
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { and, desc, eq, ilike, inArray, isNull, lte } from "drizzle-orm";
 
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { APP_BASE_URL } from "@/lib/leave-requests/config";
 import { replyLineMessage } from "@/lib/line/client";
 import { progressUsesTutorBot } from "@/lib/line/progress-reminders";
+import { createWiseClient } from "@/lib/wise/client";
+import { fetchWiseStudentRegistrationData } from "@/lib/wise/fetchers";
 
 const CLASS_LIMIT = 5;
 /** Recent classes scanned for the subject match. shortcut: a subject older than this many classes is not found; raise if teachers report it. */
 const SCAN_LIMIT = 200;
 /** 5 classes × (this + a short header) stays under LINE's 5,000-character text limit. */
 const MAX_FEEDBACK_CHARS = 800;
+
+const LINK_HOURS = 24;
 
 const FEEDBACK_PATTERN = /^\/feedback(?:\s+(.*))?$/i;
 /** `<code> [subject words]`. */
@@ -46,14 +63,14 @@ const FEEDBACK_HELP =
   "To select a subject, add it: /feedback Tara.Ta math\n" +
   "พิมพ์ /feedback ตามด้วยรหัสนักเรียน เช่น /feedback Tara.Ta";
 
-const FIELDS = [
+const FEEDBACK_FIELDS = [
   ["topics", "Topics"],
   ["performance", "Performance"],
   ["improvement", "Needs work"],
   ["homework", "Homework"],
 ] as const;
 
-const classTime = new Intl.DateTimeFormat("en-GB", {
+const feedbackClassTime = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Asia/Bangkok",
   weekday: "short",
   day: "numeric",
@@ -72,6 +89,7 @@ export type FeedbackBotAction =
 
 export interface FeedbackClassRow {
   wiseSessionId: string;
+  wiseStudentId: string | null;
   studentName: string;
   tutorKey: string | null;
   tutorName: string | null;
@@ -103,13 +121,16 @@ export function selectSubjectClasses(
   titles: ReadonlyMap<string, string>,
   chatTutorKey: string,
   wanted: string,
+  exact = false,
 ): FeedbackSelection {
   const withSubject = rows
     .map((row) => ({ row, subject: titleSubject(titles.get(row.wiseSessionId) ?? "") }))
     .filter((entry) => subjectKey(entry.subject));
   const wantedKey = subjectKey(wanted);
   const anchor = withSubject.find((entry) =>
-    wantedKey ? subjectKey(entry.subject).includes(wantedKey) : entry.row.tutorKey === chatTutorKey);
+    !wantedKey ? entry.row.tutorKey === chatTutorKey
+      : exact ? subjectKey(entry.subject) === wantedKey
+      : subjectKey(entry.subject).includes(wantedKey));
   if (!anchor) {
     const subjects = new Map(withSubject.map((entry) => [subjectKey(entry.subject), entry.subject]));
     return { status: "no_subject", subjects: [...subjects.values()].slice(0, 10) };
@@ -122,21 +143,156 @@ export function selectSubjectClasses(
   };
 }
 
-export function feedbackReply(subject: string, rows: readonly FeedbackClassRow[]): string {
+const sign = (payload: string, secret: string) =>
+  createHmac("sha256", secret).update(`feedback-link:${payload}`).digest();
+
+/** FB-BOT-L1. Null when AUTH_SECRET is not set: the reply then has no link. */
+export function feedbackLinkToken(
+  code: string,
+  subject: string,
+  now: Date,
+  secret = process.env.AUTH_SECRET,
+): string | null {
+  if (!secret) return null;
+  const exp = Math.floor(now.getTime() / 1000) + LINK_HOURS * 3600;
+  const payload = Buffer.from(JSON.stringify({ c: code, s: subject, exp })).toString("base64url");
+  return `${payload}.${sign(payload, secret).toString("base64url")}`;
+}
+
+/** Null for every failure (malformed, wrong signature, expired), so the page gives one answer. */
+export function readFeedbackLinkToken(
+  token: string,
+  now = new Date(),
+  secret = process.env.AUTH_SECRET,
+): { code: string; subject: string; expiresAt: Date } | null {
+  try {
+    if (!secret || token.length > 600) return null;
+    const [payload, signature, extra] = token.split(".");
+    const expected = sign(payload, secret);
+    const actual = Buffer.from(signature ?? "", "base64url");
+    if (extra !== undefined || actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
+    const value = JSON.parse(Buffer.from(payload, "base64url").toString()) as { c?: unknown; s?: unknown; exp?: unknown };
+    if (typeof value.c !== "string" || typeof value.s !== "string" || typeof value.exp !== "number") return null;
+    if (value.exp <= now.getTime() / 1000) return null;
+    return { code: value.c, subject: value.s, expiresAt: new Date(value.exp * 1000) };
+  } catch {
+    return null;
+  }
+}
+
+/** Wise registration form question ids ("School Name", "Current Year/Grade level"). */
+const WISE_SCHOOL_FIELD_ID = "5l92yygp";
+const WISE_YEAR_FIELD_ID = "if89sblj";
+
+export interface StudentProfile {
+  school: string;
+  year: string;
+}
+
+async function fetchRegistrationFields(wiseStudentId: string) {
+  const client = createWiseClient({ signal: AbortSignal.timeout(8000) });
+  const data = await fetchWiseStudentRegistrationData(
+    client,
+    process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413",
+    wiseStudentId,
+  );
+  return data.registrationData?.fields ?? [];
+}
+
+/** FB-BOT-P1. Never throws: blank values mean "not known". */
+export async function loadStudentProfile(
+  wiseStudentId: string | null | undefined,
+  fetchFields: typeof fetchRegistrationFields = fetchRegistrationFields,
+): Promise<StudentProfile> {
+  if (!wiseStudentId) return { school: "", year: "" };
+  try {
+    const fields = await fetchFields(wiseStudentId);
+    const answer = (id: string) => String(fields.find((field) => field.questionId === id)?.answer ?? "").trim();
+    return { school: answer(WISE_SCHOOL_FIELD_ID), year: answer(WISE_YEAR_FIELD_ID) };
+  } catch (error) {
+    console.error("LINE feedback: Wise student profile read failed", error instanceof Error ? error.name : "Error");
+    return { school: "", year: "" };
+  }
+}
+
+export function feedbackReply(
+  subject: string,
+  rows: readonly FeedbackClassRow[],
+  url: string | null = null,
+  profile: StudentProfile = { school: "", year: "" },
+): string {
   const names = [...new Set(rows.map((row) => row.studentName.trim()))].join(" / ");
   const blocks = rows.map((row, index) => {
-    const body = FIELDS
+    const body = FEEDBACK_FIELDS
       .map(([key, label]) => [label, row[key]?.trim() ?? ""] as const)
       .filter(([, value]) => value)
       .map(([label, value]) => `${label}: ${value}`)
       .join("\n");
     // Cut by code point: half an emoji makes LINE refuse the message.
     const feedback = body.length > MAX_FEEDBACK_CHARS ? `${Array.from(body).slice(0, MAX_FEEDBACK_CHARS).join("")}…` : body;
-    const title = [classTime.format(row.scheduledStartAt), row.tutorName].filter(Boolean).join(" · ");
+    const title = [feedbackClassTime.format(row.scheduledStartAt), row.tutorName].filter(Boolean).join(" · ");
     return `${index + 1}) ${title}\n${feedback || "No feedback yet."}`;
   });
   const count = `last ${rows.length} ${rows.length === 1 ? "class" : "classes"}, all tutors`;
-  return [`Feedback: ${names} · ${subject} (${count})`, ...blocks].join("\n\n");
+  const header = `Feedback: ${names} · ${subject} (${count})`;
+  const top = [
+    header,
+    [profile.school && `School: ${profile.school}`, profile.year && `Year: ${profile.year}`].filter(Boolean).join(" · "),
+    url && `Full view (link works for ${LINK_HOURS} hours): ${url}`,
+  ].filter(Boolean).join("\n");
+  return [top, ...blocks].join("\n\n");
+}
+
+/** The student's recent ended classes (newest first) and the Wise title of each. */
+export async function loadFeedbackClasses(
+  db: Database,
+  code: string,
+  now: Date,
+): Promise<{ rows: FeedbackClassRow[]; titles: Map<string, string> }> {
+  const rows = await db
+    .select({
+      wiseSessionId: schema.postClassSessions.wiseSessionId,
+      wiseStudentId: schema.postClassSessionParticipants.wiseStudentId,
+      studentName: schema.postClassSessionParticipants.studentName,
+      tutorKey: schema.postClassSessions.canonicalTutorKey,
+      tutorName: schema.postClassSessions.canonicalTutorName,
+      scheduledStartAt: schema.postClassSessions.scheduledStartAt,
+      topics: schema.postClassFeedbackVersions.topics,
+      performance: schema.postClassFeedbackVersions.performance,
+      improvement: schema.postClassFeedbackVersions.improvement,
+      homework: schema.postClassFeedbackVersions.homework,
+    })
+    .from(schema.postClassSessionParticipants)
+    .innerJoin(
+      schema.postClassSessions,
+      eq(schema.postClassSessions.id, schema.postClassSessionParticipants.sessionId),
+    )
+    .leftJoin(
+      schema.postClassFeedbackVersions,
+      eq(schema.postClassFeedbackVersions.id, schema.postClassSessions.latestFeedbackVersionId),
+    )
+    .where(and(
+      // Wise names carry the code in brackets: "Aarak (Arav.Sr) Srikueja". "_" is an ILIKE wildcard.
+      ilike(schema.postClassSessionParticipants.studentName, `%(${code.replace(/_/g, "\\_")})%`),
+      eq(schema.postClassSessions.finalStatus, "ENDED"),
+      isNull(schema.postClassSessions.wiseDeletedAt),
+      lte(schema.postClassSessions.scheduledStartAt, now),
+    ))
+    .orderBy(desc(schema.postClassSessions.scheduledStartAt))
+    .limit(SCAN_LIMIT);
+  if (rows.length === 0) return { rows, titles: new Map() };
+
+  const titleRows = await db
+    .select({
+      wiseSessionId: schema.classroomAssignmentRows.wiseSessionId,
+      title: schema.classroomAssignmentRows.title,
+    })
+    .from(schema.classroomAssignmentRows)
+    .where(inArray(schema.classroomAssignmentRows.wiseSessionId, rows.map((row) => row.wiseSessionId)));
+  const titles = new Map<string, string>();
+  for (const row of titleRows) if (row.title?.trim()) titles.set(row.wiseSessionId, row.title);
+
+  return { rows, titles };
 }
 
 /**
@@ -151,6 +307,7 @@ export async function handleFeedbackGroupCommand(input: {
   tutorBot?: boolean;
   now?: Date;
   reply?: typeof replyLineMessage;
+  profile?: typeof loadStudentProfile;
 }): Promise<false | FeedbackBotAction> {
   const match = FEEDBACK_PATTERN.exec(input.text.trim());
   if (!match) return false;
@@ -177,36 +334,8 @@ export async function handleFeedbackGroupCommand(input: {
   }
   const [, code, wanted = ""] = command;
 
-  const rows = await input.db
-    .select({
-      wiseSessionId: schema.postClassSessions.wiseSessionId,
-      studentName: schema.postClassSessionParticipants.studentName,
-      tutorKey: schema.postClassSessions.canonicalTutorKey,
-      tutorName: schema.postClassSessions.canonicalTutorName,
-      scheduledStartAt: schema.postClassSessions.scheduledStartAt,
-      topics: schema.postClassFeedbackVersions.topics,
-      performance: schema.postClassFeedbackVersions.performance,
-      improvement: schema.postClassFeedbackVersions.improvement,
-      homework: schema.postClassFeedbackVersions.homework,
-    })
-    .from(schema.postClassSessionParticipants)
-    .innerJoin(
-      schema.postClassSessions,
-      eq(schema.postClassSessions.id, schema.postClassSessionParticipants.sessionId),
-    )
-    .leftJoin(
-      schema.postClassFeedbackVersions,
-      eq(schema.postClassFeedbackVersions.id, schema.postClassSessions.latestFeedbackVersionId),
-    )
-    .where(and(
-      // Wise names carry the code in brackets: "Aarak (Arav.Sr) Srikueja". "_" is an ILIKE wildcard.
-      ilike(schema.postClassSessionParticipants.studentName, `%(${code.replace(/_/g, "\\_")})%`),
-      eq(schema.postClassSessions.finalStatus, "ENDED"),
-      isNull(schema.postClassSessions.wiseDeletedAt),
-      lte(schema.postClassSessions.scheduledStartAt, input.now ?? new Date()),
-    ))
-    .orderBy(desc(schema.postClassSessions.scheduledStartAt))
-    .limit(SCAN_LIMIT);
+  const now = input.now ?? new Date();
+  const { rows, titles } = await loadFeedbackClasses(input.db, code, now);
   if (rows.length === 0) {
     await respond(
       `No ended classes found for student code "${code}". Check the code in the brackets of the student name in Wise.\n` +
@@ -215,15 +344,6 @@ export async function handleFeedbackGroupCommand(input: {
     return "feedback_not_found";
   }
 
-  const titleRows = await input.db
-    .select({
-      wiseSessionId: schema.classroomAssignmentRows.wiseSessionId,
-      title: schema.classroomAssignmentRows.title,
-    })
-    .from(schema.classroomAssignmentRows)
-    .where(inArray(schema.classroomAssignmentRows.wiseSessionId, rows.map((row) => row.wiseSessionId)));
-  const titles = new Map<string, string>();
-  for (const row of titleRows) if (row.title?.trim()) titles.set(row.wiseSessionId, row.title);
 
   const selection = selectSubjectClasses(rows, titles, group.canonicalKey, wanted);
   if (selection.status === "no_subject") {
@@ -237,6 +357,9 @@ export async function handleFeedbackGroupCommand(input: {
     return "feedback_no_subject";
   }
 
-  await respond(feedbackReply(selection.subject, selection.rows));
+  const token = feedbackLinkToken(code, selection.subject, now);
+  const url = token ? `${APP_BASE_URL.replace(/\/$/, "")}/feedback/${token}` : null;
+  const profile = await (input.profile ?? loadStudentProfile)(selection.rows[0]?.wiseStudentId);
+  await respond(feedbackReply(selection.subject, selection.rows, url, profile));
   return "feedback_reply";
 }

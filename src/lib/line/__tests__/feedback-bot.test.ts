@@ -2,11 +2,14 @@
 // this bot gets NOTHING (FB-BOT-G1), the reply holds ONE subject from all
 // tutors (FB-BOT-S1), and it stays under LINE's text limit.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  feedbackLinkToken,
   feedbackReply,
   handleFeedbackGroupCommand,
+  loadStudentProfile,
+  readFeedbackLinkToken,
   selectSubjectClasses,
   titleSubject,
   type FeedbackClassRow,
@@ -29,6 +32,7 @@ function makeDb(selectResults: unknown[][]) {
 let nextId = 0;
 const row = (overrides: Partial<FeedbackClassRow> = {}): FeedbackClassRow => ({
   wiseSessionId: `s${nextId += 1}`,
+  wiseStudentId: "stu1",
   studentName: "Aarak (Arav.Sr) Srikueja",
   tutorKey: "Mimi",
   tutorName: "Mimi",
@@ -40,9 +44,11 @@ const row = (overrides: Partial<FeedbackClassRow> = {}): FeedbackClassRow => ({
   ...overrides,
 });
 
-const base = { groupId: "Cgroup1", replyToken: "token", text: "/feedback Arav.Sr" };
+const NO_PROFILE = { school: "", year: "" };
+const base = { groupId: "Cgroup1", replyToken: "token", text: "/feedback Arav.Sr", profile: async () => NO_PROFILE };
 const GROUP = [{ canonicalKey: "Mimi" }];
 
+beforeEach(() => vi.stubEnv("AUTH_SECRET", "test-secret"));
 afterEach(() => vi.unstubAllEnvs());
 
 describe("handleFeedbackGroupCommand", () => {
@@ -99,6 +105,9 @@ describe("handleFeedbackGroupCommand", () => {
     const text = reply.mock.calls[0][0].text as string;
     expect(text).toContain("· Chemistry (last 2 classes, all tutors)");
     expect(text).toContain("Lukas\nTopics: Moles");
+    // FB-BOT-L1: the link token names this student code and subject.
+    const token = /\/feedback\/(\S+)/.exec(text)?.[1] ?? "";
+    expect(readFeedbackLinkToken(token)).toMatchObject({ code: "Arav.Sr", subject: "Chemistry" });
     expect(text).not.toContain("Algebra");
 
     // A typed subject overrides the chat teacher's subject.
@@ -150,5 +159,73 @@ describe("feedbackReply", () => {
     const text = feedbackReply("Chemistry", Array.from({ length: 5 }, () => row({ topics: long, performance: long })));
     expect(text.length).toBeLessThan(5000);
     expect(text).toContain("…");
+  });
+});
+
+describe("feedback link token (FB-BOT-L1)", () => {
+  const NOW = new Date("2026-11-14T10:00:00Z");
+
+  it("works for 24 hours and then stops", () => {
+    const token = feedbackLinkToken("Arav.Sr", "Com sci", NOW)!;
+    expect(readFeedbackLinkToken(token, new Date("2026-11-15T09:59:00Z"))).toEqual({
+      code: "Arav.Sr", subject: "Com sci", expiresAt: new Date("2026-11-15T10:00:00Z"),
+    });
+    expect(readFeedbackLinkToken(token, new Date("2026-11-15T10:00:00Z"))).toBeNull();
+  });
+
+  it("refuses a changed, malformed, or differently signed token", () => {
+    const token = feedbackLinkToken("Arav.Sr", "Math", NOW)!;
+    const [payload, signature] = token.split(".");
+    const forged = Buffer.from(JSON.stringify({ c: "Other.St", s: "Math", exp: 9999999999 })).toString("base64url");
+    expect(readFeedbackLinkToken(`${forged}.${signature}`, NOW)).toBeNull();
+    expect(readFeedbackLinkToken(`${payload}.${signature}.x`, NOW)).toBeNull();
+    expect(readFeedbackLinkToken(payload, NOW)).toBeNull();
+    expect(readFeedbackLinkToken("", NOW)).toBeNull();
+    expect(readFeedbackLinkToken(token, NOW, "other-secret")).toBeNull();
+  });
+
+  it("gives no link when the secret is not set", () => {
+    expect(feedbackLinkToken("Arav.Sr", "Math", NOW, "")).toBeNull();
+    expect(feedbackReply("Math", [row()])).not.toContain("/feedback/");
+  });
+
+  it("the page selects the exact subject of the link", () => {
+    const mathVr = row({ tutorKey: "Aey" });
+    const math = row({ tutorKey: "Aey" });
+    const titles = new Map([[mathVr.wiseSessionId, "Live Session - Math VR"], [math.wiseSessionId, "Live Session - Math"]]);
+    const selection = selectSubjectClasses([mathVr, math], titles, "", "Math", true);
+    expect(selection.status === "ok" && selection.rows).toEqual([math]);
+  });
+});
+
+describe("school and year (FB-BOT-P1)", () => {
+  it("reads school and year from the Wise registration form", async () => {
+    const fields = async () => [
+      { questionId: "5l92yygp", answer: " Bangkok Patana " },
+      { questionId: "if89sblj", answer: "Year 10" },
+      { questionId: "other", answer: "x" },
+    ];
+    expect(await loadStudentProfile("stu1", fields)).toEqual({ school: "Bangkok Patana", year: "Year 10" });
+    expect(feedbackReply("Math", [row()], null, { school: "Bangkok Patana", year: "Year 10" }))
+      .toContain("School: Bangkok Patana · Year: Year 10");
+  });
+
+  it("leaves them out when Wise fails or the student id is not known", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(await loadStudentProfile("stu1", async () => { throw new Error("Wise down"); })).toEqual(NO_PROFILE);
+    expect(await loadStudentProfile(null)).toEqual(NO_PROFILE);
+    expect(feedbackReply("Math", [row()], null, { school: "", year: "Year 10" })).toContain("\nYear: Year 10\n");
+    expect(feedbackReply("Math", [row()])).not.toContain("School");
+    error.mockRestore();
+  });
+
+  it("the handler puts the profile of the student in the reply", async () => {
+    const reply = vi.fn();
+    const cls = row();
+    const titles = [{ wiseSessionId: cls.wiseSessionId, title: "Live Session - Chemistry" }];
+    const profile = vi.fn(async () => ({ school: "NIST", year: "Y9" }));
+    await handleFeedbackGroupCommand({ ...base, db: makeDb([GROUP, [cls], titles]).db, reply, profile });
+    expect(profile).toHaveBeenCalledWith("stu1");
+    expect(reply.mock.calls[0][0].text).toContain("School: NIST · Year: Y9");
   });
 });

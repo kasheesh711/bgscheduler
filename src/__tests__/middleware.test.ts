@@ -89,7 +89,7 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
     expect(response.headers.get("location")).toContain("/login");
   });
 
-  it.each(["/api/line/webhook", "/api/email/resend-webhook", "/api/internal/sync-wise", "/api/auth/session", "/schedule/token"])("does not read account access on public route %s even with a cookie", async (pathname) => {
+  it.each(["/api/line/webhook", "/api/email/resend-webhook", "/api/internal/sync-wise", "/api/auth/session", "/schedule/token", "/feedback/abc.def"])("does not read account access on public route %s even with a cookie", async (pathname) => {
     await middleware(makeReq(pathname, true) as never, {} as never);
     expect(validateSessionAccess).not.toHaveBeenCalled();
   });
