@@ -1,6 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
+
+// Both real source definitions are manualOnly: false; this switch makes them missing or manual-only to prove canRunManually ignores the source definition.
+const registry = vi.hoisted(() => ({ mode: "actual" as "actual" | "missing" | "manual-only" }));
+
+vi.mock("@/lib/data-health/cron-registry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/data-health/cron-registry")>();
+  return {
+    ...actual,
+    getCronJobDefinition: (key: string) => {
+      const definition = actual.getCronJobDefinition(key);
+      if (registry.mode === "missing") return null;
+      return registry.mode === "manual-only" && definition ? { ...definition, manualOnly: true } : definition;
+    },
+  };
+});
 
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -13,13 +28,18 @@ import {
   buildWatchdogEmail,
   DAILY_DIGEST_KEY,
   DEADLINE_COVERAGE_JOB_KEY,
+  deadlineCoverageJobHealth,
   PAYOUT_WINDOW_JOB_KEY,
+  payoutWindowJobHealth,
   runCronWatchdog,
   sweepCronJobs,
   SWEEP_LOCK_KEY,
   watchdogAlertRecipients,
   type CronAlertStateRow,
 } from "@/lib/internal/cron-watchdog";
+
+// Reset the registry switch after every test so no later test inherits it.
+afterEach(() => { registry.mode = "actual"; });
 
 // ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -869,6 +889,20 @@ describe("private weekend watchdog routing", () => {
         loadJobs: loadJobs([jobHealth({ key: "classroom_weekend_check", status: "failing" })]) });
       expect(sender.sendEmail).not.toHaveBeenCalled();
     } finally { vi.unstubAllEnvs(); error.mockRestore(); }
+  });
+});
+
+describe("synthetic watchdog rows", () => {
+  const modes = ["actual", "missing", "manual-only"] as const;
+
+  it.each(modes)("the payout-window row never offers a Run action when its source definition is %s", (mode) => {
+    registry.mode = mode;
+    expect(payoutWindowJobHealth(payoutWindow()).canRunManually).toBe(false);
+  });
+
+  it.each(modes)("the deadline-coverage row never offers a Run action when its source definition is %s", (mode) => {
+    registry.mode = mode;
+    expect(deadlineCoverageJobHealth(deadlineCoverage()).canRunManually).toBe(false);
   });
 });
 
