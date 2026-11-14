@@ -21,7 +21,7 @@ async function Body({ params }: { params: Promise<{ token: string }> }) {
     if (!(error instanceof HiringError)) throw error;
     return <BriefGone />;
   }
-  return <InterviewerBrief brief={brief} resumeUrl={`/api/hiring/brief/${token}/resume`} />;
+  return <InterviewerBrief brief={brief} resumeUrl={`/api/hiring/brief/${token}/resume`} rubricUrl={`/api/hiring/brief/${token}/rubric`} />;
 }
 
 export default function Page(props: { params: Promise<{ token: string }> }) {

@@ -66,6 +66,7 @@ import { attendanceAccessForEmail } from "@/lib/tutor-attendance/access";
 import { attendanceConfig } from "@/lib/tutor-attendance/data";
 import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
 import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
+import { checkRubric, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
 import { HIRING_LINE_URL, VISIT_LENGTH, hiringEmail, mockPrep } from "./email";
 
@@ -1177,6 +1178,8 @@ export async function briefView(token: string, db: Database = getDb(), now = new
         )
     : [];
   const { config } = await settings(db);
+  // Only the head's own scores and the form's state go to the page, never the stored row.
+  const own = await briefRubric(mock, db, now);
   return {
     name: candidate.name,
     subject: mock.subjects.join(", "),
@@ -1186,7 +1189,88 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     location: config.location,
     answers: candidate.preScreen,
     resume: storedResume(mock.candidateId, candidate.resumePath, candidate.resumeType)?.extension ?? null,
+    // The interviewer's own scores for this mock, to show again. Never an AI score or another person's.
+    rubric: own.rubric,
+    form: own.form,
   };
+}
+const briefSubject = (mock: { subjects: Subject[] }) => mock.subjects[0];
+type MockResult = typeof s.hiringMockResults.$inferSelect;
+/** The head's own sent scores, which no person with Hiring access has changed or confirmed since. */
+const ownBriefRubric = (row: MockResult | undefined, mockId: string) =>
+  row?.source === "person" && row.bookingId === mockId && !row.changedBy && !row.checkedBy ? row.rubric : null;
+/**
+ * What the score form shows. `wait`: the lesson has not started. `closed`: a result that is not this head's own untouched
+ * scores is recorded, or a decision is drafted, so only a person with Hiring access can change it. The page shows a
+ * rubric only when it is the head's own.
+ */
+async function briefRubric(mock: { id: string; candidateId: string; subjects: Subject[]; startTime: Date }, db: Database, now: Date) {
+  const m = s.hiringMockResults;
+  const subject = briefSubject(mock);
+  const [row] = subject ? await db.select().from(m).where(and(eq(m.candidateId, mock.candidateId), eq(m.subject, subject))) : [];
+  const [draft] = await db
+    .select({ id: s.hiringDecisions.id })
+    .from(s.hiringDecisions)
+    .where(and(eq(s.hiringDecisions.candidateId, mock.candidateId), eq(s.hiringDecisions.status, "draft")))
+    .limit(1);
+  const rubric = ownBriefRubric(row, mock.id);
+  const closed = !subject || !!draft || (!!row && row.source !== "tracker" && !rubric);
+  return { rubric, form: now < mock.startTime ? ("wait" as const) : closed ? ("closed" as const) : ("open" as const), replaced: row };
+}
+/**
+ * The interviewer's scores for one mock, sent from the interviewer link (Kevin's decision, 13 Nov 2026: a score form,
+ * not a file). The link is the only access check, as for the page. The result counts at once. It can replace only a
+ * past tracker result or this head's own earlier send: never an upload, and never scores a person with Hiring access
+ * changed or confirmed. A drafted decision closes it too, so a decision is never sent on scores nobody read. The audit
+ * row keeps what it replaced. It changes no stage and queues no message.
+ */
+export const BRIEF_CLOSED = "Scores for this mock are already recorded. Ask BeGifted admin to change them.";
+export async function saveBriefRubric(token: string, rubric: MockRubric, db: Database = getDb(), now = new Date()) {
+  if (!runtimeWritesAllowed()) throw new HiringError(503, "Scores can be saved only on the live site.");
+  const mock = await briefMock(token, db, now);
+  const subject = briefSubject(mock);
+  const { form, replaced: before } = await briefRubric(mock, db, now);
+  if (form === "wait") throw new HiringError(409, "You can send scores after the mock lesson starts.");
+  if (form === "closed" || !subject) throw new HiringError(409, BRIEF_CLOSED);
+  const problems = checkRubric(rubric);
+  if (problems.length || rubricNeedsCheck(rubric)) throw new HiringError(400, "Give every item a whole score from 1 to 10.");
+  const m = s.hiringMockResults;
+  const fresh = {
+    bookingId: mock.id,
+    source: "person" as const,
+    status: "done" as const,
+    fileId: null,
+    aiRubric: null,
+    rubric,
+    history: null,
+    model: null,
+    promptVersion: null,
+    costUsd: null,
+    costKnown: true,
+    error: null,
+    checkedBy: null,
+    checkedAt: null,
+    changedBy: null,
+    changedAt: null,
+    updatedAt: now,
+  };
+  // The same rule again inside the write, so an upload or a change that lands between the read and here is not replaced.
+  const saved = await db
+    .insert(m)
+    .values({ candidateId: mock.candidateId, subject, ...fresh })
+    .onConflictDoUpdate({
+      target: [m.candidateId, m.subject],
+      set: fresh,
+      setWhere: sql`${m.source} = 'tracker' or (${m.source} = 'person' and ${m.bookingId} = ${mock.id} and ${m.changedBy} is null and ${m.checkedBy} is null)`,
+    })
+    .returning({ id: m.id });
+  if (!saved.length) throw new HiringError(409, BRIEF_CLOSED);
+  await audit(db, `interviewer:${mock.interviewerKey ?? "unknown"}`, "mock-rubric-submitted", mock.candidateId, {
+    subject,
+    bookingId: mock.id,
+    replaced: before ? { source: before.source, status: before.status, rubric: before.rubric, history: before.history } : null,
+  });
+  return rubricTotals(rubric).total;
 }
 type VisitLink = { id: string; exp: number };
 function visitToken(token: string, now: Date): VisitLink {

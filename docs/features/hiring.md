@@ -135,6 +135,20 @@ A person uploads one scanned PDF for each subject, up to 25 MB, on the row or in
 
 ### Mock rubric
 
+There are two ways to record the head's scores.
+
+**Score form on the interviewer link (the usual way, Kevin's decision of 13 November 2026).** The [interviewer candidate page](#interviewer-candidate-page) has a form with the 10 items and a comment box. It opens when the mock lesson starts. The head chooses a whole score from 1 to 10 for each item and sends it. No file and no AI are used.
+
+- `POST /api/hiring/brief/{token}/rubric` saves the scores (`saveBriefRubric`). The link is the only access check, with the same rules as the page: a cancel, a move, a stopped candidate, a sent result or the 7-day end closes it.
+- The result is stored with source `person` and status `done`, so it counts at once. The server calculates the total out of 100.
+- The head can send again while the link works, to correct the head's own scores. A send can replace only that head's own earlier send or a past tracker result. The audit row `mock-rubric-submitted` keeps what was replaced and names the head.
+- The form closes, and a send is refused, when an uploaded rubric is recorded, when a person with `/hiring` access has changed or confirmed the scores, or when a decision is drafted. The page then shows no scores.
+- A mock with more than one subject stores the scores under its first subject, the same subject the **Mock and paper** row uses.
+- It changes no stage and queues no message. The page shows the head only that head's own sent scores for this mock.
+- A person with `/hiring` access can still change a score afterward.
+
+**File upload by a person with `/hiring` access**, for a head who used the paper form:
+
 A person uploads the head's completed rubric as a PDF. The AI copies the 10 scores and the comments, and the server calculates the four part scores and the total out of 100. A blank score or one off the scale stays blank and needs a check, so the good scores are kept. A file with no score at all fails as the wrong form. A person can change scores, replace the file, or run the AI again. The AI's first read stays unchanged.
 
 ### Decision and result email
