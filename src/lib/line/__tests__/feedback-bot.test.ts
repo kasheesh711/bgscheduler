@@ -57,6 +57,7 @@ describe("handleFeedbackGroupCommand", () => {
     const { db, select } = makeDb([[]]);
     expect(await handleFeedbackGroupCommand({ ...base, db, reply })).toBe("feedback_silent_chat");
     expect(await handleFeedbackGroupCommand({ ...base, db: makeDb([[]]).db, text: "/feedback", reply })).toBe("feedback_silent_chat");
+    expect(await handleFeedbackGroupCommand({ ...base, db: makeDb([GROUP]).db, replyToken: null, reply })).toBe("feedback_silent_chat");
     expect(reply).not.toHaveBeenCalled();
     expect(select).toHaveBeenCalledTimes(1); // no feedback lookup
   });

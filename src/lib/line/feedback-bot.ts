@@ -130,7 +130,8 @@ export function feedbackReply(subject: string, rows: readonly FeedbackClassRow[]
       .filter(([, value]) => value)
       .map(([label, value]) => `${label}: ${value}`)
       .join("\n");
-    const feedback = body.length > MAX_FEEDBACK_CHARS ? `${body.slice(0, MAX_FEEDBACK_CHARS)}…` : body;
+    // Cut by code point: half an emoji makes LINE refuse the message.
+    const feedback = body.length > MAX_FEEDBACK_CHARS ? `${Array.from(body).slice(0, MAX_FEEDBACK_CHARS).join("")}…` : body;
     const title = [classTime.format(row.scheduledStartAt), row.tutorName].filter(Boolean).join(" · ");
     return `${index + 1}) ${title}\n${feedback || "No feedback yet."}`;
   });
