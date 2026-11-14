@@ -33,6 +33,9 @@ function isPublicRoute(pathname: string) {
     // see src/lib/student-schedule/links.ts. Note the trailing slash: it keeps
     // the authenticated /student-schedule admin page out of this allowlist.
     pathname.startsWith("/schedule/") ||
+    // Teacher feedback links from the LINE /feedback reply: the signed token in the path is the access check
+    // (FB-BOT-L1, src/lib/line/feedback-bot.ts).
+    /^\/feedback\/[A-Za-z0-9_.-]+$/.test(pathname) ||
     /^\/weekend-schedule\/[A-Za-z0-9_-]{43}(?:\/print)?$/.test(pathname) ||
     /^\/hiring\/book\/[^/]+$/.test(pathname) ||
     /^\/api\/hiring\/book\/[^/]+$/.test(pathname) ||
