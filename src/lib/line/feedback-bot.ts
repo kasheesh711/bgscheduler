@@ -21,6 +21,13 @@
 //              chat. The bot check also means that one bot answers when both
 //              bots are in the same chat.
 //
+//   FB-BOT-N1  First name. `/feedback Titan` also works. The word can be the
+//              full code ("Titan.Vo"), the nickname before the dot, or the
+//              first word of the Wise name. When more than one student
+//              matches, the one that the chat's own tutor has taught wins.
+//              If that still leaves more than one, the bot lists the codes
+//              and posts no feedback link: it never guesses a student.
+//
 //   FB-BOT-L1  Link. The reply is a link to /feedback/<token>, a public page
 //              with the classes and the full text; the feedback text itself
 //              is not posted in the chat. The token is
@@ -37,7 +44,7 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-import { and, desc, eq, ilike, inArray, isNull, lte } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, isNull, lte, or } from "drizzle-orm";
 
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -60,9 +67,9 @@ const FEEDBACK_PATTERN = /^\/feedback(?:\s+(.*))?$/i;
 const COMMAND_PATTERN = /^([A-Za-z0-9._\-\u0E00-\u0E7F]{2,40})(?:\s+(.{1,40}))?$/;
 
 const FEEDBACK_HELP =
-  "Type /feedback and the student code, for example: /feedback Tara.Ta\n" +
+  "Type /feedback and the student's first name or code, for example: /feedback Tara or /feedback Tara.Ta\n" +
   "To select a subject, add it: /feedback Tara.Ta math\n" +
-  "พิมพ์ /feedback ตามด้วยรหัสนักเรียน เช่น /feedback Tara.Ta";
+  "พิมพ์ /feedback ตามด้วยชื่อหรือรหัสนักเรียน เช่น /feedback Tara";
 
 const FEEDBACK_FIELDS = [
   ["topics", "Topics"],
@@ -85,6 +92,7 @@ export type FeedbackBotAction =
   | "feedback_silent_chat"
   | "feedback_help"
   | "feedback_not_found"
+  | "feedback_ambiguous"
   | "feedback_no_subject"
   | "feedback_reply";
 
@@ -246,6 +254,63 @@ export function feedbackReply(
   return url ? top : [top, ...blocks].join("\n\n");
 }
 
+/** Codes read back from Wise names are not limited to the command characters, so escape every ILIKE wildcard. */
+const likeSafe = (value: string) => value.replace(/[\\%_]/g, "\\$&");
+
+export type StudentCodeChoice =
+  | { status: "ok"; code: string }
+  | { status: "none" }
+  | { status: "ambiguous"; codes: string[] };
+
+/**
+ * FB-BOT-N1. `candidates` are (student name, tutor) pairs of ended classes
+ * whose student matches the typed word. The students of the chat's tutor come
+ * first, then all matches; in that group a single student or an exact code wins.
+ */
+export function pickStudentCode(
+  candidates: ReadonlyArray<{ studentName: string; tutorKey: string | null }>,
+  query: string,
+  chatTutorKey: string,
+): StudentCodeChoice {
+  const all = new Map<string, string>();
+  const taught = new Map<string, string>();
+  for (const candidate of candidates) {
+    const code = /\(([^)]+)\)/.exec(candidate.studentName)?.[1]?.trim();
+    if (!code) continue;
+    all.set(code.toLowerCase(), code);
+    if (candidate.tutorKey === chatTutorKey) taught.set(code.toLowerCase(), code);
+  }
+  // A typed full code ("Titan.Ch") names one student: it always wins.
+  const fullCode = query.includes(".") ? all.get(query.toLowerCase()) : undefined;
+  if (fullCode) return { status: "ok", code: fullCode };
+  const pool = taught.size > 0 ? taught : all;
+  if (pool.size === 0) return { status: "none" };
+  if (pool.size === 1) return { status: "ok", code: [...pool.values()][0] };
+  const exact = pool.get(query.toLowerCase());
+  if (exact) return { status: "ok", code: exact };
+  return { status: "ambiguous", codes: [...pool.values()].sort().slice(0, 10) };
+}
+
+/** FB-BOT-N1: the students that the typed word can mean, with the tutors of their ended classes. */
+export async function loadStudentCandidates(db: Database, query: string, now: Date) {
+  const word = likeSafe(query);
+  const name = schema.postClassSessionParticipants.studentName;
+  return db
+    .selectDistinct({ studentName: name, tutorKey: schema.postClassSessions.canonicalTutorKey })
+    .from(schema.postClassSessionParticipants)
+    .innerJoin(
+      schema.postClassSessions,
+      eq(schema.postClassSessions.id, schema.postClassSessionParticipants.sessionId),
+    )
+    .where(and(
+      // Full code "(Titan.Vo)", nickname "(Titan." or first word of the Wise name "Titan ...".
+      or(ilike(name, `%(${word})%`), ilike(name, `%(${word}.%`), ilike(name, `${word} %`)),
+      eq(schema.postClassSessions.finalStatus, "ENDED"),
+      isNull(schema.postClassSessions.wiseDeletedAt),
+      lte(schema.postClassSessions.scheduledStartAt, now),
+    ));
+}
+
 /** The student's recent ended classes (newest first) and the Wise title of each. */
 export async function loadFeedbackClasses(
   db: Database,
@@ -276,7 +341,7 @@ export async function loadFeedbackClasses(
     )
     .where(and(
       // Wise names carry the code in brackets: "Aarak (Arav.Sr) Srikueja". "_" is an ILIKE wildcard.
-      ilike(schema.postClassSessionParticipants.studentName, `%(${code.replace(/_/g, "\\_")})%`),
+      ilike(schema.postClassSessionParticipants.studentName, `%(${likeSafe(code)})%`),
       eq(schema.postClassSessions.finalStatus, "ENDED"),
       isNull(schema.postClassSessions.wiseDeletedAt),
       lte(schema.postClassSessions.scheduledStartAt, now),
@@ -335,17 +400,26 @@ export async function handleFeedbackGroupCommand(input: {
     await respond(FEEDBACK_HELP);
     return "feedback_help";
   }
-  const [, code, wanted = ""] = command;
+  const [, typed, wanted = ""] = command;
 
   const now = input.now ?? new Date();
-  const { rows, titles } = await loadFeedbackClasses(input.db, code, now);
-  if (rows.length === 0) {
+  const choice = pickStudentCode(await loadStudentCandidates(input.db, typed, now), typed, group.canonicalKey);
+  if (choice.status === "none") {
     await respond(
-      `No ended classes found for student code "${code}". Check the code in the brackets of the student name in Wise.\n` +
-      `ไม่พบคลาสของรหัสนักเรียน "${code}"`,
+      `No ended classes found for student "${typed}". Type the first name, or the code in the brackets of the student name in Wise.\n` +
+      `ไม่พบคลาสของนักเรียน "${typed}"`,
     );
     return "feedback_not_found";
   }
+  if (choice.status === "ambiguous") {
+    await respond(
+      `More than one student matches "${typed}". Type the code, for example: /feedback ${choice.codes[0]}\n` +
+      `Codes: ${choice.codes.join(", ")}`,
+    );
+    return "feedback_ambiguous";
+  }
+  const code = choice.code;
+  const { rows, titles } = await loadFeedbackClasses(input.db, code, now);
 
 
   const selection = selectSubjectClasses(rows, titles, group.canonicalKey, wanted);

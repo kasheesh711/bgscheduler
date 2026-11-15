@@ -208,11 +208,12 @@ The DM router (`src/lib/line/schedule-bot.ts`) and group router (`src/lib/line/s
 
 ### Teacher feedback command
 
-`/feedback <code> [subject]` (`src/lib/line/feedback-bot.ts`) is dispatched from the webhook route before the other group commands, for both bots. Any member of the chat may use it; it is not gated by the admin allowlist.
+`/feedback <code or first name> [subject]` (`src/lib/line/feedback-bot.ts`) is dispatched from the webhook route before the other group commands, for both bots. Any member of the chat may use it; it is not gated by the admin allowlist.
 
 - **FB-BOT-G1** — the bot replies only in a registered teacher chat: an enabled `progress_line_groups` row (made by an admin with `/progress setup <key>`), and only through the bot that serves that tutor (`PROGRESS_LINE_TUTOR_BOT_KEYS`). All other chats get no reply, help included.
 - **FB-BOT-S1** — the reply holds the student's five most recent `ENDED` classes in one subject, from all tutors, with the latest stored feedback version. Without a subject word the subject is that of the chat tutor's most recent class with the student. The subject is read from the Wise class title in `classroom_assignment_rows`; a class with no stored title is left out, and different spellings of a subject ("Econ", "Economics") are different subjects.
 
+- **FB-BOT-N1** — the word after `/feedback` can be the full code, the nickname before the dot, or the first word of the Wise name. When more than one student matches, the student that the chat's tutor has taught is used. If more than one student still matches, the bot lists the codes and posts no link.
 - **FB-BOT-L1** — the reply is the header, school and year, and a link (the feedback text is not posted in the chat) to the public page `/feedback/<token>` (`src/app/feedback/[token]/page.tsx`, allowlisted in `src/proxy.ts`), which shows the same classes with the full text. The token is an HMAC of the student code, subject and expiry with `AUTH_SECRET`; it works for 24 hours and every failure renders one identical message. The page reads the data again on each visit. Its look is deliberately its own (fixed light palette), not the app's tokens.
 - **FB-BOT-P1** — the reply and the page also show the student's school and year, read live from the Wise registration form (one GET, 8-second limit). When Wise does not answer, they are left out.
 
