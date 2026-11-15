@@ -144,6 +144,9 @@ describe("handleFeedbackGroupCommand", () => {
     expect(reply.mock.calls[1][0].text).toContain("· Math (last 1 class, all tutors)");
     // The words "All subjects" typed in another chat are only a subject that does not exist.
     expect(await handleFeedbackGroupCommand({ ...base, text: "/feedback Arav.Sr All subjects", db: makeDb([[{ canonicalKey: "Buzz" }], cands, [math], titles]).db, reply })).toBe("feedback_no_subject");
+    // A class titled "All subjects" in another chat is not a subject, so it cannot make the owner link.
+    const trick = [{ wiseSessionId: math.wiseSessionId, title: "Live Session-All subjects" }];
+    expect(await handleFeedbackGroupCommand({ ...base, db: makeDb([[{ canonicalKey: "Aey" }], cands, [math], trick]).db, reply })).toBe("feedback_no_subject");
   });
 });
 

@@ -137,7 +137,8 @@ export function selectSubjectClasses(
 ): FeedbackSelection {
   const withSubject = rows
     .map((row) => ({ row, subject: titleSubject(titles.get(row.wiseSessionId) ?? "") }))
-    .filter((entry) => subjectKey(entry.subject));
+    // A class title must never produce the FB-BOT-O1 token subject.
+    .filter((entry) => subjectKey(entry.subject) && entry.subject !== ALL_SUBJECTS);
   const wantedKey = subjectKey(wanted);
   const anchor = withSubject.find((entry) =>
     !wantedKey ? entry.row.tutorKey === chatTutorKey
