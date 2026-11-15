@@ -433,11 +433,10 @@ export async function handleFeedbackGroupCommand(input: {
   const { rows, titles } = await loadFeedbackClasses(input.db, code, now);
 
 
-  let selection = selectSubjectClasses(rows, titles, group.canonicalKey, wanted);
-  // FB-BOT-O1: the owner did not teach this student and typed no subject.
-  if (selection.status === "no_subject" && !wanted && OWNER_CHAT_KEYS.has(group.canonicalKey) && rows.length) {
-    selection = selectAllSubjectClasses(rows);
-  }
+  // FB-BOT-O1: the owner's chat with no typed subject, also for students the owner taught.
+  const selection = !wanted && OWNER_CHAT_KEYS.has(group.canonicalKey)
+    ? selectAllSubjectClasses(rows)
+    : selectSubjectClasses(rows, titles, group.canonicalKey, wanted);
   if (selection.status === "no_subject") {
     const reason = wanted
       ? `No "${wanted.trim()}" classes found for ${code}.`

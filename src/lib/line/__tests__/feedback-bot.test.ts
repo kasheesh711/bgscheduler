@@ -133,7 +133,8 @@ describe("handleFeedbackGroupCommand", () => {
   it("FB-BOT-O1: the owner's chat gets the most recent classes in every subject", async () => {
     const reply = vi.fn();
     const math = row({ tutorKey: "Aey" });
-    const untitled = row({ tutorKey: "Mimi" });
+    // One class is the owner's own: the reply is still all subjects.
+    const untitled = row({ tutorKey: "Gift" });
     const titles = [{ wiseSessionId: math.wiseSessionId, title: "In-Person Session-Math" }];
     const cands = [{ studentName: "Aarak (Arav.Sr) Srikueja", tutorKey: "Aey" }];
     const owner = [{ canonicalKey: "Gift" }];
