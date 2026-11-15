@@ -55,6 +55,9 @@ import { createWiseClient } from "@/lib/wise/client";
 import { fetchWiseStudentRegistrationData } from "@/lib/wise/fetchers";
 
 const CLASS_LIMIT = 5;
+/** FB-BOT-O1. Owner decision 2026-11-15: Gift owns the school, so her chat can read every student's feedback. */
+const OWNER_CHAT_KEYS = new Set(["Gift"]);
+export const ALL_SUBJECTS = "All subjects";
 /** Recent classes scanned for the subject match. shortcut: a subject older than this many classes is not found; raise if teachers report it. */
 const SCAN_LIMIT = 200;
 /** 5 classes × (this + a short header), plus the link and the school line, stays under LINE's 5,000-character text limit. */
@@ -134,7 +137,8 @@ export function selectSubjectClasses(
 ): FeedbackSelection {
   const withSubject = rows
     .map((row) => ({ row, subject: titleSubject(titles.get(row.wiseSessionId) ?? "") }))
-    .filter((entry) => subjectKey(entry.subject));
+    // A class title must never produce the FB-BOT-O1 token subject.
+    .filter((entry) => subjectKey(entry.subject) && entry.subject !== ALL_SUBJECTS);
   const wantedKey = subjectKey(wanted);
   const anchor = withSubject.find((entry) =>
     !wantedKey ? entry.row.tutorKey === chatTutorKey
@@ -150,6 +154,13 @@ export function selectSubjectClasses(
     subject: anchor.subject,
     rows: withSubject.filter((entry) => subjectKey(entry.subject) === key).slice(0, CLASS_LIMIT).map((entry) => entry.row),
   };
+}
+
+/** FB-BOT-O1: the most recent classes in every subject (the owner's chat, and its link page). */
+export function selectAllSubjectClasses(rows: readonly FeedbackClassRow[]): FeedbackSelection {
+  return rows.length
+    ? { status: "ok", subject: ALL_SUBJECTS, rows: rows.slice(0, CLASS_LIMIT) }
+    : { status: "no_subject", subjects: [] };
 }
 
 const sign = (payload: string, secret: string) =>
@@ -422,7 +433,10 @@ export async function handleFeedbackGroupCommand(input: {
   const { rows, titles } = await loadFeedbackClasses(input.db, code, now);
 
 
-  const selection = selectSubjectClasses(rows, titles, group.canonicalKey, wanted);
+  // FB-BOT-O1: the owner's chat with no typed subject, also for students the owner taught.
+  const selection = !wanted && OWNER_CHAT_KEYS.has(group.canonicalKey)
+    ? selectAllSubjectClasses(rows)
+    : selectSubjectClasses(rows, titles, group.canonicalKey, wanted);
   if (selection.status === "no_subject") {
     const reason = wanted
       ? `No "${wanted.trim()}" classes found for ${code}.`
