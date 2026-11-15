@@ -22,10 +22,13 @@ import { BookOpen, Clock, GraduationCap, NotebookPen, School, Sparkles, Target }
 
 import { getDb } from "@/lib/db";
 import {
+  ALL_SUBJECTS,
   loadFeedbackClasses,
   loadStudentProfile,
   readFeedbackLinkToken,
+  selectAllSubjectClasses,
   selectSubjectClasses,
+  titleSubject,
   type FeedbackClassRow,
 } from "@/lib/line/feedback-bot";
 import { parseStudentDisplay } from "@/lib/student-schedule/data";
@@ -98,7 +101,7 @@ function ExpiredNotice() {
   );
 }
 
-function ClassCard({ row, now, last }: { row: FeedbackClassRow; now: Date; last: boolean }) {
+function ClassCard({ row, now, last, subject }: { row: FeedbackClassRow; now: Date; last: boolean; subject?: string }) {
   const sections = SECTIONS
     .map((section) => ({ ...section, value: row[section.key]?.trim() ?? "" }))
     .filter((section) => section.value);
@@ -122,7 +125,10 @@ function ClassCard({ row, now, last }: { row: FeedbackClassRow; now: Date; last:
             <h2 className="truncate text-[15px] font-semibold tracking-tight">
               {WEEKDAY.format(row.scheduledStartAt)} · {TIME.format(row.scheduledStartAt)}
             </h2>
-            <p className="text-xs text-[#6B6B6B]">{ago(row.scheduledStartAt, now)}</p>
+            <p className="text-xs text-[#6B6B6B]">
+              {subject ? <span className="font-semibold text-[#B84A00]">{subject} · </span> : null}
+              {ago(row.scheduledStartAt, now)}
+            </p>
           </div>
           <div className="flex shrink-0 items-center gap-2 rounded-full bg-[#FAF8F4] py-1 pl-1 pr-3 ring-1 ring-[#E8E3DA]">
             <span className="flex size-6 items-center justify-center rounded-full bg-[#141414] text-[11px] font-semibold text-[#FAF8F4]">
@@ -160,7 +166,8 @@ async function FeedbackBody({ params }: { params: Params }) {
   if (!grant) return <ExpiredNotice />;
 
   const { rows, titles } = await loadFeedbackClasses(getDb(), grant.code, now);
-  const selection = selectSubjectClasses(rows, titles, "", grant.subject, true);
+  const allSubjects = grant.subject === ALL_SUBJECTS;
+  const selection = allSubjects ? selectAllSubjectClasses(rows) : selectSubjectClasses(rows, titles, "", grant.subject, true);
   if (selection.status !== "ok") return <ExpiredNotice />;
 
   const classes = selection.rows;
@@ -224,7 +231,13 @@ async function FeedbackBody({ params }: { params: Params }) {
           <p className="mb-3 text-xs font-medium text-[#6B6B6B]">Most recent first · all tutors</p>
           <ol>
             {classes.map((row, index) => (
-              <ClassCard key={row.wiseSessionId} row={row} now={now} last={index === classes.length - 1} />
+              <ClassCard
+                key={row.wiseSessionId}
+                row={row}
+                now={now}
+                last={index === classes.length - 1}
+                subject={allSubjects ? titleSubject(titles.get(row.wiseSessionId) ?? "") : undefined}
+              />
             ))}
           </ol>
           <p className="mt-2 flex items-center justify-center gap-1.5 text-center text-xs text-[#85817A]">

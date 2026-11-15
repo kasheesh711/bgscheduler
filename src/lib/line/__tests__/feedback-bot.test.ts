@@ -129,6 +129,22 @@ describe("handleFeedbackGroupCommand", () => {
     expect(await handleFeedbackGroupCommand({ ...base, text: "/feedback Arav.Sr physics", db: makeDb([GROUP, CANDS, [math], titles]).db, reply })).toBe("feedback_no_subject");
     expect(reply.mock.calls[1][0].text).toContain("Subjects: Math");
   });
+
+  it("FB-BOT-O1: the owner's chat gets the most recent classes in every subject", async () => {
+    const reply = vi.fn();
+    const math = row({ tutorKey: "Aey" });
+    const untitled = row({ tutorKey: "Mimi" });
+    const titles = [{ wiseSessionId: math.wiseSessionId, title: "In-Person Session-Math" }];
+    const cands = [{ studentName: "Aarak (Arav.Sr) Srikueja", tutorKey: "Aey" }];
+    const owner = [{ canonicalKey: "Gift" }];
+    expect(await handleFeedbackGroupCommand({ ...base, db: makeDb([owner, cands, [math, untitled], titles]).db, reply })).toBe("feedback_reply");
+    expect(reply.mock.calls[0][0].text).toContain("· All subjects (last 2 classes, all tutors)");
+    // A typed subject still selects that one subject.
+    expect(await handleFeedbackGroupCommand({ ...base, text: "/feedback Arav.Sr mat", db: makeDb([owner, cands, [math, untitled], titles]).db, reply })).toBe("feedback_reply");
+    expect(reply.mock.calls[1][0].text).toContain("· Math (last 1 class, all tutors)");
+    // The words "All subjects" typed in another chat are only a subject that does not exist.
+    expect(await handleFeedbackGroupCommand({ ...base, text: "/feedback Arav.Sr All subjects", db: makeDb([[{ canonicalKey: "Buzz" }], cands, [math], titles]).db, reply })).toBe("feedback_no_subject");
+  });
 });
 
 describe("selectSubjectClasses", () => {
