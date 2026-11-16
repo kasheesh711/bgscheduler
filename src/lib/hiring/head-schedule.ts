@@ -7,6 +7,7 @@ import {
   headOfficeWindow,
   indexIsStale,
   readCalendar,
+  snapshotBusy,
   type OfficeContext,
 } from "./availability";
 import {
@@ -77,14 +78,9 @@ function headBusy(
   sitIns: SitIn[],
   range: Range,
 ) {
-  return (
-    !!group?.sessionBlocks.some(
-      (b) => b.isBlocking && overlap(range, { start: b.startTime, end: b.endTime }),
-    ) ||
-    !!group?.leaves.some((l) =>
-      overlap(range, { start: l.startTime, end: l.endTime }),
-    ) ||
-    sitIns.some((o) => overlap(range, { start: o.startTime, end: o.endTime }))
+  const busy = group ? snapshotBusy(group) : { classes: [], leaves: [] };
+  return [...busy.classes, ...busy.leaves, ...sitIns].some((b) =>
+    overlap(range, { start: b.startTime, end: b.endTime }),
   );
 }
 const hm = (minute: number) =>
@@ -121,6 +117,7 @@ export function buildHeadWeek(input: {
     headBusy(group, sitIns, { start: m.startTime, end: m.endTime });
   const nameOf = (id: string) => input.names.get(id) ?? "Candidate";
   const inWeek = (d: Date) => weekStart(localDate(d)) === ws;
+  const busy = group ? snapshotBusy(group) : { classes: [], leaves: [] };
 
   const days = Array.from({ length: 5 }, (_, i) => {
     const date = shiftDate(ws, i);
@@ -152,8 +149,8 @@ export function buildHeadWeek(input: {
         }),
       );
     const blocks = [
-      ...(group?.sessionBlocks.filter((b) => b.isBlocking).flatMap((b) => cut("wise", b)) ?? []),
-      ...(group?.leaves.flatMap((l) => cut("leave", l)) ?? []),
+      ...busy.classes.flatMap((b) => cut("wise", b)),
+      ...busy.leaves.flatMap((l) => cut("leave", l)),
       ...sitIns.flatMap((o) => cut("sit_in", o)),
       ...booked("exam", exams),
       ...booked("mock", mocks),

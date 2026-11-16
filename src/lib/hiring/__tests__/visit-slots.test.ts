@@ -37,10 +37,14 @@ const group = (
   dataIssues: [],
   ...extra,
 });
+// The production sync runs in UTC and stores the Bangkok wall clock as if it were UTC. So a stored class or
+// leave time is 7 hours after the real instant. A class also keeps its true Bangkok weekday and minute.
+const stored = (date: string, minute: number) =>
+  new Date(instant(date, minute).getTime() + 7 * 3_600_000);
 const block = (date: string, from: number, to: number, isBlocking = true) => ({
-  startTime: instant(date, from),
-  endTime: instant(date, to),
-  weekday: 0,
+  startTime: stored(date, from),
+  endTime: stored(date, to),
+  weekday: new Date(`${date}T12:00:00Z`).getUTCDay(),
   startMinute: from,
   endMinute: to,
   isBlocking,
@@ -181,11 +185,11 @@ describe("visit slots", () => {
     const withLeave = await times(
       group("Ek", {
         leaves: [
-          { startTime: instant("2026-11-02", 0), endTime: instant("2026-11-03", 0) },
+          { startTime: stored("2026-11-02", 720), endTime: stored("2026-11-02", 780) },
         ],
       }),
     );
-    expect(withLeave).toEqual([]);
+    expect(withLeave).toEqual(base.filter((_, i) => i !== 0));
     expect(await times(group("Ek", { leavesCompleteThrough: null }))).toEqual([]);
     // Leave coverage that stops before the mock hour is incomplete.
     expect(
