@@ -18,10 +18,14 @@ const head = (canonicalKey: string, extra = {}) => ({
   email: `${canonicalKey.toLowerCase()}@example.com`,
   ...extra,
 });
+// The production sync runs in UTC and stores the Bangkok wall clock as if it were UTC. So a stored class or
+// leave time is 7 hours after the real instant. A class also keeps its true Bangkok weekday and minute.
+const stored = (date: string, minute: number) =>
+  new Date(instant(date, minute).getTime() + 7 * 3_600_000);
 const block = (date: string, from: number, to: number, extra = {}) => ({
-  startTime: instant(date, from),
-  endTime: instant(date, to),
-  weekday: 0,
+  startTime: stored(date, from),
+  endTime: stored(date, to),
+  weekday: new Date(`${date}T12:00:00Z`).getUTCDay(),
   startMinute: from,
   endMinute: to,
   isBlocking: true,
@@ -187,7 +191,7 @@ describe("head week", () => {
             }),
             block(TUE, 600, 660, { isBlocking: false, studentName: "Cancelled Kid" }),
           ],
-          leaves: [{ startTime: instant(TUE, 780), endTime: instant(TUE, 840) }],
+          leaves: [{ startTime: stored(TUE, 780), endTime: stored(TUE, 840) }],
         }),
       ],
       observations: [
@@ -209,6 +213,34 @@ describe("head week", () => {
     const json = JSON.stringify(w);
     for (const hidden of ["Secret Student", "Cancelled Kid", "Lesson Student", "sess-1", "title", "studentName"])
       expect(json).not.toContain(hidden);
+  });
+
+  // 17 Nov 2026: the live calendar showed each class 7 hours late, and Sunday evening classes on Monday.
+  it("shows a class and leave at the real Bangkok time, as the UTC sync and as a Bangkok sync store them", async () => {
+    const days = async (time: (date: string, minute: number) => Date) => {
+      const at = (date: string, from: number, to: number) => ({
+        ...block(date, from, to),
+        startTime: time(date, from),
+        endTime: time(date, to),
+      });
+      const w = await run({
+        groups: [
+          group("Peat", {
+            // Sunday 18:30, Monday 10:00 and Monday 20:00.
+            sessionBlocks: [at("2026-11-01", 1110, 1170), at(MON, 600, 660), at(MON, 1200, 1260)],
+            leaves: [{ startTime: time(TUE, 780), endTime: time(TUE, 840) }],
+          }),
+        ],
+        bookings: visit({ startTime: instant(MON, 600), endTime: instant(MON, 660), visitId: null }).slice(1),
+      });
+      return w.days.slice(0, 2).map((d) => d.blocks.map((b) => `${b.kind} ${b.start}-${b.end}${b.clash ? " clash" : ""}`));
+    };
+    const expected = [
+      ["wise 10:00-11:00", "mock 10:00-11:00 clash", "wise 20:00-21:00"],
+      ["leave 13:00-14:00"],
+    ];
+    expect(await days(stored)).toEqual(expected);
+    expect(await days(instant)).toEqual(expected);
   });
 
   it("shows the mock as busy and the exam as not needing the head, with the candidate name", async () => {
@@ -247,7 +279,7 @@ describe("head week", () => {
   it("marks a mock clash for leave and for a sit-in", async () => {
     const leave = await run({
       bookings: visit(),
-      groups: [group("Peat", { leaves: [{ startTime: instant(MON, 700), endTime: instant(MON, 730) }] })],
+      groups: [group("Peat", { leaves: [{ startTime: stored(MON, 700), endTime: stored(MON, 730) }] })],
     });
     expect(leave.visits[0].clash).toBe(true);
     const sitIn = await run({
