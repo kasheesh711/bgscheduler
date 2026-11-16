@@ -8,6 +8,7 @@ import { universityName } from "@/lib/hiring/seek-view";
 import type { CandidateExtras } from "@/lib/hiring/status";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
 import { SeekLinks } from "./candidate-inspector";
+import { ResumeDeck } from "./resume-deck";
 import { SeekPanel } from "./seek-screen";
 import css from "./dashboard.module.css";
 
@@ -80,6 +81,7 @@ export function CallsScreen({
   busy: boolean;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
+  const [cards, setCards] = useState(false);
   const byId = new Map(data.candidates.map((c) => [c.id, c]));
   const rows = data.callOrder.flatMap((id) => byId.get(id) ?? []);
   const candidate = selected ? byId.get(selected) : undefined;
@@ -89,6 +91,7 @@ export function CallsScreen({
   };
   const threshold = data.config.callThreshold;
 
+  if (cards) return <ResumeDeck data={data} rows={rows} command={command} busy={busy} onClose={() => setCards(false)} />;
   return (
     <div className={css.layout}>
       <div className={css.main}>
@@ -98,6 +101,13 @@ export function CallsScreen({
               ? "Calls are off. Set an HR call score in Rules and setup to use this list."
               : `${rows.length} to call. Booked calls first, by time; then the highest SEEK score. A candidate at or above ${threshold} gets the pre-screen form only after a good call.`}
           </p>
+          {rows.length > 0 && (
+            <div className={css.tableTools}>
+              <button type="button" className={css.secondary} onClick={() => setCards(true)}>
+                Review résumés as cards
+              </button>
+            </div>
+          )}
           <div className={css.tableScroll}>
             <table className={css.table}>
               <thead>
