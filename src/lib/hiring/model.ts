@@ -438,6 +438,8 @@ export const applicationSchema = z
     workRightsAnswer: z.string().trim().min(1).max(300).nullable().default(null),
     // The SEEK job the worker read it from. Kept on a new row only, for the SEEK link.
     jobId: seekJobIdSchema.nullable().default(null),
+    // The number SEEK shows beside the email, already cleaned by `seekPhone`. HR dials it from the Calls tab.
+    phone: z.string().regex(/^\+?\d{8,15}$/).nullable().default(null),
   })
   .strict();
 export type Application = z.infer<typeof applicationSchema>;
