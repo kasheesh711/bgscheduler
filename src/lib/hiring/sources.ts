@@ -171,7 +171,11 @@ export async function importApplication(value: unknown, db: Database) {
       // The number a candidate typed on the booking page is theirs to choose, so SEEK only fills an empty one. It is not
       // part of the scored profile, so the revision stays.
       if (!existing.phone && input.phone)
-        await tx.update(s.hiringCandidates).set({ phone: input.phone }).where(eq(s.hiringCandidates.id, existing.id));
+        await tx
+          .update(s.hiringCandidates)
+          .set({ phone: input.phone })
+          // The booking page writes with no lock, so the row is checked again here.
+          .where(and(eq(s.hiringCandidates.id, existing.id), isNull(s.hiringCandidates.phone)));
       return existing.id;
     }
     const [created] = await tx
@@ -210,25 +214,43 @@ const PHONE_STAGES_OFF = ["stopped", "hired", "rejected"];
  * The SEEK applications whose candidate has no phone number yet. The people HR must call come first: while one of them
  * has no number, only they are returned. Stopped and decided candidates are never read again.
  */
-export async function seekPhonesWanted(db: Database, config: HiringConfig) {
+export async function seekPhonesWanted(db: Database, config: HiringConfig, tried: ReadonlySet<string> = new Set()) {
   const rows = await db
     .select({ id: s.hiringCandidates.id, ids: s.hiringCandidates.sourceIds })
     .from(s.hiringCandidates)
     .where(and(isNull(s.hiringCandidates.phone), notInArray(s.hiringCandidates.stage, PHONE_STAGES_OFF as Stage[])));
-  const toCall = new Set((await callQueue(db, config)).map((entry) => entry.id));
-  const first = rows.filter((row) => toCall.has(row.id));
-  return new Set((first.length ? first : rows).flatMap((row) => row.ids));
+  return phoneTier(rows, new Set((await callQueue(db, config)).map((entry) => entry.id)), tried);
+}
+
+/**
+ * A row counts only while one of its applications is not tried yet. So a candidate with no number on SEEK, or one whose
+ * job the worker does not read, cannot hold the first tier for ever and keep all other candidates out.
+ */
+export function phoneTier(rows: { id: string; ids: string[] }[], toCall: ReadonlySet<string>, tried: ReadonlySet<string>) {
+  const open = rows
+    .map((row) => ({ id: row.id, ids: row.ids.filter((id) => !tried.has(id)) }))
+    .filter((row) => row.ids.length > 0);
+  const first = open.filter((row) => toCall.has(row.id));
+  return new Set((first.length ? first : open).flatMap((row) => row.ids));
 }
 
 /** Stores the number read from SEEK. It never replaces a number, and the number stays out of the audit row. */
-export async function saveSeekPhone(applicationId: string, phone: string, db: Database) {
+export async function saveSeekPhone(applicationId: string, phone: string, email: string, db: Database) {
   const [row] = await db
     .update(s.hiringCandidates)
     .set({ phone })
-    .where(and(isNull(s.hiringCandidates.phone), sql`${s.hiringCandidates.sourceIds} @> ${JSON.stringify([applicationId])}::jsonb`))
-    .returning({ id: s.hiringCandidates.id });
+    .where(
+      and(
+        isNull(s.hiringCandidates.phone),
+        // The panel must show this candidate's own email, so a panel that still shows another person stores nothing.
+        eq(s.hiringCandidates.email, email),
+        sql`${s.hiringCandidates.sourceIds} @> ${JSON.stringify([applicationId])}::jsonb`,
+      ),
+    )
+    .returning({ id: s.hiringCandidates.id, ids: s.hiringCandidates.sourceIds });
   if (row) await audit(db, "seek-import", "phone-filled", row.id, { applicationId });
-  return !!row;
+  // The candidate's applications, so the caller opens no more panels for a number that is now stored.
+  return row?.ids ?? [];
 }
 
 export async function observeSeekState(

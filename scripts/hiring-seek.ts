@@ -256,25 +256,36 @@ async function dialogPhone(dialog: ReturnType<Page["getByRole"]>) {
 }
 
 /**
- * Opens one known candidate's detail panel only to read the phone number, then closes it. It downloads nothing and
- * clicks no Move, status or message control. Null means SEEK shows no usable number.
+ * Opens one known candidate's detail panel only to read the phone number and the email beside it, then closes it. It
+ * downloads nothing and clicks no Move, status or message control. Short waits: this read is optional.
  */
 async function readPhone(page: Page, card: ReturnType<Page["getByTestId"]>) {
-  const label = await card.locator('button[aria-label^="Move "][aria-haspopup="true"]').getAttribute("aria-label");
+  const label = await card.locator('button[aria-label^="Move "][aria-haspopup="true"]').getAttribute("aria-label", { timeout: 10000 });
   const name = label?.match(
     /^Move (.+) (?:to a status|from (?:Inbox|Prescreen|Shortlist|Interview|Offer|Accept|Not Suitable))$/,
   )?.[1];
-  if (!name) throw new Error("SEEK candidate selectors changed; phone read stopped.");
-  await card.getByText(name, { exact: true }).click();
+  if (!name) return null;
+  await card.getByText(name, { exact: true }).click({ timeout: 10000 });
   const dialog = page.getByRole("dialog", { name: "Candidate details" });
-  await dialog.waitFor({ state: "visible" });
+  await dialog.waitFor({ state: "visible", timeout: 10000 });
+  const emailLink = dialog.locator('a[href^="mailto:"]');
+  // The phone link is in the same block as the email link and loads with it.
+  await emailLink.first().waitFor({ state: "visible", timeout: 10000 });
+  const href = (await emailLink.count()) === 1 ? await emailLink.getAttribute("href") : null;
+  const phone = await dialogPhone(dialog);
+  return href && phone ? { phone, email: decodeURIComponent(href.slice(7)).trim().toLowerCase() } : null;
+}
+
+/** After a phone read, pass or fail. False means the panel is still open, so no more panels are opened this pass. */
+async function closeDetails(page: Page) {
+  const dialog = page.getByRole("dialog", { name: "Candidate details" });
   try {
-    // The email link is in the same block and loads with it, so the phone link is there when this one is.
-    await dialog.locator('a[href^="mailto:"]').first().waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
-    return await dialogPhone(dialog);
-  } finally {
-    await dialog.getByRole("button", { name: "Close modal", exact: true }).click();
-    await dialog.waitFor({ state: "hidden" });
+    if (!(await dialog.isVisible())) return true;
+    await dialog.getByRole("button", { name: "Close modal", exact: true }).click({ timeout: 10000 });
+    await dialog.waitFor({ state: "hidden", timeout: 10000 });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -464,8 +475,13 @@ export async function importSeek(
   // New imports this pass. Several jobs share one budget per cycle.
   max = 40,
   // Known candidates with no phone number yet. At most `max` panels are opened for them in one pass, with the watch
-  // pause between two, so the worker reads SEEK no faster than before. `save` gets null when SEEK shows no number.
-  phones?: { need: Set<string>; max: number; save: (applicationId: string, phone: string | null) => Promise<void> },
+  // pause between two, so the worker reads SEEK no faster than before. `save` gets null when SEEK shows no number
+  // or the panel could not be read; it is called for every panel that was tried.
+  phones?: {
+    need: Set<string>;
+    max: number;
+    save: (applicationId: string, read: { phone: string; email: string } | null) => Promise<void>;
+  },
 ) {
   const browser = await chromium.launchPersistentContext(profilePath, {
     channel: "chrome",
@@ -493,7 +509,11 @@ export async function importSeek(
         if (phones?.need.has(id) && phoneReads < phones.max) {
           if (phoneReads++) await new Promise((resolve) => setTimeout(resolve, SEEK_PAUSE_MS));
           phones.need.delete(id);
-          await phones.save(id, await readPhone(page, cards.nth(index)));
+          // The number is a help for HR, not part of the import: no failure here may stop the pass.
+          const read = await readPhone(page, cards.nth(index)).catch(() => null);
+          // A panel that will not close would take the next click, so the phone reads end for this pass.
+          if (!(await closeDetails(page))) phoneReads = phones.max;
+          await phones.save(id, read).catch(() => {});
         }
       } else if (["Inbox", "Prescreen", "Shortlist"].includes(status)) {
         if (imported >= max) {

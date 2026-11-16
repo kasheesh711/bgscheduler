@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applicationSchema } from "../model";
+import { phoneTier } from "../sources";
 import { readWorkRights, redactProfile, removeWorkRights, seekPhone } from "../seek-text";
 
 const RIGHTS = "I have permanent work rights with no restrictions";
@@ -67,5 +68,26 @@ describe("SEEK phone link", () => {
     expect(applicationSchema.parse(base).phone).toBeNull();
     expect(applicationSchema.parse({ ...base, phone: seekPhone("tel:+66 812345678") }).phone).toBe("+66812345678");
     expect(applicationSchema.safeParse({ ...base, phone: "081 234 5678" }).success).toBe(false);
+  });
+});
+
+describe("which SEEK applications are opened for a phone number", () => {
+  const rows = [
+    { id: "call-1", ids: ["a1", "a2"] },
+    { id: "call-2", ids: ["b1"] },
+    { id: "other", ids: ["c1"] },
+    { id: "tracker-only", ids: [] },
+  ];
+  const toCall = new Set(["call-1", "call-2"]);
+  it("takes the people HR must call first, and only them", () => {
+    expect([...phoneTier(rows, toCall, new Set())].sort()).toEqual(["a1", "a2", "b1"]);
+  });
+  it("leaves out a tried application, and moves on when every call candidate is tried", () => {
+    expect([...phoneTier(rows, toCall, new Set(["a1", "b1"]))]).toEqual(["a2"]);
+    expect([...phoneTier(rows, toCall, new Set(["a1", "a2", "b1"]))]).toEqual(["c1"]);
+  });
+  it("is empty when nothing is left, and a row with no SEEK application never holds the first place", () => {
+    expect(phoneTier(rows, toCall, new Set(["a1", "a2", "b1", "c1"])).size).toBe(0);
+    expect([...phoneTier([{ id: "call-1", ids: [] }, { id: "other", ids: ["c1"] }], toCall, new Set())]).toEqual(["c1"]);
   });
 });
