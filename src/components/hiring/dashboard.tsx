@@ -17,6 +17,7 @@ import { AssessmentScreen } from "./assessment-screen";
 import { OperationsRail, WorkerBanner } from "./operations-rail";
 import { PreScreenScreen } from "./prescreen-screen";
 import { CallsScreen } from "./calls-screen";
+import { CapacityScreen } from "./capacity-screen";
 import { SeekScreen } from "./seek-screen";
 import { SetupPanel } from "./setup-panel";
 import css from "./dashboard.module.css";
@@ -45,6 +46,7 @@ export const NO_FILTER: CandidateFilter = { stage: "all", prescreen: "all", buck
 
 const VIEWS = {
   overview: "Overview",
+  capacity: "Capacity",
   seek: "1 Seek intake",
   calls: "2 Calls",
   prescreen: "3 Pre-screen",
@@ -257,8 +259,12 @@ export function HiringDashboard() {
             : "Wise data is old or missing, so visit clashes may not show. Check the calendar in 4 Mock and paper."}
         </p>
       )}
+      {/* Outside the main load: this tab reads its own endpoint, so it opens at once and survives a failed load. */}
+      <div hidden={view !== "capacity"} className={css.viewPane}>
+        <CapacityScreen active={view === "capacity"} />
+      </div>
       {!data || !config || !insights ? (
-        <p role="status" className={css.loading}>
+        <p role="status" className={css.loading} hidden={view === "capacity"}>
           {error ? "Check the hiring setup and reload this page." : "Loading hiring…"}
         </p>
       ) : (
