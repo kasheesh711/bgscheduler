@@ -556,3 +556,30 @@
 .dayChecks { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .dayChecks label { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; color: var(--muted); font-size: 12px; }
 .surface .dayChecks .secondary { margin-top: 0; }
+
+/* Capacity: tutor hours by subject and by tutor. */
+.surface .capRow { display: grid; grid-template-columns: minmax(120px, 1.2fr) minmax(70px, 2fr) 48px 48px; align-items: center; gap: 10px; width: 100%; min-height: 28px; padding: 2px 6px; border-radius: 6px; text-align: left; }
+.surface button.capRow { transition: background-color 150ms; }
+.surface button.capRow:hover, .surface button.capRow[aria-expanded="true"] { background: var(--tint); }
+.capHead { color: var(--muted); font-size: 12px; }
+.capHead .num { color: var(--muted); }
+.capHead .legend { margin-top: 0; padding-top: 0; }
+.capHead .legend i { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border-radius: 2px; vertical-align: -1px; }
+.surface .capLevel { padding-left: 22px; color: var(--muted); }
+.capWide { display: none; }
+.capTrack { display: block; }
+.capBar { display: flex; height: 10px; overflow: hidden; border-radius: 3px; background: var(--line); }
+.capBar span { display: block; height: 100%; }
+.capHere { background: var(--ink); }
+.capOther { background: var(--stone-dark); }
+.capFree { background: var(--line); }
+.surface .capTight { color: var(--accent-text); font-weight: 500; }
+.table tbody tr.capPlainRow { cursor: default; }
+.table td.capSubjects, .table td.capNotes { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.table td.capNotes { color: var(--muted); }
+.table th.capGroup { position: static; padding-top: 14px; }
+.capFoot { max-width: 110ch; padding: 10px 24px 20px; color: var(--muted); font-size: 12px; }
+@media (min-width: 720px) {
+  .surface .capRow { grid-template-columns: minmax(170px, 260px) 48px minmax(120px, 1fr) repeat(4, 56px); }
+  .capWide { display: block; }
+}

@@ -17,6 +17,7 @@ import { AssessmentScreen } from "./assessment-screen";
 import { OperationsRail, WorkerBanner } from "./operations-rail";
 import { PreScreenScreen } from "./prescreen-screen";
 import { CallsScreen } from "./calls-screen";
+import { CapacityScreen } from "./capacity-screen";
 import { SeekScreen } from "./seek-screen";
 import { SetupPanel } from "./setup-panel";
 import css from "./dashboard.module.css";
@@ -45,6 +46,7 @@ export const NO_FILTER: CandidateFilter = { stage: "all", prescreen: "all", buck
 
 const VIEWS = {
   overview: "Overview",
+  capacity: "Capacity",
   seek: "1 Seek intake",
   calls: "2 Calls",
   prescreen: "3 Pre-screen",
@@ -279,6 +281,9 @@ export function HiringDashboard() {
           />
         )}
         {/* Hidden, not unmounted, for the same reason: a tab switch keeps the filters and the open résumé. */}
+        <div hidden={view !== "capacity"} className={css.viewPane}>
+          <CapacityScreen active={view === "capacity"} />
+        </div>
         <div hidden={view !== "seek"} className={css.viewPane}>
           <SeekScreen
             data={data}
