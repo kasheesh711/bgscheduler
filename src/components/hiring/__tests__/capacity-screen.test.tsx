@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { CapacityReport, CapacityTutor, HiringNeed } from "@/lib/hiring/capacity";
-import { CapacityScreen, CapacityView, needReason } from "../capacity-screen";
+import { CapacityScreen, CapacityView, NeedDetail, needReason } from "../capacity-screen";
 
 const row = (given: number, booked: number) => ({
   given,
@@ -10,11 +10,12 @@ const row = (given: number, booked: number) => ({
   outside: 0,
   utilization: given ? booked / given : null,
 });
-const block = (key: "weekday" | "saturday" | "sunday", given: number, booked: number, hire = 0) => ({
+const block = (key: "weekday" | "saturday" | "sunday", given: number, booked: number, hire = 0, givers = 2) => ({
   key,
   given,
   booked,
   used: given ? booked / given : null,
+  givers,
   hire,
 });
 const tutor = (key: string, subjects: string[], given: number, booked: number, patch: Partial<CapacityTutor> = {}): CapacityTutor => ({
@@ -37,6 +38,7 @@ const need = (subject: HiringNeed["subject"], patch: Partial<HiringNeed> = {}): 
   tutors: 2,
   tutorKeys: ["Both", "Solo"],
   idle: [],
+  review: 0,
   blocks: [block("weekday", 20, 8), block("saturday", 10, 5), block("sunday", 12, 6)],
   hire: 0,
   status: "enough",
@@ -56,6 +58,7 @@ const report = (patch: Partial<CapacityReport> = {}): CapacityReport => ({
       status: "hire",
       hiring: false,
       idle: ["Rest"],
+      review: 1,
       blocks: [block("weekday", 20, 8), block("saturday", 10, 7), block("sunday", 12, 11, 2)],
     }),
     need("Mathematics", { status: "watch", blocks: [block("weekday", 20, 8), block("saturday", 10, 7), block("sunday", 12, 8)] }),
@@ -90,7 +93,9 @@ describe("CapacityView", () => {
   it("gives each subject one status and one reason", () => {
     const html = view();
     expect(html).toContain(">Hire 2<");
-    expect(html).toContain("Sundays are 92% full · 2 tutors · 1 more with no classes: check first · Hiring is switched off in Rules and setup");
+    expect(html).toContain(
+      "Sundays are 92% full · 2 tutors · 1 more with no classes: check first · 1 not loaded from Wise · Hiring is switched off in Rules and setup",
+    );
     expect(html).toContain(">Nearly full<");
     expect(html).toContain(">Enough tutors<");
     expect(html.indexOf(">Physics<")).toBeLessThan(html.indexOf(">Mathematics<"));
@@ -114,9 +119,40 @@ describe("CapacityView", () => {
 });
 
 describe("needReason", () => {
-  it("names the fullest busy block", () => {
+  it("names the block that decides", () => {
     expect(needReason(need("Thai", { tutors: 1 }))).toBe("Sundays are 50% full · 1 tutor");
     expect(needReason(need("Thai", { tightest: null }))).toBe("No busy hours in Wise · 2 tutors");
+  });
+
+  it("does not call a subject fine when no tutor with classes could be read", () => {
+    const none = need("Thai", { tutors: 0, tutorKeys: [], status: "unknown", tightest: null, idle: ["Rest"], review: 2 });
+    expect(needReason(none)).toBe("No tutor with classes to measure · 1 more with no classes: check first · 2 not loaded from Wise");
+    expect(view(report({ needs: [none] }))).toContain(">Not known<");
+  });
+});
+
+describe("NeedDetail", () => {
+  it("shows a sum that a reader can repeat and that ends on the number", () => {
+    // 40 h given by 10 tutors, 38 h booked. The limit is 30 h, so 8 h are over. A tutor gives 4 h, 3 h at 75%: 8 ÷ 3 → 3.
+    const physics = need("Physics", {
+      hire: 3,
+      status: "hire",
+      tightest: "weekday",
+      idle: ["Rest"],
+      review: 1,
+      blocks: [block("weekday", 40, 38, 3, 10), block("saturday", 10, 9, 1, 2), block("sunday", 12, 6)],
+    });
+    const html = renderToStaticMarkup(<NeedDetail need={physics} report={report()} />);
+    expect(html).toContain(
+      "Weekday evenings: 38.0 h are booked. The limit is 75% of 40.0 h = 30.0 h, so 8.0 h are over. One tutor gives about 4.0 h in these hours, and 75% of that is 3.0 h. 8.0 ÷ 3.0, rounded up, makes 3 new tutors.",
+    );
+    expect(html).toContain("not counted: Rest.");
+    expect(html).toContain("1 tutor of this subject did not load from Wise in the last sync and is not counted.");
+    expect(html).toContain("38.0 of 40.0 h a week booked");
+  });
+
+  it("has no sum when no hire is needed", () => {
+    expect(renderToStaticMarkup(<NeedDetail need={need("Thai")} report={report()} />)).not.toContain("rounded up");
   });
 });
 

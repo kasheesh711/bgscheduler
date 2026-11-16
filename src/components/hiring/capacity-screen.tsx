@@ -24,13 +24,24 @@ const ISSUE: Record<string, string> = {
   alias: "Tutor identity not confirmed in Wise data",
   completeness: "Wise hours or leave did not load",
 };
-const STATUS = { hire: "Hire", watch: "Nearly full", enough: "Enough tutors" } as const;
+const STATUS = { hire: "Hire", watch: "Nearly full", enough: "Enough tutors", unknown: "Not known" } as const;
 
 /** One sentence HR can read with no other number: which hours are full, and how many tutors carry them. */
 export function needReason(need: HiringNeed) {
   const block = need.blocks.find((b) => b.key === need.tightest);
-  const full = block ? `${blockLabel(block.key)} are ${percent(block.used)} full` : "No busy hours in Wise";
-  return `${full} · ${count(need.tutors, "tutor")}`;
+  const full = !need.tutors
+    ? "No tutor with classes to measure"
+    : block
+      ? `${blockLabel(block.key)} are ${percent(block.used)} full · ${count(need.tutors, "tutor")}`
+      : `No busy hours in Wise · ${count(need.tutors, "tutor")}`;
+  return [
+    full,
+    need.idle.length > 0 && `${need.idle.length} more with no classes: check first`,
+    need.review > 0 && `${need.review} not loaded from Wise`,
+    need.hire > 0 && !need.hiring && "Hiring is switched off in Rules and setup",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function TutorRows({ rows, review }: { rows: CapacityTutor[]; review?: boolean }) {
@@ -96,11 +107,12 @@ function TutorTable({ rows, review = [] }: { rows: CapacityTutor[]; review?: Cap
   );
 }
 
-/** The working behind one subject's number: each busy block, the sum for the fullest one, and the tutors. */
-function NeedDetail({ need, report }: { need: HiringNeed; report: CapacityReport }) {
-  // The fullest block that asks for the number, so the sum agrees with the reason on the row.
-  const worst = need.blocks.filter((b) => b.hire === need.hire && b.hire > 0).sort((a, b) => (b.used ?? 0) - (a.used ?? 0))[0];
-  const givers = worst ? report.tutors.filter((t) => need.tutorKeys.includes(t.key) && t.busy[worst.key].given > 0).length : 0;
+/** The working behind one subject's number: each busy block, the sum for the block that decides, and the tutors. */
+export function NeedDetail({ need, report }: { need: HiringNeed; report: CapacityReport }) {
+  // The block on the row. With a hire, it is the block that sets the number.
+  const worst = need.hire > 0 ? need.blocks.find((b) => b.key === need.tightest) : undefined;
+  const limit = worst ? BUSY_TARGET * worst.given : 0;
+  const perTutor = worst ? (BUSY_TARGET * worst.given) / worst.givers : 0;
   return (
     <div className={css.needDetail}>
       <div className={css.needBlocks}>
@@ -122,15 +134,22 @@ function NeedDetail({ need, report }: { need: HiringNeed; report: CapacityReport
       </div>
       {worst && (
         <p className={css.needSum}>
-          {blockLabel(worst.key)}: {hours(worst.booked)} h are booked. {TARGET}% of {hours(worst.given)} h is{" "}
-          {hours(BUSY_TARGET * worst.given)} h, so {hours(worst.booked - BUSY_TARGET * worst.given)} h are over the limit.
-          One tutor gives about {hours(worst.given / givers)} h in these hours. That makes {count(need.hire, "new tutor")}.
+          {blockLabel(worst.key)}: {hours(worst.booked)} h are booked. The limit is {TARGET}% of {hours(worst.given)} h ={" "}
+          {hours(limit)} h, so {hours(worst.booked - limit)} h are over. One tutor gives about{" "}
+          {hours(worst.given / worst.givers)} h in these hours, and {TARGET}% of that is {hours(perTutor)} h.{" "}
+          {hours(worst.booked - limit)} ÷ {hours(perTutor)}, rounded up, makes {count(need.hire, "new tutor")}.
         </p>
       )}
       {need.idle.length > 0 && (
         <p className={css.needSum}>
           No classes in this period, so not counted: {need.idle.join(", ")}. Check that they still teach, or give them
           students before you hire.
+        </p>
+      )}
+      {need.review > 0 && (
+        <p className={css.needSum}>
+          {count(need.review, "tutor")} of this subject did not load from Wise in the last sync and {need.review === 1 ? "is" : "are"} not
+          counted. The number can change after the next sync.
         </p>
       )}
       <TutorTable rows={report.tutors.filter((t) => need.tutorKeys.includes(t.key))} />
@@ -315,11 +334,7 @@ export function CapacityView({
                 <span className={`${css.pill} ${css[`need_${need.status}`]}`}>
                   {need.hire > 0 ? `Hire ${need.hire}` : STATUS[need.status]}
                 </span>
-                <span className={css.needWhy}>
-                  {needReason(need)}
-                  {need.idle.length > 0 && ` · ${need.idle.length} more with no classes: check first`}
-                  {need.hire > 0 && !need.hiring && " · Hiring is switched off in Rules and setup"}
-                </span>
+                <span className={css.needWhy}>{needReason(need)}</span>
               </button>
               {open === need.subject && <NeedDetail need={need} report={r} />}
             </li>
@@ -344,8 +359,9 @@ export function CapacityView({
         <AllHours report={r} />
       </details>
       <p className={css.capFoot}>
-        How the number is made: for each block of busy hours, hours over {TARGET}% ÷ the hours one tutor of the subject
-        gives in that block, rounded up. The largest block decides. Each value is the 4-week total ÷ 4. Wise makes future
+        How the number is made: for each block of busy hours, the hours over {TARGET}% ÷ {TARGET}% of the hours one
+        tutor of the subject gives in that block, rounded up. The largest block decides. A class outside a tutor’s listed
+        hours counts as a busy hour given and booked. Each value is the 4-week total ÷ 4. Wise makes future
         classes only some weeks ahead, so a later week can look more free than it will be. Wise data from{" "}
         {formatInTimeZone(new Date(r.syncedAt), ZONE, "d MMM, HH:mm")}.
       </p>

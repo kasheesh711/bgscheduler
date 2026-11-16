@@ -32,8 +32,8 @@ import { fullPriority } from "./rules";
 
 export const CAPACITY_WEEKS = 4;
 /**
- * The hours students book, measured on the live classes of 23–29 November 2026: weekdays after school, and the
- * day at weekends. Minutes from Bangkok midnight; days as 0 = Sunday.
+ * The hours students book: weekdays after school, and the day at weekends. Measured on 17 November 2026 from
+ * the classes booked for the week of 23–29 November 2026. Minutes from Bangkok midnight; days as 0 = Sunday.
  */
 export const BUSY_BLOCKS = [
   { key: "weekday", label: "Weekday evenings", days: [1, 2, 3, 4, 5], start: 16 * 60, end: 20 * 60 },
@@ -76,8 +76,9 @@ const TITLE_ALIASES: [string, string[]][] = [
   ["engvr", ["EnglishVR"]],
   ["verbalreasoning", ["EnglishVR"]],
   ["english", ["EFL", "ESL"]],
-  ["eng", ["EFL", "ESL"]],
   ["mathsvr", ["MathVR"]],
+  ["mathsverbal", ["MathVR"]],
+  ["mathverbal", ["MathVR"]],
   ["geometry", ["Math"]],
   ["computerscience", ["ComSci"]],
   ["computing", ["ComSci"]],
@@ -101,6 +102,7 @@ export type CapacityHours = {
   /** Booked ÷ given, 0–1. Null when no hours are given. */
   utilization: number | null;
 };
+/** Hours per week inside one busy block. A class outside the listed hours counts in both: the tutor gave that time. */
 export type BusyHours = { given: number; booked: number };
 export type CapacityTutor = CapacityHours & {
   key: string;
@@ -143,11 +145,15 @@ export type HiringNeed = {
   tutorKeys: string[];
   /** Names of tutors with the subject and no class. */
   idle: string[];
-  blocks: (BusyHours & { key: BusyKey; used: number | null; hire: number })[];
+  /** Tutors with the subject who are listed for review, so their hours are in no number. */
+  review: number;
+  /** `givers` = tutors with time in the block; a new tutor is taken to give their average. */
+  blocks: (BusyHours & { key: BusyKey; used: number | null; givers: number; hire: number })[];
   /** People to hire now: the largest need of any block, since one new tutor can teach in all of them. */
   hire: number;
-  status: "hire" | "watch" | "enough";
-  /** The fullest block. Null when the tutors give no busy hours. */
+  /** "unknown" = no tutor with a class could be read, so there is nothing to measure. */
+  status: "hire" | "watch" | "enough" | "unknown";
+  /** The block that decides: the one that asks for the most people, else the fullest. Null with no busy hours. */
   tightest: BusyKey | null;
 };
 export type CapacityReport = {
@@ -182,15 +188,16 @@ export function classSubject(title: string | undefined, subjects: string[]): str
   const tags = subjects.map((s) => [s, key(s)] as const);
   const exact = tags.find(([, tag]) => tag === text);
   if (exact) return exact[0];
+  // Thai vowel and tone marks are \p{M}, so they stay inside a word.
+  const words = raw.split(/[^\p{L}\p{M}\p{N}]+/u).map(key).filter(Boolean);
   for (const [word, names] of TITLE_ALIASES) {
-    const found = text.startsWith(word) && names.find((name) => subjects.includes(name));
+    const found = (text.startsWith(word) || words.includes(word)) && names.find((name) => subjects.includes(name));
     if (found) return found;
   }
   // The longest tag wins, so "MathVR practice" is not "Math".
   const starts = tags.filter(([, tag]) => text.startsWith(tag)).sort((a, b) => b[1].length - a[1].length)[0];
   if (starts) return starts[0];
   // Whole words only: "sECONd language" is not Econ. A short word can be the start of a tag ("Bio", "Sci").
-  const words = raw.split(/[^\p{L}\p{N}]+/u).map(key).filter(Boolean);
   return tags.find(([, tag]) => words.some((w) => w.startsWith(tag) || (w.length >= 3 && tag.startsWith(w))))?.[0] ?? null;
 }
 
@@ -239,7 +246,7 @@ export function buildCapacityReport(input: {
   }
 
   const priority = fullPriority(input.priority);
-  type Pool = Pick<HiringNeed, "subject" | "tutorKeys" | "idle"> & {
+  type Pool = Pick<HiringNeed, "subject" | "tutorKeys" | "idle" | "review"> & {
     tags: Set<string>;
     busy: Record<BusyKey, BusyHours & { givers: number }>;
   };
@@ -298,7 +305,8 @@ export function buildCapacityReport(input: {
     const busy = Object.fromEntries(
       BUSY_BLOCKS.map((b) => [
         b.key,
-        { given: perWeek(intersectIntervals(given, busyMask[b.key])), booked: perWeek(intersectIntervals(inside, busyMask[b.key])) },
+        // A class outside the listed hours is still demand in a busy hour, and time the tutor gave.
+        { given: perWeek(intersectIntervals([...given, ...all], busyMask[b.key])), booked: perWeek(intersectIntervals(all, busyMask[b.key])) },
       ]),
     ) as Record<BusyKey, BusyHours>;
     const row: CapacityTutor = {
@@ -313,33 +321,35 @@ export function buildCapacityReport(input: {
       leaveUnknown: !group.leavesCompleteThrough || group.leavesCompleteThrough.getTime() < period.end,
       issues: [...issues].sort(),
     };
-    if (issues.size) {
-      needsReview.push(row);
-      continue;
-    }
-    tutors.push(row);
-
     for (const subject of new Set(subjects.flatMap((tag) => HIRING_SUBJECT[tag] ?? []))) {
       const pool = pools.get(subject) ?? {
         subject,
         tags: new Set<string>(),
         tutorKeys: [],
         idle: [],
+        review: 0,
         busy: Object.fromEntries(BUSY_BLOCKS.map((b) => [b.key, { given: 0, booked: 0, givers: 0 }])) as Pool["busy"],
       };
       pools.set(subject, pool);
       for (const tag of subjects) if (HIRING_SUBJECT[tag] === subject) pool.tags.add(tag);
-      if (row.idle) {
-        pool.idle.push(row.name);
-        continue;
-      }
-      pool.tutorKeys.push(row.key);
-      for (const b of BUSY_BLOCKS) {
-        pool.busy[b.key].given += busy[b.key].given;
-        pool.busy[b.key].booked += busy[b.key].booked;
-        if (busy[b.key].given > 0) pool.busy[b.key].givers++;
+      // CAP-04 and CAP-05: neither a review tutor nor an idle tutor adds hours, but the row still shows them.
+      if (issues.size) pool.review++;
+      else if (row.idle) pool.idle.push(row.name);
+      else {
+        pool.tutorKeys.push(row.key);
+        for (const b of BUSY_BLOCKS) {
+          pool.busy[b.key].given += busy[b.key].given;
+          pool.busy[b.key].booked += busy[b.key].booked;
+          if (busy[b.key].given > 0) pool.busy[b.key].givers++;
+        }
       }
     }
+    if (issues.size) {
+      needsReview.push(row);
+      continue;
+    }
+    tutors.push(row);
+
 
     const here = (subject: string) =>
       perWeek(intersectIntervals(classes.filter((c) => c.subject === subject).map((c) => c.interval), given));
@@ -396,10 +406,11 @@ export function buildCapacityReport(input: {
       // Hours over the target, in new tutors who give what a tutor of this subject gives in the block now.
       const short = booked - BUSY_TARGET * given;
       const hire = short > 1e-9 ? Math.ceil(short / ((BUSY_TARGET * given) / givers) - 1e-9) : 0;
-      return { key: b.key, given, booked, used: given > 0 ? booked / given : null, hire };
+      return { key: b.key, given, booked, used: given > 0 ? booked / given : null, givers, hire };
     });
-    const fullest = blocks.reduce((a, b) => ((b.used ?? -1) > (a.used ?? -1) ? b : a));
     const hire = Math.max(...blocks.map((b) => b.hire));
+    // Among the blocks that ask for the most people, the fullest. With no hire that is the fullest of all.
+    const fullest = blocks.filter((b) => b.hire === hire).reduce((a, b) => ((b.used ?? -1) > (a.used ?? -1) ? b : a));
     const index = priority.findIndex((p) => p.subject === pool.subject);
     return {
       subject: pool.subject,
@@ -409,9 +420,10 @@ export function buildCapacityReport(input: {
       tutors: pool.tutorKeys.length,
       tutorKeys: pool.tutorKeys,
       idle: pool.idle.sort(),
+      review: pool.review,
       blocks,
       hire,
-      status: hire > 0 ? "hire" : (fullest.used ?? 0) >= BUSY_WATCH ? "watch" : "enough",
+      status: !pool.tutorKeys.length ? "unknown" : hire > 0 ? "hire" : (fullest.used ?? 0) >= BUSY_WATCH ? "watch" : "enough",
       tightest: fullest.used === null ? null : fullest.key,
     };
   });

@@ -399,13 +399,16 @@ One row for each Hiring subject that has a tutor in Wise, with one status and on
 - **Hire N**: the subject's tutors are more than 75% full in a block of busy hours.
 - **Nearly full**: the fullest block is 60% full or more.
 - **Enough tutors**: all blocks are below 60%.
+- **Not known**: no tutor of the subject with a class could be read (all have no class, or did not load from Wise). The row says which.
 
 The rule (CAP-05, owner request 17 November 2026):
 
-- **Busy hours** are the hours students book: weekday evenings (Mon–Fri 16:00–20:00), Saturdays and Sundays (09:00–18:00). They were measured on the live classes of 23–29 November 2026 and are constants in `src/lib/hiring/capacity.ts` (`BUSY_BLOCKS`, `BUSY_TARGET`, `BUSY_WATCH`).
+- **Busy hours** are the hours students book: weekday evenings (Mon–Fri 16:00–20:00), Saturdays and Sundays (09:00–18:00). They were measured on 17 November 2026 from the classes booked for the week of 23–29 November 2026, and are constants in `src/lib/hiring/capacity.ts` (`BUSY_BLOCKS`, `BUSY_TARGET`, `BUSY_WATCH`).
 - All listed hours are not used for this number. On 17 November 2026 they showed 74% free, because tutors list long hours in Wise and 16 tutors had no class.
-- For each block: hours over 75% of the given hours ÷ the hours one tutor of the subject gives in that block (at 75%), rounded up. The largest block decides, because one new tutor can teach in all blocks.
+- For each block: hours over 75% of the given hours ÷ 75% of the hours one tutor of the subject gives in that block, rounded up. "One tutor" is the average of the tutors with time in the block. The largest block decides, because one new tutor can teach in all blocks, and the row names that block.
+- A class in a busy hour that is outside the tutor's listed hours counts as an hour given and booked. The tutor gave that time, and the demand is real.
 - **A tutor with no class in the period is not counted as capacity.** The row says how many there are, and the detail names them, so HR checks or uses them before a hire.
+- A tutor who is listed for review (see "Not counted" below) adds no hours. The row says how many of the subject's tutors did not load, because the number can change after the next sync.
 - A tutor's hours are one pool for all their subjects (CAP-01, owner decision 17 November 2026). A Maths-and-Physics tutor is in both subjects, and a Physics class also fills the Maths pool. So the numbers of two subjects must not be added: one new tutor who teaches both counts for both.
 - The Wise tags map to Hiring subjects in `HIRING_SUBJECT`. `EFL` and `ESL` make one `EFL/ESL` row. `EnglishVR`, `MathVR`, `NonVR`, `Others` and `Science` have no Hiring subject and appear only in the all-hours view.
 - A row also says when it asks for a hire and the subject's Hiring switch in Rules and setup is off.
