@@ -87,6 +87,9 @@ export function ResumeDeck({
   const [choices, setChoices] = useState<Map<string, DeckChoice>>(() => new Map(readKept().map((id) => [id, "keep" as const])));
   const [dx, setDx] = useState(0);
   const [sending, setSending] = useState(false);
+  const [failed, setFailed] = useState(0);
+  // The revision of each card when HR rejected it. A record that changed since then is refused by the server.
+  const [seen, setSeen] = useState<Map<string, number>>(new Map());
   const [drag, setDrag] = useState<{ x: number; width: number } | null>(null);
   const deck = useRef<HTMLDivElement>(null);
 
@@ -103,7 +106,12 @@ export function ResumeDeck({
     else next.delete(id);
     setChoices(next);
     writeKept(next);
+    const revision = byId.get(id)?.revision;
+    if (choice === "reject" && revision !== undefined) setSeen(new Map(seen).set(id, revision));
+    setFailed(0);
     setDx(0);
+    // A click moves focus to a button that then leaves the page; the arrow keys need the deck.
+    deck.current?.focus();
   };
   const clearKept = () => {
     const next = new Map([...choices].filter(([, choice]) => choice === "reject"));
@@ -112,11 +120,15 @@ export function ResumeDeck({
   };
   /** Stop has no undo, so nothing is written until HR confirms the list. A failed Stop keeps its row in the list. */
   const confirm = async () => {
-    if (!window.confirm(`Stop ${rejected.length} candidate${rejected.length === 1 ? "" : "s"}? Nothing is sent to them, and they leave every queue. This cannot be undone here.`)) return;
+    const list = rejected;
+    if (!window.confirm(`Stop ${list.length} candidate${list.length === 1 ? "" : "s"}? Nothing is sent to them, they leave every queue, and a booked call is cancelled. This cannot be undone here.`)) return;
     setSending(true);
     const done = new Set<string>();
-    for (const candidate of rejected) if (await command(rejectCommand(candidate))) done.add(candidate.id);
-    setChoices((current) => new Map([...current].filter(([id]) => !done.has(id))));
+    for (const candidate of list)
+      if (await command(rejectCommand({ ...candidate, revision: seen.get(candidate.id) ?? candidate.revision }))) done.add(candidate.id);
+    // A refused Stop goes back to the cards, so HR sees the record as it is now before a new choice.
+    setChoices((current) => new Map([...current].filter(([id, choice]) => choice === "keep" && !done.has(id))));
+    setFailed(list.length - done.size);
     setSending(false);
   };
   const locked = busy || sending;
@@ -130,7 +142,7 @@ export function ResumeDeck({
       tabIndex={-1}
       aria-label="Résumé cards"
       onKeyDown={(e) => {
-        if (!card || locked || e.target !== e.currentTarget) return;
+        if (!card || locked || (e.target as HTMLElement).closest("input, textarea, select, a")) return;
         if (e.key === "ArrowLeft") choose(card.id, "reject");
         if (e.key === "ArrowRight") choose(card.id, "keep");
       }}
@@ -141,11 +153,11 @@ export function ResumeDeck({
         </p>
         <div className={css.decisionActions}>
           {kept > 0 && (
-            <button type="button" className={css.secondary} onClick={clearKept}>
+            <button type="button" className={css.secondary} disabled={locked} onClick={clearKept}>
               Show kept cards again
             </button>
           )}
-          <button type="button" className={css.secondary} onClick={onClose}>
+          <button type="button" className={css.secondary} disabled={sending} onClick={onClose}>
             Back to the list
           </button>
         </div>
@@ -160,7 +172,7 @@ export function ResumeDeck({
           <header
             className={css.deckHandle}
             onPointerDown={(e) => {
-              if (locked) return;
+              if (locked || e.button !== 0) return;
               setDrag({ x: e.clientX, width: e.currentTarget.offsetWidth });
               e.currentTarget.setPointerCapture(e.pointerId);
             }}
@@ -206,6 +218,11 @@ export function ResumeDeck({
         </p>
       )}
 
+      {failed > 0 && (
+        <p role="alert" className={css.errorText}>
+          {failed} candidate{failed === 1 ? " was" : "s were"} not stopped, because the record changed or has an appointment. {failed === 1 ? "The card is" : "The cards are"} back in the deck.
+        </p>
+      )}
       {rejected.length > 0 && (
         <section className={css.deckPending} aria-label="Candidates to reject">
           <div className={css.decisionActions}>
