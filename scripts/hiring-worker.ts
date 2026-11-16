@@ -15,7 +15,7 @@ import {
   subscriptionAuthSchema,
 } from "../src/lib/hiring/model";
 import { settings } from "../src/lib/hiring/service";
-import { importApplication, observeSeekState } from "../src/lib/hiring/sources";
+import { importApplication, observeSeekState, saveSeekPhone, seekPhonesWanted } from "../src/lib/hiring/sources";
 import { keepResume } from "../src/lib/hiring/resume-files";
 import { runHiringCycle, sendOneRefusal } from "../src/lib/hiring/worker";
 import { requestDelivery } from "../src/lib/hiring/dispatch";
@@ -28,6 +28,11 @@ import {
   type ClaudeRunnerDeps,
 } from "../src/lib/feedback-autowriter/nightly/claude-runner";
 import { connectSeek, importSeek } from "./hiring-seek";
+
+/** SEEK applications already opened for a phone number since this worker started. */
+const phoneTried = new Set<string>();
+/** Twelve panels with the 10-second watch pause add about two minutes to a 15-minute cycle. */
+const PHONE_READS_PER_CYCLE = 12;
 
 async function main() {
   if (Number(process.versions.node.split(".")[0]) < 24)
@@ -115,6 +120,11 @@ async function main() {
         const known = new Set(rows.flatMap((r) => r.ids));
         const campaigns = [];
         let budget = 40;
+        // shortcut: the list of applications already opened for a phone number lives in this process only, so a restart
+        // opens a candidate with no number on SEEK once more; store the try on the row if that count grows.
+        const phoneNeed = await seekPhonesWanted(db, config);
+        for (const id of phoneTried) phoneNeed.delete(id);
+        let phoneBudget = PHONE_READS_PER_CYCLE;
         for (const { jobId } of config.seekJobs.filter((j) => j.active)) {
           const read = await importSeek(
             profile,
@@ -125,6 +135,15 @@ async function main() {
               observeSeekState(id, status, contacted, db),
             (candidateId, file) => keepResume(candidateId, file, db),
             budget,
+            {
+              need: phoneNeed,
+              max: phoneBudget,
+              save: async (applicationId, phone) => {
+                phoneTried.add(applicationId);
+                phoneBudget--;
+                if (phone) await saveSeekPhone(applicationId, phone, db);
+              },
+            },
           );
           budget -= read.imported;
           campaigns.push({ jobId, ...read });

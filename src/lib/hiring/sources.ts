@@ -1,4 +1,4 @@
-import { and, eq, gt, inArray, isNotNull, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, isNull, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -22,7 +22,7 @@ import {
   type Stage,
 } from "./model";
 import { queueRecruitmentForm } from "./recruitment";
-import { appInvited, callInviteSentAt, formSentAt } from "./queue";
+import { appInvited, callInviteSentAt, callQueue, formSentAt } from "./queue";
 import { RESUME_MAX_BYTES, sniffResume, storeResume, type ResumeFile } from "./resume-files";
 import { answerKey } from "./scoring";
 import { resultColumns } from "./result-history";
@@ -168,6 +168,10 @@ export async function importApplication(value: unknown, db: Database) {
           applicationId: input.applicationId,
         });
       }
+      // The number a candidate typed on the booking page is theirs to choose, so SEEK only fills an empty one. It is not
+      // part of the scored profile, so the revision stays.
+      if (!existing.phone && input.phone)
+        await tx.update(s.hiringCandidates).set({ phone: input.phone }).where(eq(s.hiringCandidates.id, existing.id));
       return existing.id;
     }
     const [created] = await tx
@@ -178,6 +182,7 @@ export async function importApplication(value: unknown, db: Database) {
         sourceIds: [input.applicationId],
         name: input.name,
         email: input.email,
+        phone: input.phone,
         profileText: text,
         workRightsAnswer: input.workRightsAnswer,
         previouslyContacted: input.previouslyContacted,
@@ -197,6 +202,33 @@ export async function importApplication(value: unknown, db: Database) {
     });
     return created.id;
   });
+}
+
+const PHONE_STAGES_OFF = ["stopped", "hired", "rejected"];
+
+/**
+ * The SEEK applications whose candidate has no phone number yet. The people HR must call come first: while one of them
+ * has no number, only they are returned. Stopped and decided candidates are never read again.
+ */
+export async function seekPhonesWanted(db: Database, config: HiringConfig) {
+  const rows = await db
+    .select({ id: s.hiringCandidates.id, ids: s.hiringCandidates.sourceIds })
+    .from(s.hiringCandidates)
+    .where(and(isNull(s.hiringCandidates.phone), notInArray(s.hiringCandidates.stage, PHONE_STAGES_OFF as Stage[])));
+  const toCall = new Set((await callQueue(db, config)).map((entry) => entry.id));
+  const first = rows.filter((row) => toCall.has(row.id));
+  return new Set((first.length ? first : rows).flatMap((row) => row.ids));
+}
+
+/** Stores the number read from SEEK. It never replaces a number, and the number stays out of the audit row. */
+export async function saveSeekPhone(applicationId: string, phone: string, db: Database) {
+  const [row] = await db
+    .update(s.hiringCandidates)
+    .set({ phone })
+    .where(and(isNull(s.hiringCandidates.phone), sql`${s.hiringCandidates.sourceIds} @> ${JSON.stringify([applicationId])}::jsonb`))
+    .returning({ id: s.hiringCandidates.id });
+  if (row) await audit(db, "seek-import", "phone-filled", row.id, { applicationId });
+  return !!row;
 }
 
 export async function observeSeekState(

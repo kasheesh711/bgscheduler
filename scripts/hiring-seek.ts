@@ -10,7 +10,7 @@ import {
 } from "../src/lib/hiring/model";
 import { BackfillFatal, type BackfillRead } from "../src/lib/hiring/backfill";
 import type { ResumeFile } from "../src/lib/hiring/resume-files";
-import { readWorkRights, redactProfile, removeWorkRights } from "../src/lib/hiring/seek-text";
+import { readWorkRights, redactProfile, removeWorkRights, seekPhone } from "../src/lib/hiring/seek-text";
 
 const ID_CONTROL = 'input[id^="checkbox-"], button[id$="-move-to"]';
 
@@ -152,6 +152,7 @@ async function readApplication(
     const email = emailHref
       ? decodeURIComponent(emailHref.slice(7)).trim().toLowerCase()
       : null;
+    const phone = await dialogPhone(dialog);
     for (let i = 0; i < 20; i++) {
       const more = profile.getByRole("button", { name: "More", exact: true });
       if ((await more.count()) === 0) break;
@@ -233,6 +234,7 @@ async function readApplication(
         sourceStatus: status ?? "",
         workRightsAnswer,
         jobId,
+        phone,
       },
       resumeFile,
       resumeFailed,
@@ -243,6 +245,35 @@ async function readApplication(
     await dialog
       .getByRole("button", { name: "Close modal", exact: true })
       .click();
+    await dialog.waitFor({ state: "hidden" });
+  }
+}
+
+/** The number SEEK shows beside the email. Two links, or none, is no number: the page is not what this reads. */
+async function dialogPhone(dialog: ReturnType<Page["getByRole"]>) {
+  const link = dialog.locator('a[href^="tel:"]');
+  return (await link.count()) === 1 ? seekPhone(await link.getAttribute("href")) : null;
+}
+
+/**
+ * Opens one known candidate's detail panel only to read the phone number, then closes it. It downloads nothing and
+ * clicks no Move, status or message control. Null means SEEK shows no usable number.
+ */
+async function readPhone(page: Page, card: ReturnType<Page["getByTestId"]>) {
+  const label = await card.locator('button[aria-label^="Move "][aria-haspopup="true"]').getAttribute("aria-label");
+  const name = label?.match(
+    /^Move (.+) (?:to a status|from (?:Inbox|Prescreen|Shortlist|Interview|Offer|Accept|Not Suitable))$/,
+  )?.[1];
+  if (!name) throw new Error("SEEK candidate selectors changed; phone read stopped.");
+  await card.getByText(name, { exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Candidate details" });
+  await dialog.waitFor({ state: "visible" });
+  try {
+    // The email link is in the same block and loads with it, so the phone link is there when this one is.
+    await dialog.locator('a[href^="mailto:"]').first().waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+    return await dialogPhone(dialog);
+  } finally {
+    await dialog.getByRole("button", { name: "Close modal", exact: true }).click();
     await dialog.waitFor({ state: "hidden" });
   }
 }
@@ -432,6 +463,9 @@ export async function importSeek(
   keepFile: (candidateId: string, file: ResumeFile) => Promise<boolean>,
   // New imports this pass. Several jobs share one budget per cycle.
   max = 40,
+  // Known candidates with no phone number yet. At most `max` panels are opened for them in one pass, with the watch
+  // pause between two, so the worker reads SEEK no faster than before. `save` gets null when SEEK shows no number.
+  phones?: { need: Set<string>; max: number; save: (applicationId: string, phone: string | null) => Promise<void> },
 ) {
   const browser = await chromium.launchPersistentContext(profilePath, {
     channel: "chrome",
@@ -442,7 +476,8 @@ export async function importSeek(
   let imported = 0,
     remaining = 0,
     resumeUploadsFailed = 0,
-    resumeLocked = 0;
+    resumeLocked = 0,
+    phoneReads = 0;
   const onWebsite = new Map<string, number>();
   const count = (status: string) => onWebsite.set(status, (onWebsite.get(status) ?? 0) + 1);
   try {
@@ -455,6 +490,11 @@ export async function importSeek(
             .getByRole("button", { name: /^Emails? \([1-9]\d*\)$/ })
             .count()) > 0;
         await observe(id, status, contacted);
+        if (phones?.need.has(id) && phoneReads < phones.max) {
+          if (phoneReads++) await new Promise((resolve) => setTimeout(resolve, SEEK_PAUSE_MS));
+          phones.need.delete(id);
+          await phones.save(id, await readPhone(page, cards.nth(index)));
+        }
       } else if (["Inbox", "Prescreen", "Shortlist"].includes(status)) {
         if (imported >= max) {
           remaining++;
