@@ -419,6 +419,10 @@ describe("hiring decision boundaries", () => {
         660,
       ),
     ).toBe(false);
+    // The same class as the UTC production sync stores it: the Bangkok wall clock as if it were UTC.
+    const stored = { ...block, startTime: new Date("2026-11-02T10:30:00Z"), endTime: new Date("2026-11-02T11:30:00Z") };
+    expect(indexedSlotAvailable({ ...group, sessionBlocks: [stored] }, "2026-11-02", 600, 660)).toBe(false);
+    expect(indexedSlotAvailable({ ...group, sessionBlocks: [stored] }, "2026-11-02", 1020, 1080)).toBe(true);
     expect(
       indexedSlotAvailable(
         { ...group, sessionBlocks: [{ ...block, isBlocking: false }] },

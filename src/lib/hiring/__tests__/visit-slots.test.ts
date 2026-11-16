@@ -185,11 +185,11 @@ describe("visit slots", () => {
     const withLeave = await times(
       group("Ek", {
         leaves: [
-          { startTime: stored("2026-11-02", 0), endTime: stored("2026-11-03", 0) },
+          { startTime: stored("2026-11-02", 720), endTime: stored("2026-11-02", 780) },
         ],
       }),
     );
-    expect(withLeave).toEqual([]);
+    expect(withLeave).toEqual(base.filter((_, i) => i !== 0));
     expect(await times(group("Ek", { leavesCompleteThrough: null }))).toEqual([]);
     // Leave coverage that stops before the mock hour is incomplete.
     expect(
