@@ -259,8 +259,12 @@ export function HiringDashboard() {
             : "Wise data is old or missing, so visit clashes may not show. Check the calendar in 4 Mock and paper."}
         </p>
       )}
+      {/* Outside the main load: this tab reads its own endpoint, so it opens at once and survives a failed load. */}
+      <div hidden={view !== "capacity"} className={css.viewPane}>
+        <CapacityScreen active={view === "capacity"} />
+      </div>
       {!data || !config || !insights ? (
-        <p role="status" className={css.loading}>
+        <p role="status" className={css.loading} hidden={view === "capacity"}>
           {error ? "Check the hiring setup and reload this page." : "Loading hiring…"}
         </p>
       ) : (
@@ -281,9 +285,6 @@ export function HiringDashboard() {
           />
         )}
         {/* Hidden, not unmounted, for the same reason: a tab switch keeps the filters and the open résumé. */}
-        <div hidden={view !== "capacity"} className={css.viewPane}>
-          <CapacityScreen active={view === "capacity"} />
-        </div>
         <div hidden={view !== "seek"} className={css.viewPane}>
           <SeekScreen
             data={data}

@@ -189,6 +189,112 @@ describe("buildCapacityReport", () => {
   });
 });
 
+describe("hiring need (CAP-05)", () => {
+  const SUNDAYS = ["2026-11-22", "2026-11-29", "2026-12-06", "2026-12-13"];
+  // A Physics tutor who gives Sunday 09:00–13:00 and teaches `booked` hours of it each Sunday.
+  const sundayTutor = (key: string, booked: number, extra: Partial<IndexedTutorGroup> = {}) =>
+    group(key, {
+      qualifications: [tag("Physics")],
+      availabilityWindows: [hours(0, 9, 13)],
+      sessionBlocks: booked ? SUNDAYS.map((date) => lesson(date, 9, 9 + booked, "In-Person Session-Physics")) : [],
+      ...extra,
+    });
+  const need = (groups: IndexedTutorGroup[], subject = "Physics") => report(groups).needs.find((n) => n.subject === subject)!;
+
+  it("asks for a tutor when the busy hours are over 75% full", () => {
+    const n = need([sundayTutor("P", 4)]);
+    // 4 h booked of 4 h. 75% is 3 h, so 1 h is over. One tutor adds 3 h at 75%: one hire.
+    expect(n).toMatchObject({ hire: 1, status: "hire", tightest: "sunday", tutors: 1, tutorKeys: ["P"], idle: [] });
+    expect(n.blocks.find((b) => b.key === "sunday")).toEqual({ key: "sunday", given: 4, booked: 4, used: 1, hire: 1 });
+    expect(n.blocks.find((b) => b.key === "weekday")).toEqual({ key: "weekday", given: 0, booked: 0, used: null, hire: 0 });
+  });
+
+  it("asks for more tutors when a larger pool is full", () => {
+    // 20 h booked of 20 h. 75% is 15 h, so 5 h are over. One tutor adds 3 h: two hires.
+    expect(need(["A", "B", "C", "D", "E"].map((key) => sundayTutor(key, 4))).hire).toBe(2);
+  });
+
+  it("says nearly full at the limit and enough below 60%", () => {
+    expect(need([sundayTutor("P", 3)])).toMatchObject({ hire: 0, status: "watch" });
+    expect(need([sundayTutor("P", 2)])).toMatchObject({ hire: 0, status: "enough" });
+  });
+
+  it("does not count a tutor with no class as capacity, and names that tutor", () => {
+    const n = need([sundayTutor("P", 4), sundayTutor("Idle", 0)]);
+    expect(n).toMatchObject({ hire: 1, tutors: 1, idle: ["Idle"] });
+    expect(n.blocks.find((b) => b.key === "sunday")!.given).toBe(4);
+    const r = report([sundayTutor("P", 4), sundayTutor("Idle", 0)]);
+    expect(r.tutors.map((t) => [t.key, t.idle])).toEqual([["P", false], ["Idle", true]]);
+    expect(r.totals.given).toBe(8); // The all-hours view still shows the idle tutor.
+  });
+
+  it("reads only the busy hours", () => {
+    // Monday 10:00–14:00 is not a busy block, so a full Monday morning does not ask for a hire.
+    const morning = group("M", { sessionBlocks: [MON, "2026-11-30", "2026-12-07", "2026-12-14"].map((d) => lesson(d, 10, 14)) });
+    const r = report([morning]);
+    expect(r.tutors[0]).toMatchObject({ utilization: 1, busy: { weekday: { given: 0, booked: 0 } } });
+    expect(r.needs[0]).toMatchObject({ subject: "Mathematics", hire: 0, status: "enough", tightest: null });
+    const evening = group("E", { availabilityWindows: [hours(1, 14, 22)] });
+    expect(report([evening]).tutors[0].busy.weekday).toEqual({ given: 4, booked: 0 }); // 16:00–20:00 only.
+  });
+
+  it("makes one row for the Hiring subject of two Wise tags, with its switch and priority", () => {
+    const r = buildCapacityReport({
+      groups: [
+        sundayTutor("A", 4, { qualifications: [tag("EFL"), tag("Science")] }),
+        sundayTutor("B", 1, { qualifications: [tag("ESL")] }),
+      ],
+      syncedAt: NOW,
+      priority: [
+        { subject: "Physics", hiring: true },
+        { subject: "EFL/ESL", hiring: false },
+      ],
+      now: NOW,
+    });
+    expect(r.needs).toHaveLength(1); // Science has no Hiring subject.
+    expect(r.needs[0]).toMatchObject({ subject: "EFL/ESL", wiseSubjects: ["EFL", "ESL"], tutors: 2, hiring: false, rank: 2 });
+  });
+
+  it("puts the largest need first", () => {
+    const r = report([
+      sundayTutor("P", 4),
+      sundayTutor("C", 3, { qualifications: [tag("Chemistry")] }),
+      sundayTutor("B", 1, { qualifications: [tag("Biology")] }),
+    ]);
+    expect(r.needs.map((n) => [n.subject, n.status])).toEqual([
+      ["Physics", "hire"],
+      ["Chemistry", "watch"],
+      ["Biology", "enough"],
+    ]);
+  });
+});
+
+describe("edges", () => {
+  it("sends a tutor to review when Wise did not load their hours in the last sync", () => {
+    // A failed fetch sets the leave watermark to the sync time, which is before the period.
+    const r = report([group("A", { leavesCompleteThrough: NOW }), group("B", { leavesCompleteThrough: null })]);
+    expect(r.needsReview.map((t) => [t.key, t.issues])).toEqual([["A", ["completeness"]], ["B", ["completeness"]]]);
+    expect(r.totals.tutors).toBe(0);
+    expect(r.needs).toEqual([]);
+  });
+
+  it("clips a class at the end of the period and keeps given = booked + free", () => {
+    // Tuesday 15 December is the last day. The class runs 23:00–01:00, so one hour is in the period.
+    const late = { ...lesson("2026-12-15", 23, 24), endTime: instant("2026-12-16", 60), endMinute: 60 };
+    const r = report([group("A", { sessionBlocks: [late, lesson(MON, 10, 12)] })]);
+    const t = r.tutors[0];
+    expect(t.outside).toBe(0.25);
+    expect(t.booked + t.remaining).toBe(t.given);
+  });
+
+  it("still counts a class whose weekday does not match its time", () => {
+    // The clock cannot be proven from the row, so it takes the shift of the snapshot.
+    const odd = lesson(MON, 10, 12, undefined, { weekday: 3 });
+    const r = report([group("A", { sessionBlocks: [lesson(TUE, 9, 10, undefined, { isBlocking: false }), odd] })]);
+    expect(r.tutors[0].booked).toBe(0.5);
+  });
+});
+
 describe("classSubject", () => {
   it("gives the only subject without reading the title", () => {
     expect(classSubject("Live Session", ["Math"])).toBe("Math");
@@ -207,6 +313,12 @@ describe("classSubject", () => {
     expect(classSubject("In-Person Session - SAT Math", subjects)).toBe("Math");
     expect(classSubject("In-Person Session - NVR", [...subjects, "NonVR"])).toBe("NonVR");
     expect(classSubject("In-Person Session - Eng VR", [...subjects, "EnglishVR"])).toBe("EnglishVR");
+    expect(classSubject("In-Person Session - Maths VR", subjects)).toBe("MathVR");
+    expect(classSubject("In-Person Session - English Lit", subjects)).toBe("Literature");
+    expect(classSubject("In-Person Session - Geometry", ["Geo", "Math"])).toBe("Math");
+    expect(classSubject("In-Person Session - Bio", ["Biology", "Chemistry"])).toBe("Biology");
+    expect(classSubject("In-Person Session - English as a Second Language", ["Econ", "Math"])).toBeNull();
+    expect(classSubject("In-Person Session - ภาษาไทย", ["Math", "Thai"])).toBe("Thai");
     expect(classSubject("In-Person Session-Chemistry", subjects)).toBeNull();
     expect(classSubject("In-Person Session", subjects)).toBeNull();
   });
