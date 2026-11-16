@@ -27,6 +27,22 @@ const RIGHTS = /Preferred work rights in Thailand\s*\n([^\n]*)/i;
 const isHeading = (line: string) => PAGE_HEADINGS.includes(line.trim().toLowerCase());
 
 /** The work-rights answer on a SEEK profile, or null when it is blank. The import schema allows 300 characters. */
+/**
+ * The number from SEEK's `tel:` link, with the same rule as the call booking page: spaces, dots, dashes and brackets go,
+ * and 8 to 15 digits stay, with an optional leading +. Anything else is no number, so a wrong one is never stored.
+ */
+export function seekPhone(href: string | null | undefined): string | null {
+  if (!href?.startsWith("tel:")) return null;
+  let raw: string;
+  try {
+    raw = decodeURIComponent(href.slice(4));
+  } catch {
+    return null;
+  }
+  const number = raw.replace(/[\s().-]/g, "");
+  return /^\+?\d{8,15}$/.test(number) ? number : null;
+}
+
 export function readWorkRights(profile: string): string | null {
   const line = profile.match(RIGHTS)?.[1] ?? "";
   return isHeading(line) ? null : line.trim().slice(0, 300).trim() || null;

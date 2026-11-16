@@ -15,7 +15,7 @@ import {
   subscriptionAuthSchema,
 } from "../src/lib/hiring/model";
 import { settings } from "../src/lib/hiring/service";
-import { importApplication, observeSeekState } from "../src/lib/hiring/sources";
+import { importApplication, observeSeekState, saveSeekPhone, seekPhonesWanted } from "../src/lib/hiring/sources";
 import { keepResume } from "../src/lib/hiring/resume-files";
 import { runHiringCycle, sendOneRefusal } from "../src/lib/hiring/worker";
 import { requestDelivery } from "../src/lib/hiring/dispatch";
@@ -28,6 +28,11 @@ import {
   type ClaudeRunnerDeps,
 } from "../src/lib/feedback-autowriter/nightly/claude-runner";
 import { connectSeek, importSeek } from "./hiring-seek";
+
+/** SEEK applications already opened for a phone number since this worker started. */
+const phoneTried = new Set<string>();
+/** Twelve panels with the 10-second watch pause add about two minutes to a 15-minute cycle. */
+const PHONE_READS_PER_CYCLE = 12;
 
 async function main() {
   if (Number(process.versions.node.split(".")[0]) < 24)
@@ -115,6 +120,11 @@ async function main() {
         const known = new Set(rows.flatMap((r) => r.ids));
         const campaigns = [];
         let budget = 40;
+        // shortcut: the list of applications already opened for a phone number lives in this process only, so a restart
+        // opens a candidate with no number on SEEK once more; store the try on the row if that count grows.
+        const phoneNeed = await seekPhonesWanted(db, config, phoneTried);
+        const phoneAsked = phoneNeed.size;
+        let phoneBudget = PHONE_READS_PER_CYCLE;
         for (const { jobId } of config.seekJobs.filter((j) => j.active)) {
           const read = await importSeek(
             profile,
@@ -125,10 +135,24 @@ async function main() {
               observeSeekState(id, status, contacted, db),
             (candidateId, file) => keepResume(candidateId, file, db),
             budget,
+            {
+              need: phoneNeed,
+              max: phoneBudget,
+              save: async (applicationId, read) => {
+                phoneTried.add(applicationId);
+                phoneBudget--;
+                if (!read) return;
+                // One number serves all of a candidate's applications.
+                for (const id of await saveSeekPhone(applicationId, read.phone, read.email, db)) phoneNeed.delete(id);
+              },
+            },
           );
           budget -= read.imported;
           campaigns.push({ jobId, ...read });
         }
+        // A full pass over every active job that opened no panel means SEEK does not list these applications (an ad that
+        // is no longer read, for example). They are set aside, so they cannot keep the others waiting.
+        if (phoneAsked && phoneBudget === PHONE_READS_PER_CYCLE) for (const id of phoneNeed) phoneTried.add(id);
         const imported = mergeSourceSummaries(campaigns);
         const cliVersion = execFileSync("claude", ["--version"], {
           encoding: "utf8",

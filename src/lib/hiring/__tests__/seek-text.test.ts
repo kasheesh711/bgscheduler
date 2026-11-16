@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { readWorkRights, redactProfile, removeWorkRights } from "../seek-text";
+import { applicationSchema } from "../model";
+import { phoneTier } from "../sources";
+import { readWorkRights, redactProfile, removeWorkRights, seekPhone } from "../seek-text";
 
 const RIGHTS = "I have permanent work rights with no restrictions";
 const OLD_REMOVAL = /Preferred work rights in Thailand\s*\n[^\n]*/i;
@@ -47,5 +49,45 @@ describe("redactProfile", () => {
   });
   it("does not change text when the name is empty", () => {
     expect(redactProfile("abc", "")).toBe("abc");
+  });
+});
+
+describe("SEEK phone link", () => {
+  it("takes the number from the tel link and removes spaces, dots, dashes and brackets", () => {
+    expect(seekPhone("tel:+66 812345678")).toBe("+66812345678");
+    expect(seekPhone("tel:081-234-5678")).toBe("0812345678");
+    expect(seekPhone("tel:(02) 123.4567")).toBe("021234567");
+    expect(seekPhone("tel:%2B66%20812345678")).toBe("+66812345678");
+  });
+  it("stores nothing for a link that is not a usable number", () => {
+    for (const href of [null, undefined, "", "mailto:a@b.co", "tel:", "tel:12345", "tel:1234567890123456", "tel:call me", "tel:+66 81 x234", "tel:%E0%A4%A"])
+      expect(seekPhone(href)).toBeNull();
+  });
+  it("is the form the import schema accepts, and an import with no phone still parses", () => {
+    const base = { applicationId: "00000000-0000-4000-8000-000000000001", name: "Sample", email: null, profileText: "x", previouslyContacted: false, sourceStatus: "Inbox" };
+    expect(applicationSchema.parse(base).phone).toBeNull();
+    expect(applicationSchema.parse({ ...base, phone: seekPhone("tel:+66 812345678") }).phone).toBe("+66812345678");
+    expect(applicationSchema.safeParse({ ...base, phone: "081 234 5678" }).success).toBe(false);
+  });
+});
+
+describe("which SEEK applications are opened for a phone number", () => {
+  const rows = [
+    { id: "call-1", ids: ["a1", "a2"] },
+    { id: "call-2", ids: ["b1"] },
+    { id: "other", ids: ["c1"] },
+    { id: "tracker-only", ids: [] },
+  ];
+  const toCall = new Set(["call-1", "call-2"]);
+  it("takes the people HR must call first, and only them", () => {
+    expect([...phoneTier(rows, toCall, new Set())].sort()).toEqual(["a1", "a2", "b1"]);
+  });
+  it("leaves out a tried application, and moves on when every call candidate is tried", () => {
+    expect([...phoneTier(rows, toCall, new Set(["a1", "b1"]))]).toEqual(["a2"]);
+    expect([...phoneTier(rows, toCall, new Set(["a1", "a2", "b1"]))]).toEqual(["c1"]);
+  });
+  it("is empty when nothing is left, and a row with no SEEK application never holds the first place", () => {
+    expect(phoneTier(rows, toCall, new Set(["a1", "a2", "b1", "c1"])).size).toBe(0);
+    expect([...phoneTier([{ id: "call-1", ids: [] }, { id: "other", ids: ["c1"] }], toCall, new Set())]).toEqual(["c1"]);
   });
 });
