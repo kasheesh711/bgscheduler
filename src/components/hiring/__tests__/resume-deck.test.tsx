@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { RESUME_TYPES } from "@/lib/hiring/model";
 import { CallsScreen } from "../calls-screen";
+import { ResumeBody } from "../candidate-inspector";
 import type { HiringCandidate, HiringData } from "../dashboard";
 import { nextCard, rejectCommand, RESUME_REJECT_REASON, ResumeDeck, swipeChoice, type DeckChoice } from "../resume-deck";
 
@@ -58,6 +59,16 @@ describe("résumé deck rules", () => {
     expect(nextCard(rows, new Map())).toEqual({ id: "a" });
     expect(nextCard(rows, new Map<string, DeckChoice>([["a", "keep"], ["b", "reject"]]))).toEqual({ id: "c" });
     expect(nextCard(rows, new Map<string, DeckChoice>([["a", "keep"], ["b", "reject"], ["c", "keep"]]))).toBeUndefined();
+  });
+});
+
+describe("ResumeBody viewer options", () => {
+  it("adds them to the iframe only, so Download keeps the plain address", () => {
+    const html = renderToStaticMarkup(
+      <ResumeBody id="a" name="Sample A" state="available" type={RESUME_TYPES.pdf} months={12} check={{ status: "ready" }} viewer="#toolbar=0" />,
+    );
+    expect(html).toContain('src="/api/hiring/resume/a#toolbar=0"');
+    expect(html).toContain('href="/api/hiring/resume/a"');
   });
 });
 

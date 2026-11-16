@@ -60,6 +60,8 @@ function ResumeCard({ candidate, data }: { candidate: HiringCandidate; data: Hir
         type={candidate.resumeType}
         months={data.config.resumeRetentionMonths}
         check={check}
+        // The file is the card: no thumbnail strip or toolbar, and the page as wide as the card.
+        viewer="#toolbar=0&navpanes=0&view=FitH"
       />
       {(!pdf || check.status === "failed") && (
         <div className={css.sourceText}>

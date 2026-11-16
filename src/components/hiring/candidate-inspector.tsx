@@ -209,6 +209,7 @@ export function ResumeBody({
   type,
   months,
   check,
+  viewer = "",
 }: {
   id: string;
   name: string;
@@ -216,6 +217,8 @@ export function ResumeBody({
   type: string | null;
   months: number;
   check: ResumeCheck;
+  /** PDF viewer options for the iframe only, such as "#toolbar=0". The download link never gets them. */
+  viewer?: string;
 }) {
   if (state === "deleted")
     return (
@@ -233,7 +236,7 @@ export function ResumeBody({
       {type === RESUME_TYPES.pdf && (
         <>
           <p className={css.inspectorMeta}>A link in a résumé can open another site. Do not sign in on a page that opens from a résumé.</p>
-          <iframe className={css.resumeFrame} src={src} title={`Original résumé of ${name}`} />
+          <iframe className={css.resumeFrame} src={src + viewer} title={`Original résumé of ${name}`} />
         </>
       )}
       <a className={css.sourceLink} href={src} download>
