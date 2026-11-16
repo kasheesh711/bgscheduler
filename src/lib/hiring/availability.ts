@@ -12,6 +12,7 @@ import { fetchWiseSessionsForBangkokDates } from "@/lib/wise/day-sessions";
 import { fetchTeacherAvailability } from "@/lib/wise/fetchers";
 import { getWiseSessionTeacherUserId } from "@/lib/wise/types";
 import { isBlockingStatus } from "@/lib/normalization/sessions";
+import { interpretSnapshotSessionInterval } from "@/lib/tutor-offboarding/workforce/snapshot-timezone";
 import {
   businessDates,
   CALL_DAY_END,
@@ -44,6 +45,43 @@ export const blocksHead = (issues: { type: string; message: string }[]) =>
       (i.type === "completeness" && !AVAILABILITY_ISSUE.test(i.message)),
   );
 
+type Span = { startTime: Date; endTime: Date };
+// The index keeps its group objects until the next snapshot, so each group is converted once.
+const busyCache = new WeakMap<object, { classes: Span[]; leaves: Span[] }>();
+/**
+ * A group's blocking classes and its leave from the snapshot, as real instants. Every Hiring read of index
+ * times goes through here. The sync stores Bangkok wall-clock Dates (`toLocalTime`), so with the UTC
+ * production sync each stored time is 7 hours after the real one. A class also keeps its Bangkok weekday and
+ * minute, which fix its real time. Leave has no such fields, so it takes the shift of the group's first class
+ * that resolves. With no such class, the writer is the UTC production sync.
+ */
+export function snapshotBusy(group: Pick<IndexedTutorGroup, "leaves" | "sessionBlocks">) {
+  const hit = busyCache.get(group);
+  if (hit) return hit;
+  const real = group.sessionBlocks.map((b) => interpretSnapshotSessionInterval(b));
+  const first = real.findIndex(Boolean);
+  const shift =
+    first < 0
+      ? -7 * 3_600_000
+      : Date.parse(real[first]!.startAt) - group.sessionBlocks[first].startTime.getTime();
+  const moved = (span: Span) => ({
+    startTime: new Date(span.startTime.getTime() + shift),
+    endTime: new Date(span.endTime.getTime() + shift),
+  });
+  const busy = {
+    classes: group.sessionBlocks.flatMap((b, i) =>
+      !b.isBlocking
+        ? []
+        : real[i]
+          ? [{ startTime: new Date(real[i]!.startAt), endTime: new Date(real[i]!.endAt) }]
+          : [moved(b)],
+    ),
+    leaves: group.leaves.map(moved),
+  };
+  busyCache.set(group, busy);
+  return busy;
+}
+
 // Saved office hours decide when a head is in. Wise working hours are not used (Kevin's instruction).
 export function indexedSlotAvailable(
   group: IndexedTutorGroup,
@@ -52,16 +90,13 @@ export function indexedSlotAvailable(
   end: number,
 ) {
   const range = { start: instant(date, start), end: instant(date, end) };
+  const busy = snapshotBusy(group);
   return (
     !!group.leavesCompleteThrough &&
     group.leavesCompleteThrough >= range.end &&
     !blocksHead(group.dataIssues) &&
-    !group.leaves.some((l) =>
-      overlap(range, { start: l.startTime, end: l.endTime }),
-    ) &&
-    !group.sessionBlocks.some(
-      (b) =>
-        b.isBlocking && overlap(range, { start: b.startTime, end: b.endTime }),
+    ![...busy.leaves, ...busy.classes].some((b) =>
+      overlap(range, { start: b.startTime, end: b.endTime }),
     )
   );
 }

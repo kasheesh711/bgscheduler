@@ -431,10 +431,11 @@ describe("hiring decision boundaries", () => {
       indexedSlotAvailable(
         {
           ...group,
+          // Leave 10:30–11:30 as the UTC production sync stores it: the Bangkok wall clock as if it were UTC.
           leaves: [
             {
-              startTime: new Date("2026-11-02T03:30:00Z"),
-              endTime: new Date("2026-11-02T04:30:00Z"),
+              startTime: new Date("2026-11-02T10:30:00Z"),
+              endTime: new Date("2026-11-02T11:30:00Z"),
             },
           ],
         },
