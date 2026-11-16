@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { RESUME_TYPES } from "@/lib/hiring/model";
 import { universityName } from "@/lib/hiring/seek-view";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
-import { ResumeBody, SourceTextBody, useResumeCheck, useSourceText } from "./candidate-inspector";
+import { PhoneLink, ResumeBody, SourceTextBody, useResumeCheck, useSourceText } from "./candidate-inspector";
 import { callSubjects } from "./calls-screen";
 import css from "./dashboard.module.css";
 
@@ -193,6 +193,9 @@ export function ResumeDeck({
           >
             <div>
               <h2 className={css.deckName}>{card.name}</h2>
+              <span onPointerDown={(e) => e.stopPropagation()}>
+                <PhoneLink phone={card.phone} large />
+              </span>
               <p className={css.inspectorMeta}>
                 {subjects.main}
                 {subjects.other.length > 0 && `, also ${subjects.other.join(", ")}`} · {universityName(card)}

@@ -176,6 +176,16 @@ export function SourceTextBody({ id, source, error }: { id: string } & ReturnTyp
   return <p className={css.inspectorMeta}>No extracted profile or résumé text is available for this record.</p>;
 }
 
+/** The number HR dials, large enough to read from the desk phone. `tel:` opens the phone app on a mobile. */
+export function PhoneLink({ phone, large = false }: { phone: string | null | undefined; large?: boolean }) {
+  if (!phone) return <span className={css.mutedCell}>No phone number</span>;
+  return (
+    <a className={large ? `${css.phoneLink} ${css.phoneLarge}` : css.phoneLink} href={`tel:${phone.replace(/[^\d+]/g, "")}`}>
+      {phone}
+    </a>
+  );
+}
+
 /** `fallbackJobId` is for a row with no saved job. Each other row links to the job it was read from. */
 export function SeekLinks({
   candidate,

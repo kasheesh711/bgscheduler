@@ -239,6 +239,8 @@
 .table tbody tr:hover, .table tbody tr[data-selected] { background: var(--tint); }
 .candidateCell { min-width: 0; }
 .surface .nameButton { display: block; max-width: 180px; overflow: hidden; color: var(--ink); font-weight: 500; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.phoneLink { color: var(--ink); font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; text-decoration: underline; text-underline-offset: 3px; }
+.phoneLarge { display: inline-block; margin: 2px 0; font-size: 24px; }
 .email { display: block; max-width: 180px; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .mutedCell { color: var(--muted); }
 .readyWord { margin-left: 6px; color: var(--accent-text); font-size: 12px; font-weight: 500; }

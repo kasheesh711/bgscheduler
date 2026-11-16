@@ -7,7 +7,7 @@ import { topHiringSubject } from "@/lib/hiring/scoring";
 import { universityName } from "@/lib/hiring/seek-view";
 import type { CandidateExtras } from "@/lib/hiring/status";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
-import { SeekLinks } from "./candidate-inspector";
+import { PhoneLink, SeekLinks } from "./candidate-inspector";
 import { ResumeDeck } from "./resume-deck";
 import { SeekPanel } from "./seek-screen";
 import css from "./dashboard.module.css";
@@ -114,6 +114,7 @@ export function CallsScreen({
                 <tr>
                   <th>#</th>
                   <th>Candidate</th>
+                  <th>Phone</th>
                   <th>Subject</th>
                   <th>University</th>
                   <th>Score</th>
@@ -142,6 +143,9 @@ export function CallsScreen({
                         </button>
                         {c.profileAssessment?.briefSummary && <span className={css.email}>{c.profileAssessment.briefSummary}</span>}
                       </td>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <PhoneLink phone={c.phone} />
+                      </td>
                       <td>
                         {subjects.main}
                         {subjects.other.length > 0 && <span className={css.email}>Also {subjects.other.join(", ")}</span>}
@@ -150,11 +154,6 @@ export function CallsScreen({
                       <td className={css.num}>{c.profileScore === null ? "–" : Math.round(c.profileScore * 10) / 10}</td>
                       <td onClick={(e) => e.stopPropagation()}>
                         {callState(c.id, data.calls, data.inviteOutbox)}
-                        {c.phone && (
-                          <a className={css.email} href={`tel:${c.phone}`}>
-                            {c.phone}
-                          </a>
-                        )}
                       </td>
                       <td className={css.mutedCell}>{triesText(c.callReview)}</td>
                       <td onClick={(e) => e.stopPropagation()}>
