@@ -8,6 +8,7 @@ import { preScreenNote, visitText, type CandidateExtras } from "@/lib/hiring/sta
 import type { Command, HiringCandidate } from "./dashboard";
 import { CRITERION_LABELS, PILL_CLASS, RESULT_CLASS, RESULT_LABELS } from "./pipeline-charts";
 import { Pentagon } from "./pentagon";
+import { phoneView } from "@/lib/hiring/phone";
 import css from "./dashboard.module.css";
 
 const POINTS = { met: 1, partial: 0.5, not_met: 0, unknown: 0 };
@@ -176,12 +177,13 @@ export function SourceTextBody({ id, source, error }: { id: string } & ReturnTyp
   return <p className={css.inspectorMeta}>No extracted profile or résumé text is available for this record.</p>;
 }
 
-/** The number HR dials, large enough to read from the desk phone. `tel:` opens the phone app on a mobile. */
+/** The number HR dials, in one Thai format. On a mobile, a tap opens the phone's own call screen with the number. */
 export function PhoneLink({ phone, large = false }: { phone: string | null | undefined; large?: boolean }) {
   if (!phone) return <span className={css.mutedCell}>No phone number</span>;
+  const view = phoneView(phone);
   return (
-    <a className={large ? `${css.phoneLink} ${css.phoneLarge}` : css.phoneLink} href={`tel:${phone.replace(/[^\d+]/g, "")}`}>
-      {phone}
+    <a className={large ? `${css.phoneLink} ${css.phoneLarge}` : css.phoneLink} href={view.href}>
+      {view.display}
     </a>
   );
 }

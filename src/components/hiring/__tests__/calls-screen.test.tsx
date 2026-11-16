@@ -63,16 +63,17 @@ describe("CallsScreen", () => {
     );
     expect(html).toContain("Booked Mon 16 Nov, 10:15");
     expect(html).toContain('href="tel:+66812345678"');
+    expect(html).toContain(">081 234 5678<");
     // Its own column, and a clear note for a candidate with no number.
     expect(html).toContain("<th>Phone</th>");
     expect(html).toContain("No phone number");
     expect(html).toContain("Invited 12 Nov");
     expect(html).toContain("Call booking");
   });
-  it("dials only digits and the plus sign, and shows the number as written", () => {
+  it("shows a Thai number in one format, however it was typed, and dials the international number", () => {
     const html = screen(data({ candidates: [candidate({ phone: "081 234-5678" }), candidate({ id: "b" })] }));
-    expect(html).toContain('href="tel:0812345678"');
-    expect(html).toContain(">081 234-5678<");
+    expect(html).toContain('href="tel:+66812345678"');
+    expect(html).toContain(">081 234 5678<");
   });
   it("says so when nobody is waiting, and when calls are off", () => {
     expect(screen(data({ callOrder: [] }))).toContain("Nobody is waiting for a call.");
