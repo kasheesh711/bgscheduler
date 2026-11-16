@@ -87,7 +87,6 @@ const TITLE_ALIASES: [string, string[]][] = [
   ["computerscience", ["ComSci"]],
   ["computing", ["ComSci"]],
   ["coding", ["ComSci"]],
-  ["writing", ["EFL", "ESL"]],
   ["nvr", ["NonVR"]],
   ["nonverbal", ["NonVR"]],
   ["ภาษาไทย", ["Thai"]],
@@ -165,6 +164,15 @@ export type HiringNeed = {
   /** The order of the list: new starts × how full the tutors are. 0 until the demand read is joined. */
   score: number;
 };
+/**
+ * How full the subject's tutors are, 0–1, in the block the row names. One rule for the row, the score and the
+ * detail. With no tutor to measure: 0 when a tutor with no class could take the students, else 1, because
+ * nobody is known to be free.
+ */
+export function needFullness(need: Pick<HiringNeed, "tutors" | "idle" | "blocks" | "tightest">): number {
+  if (!need.tutors) return need.idle.length ? 0 : 1;
+  return need.blocks.find((b) => b.key === need.tightest)?.used ?? 0;
+}
 export type CapacityReport = {
   from: string;
   to: string;

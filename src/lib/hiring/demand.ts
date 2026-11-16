@@ -1,7 +1,15 @@
 import { sql } from "drizzle-orm";
 import { type Database, getDb } from "@/lib/db";
 import { ensureIndex } from "@/lib/search/index";
-import { buildCapacityReport, classSubject, DEMAND_DAYS, HIRING_SUBJECT, type CapacityReport, type HiringNeed } from "./capacity";
+import {
+  buildCapacityReport,
+  classSubject,
+  DEMAND_DAYS,
+  HIRING_SUBJECT,
+  needFullness,
+  type CapacityReport,
+  type HiringNeed,
+} from "./capacity";
 import { localDate, shiftDate, SUBJECTS, type HiringConfig, type Subject } from "./model";
 import { fullPriority } from "./rules";
 
@@ -13,6 +21,8 @@ const WISE_TAGS = [
 ];
 /** Titles of Hiring subjects that no Wise tag covers, and of subjects that are not on the Hiring list. */
 const TITLE_SUBJECTS: [RegExp, string][] = [
+  [/^eng(lish)?\s*lit/, "English Literature"],
+  [/^eng$/, "EFL/ESL"],
   [/^french/, "French"],
   [/^(art|design)/, "Art & Design Technology"],
   [/^ict/, "ICT"],
@@ -85,7 +95,8 @@ export async function loadEnrolmentRows(db: Database = getDb(), now = new Date()
         and v.payload->'session'->>'wiseClassId' is not null
         and st.student not in (select wise_user_id from tutor_wise_accounts where wise_user_id is not null)
         and st.student not in (
-          select wise_student_id from post_class_session_participants where lower(trim(student_name)) like '% online')
+          select wise_student_id from post_class_session_participants
+          where lower(trim(student_name)) like '% online' and wise_student_id is not null)
     )
     select student, class_id, title, tutor, max(level) level, min(at) first, max(at) last
     from taken group by student, class_id, title, tutor
@@ -123,7 +134,9 @@ export function demandSubject(title: string, tutorTags: string[] = []): string {
   const direct = TITLE_SUBJECTS.find(([pattern]) => pattern.test(text.toLowerCase().replace(/^trial\s+/, "")));
   if (direct) return direct[1];
   const tag = classSubject(text.replace(/^trial\s+/i, ""), WISE_TAGS);
-  return tag ? (HIRING_SUBJECT[tag] ?? OTHER_LABEL[tag] ?? OTHER_SUBJECT) : OTHER_SUBJECT;
+  if (tag) return HIRING_SUBJECT[tag] ?? OTHER_LABEL[tag] ?? OTHER_SUBJECT;
+  // "Writing" and "Essay" with no other subject word are English writing classes.
+  return /writ+ing|essay/i.test(text) ? "EFL/ESL" : OTHER_SUBJECT;
 }
 
 export type DemandSubject = {
@@ -143,7 +156,7 @@ export type DemandReport = {
   from: string;
   to: string;
   subjects: DemandSubject[];
-  /** All starts in the 90 days, each student-and-course pair counted for each of its subjects. */
+  /** All starts in the 90 days. A student in one course counts one time for each subject they started in it. */
   started: number;
   /** Starts whose subject could not be read from a title or a tutor. They are in "Other or not known". */
   unknown: number;
@@ -155,6 +168,8 @@ export type DemandReport = {
  */
 export function buildDemand(input: { rows: EnrolmentRow[]; tutorTags: Map<string, string[]>; now: Date }): DemandReport {
   const now = input.now.getTime();
+  // Whole Bangkok days, so a block holds the dates its label shows whatever the hour of the class.
+  const bangkokDay = (t: number) => Math.floor((t + 7 * 3_600_000) / DAY);
   const untitled = (title: string) => !title.replace(/^.*?session[\s-]*/i, "").replace(/\(cancell?ed\)\s*$/i, "").trim();
   // An untitled class takes the subject this student has with this tutor in the same course, when there is one only.
   const withTutor = new Map<string, Set<string>>();
@@ -180,7 +195,7 @@ export function buildDemand(input: { rows: EnrolmentRow[]; tutorTags: Map<string
   const subjects = new Map<string, DemandSubject & { byLevel: Map<string, number> }>();
   let started = 0, unknown = 0;
   for (const pair of pairs.values()) {
-    const age = Math.floor((now - pair.first) / DAY);
+    const age = bangkokDay(now) - bangkokDay(pair.first);
     const isStart = age >= 0 && age < DEMAND_DAYS;
     const isActive = now - pair.last < 30 * DAY;
     if (!isStart && !isActive) continue;
@@ -218,13 +233,11 @@ export function buildDemand(input: { rows: EnrolmentRow[]; tutorTags: Map<string
   };
 }
 
-/** How full the subject's tutors are in their fullest busy block, 0–1. With no tutor to measure, nobody can take a new student. */
-const fullness = (need: HiringNeed) => (need.tutors ? Math.max(0, ...need.blocks.map((b) => b.used ?? 0)) : 1);
-
 /**
  * CAP-06 (owner request, 17 November 2026): the order follows demand. Score = new starts in 90 days × how full
- * the tutors are. A full subject with no new students drops; a growing subject with tutors near the limit rises.
- * A Hiring subject with starts and no tutor tagged in Wise gets a row too.
+ * the tutors are (`needFullness`). A full subject with no new students drops; a growing subject with tutors near
+ * the limit rises. A Hiring subject with starts and no tutor tagged in Wise gets a row too. Subjects with the
+ * same score keep the order by need: people to hire, then how full.
  */
 export function prioritise(
   needs: HiringNeed[],
@@ -257,9 +270,9 @@ export function prioritise(
   return rows
     .map((need) => {
       const d = bySubject.get(need.subject) ?? null;
-      return { ...need, demand: d, score: (d?.started ?? 0) * fullness(need) };
+      return { ...need, demand: d, score: (d?.started ?? 0) * needFullness(need) };
     })
-    .sort((a, b) => b.score - a.score || b.hire - a.hire || fullness(b) - fullness(a) || a.rank - b.rank);
+    .sort((a, b) => b.score - a.score || b.hire - a.hire || needFullness(b) - needFullness(a) || a.rank - b.rank);
 }
 
 /**

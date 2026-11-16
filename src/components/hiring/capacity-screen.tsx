@@ -6,6 +6,7 @@ import {
   BUSY_BLOCKS,
   BUSY_TARGET,
   DEMAND_DAYS,
+  needFullness,
   type CapacityHours,
   type CapacityReport,
   type CapacityTutor,
@@ -52,6 +53,7 @@ export function needReason(need: HiringNeed) {
 export function demandTrend(d: Pick<DemandSubject, "started" | "months">) {
   const [first, , last] = d.months;
   if (d.started < 10) return "";
+  if (first === last) return "steady";
   return last >= first * 1.2 ? "rising" : last <= first * 0.8 ? "falling" : "steady";
 }
 
@@ -151,11 +153,12 @@ function TutorTable({ rows, review = [] }: { rows: CapacityTutor[]; review?: Cap
 
 /** How full the tutors are in the block that decides, as a short bar with the limit marked. */
 function FullMeter({ need }: { need: HiringNeed }) {
-  const used = need.blocks.find((b) => b.key === need.tightest)?.used ?? null;
+  const used = needFullness(need);
   return (
     <span className={css.needFull}>
-      <span className={css.needTrack} aria-hidden="true" data-limit>
-        <span data-over={need.hire > 0} style={{ width: `${Math.min(100, (used ?? 0) * 100)}%` }} />
+      {/* The mark follows the limit in the code, not a copy of it in the stylesheet. */}
+      <span className={css.needTrack} aria-hidden="true" data-limit style={{ "--limit": `${TARGET}%` } as React.CSSProperties}>
+        <span data-over={need.hire > 0} style={{ width: `${Math.min(100, (need.tutors ? used : 0) * 100)}%` }} />
       </span>
       <span className={css.num}>{need.tutors ? percent(used) : "–"}</span>
     </span>
@@ -169,7 +172,7 @@ export function NeedDetail({ need, report }: { need: HiringNeed; report: Capacit
   const limit = worst ? BUSY_TARGET * worst.given : 0;
   const perTutor = worst ? (BUSY_TARGET * worst.given) / worst.givers : 0;
   const d = need.demand;
-  const fullest = Math.max(0, ...need.blocks.map((b) => b.used ?? 0));
+  const fullest = needFullness(need);
   const labels = report.demand ? periods(report.demand.to) : [];
   const top = Math.max(1, ...(d?.months ?? []));
   return (
@@ -386,7 +389,7 @@ export function CapacityView({
   const [open, setOpen] = useState<string | null>(null);
   const idle = r.tutors.filter((t) => t.idle);
   // The top of the list, without subjects that have room.
-  const first = r.needs.filter((n) => n.status !== "enough" && (!r.demand || n.score > 0)).slice(0, 3);
+  const first = r.needs.filter((n) => n.status !== "enough").slice(0, 3);
   const max = Math.max(1, ...r.needs.map((n) => n.demand?.started ?? 0), ...(r.demand?.subjects.map((d) => d.started) ?? []));
   return (
     <div>
@@ -402,7 +405,8 @@ export function CapacityView({
       )}
       {!r.demand && (
         <p role="alert" className={css.alert}>
-          The new-student numbers could not load. The list is in the order of how full the tutors are.
+          The new-student numbers could not load. The list is in the order of need: people to hire, then how full the
+          tutors are.
         </p>
       )}
       <section className={css.needHero} aria-label="Top priorities">

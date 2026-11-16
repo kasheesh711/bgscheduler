@@ -400,7 +400,7 @@ One row for each Hiring subject, in order of priority. Each row has two bars and
 - **Tutors full:** how full the subject's tutors are in the busy block that decides, with the 75% limit marked.
 - **What to do:** the status below.
 
-**The order (CAP-06, owner request 17 November 2026).** Before, the list measured supply only, so a subject with two or three full tutors and one new student stood above Mathematics. Now the score is **new students in 90 days × how full the tutors are**. A full subject with no new students drops. A growing subject with tutors near the limit rises. The header names the top three that are not "Enough tutors".
+**The order (CAP-06, owner request 17 November 2026).** Before, the list measured supply only, so a subject with two or three full tutors and one new student stood above Mathematics. Now the score is **new students in 90 days × how full the tutors are** (the percentage on the row). A full subject with no new students drops. A growing subject with tutors near the limit rises. Subjects with the same score keep the order by need: people to hire, then how full. The header names the top three that are not "Enough tutors".
 
 **What a new student is.** A student's first class that took place (Wise status ENDED) in one Wise class (one course at one level) in one subject. So a new student, a new subject for a student, and a move to a new level each count one time. Source and rules:
 
@@ -409,8 +409,9 @@ One row for each Hiring subject, in order of priority. Each row has two bars and
 - `workforce_session_versions` has every class from February 2026 with title and students, but stopped on 10 October 2026. It is used as the look-back that tells a new start from an old one. It is the stored class history only; the workforce report engine is not used.
 - The title is matched to a subject with the same rule as the tutor bars (`classSubject`). A title of a Hiring subject with no Wise tag (French, Art, ICT, IELTS) is matched by name. "Trial" classes count.
 - General science, 11+ reasoning and "Other or not known" are not on the Hiring list. They show below the list with the same bars, so the demand is visible.
-- A Hiring subject with new students and no tutor tagged in Wise gets a row with "Not known". Its new students count in full in the score, because nobody can take them.
-- If the read of this record fails, the supply numbers still load, the list is in the order of how full the tutors are, and the screen says so.
+- A Hiring subject with new students and no tutor tagged in Wise gets a row with "Not known". Its new students count in full in the score, because nobody is known to be free. A subject whose only tutors have no class scores 0: HR checks those tutors first.
+- A 30-day block holds whole Bangkok days, so it holds exactly the dates on its label.
+- If the read of this record fails, the supply numbers still load, the list is in the order of need (people to hire, then how full the tutors are), and the screen says so.
 
 Not checked by a test: the SQL in `loadEnrolmentRows`. It was run against live data on 17 November 2026 (378 starts in 90 days).
 
@@ -468,6 +469,8 @@ Limits:
 - A subject with one or two tutors moves from "enough" to "hire" on a few hours.
 - New students show demand that arrived. A student who wanted a class and got none is not in the data.
 - A new start does not mean a net gain: students who stopped are not subtracted.
+- A start is counted for each Wise class. If Wise gets a new class for a student who stays in the same course (not checked), that student counts again.
+- A class with two subjects in its title ("Biology & Chemistry") counts for the first one.
 - The numbers are separate from Tutor Offboarding → Analytics (CAP-03). That report is a history of recorded dates; this tab is a forward view of the current snapshot. The two can differ.
 
 The data comes from `GET /api/hiring?capacity=1`. It loads when the tab first opens and does not wait for the main Hiring load.

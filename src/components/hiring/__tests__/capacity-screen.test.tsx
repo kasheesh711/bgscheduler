@@ -119,6 +119,8 @@ describe("CapacityView", () => {
     expect(html).not.toContain("Wise data is old");
     expect(html).not.toContain("could not load");
     expect(view(report({ needs: [need("Thai")] }))).toContain("No new tutor needed");
+    // A subject over the limit is named even with no new student.
+    expect(view(report({ needs: [need("History", { hire: 1, status: "hire" })] }))).toContain(">History<");
   });
 
   it("shows each subject with its new students, how full the tutors are, and what to do", () => {
@@ -170,6 +172,7 @@ describe("demandTrend", () => {
     expect(demandTrend({ started: 20, months: [10, 5, 5] })).toBe("falling");
     expect(demandTrend({ started: 31, months: [10, 10, 11] })).toBe("steady");
     expect(demandTrend({ started: 6, months: [1, 1, 4] })).toBe("");
+    expect(demandTrend({ started: 10, months: [0, 10, 0] })).toBe("steady");
   });
 });
 
