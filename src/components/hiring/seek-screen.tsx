@@ -18,7 +18,7 @@ import {
   type SeekFilter,
 } from "@/lib/hiring/seek-view";
 import { preScreenNote, type CandidateExtras } from "@/lib/hiring/status";
-import { AssessmentBlock, ResumeBody, SeekLinks, SourceTextBody, useResumeCheck, useSourceText } from "./candidate-inspector";
+import { AssessmentBlock, PhoneLink, ResumeBody, SeekLinks, SourceTextBody, useResumeCheck, useSourceText } from "./candidate-inspector";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
 import { PILL_CLASS } from "./pipeline-charts";
 import css from "./dashboard.module.css";
@@ -153,6 +153,7 @@ export function SeekPanel({
       <header className={css.inspectorHead}>
         <div>
           <h2 className={css.inspectorName}>{candidate.name}</h2>
+          {candidate.phone && <PhoneLink phone={candidate.phone} large />}
           <p className={css.inspectorMeta}>{candidate.email || "Email needs review"}</p>
           <SeekLinks candidate={candidate} fallbackJobId={data.config.seekJobs[0].jobId} />
           <button type="button" className={css.inlineLink} onClick={onOpenRecord}>
