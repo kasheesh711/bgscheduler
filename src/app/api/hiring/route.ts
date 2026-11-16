@@ -2,7 +2,7 @@ import { z } from "zod";
 import { after, NextResponse } from "next/server";
 import { requireHiringAdmin } from "@/lib/hiring/access";
 import { createFileIntent, finishFile } from "@/lib/hiring/assessment-files";
-import { capacityReport } from "@/lib/hiring/capacity";
+import { hiringCapacity } from "@/lib/hiring/demand";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
 import { changePaperMarks, changePaperSubject, changeRubric, clearResultCheck } from "@/lib/hiring/marking";
 import { RUBRIC_ITEMS, type RubricItem } from "@/lib/hiring/marking-sheet";
@@ -142,7 +142,7 @@ export async function GET(request: Request) {
     if (params.has("capacity")) {
       const db = getDb();
       const { config } = await settings(db);
-      return NextResponse.json(await capacityReport(config.subjectPriority, db), {
+      return NextResponse.json(await hiringCapacity(config.subjectPriority, db), {
         headers: { "Cache-Control": "no-store" },
       });
     }

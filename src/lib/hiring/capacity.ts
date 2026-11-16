@@ -16,9 +16,10 @@
 //           the number of people to hire reads only the busy hours, and a
 //           tutor with no class in the period is not counted as capacity:
 //           HR checks that tutor first.
+//   CAP-06  Demand order. The list follows new students (demand.ts): the score
+//           is new starts in 90 days × how full the subject's tutors are.
 // ----------------------------------------------------------------------------
-import { type Database, getDb } from "@/lib/db";
-import { ensureIndex, type IndexedTutorGroup } from "@/lib/search/index";
+import type { IndexedTutorGroup } from "@/lib/search/index";
 import {
   intersectIntervals,
   intervalMinutes,
@@ -27,10 +28,13 @@ import {
 } from "@/lib/tutor-offboarding/workforce/intervals";
 import { interpretSnapshotSessionInterval } from "@/lib/tutor-offboarding/workforce/snapshot-timezone";
 import { indexIsStale } from "./availability";
+import type { DemandReport, DemandSubject } from "./demand";
 import { instant, localDate, shiftDate, type HiringConfig, type Subject } from "./model";
 import { fullPriority } from "./rules";
 
 export const CAPACITY_WEEKS = 4;
+/** The look-back for new students (CAP-06). Here, not in demand.ts, so the screen can read it without server code. */
+export const DEMAND_DAYS = 90;
 /**
  * The hours students book: weekdays after school, and the day at weekends. Measured on 17 November 2026 from
  * the classes booked for the week of 23–29 November 2026. Minutes from Bangkok midnight; days as 0 = Sunday.
@@ -49,7 +53,7 @@ const DAY = 86_400_000;
 const MINUTE = 60_000;
 
 /** Wise teacher-tag subject → the Hiring subject it recruits for. A tag with no entry has no Hiring subject. */
-const HIRING_SUBJECT: Record<string, Subject> = {
+export const HIRING_SUBJECT: Record<string, Subject> = {
   Math: "Mathematics",
   Physics: "Physics",
   Chemistry: "Chemistry",
@@ -83,6 +87,7 @@ const TITLE_ALIASES: [string, string[]][] = [
   ["computerscience", ["ComSci"]],
   ["computing", ["ComSci"]],
   ["coding", ["ComSci"]],
+  ["writing", ["EFL", "ESL"]],
   ["nvr", ["NonVR"]],
   ["nonverbal", ["NonVR"]],
   ["ภาษาไทย", ["Thai"]],
@@ -155,6 +160,10 @@ export type HiringNeed = {
   status: "hire" | "watch" | "enough" | "unknown";
   /** The block that decides: the one that asks for the most people, else the fullest. Null with no busy hours. */
   tightest: BusyKey | null;
+  /** New students of the subject in the last 90 days. Null until the demand read is joined (`prioritise`). */
+  demand: DemandSubject | null;
+  /** The order of the list: new starts × how full the tutors are. 0 until the demand read is joined. */
+  score: number;
 };
 export type CapacityReport = {
   from: string;
@@ -163,8 +172,10 @@ export type CapacityReport = {
   syncedAt: string;
   stale: boolean;
   totals: CapacityHours & { tutors: number };
-  /** By Hiring subject, the largest need first. */
+  /** By Hiring subject. With demand: the highest score first. Without: the largest need first. */
   needs: HiringNeed[];
+  /** The demand period and the subjects that are not on the Hiring list. Null when the demand read failed. */
+  demand: DemandReport | null;
   subjects: CapacitySubject[];
   tutors: CapacityTutor[];
   needsReview: CapacityTutor[];
@@ -425,6 +436,8 @@ export function buildCapacityReport(input: {
       hire,
       status: !pool.tutorKeys.length ? "unknown" : hire > 0 ? "hire" : (fullest.used ?? 0) >= BUSY_WATCH ? "watch" : "enough",
       tightest: fullest.used === null ? null : fullest.key,
+      demand: null,
+      score: 0,
     };
   });
   const fullness = (need: HiringNeed) => Math.max(...need.blocks.map((b) => b.used ?? -1));
@@ -437,19 +450,10 @@ export function buildCapacityReport(input: {
     stale: indexIsStale({ syncedAt: input.syncedAt }, input.now),
     totals: tutors.reduce((sum, row) => add(sum, row), { ...zero(), tutors: tutors.length }),
     needs,
+    demand: null,
     subjects,
     tutors: tutors.sort(byName),
     needsReview: needsReview.sort(byName),
     unidentified,
   };
-}
-
-/** Reads the warm snapshot index only. No Wise call and no write. */
-export async function capacityReport(
-  priority: HiringConfig["subjectPriority"],
-  db: Database = getDb(),
-  now = new Date(),
-): Promise<CapacityReport> {
-  const index = await ensureIndex(db);
-  return buildCapacityReport({ groups: index.tutorGroups, syncedAt: index.syncedAt, priority, now });
 }
