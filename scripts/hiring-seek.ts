@@ -252,7 +252,12 @@ async function readApplication(
 /** The number SEEK shows beside the email. Two links, or none, is no number: the page is not what this reads. */
 async function dialogPhone(dialog: ReturnType<Page["getByRole"]>) {
   const link = dialog.locator('a[href^="tel:"]');
-  return (await link.count()) === 1 ? seekPhone(await link.getAttribute("href")) : null;
+  // The number is optional, so a page that changes under this read gives no number, never a failed import.
+  try {
+    return (await link.count()) === 1 ? seekPhone(await link.getAttribute("href", { timeout: 5000 })) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
