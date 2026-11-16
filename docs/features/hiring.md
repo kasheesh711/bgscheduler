@@ -2,9 +2,10 @@
 
 Status: visit automation is live with sending off (2 Nov 2026). The three-stage revamp is complete in code on stacked pull requests #246 to #254. Local checks passed. Migrations `0120` and `0121` are applied to production. Merge, deployment, live use and acceptance are separate steps, listed in [Go-live for the revamp](#go-live-for-the-revamp).
 
-The Hiring page has six tabs. Each opens by address (`/hiring?view=seek`).
+The Hiring page has seven tabs. Each opens by address (`/hiring?view=seek`).
 
 - **Overview** (`view=overview`): summary figures, limit meters, the candidate table, charts, and worker, delivery and activity status.
+- **Capacity** (`view=capacity`): which subject to hire for now and how many people, from tutor hours in the next 4 weeks. See [Capacity](#capacity).
 - **1 Seek intake** (`view=seek`): see [Seek intake](#seek-intake).
 - **2 Calls** (`view=calls`): see [HR calls](#hr-calls).
 - **3 Pre-screen** (`view=prescreen`): see [Pre-screen screen](#pre-screen-screen).
@@ -386,6 +387,68 @@ The **Head schedules** view shows one head's Monday-to-Friday week at a time. A 
 A mock that overlaps a Wise class, leave or sit-in is a clash. The calendar and the candidate row show it. An old or missing Wise snapshot sets a stale warning. The warning never hides the week.
 
 The data comes from `GET /api/hiring?head={canonicalKey}&weekStart={date}`.
+
+## Capacity
+
+The Capacity tab tells HR which subject to hire for now and how many people. It is read-only. It reads the current Wise snapshot (the same index as Search) and makes no Wise call. The detail is behind a click.
+
+### First screen: hire this month
+
+One row for each Hiring subject that has a tutor in Wise, with one status and one reason:
+
+- **Hire N**: the subject's tutors are more than 75% full in a block of busy hours.
+- **Nearly full**: the fullest block is 60% full or more.
+- **Enough tutors**: all blocks are below 60%.
+- **Not known**: no tutor of the subject with a class could be read (all have no class, or did not load from Wise). The row says which.
+
+The rule (CAP-05, owner request 17 November 2026):
+
+- **Busy hours** are the hours students book: weekday evenings (Mon–Fri 16:00–20:00), Saturdays and Sundays (09:00–18:00). They were measured on 17 November 2026 from the classes booked for the week of 23–29 November 2026, and are constants in `src/lib/hiring/capacity.ts` (`BUSY_BLOCKS`, `BUSY_TARGET`, `BUSY_WATCH`).
+- All listed hours are not used for this number. On 17 November 2026 they showed 74% free, because tutors list long hours in Wise and 16 tutors had no class.
+- For each block: hours over 75% of the given hours ÷ 75% of the hours one tutor of the subject gives in that block, rounded up. "One tutor" is the average of the tutors with time in the block. The largest block decides, because one new tutor can teach in all blocks, and the row names that block.
+- A class in a busy hour that is outside the tutor's listed hours counts as an hour given and booked. The tutor gave that time, and the demand is real.
+- **A tutor with no class in the period is not counted as capacity.** The row says how many there are, and the detail names them, so HR checks or uses them before a hire.
+- A tutor who is listed for review (see "Not counted" below) adds no hours. The row says how many of the subject's tutors did not load, because the number can change after the next sync.
+- A tutor's hours are one pool for all their subjects (CAP-01, owner decision 17 November 2026). A Maths-and-Physics tutor is in both subjects, and a Physics class also fills the Maths pool. So the numbers of two subjects must not be added: one new tutor who teaches both counts for both.
+- The Wise tags map to Hiring subjects in `HIRING_SUBJECT`. `EFL` and `ESL` make one `EFL/ESL` row. `EnglishVR`, `MathVR`, `NonVR`, `Others` and `Science` have no Hiring subject and appear only in the all-hours view.
+- A row also says when it asks for a hire and the subject's Hiring switch in Rules and setup is off.
+
+The number is for now. There is no forecast for later months: HR opens the tab each month.
+
+Click a subject to see each block (booked of given hours), the sum behind the number, the tutors with no class, and the subject's tutors.
+
+### The period and one tutor's hours
+
+The period is the 28 Bangkok days that start tomorrow. Today is left out because its past classes are not in the snapshot. Each weekday occurs four times, and each value is the 4-week total divided by 4: hours per week.
+
+For one tutor (one Wise identity group, so linked online and onsite accounts count one time):
+
+| Term | Rule |
+|---|---|
+| Given | Wise working hours minus leave. Overlapping hours of linked accounts count one time. |
+| Booked | Classes inside the given hours. Cancelled classes do not count. |
+| Free | Given minus booked. |
+| Used | Booked ÷ given. No value when no hours are given. |
+| Outside hours | Classes outside the given hours. Shown in its own column and not in a rate. |
+
+- **Active tutor:** a person in the snapshot who has a class in the period, or who gives hours and has a subject tag. An account with hours but no tag and no class is a staff account and is left out.
+- **Not counted (CAP-04, fail closed):** an active tutor is listed for review and is in no number when the snapshot has an identity (`alias`) or `completeness` issue for them, or when their leave watermark is before the period. The sync sets that watermark to the sync time when it cannot load a tutor's Wise hours and leave, so a failed load shows there even when the issue row is stored under the tutor's full Wise name.
+
+### Behind a click
+
+- **Tutors with no classes, and tutors not counted:** one table.
+- **All hours and all tutors:** every listed hour by Wise subject tag and by tutor. The bar is dark for classes in the subject, grey for classes in the tutor's other subjects or with a title that names none of them, and light for free hours. A level row (curriculum and level) shows the full hours of the tutors with that tag, with booked time in one tone. A click on a subject filters the tutor table.
+- **Class subject:** a tutor with one subject teaches that subject. For a tutor with more, the words after "Session" in the Wise class title must match one of that tutor's own tags. The footnote shows the hours with no match.
+
+Limits:
+
+- Wise makes future classes only some weeks ahead, so a later week can look more free than it will be.
+- The given hours are what each tutor entered in Wise.
+- Some tutors fail to load in each sync and are left out until the next one, so a number can move between syncs.
+- A subject with one or two tutors moves from "enough" to "hire" on a few hours.
+- The numbers are separate from Tutor Offboarding → Analytics (CAP-03). That report is a history of recorded dates; this tab is a forward view of the current snapshot. The two can differ.
+
+The data comes from `GET /api/hiring?capacity=1`. It loads when the tab first opens and does not wait for the main Hiring load.
 
 ## Rules and setup
 
