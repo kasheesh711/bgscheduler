@@ -649,3 +649,16 @@
 .funnelRule { color: var(--muted); }
 .funnelNote { margin-top: 6px; color: var(--muted); font-size: 12px; }
 @media (min-width: 1180px) { .funnelGrid { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); } }
+
+/* First-use hint (one per role view, dismissed per browser) */
+.firstUseHint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--stone); border-radius: 8px; background: var(--paper); font-size: 13px; }
+.firstUseHint p { flex: 1 1 32ch; margin: 0; }
+.surface .firstUseHint .secondary { margin-top: 0; }
+.tableCaption { caption-side: top; text-align: left; padding: 0 0 6px; font-weight: 600; font-size: 13px; }
+/* Tab skeletons: grey blocks in the shape of the tab while its data loads. */
+.skeleton .loading { padding-bottom: 12px; }
+.skeletonHero, .skeletonLine { display: block; margin: 0 24px 10px; border-radius: 12px; background: var(--tint); }
+.skeletonHero { height: 76px; margin-bottom: 16px; }
+.skeletonLine { height: 44px; border-radius: 6px; }
+/* The title block has a fixed basis, so whether the view switch wraps does not depend on the subtitle that loads later. */
+.topbar > div:first-child { flex: 1 1 60ch; min-width: 0; }

@@ -302,6 +302,12 @@ describe("Rules and setup", () => {
       expect(html).toContain(text);
   });
 
+  it("paints the tab before the long university list", () => {
+    const html = panel(make({ universities: [{ name: "MIT", country: "US", rank: null, edition: "2026-2027", sourceUrl: "https://www.usnews.com/education/best-global-universities", aliases: [] }] }));
+    expect(html).toContain("Loading 1 universities…");
+    expect(html).not.toContain('aria-label="University 1"');
+  });
+
   it("describes the profile gate as the code applies it", () => {
     const html = panel(make());
     expect(html).toContain("waits at New");

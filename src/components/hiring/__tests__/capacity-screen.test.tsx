@@ -230,4 +230,10 @@ describe("CapacityScreen", () => {
   it("does not load before the tab opens", () => {
     expect(renderToStaticMarkup(<CapacityScreen active={false} />)).toContain("Loading capacity…");
   });
+
+  it("holds the shape of the report while it loads, so nothing jumps", () => {
+    const html = renderToStaticMarkup(<CapacityScreen active={false} />);
+    expect(html).toContain('role="status"');
+    expect(html.match(/aria-hidden="true"/g)).toHaveLength(7);
+  });
 });

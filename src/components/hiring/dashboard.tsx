@@ -22,6 +22,7 @@ import { FunnelPanel } from "./funnel-panel";
 import { RunSheetScreen } from "./run-sheet-screen";
 import { SeekScreen } from "./seek-screen";
 import { SetupPanel } from "./setup-panel";
+import { TabSkeleton } from "./tab-skeleton";
 import css from "./dashboard.module.css";
 
 const serif = Instrument_Serif({
@@ -215,13 +216,18 @@ export function HiringDashboard() {
           <h1 className={css.title}>
             Tutor <em>hiring</em>
           </h1>
-          {data && (
-            <p className={css.subtitle}>
-              SEEK {campaignNames(data.config.seekJobs)} · Threshold {data.config.profileThreshold}/100 ·
-              Automation {data.config.enabled ? "on" : "paused"} · Messages{" "}
-              {data.config.deliveryEnabled ? "on" : "paused"}
-            </p>
-          )}
+          {/* Always one line, so the tabs below do not move down when the data arrives. */}
+          <p className={css.subtitle}>
+            {data ? (
+              <>
+                SEEK {campaignNames(data.config.seekJobs)} · Threshold {data.config.profileThreshold}/100 ·
+                Automation {data.config.enabled ? "on" : "paused"} · Messages{" "}
+                {data.config.deliveryEnabled ? "on" : "paused"}
+              </>
+            ) : (
+              "\u00a0"
+            )}
+          </p>
         </div>
         <div role="status" className={css.notice}>
           {/* Rules and setup shows these beside its Save button, where they are in view. */}
@@ -269,9 +275,13 @@ export function HiringDashboard() {
         <CapacityScreen active={view === "capacity"} />
       </div>
       {!data || !config || !insights ? (
-        <p role="status" className={css.loading} hidden={view === "capacity"}>
-          {error ? "Check the hiring setup and reload this page." : "Loading hiring…"}
-        </p>
+        error ? (
+          <p role="status" className={css.loading} hidden={view === "capacity"}>
+            Check the hiring setup and reload this page.
+          </p>
+        ) : (
+          <TabSkeleton label={`Loading hiring: ${VIEWS[view]}…`} hidden={view === "capacity"} />
+        )
       ) : (
         <>
         {view === "setup" && (

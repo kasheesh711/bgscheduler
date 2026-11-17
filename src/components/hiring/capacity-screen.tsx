@@ -15,6 +15,7 @@ import {
 import type { DemandSubject } from "@/lib/hiring/demand";
 import { ZONE } from "@/lib/hiring/model";
 import css from "./dashboard.module.css";
+import { TabSkeleton } from "./tab-skeleton";
 
 const hours = (value: number) => value.toFixed(1);
 const percent = (value: number | null) => (value === null ? "–" : `${Math.round(value * 100)}%`);
@@ -551,8 +552,6 @@ export function CapacityScreen({ active }: { active: boolean }) {
       </button>
     </p>
   ) : (
-    <p role="status" className={css.loading}>
-      Loading capacity…
-    </p>
+    <TabSkeleton label="Loading capacity…" />
   );
 }
