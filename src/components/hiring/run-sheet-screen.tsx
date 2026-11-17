@@ -154,9 +154,16 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
             head or a paper. No visit has a room yet.
           </p>
           {!coming.length && recent.length > 0 && (
-            <p>
-              Last visit day: {dayLabel(recent[0].date)}.
-            </p>
+            <div>
+              <h3 className={css.panelTitle}>Last visit day: {dayLabel(recent[0].date)}</h3>
+              <Table
+                head={["Time", "Candidate", "Subject", "Head", "Paper", "Room"]}
+                rows={recent
+                  .filter((r) => r.date === recent[0].date)
+                  .map((r) => [times(r), r.candidateName, r.subject ?? review(NO_SUBJECT), head(r), <Paper key="p" row={r} />, review(r.roomReason)])}
+                empty="No visits."
+              />
+            </div>
           )}
           {days.map((date) => (
             <div key={date}>

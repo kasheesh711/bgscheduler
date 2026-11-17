@@ -1,17 +1,18 @@
-/* BeGifted 4.0.0 surface. Scoped on purpose: /hiring does not use the app's theme tokens. */
+/* BeGifted 4.0.0 surface, on the app's theme tokens. */
 .surface {
-  --paper: #faf8f4;
-  --ink: #141414;
-  --support: #3a3a3a;
-  --muted: #6b6b6b;
-  --line: #e8e3da;
-  --tint: #f1ede7;
-  --stone: #d3ccc0;
-  --stone-dark: #85817a;
-  --accent-text: #b84a00;
-  --good: #17683e;
-  --warn: #795500;
-  --danger: #b52931;
+  /* Mapped onto the app tokens in globals.css; good, warn and the stone greys are mixed from them. */
+  --paper: var(--background);
+  --ink: var(--foreground);
+  --support: color-mix(in oklch, var(--foreground) 82%, var(--background));
+  --muted: var(--muted-foreground);
+  --line: var(--border);
+  --tint: color-mix(in oklch, var(--foreground) 5%, var(--background));
+  --stone: color-mix(in oklch, var(--foreground) 22%, var(--background));
+  --stone-dark: color-mix(in oklch, var(--foreground) 50%, var(--background));
+  --accent-text: color-mix(in oklch, var(--primary) 88%, black);
+  --good: color-mix(in oklch, var(--available) 48%, black);
+  --warn: color-mix(in oklch, var(--blocked) 48%, black);
+  --danger: color-mix(in oklch, var(--destructive) 85%, black);
   --serif: var(--font-instrument-serif), Georgia, serif;
   --sans: var(--font-inter), system-ui, sans-serif;
 
@@ -361,7 +362,7 @@
 .subjectPicker legend { margin-bottom: 2px; color: var(--muted); }
 .subjectPicker label, .subjectChecks label { display: inline-flex; align-items: center; gap: 4px; color: var(--support); }
 .subjectPicker input, .subjectChecks input, .checkList input { accent-color: var(--ink); }
-.fieldLabel { display: grid; gap: 3px; color: var(--muted); }
+.fieldLabel { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; color: var(--muted); }
 .textarea { width: 100%; padding: 6px 8px; resize: vertical; }
 .decisionActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .callActions { flex-wrap: nowrap; white-space: nowrap; }
@@ -376,7 +377,7 @@
 /* Setup */
 .setupBar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 24px; border-bottom: 1px solid var(--line); background: var(--paper); }
 .setupGrid { display: grid; grid-template-columns: 1fr; }
-.setupSection { display: grid; align-content: start; gap: 8px; min-width: 0; overflow-wrap: anywhere; padding: 12px 24px 16px; border-bottom: 1px solid var(--line); }
+.setupSection { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 8px; min-width: 0; overflow-wrap: anywhere; padding: 12px 24px 16px; border-bottom: 1px solid var(--line); }
 .setupSection .panelLede { margin-bottom: 0; }
 .setupSection .secondary { margin-top: 0; }
 .weightBar { display: flex; gap: 2px; height: 10px; }
@@ -390,11 +391,12 @@
 .input { width: 100%; height: 28px; padding: 0 8px; min-width: 0; }
 .checkList { display: grid; gap: 4px; }
 .checkList label { display: flex; align-items: center; gap: 6px; color: var(--support); }
-.interviewerRow { display: grid; grid-template-columns: 1fr; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); }
+.interviewerRow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); }
 .interviewerRow .inlineLink { justify-self: start; align-self: center; }
 .subjectChecks { display: flex; flex-wrap: wrap; gap: 2px 12px; grid-column: 1 / -1; }
 .universityScroll { min-height: 120px; max-height: 340px; overflow: auto; }
-.setupSection :is(input, select, textarea) { max-width: 100%; }
+.setupSection :is(input, select, textarea) { max-width: 100%; box-sizing: border-box; }
+.setupSection :is(p, label, span, code) { min-width: 0; overflow-wrap: anywhere; }
 .universityTable { width: 100%; min-width: 980px; border-collapse: collapse; }
 .universityTable th { position: sticky; top: 0; z-index: 1; padding: 4px 6px; background: var(--paper); color: var(--muted); font-weight: 500; text-align: left; }
 .universityTable td { padding: 2px 6px; border-top: 1px solid var(--line); white-space: nowrap; }
@@ -409,7 +411,7 @@
   .charts { grid-template-columns: repeat(2, 1fr); }
   .charts .panel:nth-child(even) { border-left: 1px solid var(--line); }
   .wideOnly { display: table-cell; }
-  .interviewerRow { grid-template-columns: 1fr 1fr auto; }
+  .interviewerRow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
   .setupGrid { grid-template-columns: repeat(2, 1fr); }
   .setupFull { grid-column: 1 / -1; }
   .setupWide { grid-column: 1 / -1; }
@@ -458,7 +460,7 @@
   .setupSection + .setupSection { border-left: 1px solid var(--line); }
   .setupWide { grid-column: auto; }
   .setupFull { border-left: 0; }
-  .interviewerRow { grid-template-columns: minmax(120px, 1fr) minmax(160px, 1.3fr) auto; }
+  .interviewerRow { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto; }
 }
 /* Wide enough for the average beside the other charts, so Subject supply gets a full row and the table starts higher. */
 @media (min-width: 1360px) and (min-height: 720px) {
@@ -686,11 +688,13 @@
 /* Setup rows: the action never wraps per letter; inputs shrink instead; a status value keeps its word whole. */
 .interviewerRow > input { min-width: 0; }
 .interviewerRow .inlineLink { white-space: nowrap; }
-.statusRow > span:last-child { flex-shrink: 0; max-width: 60%; text-align: right; }
+.statusRow > span:last-child { flex: 1 1 8em; min-width: 0; text-align: right; }
 .checkInline { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
 /* A long status sentence wraps under its label instead of running out of the setup column. */
 .statusRow { flex-wrap: wrap; }
 .activeFilters { flex-wrap: wrap; }
-/* Next action and Owner only where the table has room for them beside the visit columns. */
+/* Next action and Owner from 1200px. */
 .widestOnly { display: none; }
-@media (min-width: 1360px) { .widestOnly { display: table-cell; } }
+@media (min-width: 1200px) { .widestOnly { display: table-cell; } }
+/* Lower-value columns (pre-screen score, university, flags, updated) leave room for Next action and Owner below 1360px. */
+@media (min-width: 720px) and (max-width: 1359px) { .surface .xwide { display: none; } }

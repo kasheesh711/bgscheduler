@@ -219,7 +219,7 @@ export function CandidateTable({
               <th className={css.widestOnly}>Next action</th>
               <th className={css.widestOnly}>Owner</th>
               <th className={css.wideOnly}>Pre-screen</th>
-              <th className={css.wideOnly}>Pre-screen score</th>
+              <th className={`${css.wideOnly} ${css.xwide}`}>Pre-screen score</th>
               <th className={css.wideOnly}>Visit</th>
               <th className={css.wideOnly} title="Degree, Subject, Curriculum, Teaching, English">
                 <span className={css.evidenceHead}>
@@ -228,10 +228,10 @@ export function CandidateTable({
                   ))}
                 </span>
               </th>
-              <th className={css.wideOnly}>University</th>
+              <th className={`${css.wideOnly} ${css.xwide}`}>University</th>
               <th className={css.wideOnly}>Subjects</th>
-              <th className={css.wideOnly}>Flags</th>
-              <th className={css.wideOnly} aria-sort={sort.key === "updated" ? (sort.descending ? "descending" : "ascending") : "none"}>
+              <th className={`${css.wideOnly} ${css.xwide}`}>Flags</th>
+              <th className={`${css.wideOnly} ${css.xwide}`} aria-sort={sort.key === "updated" ? (sort.descending ? "descending" : "ascending") : "none"}>
                 <button
                   type="button"
                   onClick={() => setSort({ key: "updated", descending: sort.key === "updated" ? !sort.descending : true })}
@@ -330,7 +330,7 @@ export function CandidateTable({
                       </span>
                     )}
                   </td>
-                  <td className={css.wideOnly}>
+                  <td className={`${css.wideOnly} ${css.xwide}`}>
                     {c.preScreenScore === null ? (
                       <span className={css.mutedCell}>–</span>
                     ) : (
@@ -361,7 +361,7 @@ export function CandidateTable({
                       <span className={css.mutedCell}>–</span>
                     )}
                   </td>
-                  <td className={`${css.wideOnly} ${css.truncate}`} title={c.universityAssessment?.name ?? undefined}>
+                  <td className={`${css.wideOnly} ${css.xwide} ${css.truncate}`} title={c.universityAssessment?.name ?? undefined}>
                     {c.universityAssessment ? (
                       <>
                         {c.universityAssessment.name ?? "Not confirmed"}
@@ -377,8 +377,8 @@ export function CandidateTable({
                     {c.subjects.slice(0, 2).join(", ") || <span className={css.mutedCell}>–</span>}
                     {c.subjects.length > 2 && <span className={css.points}>+{c.subjects.length - 2}</span>}
                   </td>
-                  <td className={`${css.wideOnly} ${css.mutedCell} ${css.truncate}`}>{flags.join(", ")}</td>
-                  <td className={`${css.wideOnly} ${css.mutedCell}`}>{shortDate(c.updatedAt)}</td>
+                  <td className={`${css.wideOnly} ${css.xwide} ${css.mutedCell} ${css.truncate}`}>{flags.join(", ")}</td>
+                  <td className={`${css.wideOnly} ${css.xwide} ${css.mutedCell}`}>{shortDate(c.updatedAt)}</td>
                 </tr>
               );
             })}
