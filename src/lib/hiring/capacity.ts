@@ -18,6 +18,13 @@
 //           HR checks that tutor first.
 //   CAP-06  Demand order. The list follows new students (demand.ts): the score
 //           is new starts in 90 days × how full the subject's tutors are.
+//   CAP-07  Weekend peak (measured 18 November 2026; owner to confirm in the
+//           morning). Staff said the rate felt low: half of all booked hours
+//           are at weekends, and the 09:00–18:00 block mixed quiet hours into
+//           the peak. Classes of the past 8 weeks and the next 4 weeks put the
+//           weekend peak at 10:00–15:00 (Sunday next 4 weeks: to 16:00), the
+//           hours with at least 80% of the day's busiest hour. Replaces the
+//           17 November Sat–Sun 09:00–18:00 block. Weekday 16:00–20:00 stays.
 // ----------------------------------------------------------------------------
 import type { IndexedTutorGroup } from "@/lib/search/index";
 import {
@@ -36,13 +43,13 @@ export const CAPACITY_WEEKS = 4;
 /** The look-back for new students (CAP-06). Here, not in demand.ts, so the screen can read it without server code. */
 export const DEMAND_DAYS = 90;
 /**
- * The hours students book: weekdays after school, and the day at weekends. Measured on 17 November 2026 from
- * the classes booked for the week of 23–29 November 2026. Minutes from Bangkok midnight; days as 0 = Sunday.
+ * The hours students book: weekdays after school (measured 17 November 2026) and the weekend peak (CAP-07, measured
+ * 18 November 2026). Minutes from Bangkok midnight; days as 0 = Sunday.
  */
 export const BUSY_BLOCKS = [
-  { key: "weekday", label: "Weekday evenings", days: [1, 2, 3, 4, 5], start: 16 * 60, end: 20 * 60 },
-  { key: "saturday", label: "Saturdays", days: [6], start: 9 * 60, end: 18 * 60 },
-  { key: "sunday", label: "Sundays", days: [0], start: 9 * 60, end: 18 * 60 },
+  { key: "weekday", label: "Weekday evenings 16:00–20:00", days: [1, 2, 3, 4, 5], start: 16 * 60, end: 20 * 60 },
+  { key: "saturday", label: "Saturday peak 10:00–15:00", days: [6], start: 10 * 60, end: 15 * 60 },
+  { key: "sunday", label: "Sunday peak 10:00–16:00", days: [0], start: 10 * 60, end: 16 * 60 },
 ] as const;
 export type BusyKey = (typeof BUSY_BLOCKS)[number]["key"];
 /** Above this share of busy hours booked, a subject needs a hire. A full pool cannot take a new student at a time the student can come. */

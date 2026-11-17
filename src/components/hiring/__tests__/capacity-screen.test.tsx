@@ -132,7 +132,7 @@ describe("CapacityView", () => {
     expect(html).toContain(">Hire 2<");
     expect(html).toContain(">92%<");
     expect(html).toContain(
-      "Sundays are 92% full · 2 tutors · 1 more with no classes: check first · 1 not loaded from Wise · Hiring is switched off in Rules and setup",
+      "Sunday peak 10:00–16:00: 92% full · 2 tutors · 1 more with no classes: check first · 1 not loaded from Wise · Hiring is switched off in Rules and setup",
     );
     expect(html).toContain(">Nearly full<");
     expect(html).toContain(">Enough tutors<");
@@ -178,7 +178,7 @@ describe("demandTrend", () => {
 
 describe("needReason", () => {
   it("names the block that decides", () => {
-    expect(needReason(need("Thai", { tutors: 1 }))).toBe("Sundays are 50% full · 1 tutor");
+    expect(needReason(need("Thai", { tutors: 1 }))).toBe("Sunday peak 10:00–16:00: 50% full · 1 tutor");
     expect(needReason(need("Thai", { tightest: null }))).toBe("No busy hours in Wise · 2 tutors");
   });
 
@@ -202,7 +202,7 @@ describe("NeedDetail", () => {
     });
     const html = renderToStaticMarkup(<NeedDetail need={physics} report={report()} />);
     expect(html).toContain(
-      "Weekday evenings: 38.0 h are booked. The limit is 75% of 40.0 h = 30.0 h, so 8.0 h are over. One tutor gives about 4.0 h in these hours, and 75% of that is 3.0 h. 8.0 ÷ 3.0, rounded up, makes 3 new tutors.",
+      "Weekday evenings 16:00–20:00: 38.0 h are booked. The limit is 75% of 40.0 h = 30.0 h, so 8.0 h are over. One tutor gives about 4.0 h in these hours, and 75% of that is 3.0 h. 8.0 ÷ 3.0, rounded up, makes 3 new tutors.",
     );
     expect(html).toContain("not counted: Rest.");
     expect(html).toContain("1 tutor of this subject did not load from Wise in the last sync and is not counted.");
