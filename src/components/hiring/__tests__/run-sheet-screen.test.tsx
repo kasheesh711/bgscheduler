@@ -43,6 +43,19 @@ describe("RunSheetScreen", () => {
     expect(html).toContain("1 of 2 visits from today to Thu 26 Nov miss a head or a paper. No visit has a room yet.");
     expect(html).toContain("Today");
     expect(html).toContain("Tomorrow");
+    expect(html).toContain("<th>Head</th>");
+    expect(html).toContain("Peat Smith");
+  });
+
+  it("shows a head gap as Needs review in the print list", () => {
+    const noHead = {
+      ...data,
+      bookings: [{ id: "p9", candidateId: "c9", kind: "paper", subjects: ["Physics"], interviewerKey: null, startTime: "2026-11-19T03:00:00.000Z", status: "confirmed", visitId: null }],
+      candidates: [{ id: "c9", name: "Oat", visitSubject: "Physics" }],
+    };
+    const html = renderToStaticMarkup(<RunSheetScreen data={noHead} now={now} initialTab="print" />);
+    expect(html).toContain("Needs review: no head takes Physics");
+    expect(html).toContain("1 of 1 visits");
   });
 
   it("gives each head their mocks and paper-only visits", () => {

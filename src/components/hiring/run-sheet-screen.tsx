@@ -16,6 +16,7 @@ import {
   type RunSheetInput,
   type RunSheetRow,
 } from "@/lib/hiring/run-sheet";
+import { FirstUseHint } from "./first-use-hint";
 import css from "./dashboard.module.css";
 
 const TABS = {
@@ -51,7 +52,7 @@ function Paper({ row }: { row: RunSheetRow }) {
   );
 }
 const head = (row: RunSheetRow) =>
-  row.hod ? `${row.hod.name}${row.hod.source === "roster" ? " (only head for this subject)" : ""}` : review(row.hodReason);
+  row.hod ? `${row.hod.name}${row.hod.source === "roster" ? " (only head for this subject)" : ""}` : review(row.hodReason ?? "Needs review: no head for this visit");
 const candidate = (row: RunSheetRow) => `${row.candidateName}${row.status === "confirmed" ? "" : ` (${row.status.replace("_", " ")})`}`;
 
 function Table({ head: columns, rows, empty }: { head: string[]; rows: ReactNode[][]; empty: string }) {
@@ -124,6 +125,10 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
 
       {tab === "sheet" && (
         <>
+          <FirstUseHint id="hr-run-sheet">
+            HR: this list shows every visit from today, first visit first. &quot;Needs review&quot; tells you what is missing: tell
+            Kevin. Full steps: the printed HR job aid.
+          </FirstUseHint>
           <Table head={sheetColumns} rows={coming.map(sheetRow)} empty="No visits are booked from today." />
           <label className={css.fieldLabel}>
             <input type="checkbox" checked={showPast} onChange={(e) => setShowPast(e.target.checked)} /> Show past visits (last 8
@@ -135,6 +140,10 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
 
       {tab === "print" && (
         <>
+          <FirstUseHint id="aya-print-list">
+            Aya and Thea: under Tomorrow, click Print on each row and print the paper. Tell Kevin about each &quot;Needs review&quot;
+            row. Full steps: the printed Admin job aid.
+          </FirstUseHint>
           <p role="status" className={printRows.some(staffGap) ? css.warnWord : undefined}>
             {printRows.filter(staffGap).length} of {printRows.length} visits from today to {dayLabel(shiftDate(today, 8))} miss a
             head or a paper. No visit has a room yet.
@@ -145,10 +154,10 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
                 {date === today ? "Today" : date === shiftDate(today, 1) ? "Tomorrow" : ""} {dayLabel(date)}
               </h3>
               <Table
-                head={["Time", "Candidate", "Subject", "Paper", "Room"]}
+                head={["Time", "Candidate", "Subject", "Head", "Paper", "Room"]}
                 rows={coming
                   .filter((r) => r.date === date)
-                  .map((r) => [times(r), r.candidateName, r.subject ?? review(NO_SUBJECT), <Paper key="p" row={r} />, review(r.roomReason)])}
+                  .map((r) => [times(r), r.candidateName, r.subject ?? review(NO_SUBJECT), head(r), <Paper key="p" row={r} />, review(r.roomReason)])}
                 empty="No visits."
               />
             </div>
@@ -156,6 +165,12 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
         </>
       )}
 
+      {tab === "heads" && (
+        <FirstUseHint id="hod-upcoming-mocks">
+          Heads: find the block with your name. Read the first row for your next visit. &quot;You run the mock&quot; means you take
+          the mock. Full steps: the printed Head of department job aid.
+        </FirstUseHint>
+      )}
       {tab === "heads" &&
         heads.map((h) => (
           <div key={h.canonicalKey}>

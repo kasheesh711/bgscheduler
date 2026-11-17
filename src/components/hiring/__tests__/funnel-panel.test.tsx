@@ -50,6 +50,9 @@ describe("funnel panel", () => {
     expect(html).toContain("Read the record. Invite, move on or stop.");
     expect(html).toContain("Not counted"); // stopped is never stuck
     expect(html).toContain("their days are a lower bound");
+    // Visible table names, so the Kevin job aid can point at them.
+    expect(html).toMatch(/<caption[^>]*>Funnel steps<\/caption>/);
+    expect(html).toMatch(/<caption[^>]*>Candidates by current stage<\/caption>/);
   });
 
   it("sends the stuck ids and the stage to the table filter", () => {

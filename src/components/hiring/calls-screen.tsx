@@ -8,6 +8,7 @@ import { universityName } from "@/lib/hiring/seek-view";
 import type { CandidateExtras } from "@/lib/hiring/status";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
 import { PhoneLink, SeekLinks } from "./candidate-inspector";
+import { FirstUseHint } from "./first-use-hint";
 import { ResumeDeck } from "./resume-deck";
 import { SeekPanel } from "./seek-screen";
 import css from "./dashboard.module.css";
@@ -96,6 +97,12 @@ export function CallsScreen({
     <div className={css.layout}>
       <div className={css.main}>
         <section className={css.tableSection} aria-label="Candidates for HR to call">
+          {rows.length > 0 && (
+            <FirstUseHint id="hr-calls">
+              HR: call the first row. Click the number in Phone. After the call, click Good call, No answer or Bad call. Bad call
+              stops the candidate. Full steps: the printed HR job aid.
+            </FirstUseHint>
+          )}
           <p className={css.activeFilters}>
             {threshold === null
               ? "Calls are off. Set an HR call score in Rules and setup to use this list."

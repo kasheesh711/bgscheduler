@@ -13,6 +13,7 @@ import {
   type Stat,
 } from "@/lib/hiring/funnel";
 import type { Stage } from "@/lib/hiring/model";
+import { FirstUseHint } from "./first-use-hint";
 import css from "./dashboard.module.css";
 
 type Campaign = { jobId: string; label: string };
@@ -62,7 +63,8 @@ export function PipelineBoard({ g, onShowStuck }: { g: GroupFunnel; onShowStuck:
   const fromImport = Object.values(g.currentStage).reduce((sum, s) => sum + s.sinceIsImportTime, 0);
   return (
     <div className={css.tableScroll}>
-      <table className={css.table} aria-label="Candidates by current stage">
+      <table className={css.table}>
+        <caption className={css.tableCaption}>Candidates by current stage</caption>
         <thead>
           <tr>
             <th scope="col">Stage now</th>
@@ -140,6 +142,10 @@ export function FunnelView({
   const applied = g.reached.applied;
   return (
     <section className={`${css.panel} ${css.funnelPanel}`} aria-labelledby="funnel-title">
+      <FirstUseHint id="kevin-funnel">
+        Kevin: in Funnel steps, read From step before (conversion) and Time from step before. In Candidates by current stage,
+        click a Stuck count to list those candidates. Full steps: the printed Kevin job aid.
+      </FirstUseHint>
       <div className={css.funnelHead}>
         <div>
           <h2 id="funnel-title" className={css.panelTitle}>
@@ -169,7 +175,8 @@ export function FunnelView({
       </div>
       <div className={css.funnelGrid}>
         <div className={css.tableScroll}>
-          <table className={css.table} aria-label="Funnel steps">
+          <table className={css.table}>
+            <caption className={css.tableCaption}>Funnel steps</caption>
             <thead>
               <tr>
                 <th scope="col">Step</th>
