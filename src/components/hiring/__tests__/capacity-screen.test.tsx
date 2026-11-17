@@ -132,7 +132,7 @@ describe("CapacityView", () => {
     expect(html).toContain(">Hire 2<");
     expect(html).toContain(">92%<");
     expect(html).toContain(
-      "Sunday peak 10:00–16:00: 92% full · 2 tutors · 1 more with no classes: check first · 1 not loaded from Wise · Hiring is switched off in Rules and setup",
+      "Sunday peak 10:00–16:00: 92% full · 2 tutors · 1 more with no classes: check first · 1 of 4 not loaded from Wise · Hiring is switched off in Rules and setup",
     );
     expect(html).toContain(">Nearly full<");
     expect(html).toContain(">Enough tutors<");
@@ -184,7 +184,7 @@ describe("needReason", () => {
 
   it("does not call a subject fine when no tutor with classes could be read", () => {
     const none = need("Thai", { tutors: 0, tutorKeys: [], status: "unknown", tightest: null, idle: ["Rest"], review: 2 });
-    expect(needReason(none)).toBe("No tutor with classes to measure · 1 more with no classes: check first · 2 not loaded from Wise");
+    expect(needReason(none)).toBe("No tutor with classes to measure · 1 more with no classes: check first · 2 of 3 not loaded from Wise");
     expect(view(report({ needs: [none] }))).toContain(">Not known<");
   });
 });

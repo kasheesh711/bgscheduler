@@ -16,7 +16,7 @@ export interface RunSheetBooking {
 }
 export interface RunSheetInput {
   bookings: RunSheetBooking[];
-  candidates: { id: string; name: string; visitSubject: string | null }[];
+  candidates: { id: string; name: string; visitSubject: string | null; stage?: string; updatedAt?: Date | string }[];
   config: {
     interviewers: { canonicalKey: string; subjects: string[]; email: string }[];
     paperPassRules: { subject: string }[];
@@ -58,6 +58,9 @@ export const NO_ROOM = "Needs review: no room is booked for this visit";
 export const NO_SUBJECT = "Needs review: no subject";
 export const NO_MARK_SCHEME = "No mark scheme: marking cannot run";
 export const NO_PASS_MARK = "No pass mark";
+export const UNRECORDED_OWNER = "HR — record the visit or move the stage";
+/** Stages that say a visit is booked (the old flow's paper_booked and mock_booked included). */
+const VISIT_BOOKED_STAGES = ["onsite_booked", "paper_booked", "mock_booked"];
 export const MOCK_ONLY = "Mock only: no paper sitting is booked";
 
 const at = (value: Date | string) => new Date(value);
@@ -100,7 +103,8 @@ export function buildRunSheet({ bookings, candidates, config, library, tutors }:
       const key = mockRow.interviewerKey;
       const email = config.interviewers.find((h) => h.canonicalKey === key)?.email ?? mockRow.interviewerEmail ?? null;
       hod = { key, name: headName(key, tutors), email, source: "booked" };
-    } else if (!subject) hodReason = NO_SUBJECT;
+    } else if (mockRow) hodReason = "Needs review: no head is booked for this mock";
+    else if (!subject) hodReason = NO_SUBJECT;
     else if (subjectHeads.length === 1) {
       const head = config.interviewers.find((h) => h.canonicalKey === subjectHeads[0])!;
       hod = { key: head.canonicalKey, name: headName(head.canonicalKey, tutors), email: head.email, source: "roster" };
@@ -146,6 +150,41 @@ export function buildRunSheet({ bookings, candidates, config, library, tutors }:
     });
   }
   return rows.sort((a, b) => (a.date + startOf(a)).localeCompare(b.date + startOf(b)));
+}
+
+export interface UnrecordedVisit {
+  candidateId: string;
+  candidateName: string;
+  stage: string;
+  subject: string | null;
+  head: string;
+  paper: string;
+  owner: string;
+}
+
+/**
+ * Fail-closed: candidates at a booked-visit stage with no confirmed visit booking. They have no date, so they stay out of every dated list and
+ * count. Only candidates updated in the last 8 weeks, the same window pastVisits uses, so old stuck stages do not pile up.
+ */
+export function unrecordedVisits({ bookings, candidates, config, library, tutors, now }: RunSheetInput): UnrecordedVisit[] {
+  const withBooking = new Set(bookings.filter((b) => (b.kind === "paper" || b.kind === "mock") && b.status === "confirmed").map((b) => b.candidateId));
+  const since = at(now).getTime() - 56 * 86_400_000;
+  return candidates
+    .filter((c) => c.stage && VISIT_BOOKED_STAGES.includes(c.stage) && !withBooking.has(c.id) && !(c.updatedAt && at(c.updatedAt).getTime() < since))
+    .map((c) => {
+      const subject = c.visitSubject ?? null;
+      const heads = subject ? config.interviewers.filter((h) => h.subjects.includes(subject)).map((h) => headName(h.canonicalKey, tutors)) : [];
+      const qp = subject && library.find((f) => f.kind === "question_paper" && f.subject === subject && f.status === "ready");
+      return {
+        candidateId: c.id,
+        candidateName: c.name,
+        stage: c.stage!,
+        subject,
+        head: !subject ? NO_SUBJECT : heads.length === 1 ? heads[0] : heads.length ? `Needs review: ${heads.length} heads take ${subject}` : `Needs review: no head takes ${subject}`,
+        paper: !subject ? NO_SUBJECT : qp ? qp.name : `Needs review: no question paper for ${subject} in the paper library`,
+        owner: UNRECORDED_OWNER,
+      };
+    });
 }
 
 /** The first time of the visit, HH:mm. */
@@ -221,12 +260,13 @@ export function gapOwner(reason: string) {
 }
 
 /** Replay counts: how many visits the run sheet can fully staff, and every gap by reason. */
-export function replayRunSheet(rows: RunSheetRow[]) {
+export function replayRunSheet(rows: RunSheetRow[], unrecorded = 0) {
   const gaps: Record<string, number> = {};
   for (const r of rows)
     for (const reason of [r.hodReason, r.paperReason, r.roomReason, ...r.issues]) if (reason && reason !== MOCK_ONLY) gaps[reason] = (gaps[reason] ?? 0) + 1;
   return {
     visits: rows.length,
+    unrecordedVisits: unrecorded,
     withHod: rows.filter((r) => r.hod).length,
     withPaper: rows.filter((r) => r.paper).length,
     withBoth: rows.filter((r) => r.hod && r.paper).length,

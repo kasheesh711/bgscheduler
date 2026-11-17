@@ -12,6 +12,7 @@ import {
   pastVisits,
   printDays,
   staffGap,
+  unrecordedVisits,
   upcoming,
   type RunSheetInput,
   type RunSheetRow,
@@ -86,9 +87,9 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
   const [tab, setTab] = useState<RunSheetTab>(initialTab);
   const [showPast, setShowPast] = useState(false);
   // Re-read the clock on each data reload: the pane stays mounted, so a mount-time "today" goes stale after midnight.
-  const { at, rows } = useMemo(() => {
+  const { at, rows, unrecorded } = useMemo(() => {
     const at = now ?? new Date();
-    return { at, rows: buildRunSheet({ ...data, now: at }) };
+    return { at, rows: buildRunSheet({ ...data, now: at }), unrecorded: unrecordedVisits({ ...data, now: at }) };
   }, [data, now]);
   const today = localDate(at);
   const coming = upcoming(rows, today);
@@ -126,6 +127,25 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
             HR: this list shows every visit from today, first visit first. Old visits show under the list. &quot;Needs review&quot; tells you what is missing: tell
             Kevin. Full steps: the printed HR job aid.
           </FirstUseHint>
+          {unrecorded.length > 0 && (
+            <>
+              <h3 className={css.panelTitle}>
+                Needs review: {unrecorded.length} {unrecorded.length === 1 ? "candidate is" : "candidates are"} at a booked stage but no visit time is recorded
+              </h3>
+              <Table
+                head={["Candidate", "Stage", "Subject", "Head", "Paper", "Owner"]}
+                rows={unrecorded.map((u) => [
+                  u.candidateName,
+                  u.stage.replaceAll("_", " "),
+                  u.subject ?? review(NO_SUBJECT),
+                  u.head,
+                  u.paper,
+                  u.owner,
+                ])}
+                empty=""
+              />
+            </>
+          )}
           <Table head={sheetColumns} rows={coming.map(sheetRow)} empty="No visits are booked from today." />
           {!coming.length && recent.length > 0 && (
             <>

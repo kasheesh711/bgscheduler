@@ -126,12 +126,13 @@ export function OperationsRail({
         <h2 className={css.railTitle}>Interviewers</h2>
         <ul className={css.railList}>
           {data.config.interviewers.map((person) => {
+            const upcomingTotal = Object.values(insights.upcomingByInterviewer).reduce((a, b) => a + b, 0);
             const tutor = data.tutors.find((t) => t.canonicalKey === person.canonicalKey);
             return (
               <li key={person.canonicalKey} className={css.interviewer}>
                 <span className={css.railName}>{tutor?.name ?? person.canonicalKey}</span>
                 <span className={css.railMeta}>
-                  {person.subjects.length} of {data.config.subjectPriority.length} {data.config.subjectPriority.length === 1 ? "subject" : "subjects"} · {insights.upcomingByInterviewer[person.canonicalKey]} upcoming
+                  {person.subjects.length} of {data.config.subjectPriority.length} {data.config.subjectPriority.length === 1 ? "subject" : "subjects"} · {upcomingTotal === 0 ? "No upcoming mocks" : `${insights.upcomingByInterviewer[person.canonicalKey]} of ${upcomingTotal} upcoming`}
                 </span>
                 {!tutor?.lineReady && <span className={css.warnWord}>LINE needs setup</span>}
               </li>
@@ -143,6 +144,12 @@ export function OperationsRail({
 
       <section className={css.railSection}>
         <h2 className={css.railTitle}>Appointments</h2>
+        {appointments.length > 0 && (
+          <p className={css.railLede}>
+            {appointments.filter((b) => b.status === "confirmed").length} of {appointments.length} confirmed (
+            {Math.round((appointments.filter((b) => b.status === "confirmed").length / appointments.length) * 100)}%)
+          </p>
+        )}
         {appointments.length === 0 ? (
           <p className={css.railLede}>No appointments yet.</p>
         ) : (

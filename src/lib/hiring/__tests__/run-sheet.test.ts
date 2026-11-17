@@ -8,6 +8,8 @@ import {
   needsReview,
   NO_MARK_SCHEME,
   NO_PASS_MARK,
+  UNRECORDED_OWNER,
+  unrecordedVisits,
   NO_ROOM,
   pastVisits,
   printDays,
@@ -177,6 +179,14 @@ describe("views and previews", () => {
 });
 
 describe("review fixes", () => {
+  it("never names a roster head for a mock booked with no head", () => {
+    const [row] = buildRunSheet({
+      ...base,
+      bookings: [booking({ id: "m", candidateId: "c2", kind: "mock", subjects: ["English Language"], interviewerKey: null })],
+    });
+    expect(row.hod).toBeNull();
+    expect(row.hodReason).toBe("Needs review: no head is booked for this mock");
+  });
   it("ignores a library file with no status (fail-closed)", () => {
     const [row] = buildRunSheet({
       ...base,
@@ -235,5 +245,30 @@ describe("review fixes", () => {
   it("names the head from the tutor list in the head preview, even with only paper-only visits", () => {
     const rows = buildRunSheet({ ...base, bookings: [booking({ subjects: ["Physics"] })] });
     expect(headUpcomingMessage(rows, "Peat", "2026-11-18", base.tutors)).toMatch(/^Peat Smith: 1 upcoming visit\./);
+  });
+});
+
+describe("booked-stage candidates with no booking row", () => {
+  const stageIn = (stage: string, updatedAt = "2026-11-10T00:00:00Z") => ({
+    ...base,
+    candidates: [{ id: "c1", name: "Kim", visitSubject: "Mathematics", stage, updatedAt }],
+  });
+  it.each(["onsite_booked", "paper_booked", "mock_booked"])("lists %s in unrecordedVisits, never as a dated row", (stage) => {
+    const input = stageIn(stage);
+    expect(buildRunSheet(input)).toHaveLength(0);
+    const [u] = unrecordedVisits(input);
+    expect(u.candidateName).toBe("Kim");
+    expect(u.stage).toBe(stage);
+    expect(u.head).toContain("2 heads take Mathematics");
+    expect(u.paper).toBe("Maths QP.pdf");
+    expect(u.owner).toBe(UNRECORDED_OWNER);
+    const replay = replayRunSheet([], unrecordedVisits(input).length);
+    expect(replay.visits).toBe(0);
+    expect(replay.unrecordedVisits).toBe(1);
+  });
+  it("skips a candidate with a confirmed booking, a non-booked stage, or an update older than 8 weeks", () => {
+    expect(unrecordedVisits({ ...stageIn("onsite_booked"), bookings: [booking({})] })).toHaveLength(0);
+    expect(unrecordedVisits(stageIn("invited"))).toHaveLength(0);
+    expect(unrecordedVisits(stageIn("onsite_booked", "2026-08-01T00:00:00Z"))).toHaveLength(0);
   });
 });

@@ -843,7 +843,7 @@ export function AssessmentScreen({
                 <div className={`${css.tabs} ${css.tabsRow}`} role="group" aria-label="Filter visits">
                   {ASSESSMENT_CHIPS.map((value, index) => (
                     <button key={value} type="button" aria-pressed={chip === value} onClick={() => setChip(chip === value ? null : value)}>
-                      {value} <span className={css.tabCount}>{counts[index]}</span>
+                      {value} <span className={css.tabCount}>{counts[index]} of {rows.length}</span>
                     </button>
                   ))}
                 </div>

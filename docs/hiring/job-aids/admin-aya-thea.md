@@ -7,8 +7,9 @@ One page. Open https://bgscheduler.vercel.app/hiring. The Overview opens first.
 2. Click **Aya: print list**.
 3. Find the **Tomorrow** heading. **Today** is above it. If no visit is booked from today, **Last visit day** shows the most recent visit day first.
 4. For each row, click **Print <paper name>** in the **Paper** column. The file opens. Print it.
-5. If **Tomorrow** shows "No visits.", nothing needs printing for tomorrow. The list also shows each later day with a visit, up to 8 days ahead.
-6. The **Print** link opens the paper in a new tab.
+5. A candidate at a booked stage with no recorded visit time is not on this list, because the visit has no date. HR sees that candidate under **Run sheet**.
+6. If **Tomorrow** shows "No visits.", nothing needs printing for tomorrow. The list also shows each later day with a visit, up to 8 days ahead.
+7. The **Print** link opens the paper in a new tab.
 
 ## Task 2. Which room is each visit in?
 1. On **Aya: print list**, read the **Room** column.
