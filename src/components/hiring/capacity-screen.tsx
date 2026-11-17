@@ -5,11 +5,14 @@ import { formatInTimeZone } from "date-fns-tz";
 import {
   BUSY_BLOCKS,
   BUSY_TARGET,
+  DEMAND_DAYS,
+  needFullness,
   type CapacityHours,
   type CapacityReport,
   type CapacityTutor,
   type HiringNeed,
 } from "@/lib/hiring/capacity";
+import type { DemandSubject } from "@/lib/hiring/demand";
 import { ZONE } from "@/lib/hiring/model";
 import css from "./dashboard.module.css";
 
@@ -30,7 +33,9 @@ const STATUS = { hire: "Hire", watch: "Nearly full", enough: "Enough tutors", un
 export function needReason(need: HiringNeed) {
   const block = need.blocks.find((b) => b.key === need.tightest);
   const full = !need.tutors
-    ? "No tutor with classes to measure"
+    ? need.idle.length || need.review
+      ? "No tutor with classes to measure"
+      : "No tutor has this subject in Wise"
     : block
       ? `${blockLabel(block.key)} are ${percent(block.used)} full · ${count(need.tutors, "tutor")}`
       : `No busy hours in Wise · ${count(need.tutors, "tutor")}`;
@@ -42,6 +47,45 @@ export function needReason(need: HiringNeed) {
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+/** "rising" or "falling" when the last 30 days differ from the first 30 by a fifth or more. Too few students say nothing. */
+export function demandTrend(d: Pick<DemandSubject, "started" | "months">) {
+  const [first, , last] = d.months;
+  if (d.started < 10) return "";
+  if (first === last) return "steady";
+  return last >= first * 1.2 ? "rising" : last <= first * 0.8 ? "falling" : "steady";
+}
+
+/** The start dates of the three 30-day blocks, oldest first, and the last day. */
+function periods(to: string) {
+  const at = (back: number) => {
+    const d = new Date(`${to}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - back);
+    return d.toISOString().slice(0, 10);
+  };
+  return [0, 1, 2].map((i) => `${day(at(DEMAND_DAYS - 1 - 30 * i))} to ${day(at(DEMAND_DAYS - 30 * (i + 1)))}`);
+}
+
+/** New students as one bar to the scale of the largest subject, with the number and the three 30-day bars. */
+function DemandBar({ demand: d, max }: { demand: DemandSubject | null; max: number }) {
+  const started = d?.started ?? 0;
+  const months = d?.months ?? [0, 0, 0];
+  const top = Math.max(1, ...months);
+  return (
+    <span className={css.needDemand}>
+      <span className={css.needNumber}>{started}</span>
+      <span className={css.needTrack} aria-hidden="true">
+        <span style={{ width: `${max > 0 ? (started / max) * 100 : 0}%` }} />
+      </span>
+      <span className={css.needSpark} aria-hidden="true">
+        {months.map((n, i) => (
+          <i key={i} style={{ height: `${Math.max(8, (n / top) * 100)}%` }} data-empty={n === 0} />
+        ))}
+      </span>
+      <span className={css.needTrend}>{d ? demandTrend(d) : ""}</span>
+    </span>
+  );
 }
 
 function TutorRows({ rows, review }: { rows: CapacityTutor[]; review?: boolean }) {
@@ -107,14 +151,67 @@ function TutorTable({ rows, review = [] }: { rows: CapacityTutor[]; review?: Cap
   );
 }
 
+/** How full the tutors are in the block that decides, as a short bar with the limit marked. */
+function FullMeter({ need }: { need: HiringNeed }) {
+  const used = needFullness(need);
+  return (
+    <span className={css.needFull}>
+      {/* The mark follows the limit in the code, not a copy of it in the stylesheet. */}
+      <span className={css.needTrack} aria-hidden="true" data-limit style={{ "--limit": `${TARGET}%` } as React.CSSProperties}>
+        <span data-over={need.hire > 0} style={{ width: `${Math.min(100, (need.tutors ? used : 0) * 100)}%` }} />
+      </span>
+      <span className={css.num}>{need.tutors ? percent(used) : "–"}</span>
+    </span>
+  );
+}
+
 /** The working behind one subject's number: each busy block, the sum for the block that decides, and the tutors. */
 export function NeedDetail({ need, report }: { need: HiringNeed; report: CapacityReport }) {
   // The block on the row. With a hire, it is the block that sets the number.
   const worst = need.hire > 0 ? need.blocks.find((b) => b.key === need.tightest) : undefined;
   const limit = worst ? BUSY_TARGET * worst.given : 0;
   const perTutor = worst ? (BUSY_TARGET * worst.given) / worst.givers : 0;
+  const d = need.demand;
+  const fullest = needFullness(need);
+  const labels = report.demand ? periods(report.demand.to) : [];
+  const top = Math.max(1, ...(d?.months ?? []));
   return (
     <div className={css.needDetail}>
+      {d && report.demand && (
+        <>
+          <h3 className={css.needHead}>New students: {d.started} in the last {DEMAND_DAYS} days</h3>
+          <div className={css.needChart}>
+            {d.months.map((n, i) => (
+              <div key={labels[i]} className={css.needColumn}>
+                <span className={css.needColumnValue}>{n}</span>
+                <span className={css.needColumnBar} aria-hidden="true">
+                  <i style={{ height: `${(n / top) * 100}%` }} />
+                </span>
+                <span className={css.tileNote}>{labels[i]}</span>
+              </div>
+            ))}
+            <div className={css.needLevels}>
+              <p className={css.tileLabel}>By level</p>
+              {d.levels.slice(0, 6).map((l) => (
+                <p key={l.level} className={css.needLevel}>
+                  <span>{l.level}</span>
+                  <span className={css.needTrack} aria-hidden="true">
+                    <span style={{ width: `${(l.started / d.levels[0].started) * 100}%` }} />
+                  </span>
+                  <span className={css.num}>{l.started}</span>
+                </p>
+              ))}
+            </div>
+          </div>
+          <p className={css.needSum}>
+            {count(d.active, "student")} had a {need.subject} class in the last 30 days. A new student is a student’s first
+            class in a course of this subject: a new student, a new subject for a student, or a move to a new level.
+            {need.tutors > 0 &&
+              ` Place in the list: ${d.started} new students × ${percent(fullest)} full = ${Math.round(need.score)}.`}
+          </p>
+        </>
+      )}
+      <h3 className={css.needHead}>How full the tutors are</h3>
       <div className={css.needBlocks}>
         {need.blocks.map((b) => (
           <div key={b.key}>
@@ -290,8 +387,10 @@ export function CapacityView({
   error?: string;
 }) {
   const [open, setOpen] = useState<string | null>(null);
-  const toHire = r.needs.filter((n) => n.hire > 0);
   const idle = r.tutors.filter((t) => t.idle);
+  // The top of the list, without subjects that have room.
+  const first = r.needs.filter((n) => n.status !== "enough").slice(0, 3);
+  const max = Math.max(1, ...r.needs.map((n) => n.demand?.started ?? 0), ...(r.demand?.subjects.map((d) => d.started) ?? []));
   return (
     <div>
       {error && (
@@ -304,12 +403,16 @@ export function CapacityView({
           Wise data is old (last sync {formatInTimeZone(new Date(r.syncedAt), ZONE, "d MMM, HH:mm")}). These numbers can be wrong.
         </p>
       )}
-      <section className={css.needHero} aria-label="Hire next">
+      {!r.demand && (
+        <p role="alert" className={css.alert}>
+          The new-student numbers could not load. The list is in the order of need: people to hire, then how full the
+          tutors are.
+        </p>
+      )}
+      <section className={css.needHero} aria-label="Top priorities">
         <div>
-          <p className={css.heroLabel}>Hire this month</p>
-          <p className={css.heroValue}>
-            {toHire.length ? `${count(toHire.length, "subject")} need${toHire.length === 1 ? "s" : ""} a new tutor` : "No new tutor needed"}
-          </p>
+          <p className={css.heroLabel}>Top priorities</p>
+          <p className={css.heroValue}>{first.length ? first.map((n) => n.subject).join(" · ") : "No new tutor needed"}</p>
         </div>
         <button type="button" className={css.heroLink} onClick={reload} disabled={busy}>
           {busy ? "Loading…" : "Reload"}
@@ -317,20 +420,37 @@ export function CapacityView({
       </section>
       <section className={css.panel}>
         <p className={css.panelLede}>
-          From the classes booked for {day(r.from)} to {day(r.to)}. A subject needs a new tutor when its tutors are more
-          than {TARGET}% full in the hours students come: weekday evenings (16:00–20:00), Saturdays and Sundays
-          (09:00–18:00). A new tutor who teaches two subjects counts for both. Click a subject to see why.
+          The list is in order of priority. A subject is high when it has many new students and its tutors are nearly
+          full.{" "}
+          {r.demand && (
+            <>
+              New students are counted from {day(r.demand.from)} to {day(r.demand.to)}.{" "}
+            </>
+          )}
+          Tutors are full above {TARGET}% of the hours students come: weekday evenings (16:00–20:00), Saturdays and Sundays
+          (09:00–18:00), from {day(r.from)} to {day(r.to)}. Click a subject to see why.
         </p>
+        <div className={`${css.needRow} ${css.needHeadRow}`} aria-hidden="true">
+          <span />
+          <span>Subject</span>
+          <span>New students, last {DEMAND_DAYS} days</span>
+          <span>Tutors full</span>
+          <span>What to do</span>
+        </div>
         <ol className={css.needList}>
-          {r.needs.map((need) => (
+          {r.needs.map((need, i) => (
             <li key={need.subject}>
               <button
                 type="button"
                 className={css.needRow}
                 aria-expanded={open === need.subject}
+                aria-label={`${i + 1}. ${need.subject}: ${count(need.demand?.started ?? 0, "new student")}, ${need.hire > 0 ? `hire ${need.hire}` : STATUS[need.status]}. ${needReason(need)}`}
                 onClick={() => setOpen(open === need.subject ? null : need.subject)}
               >
+                <span className={css.needRank}>{i + 1}</span>
                 <span className={css.needName}>{need.subject}</span>
+                <DemandBar demand={need.demand} max={max} />
+                <FullMeter need={need} />
                 <span className={`${css.pill} ${css[`need_${need.status}`]}`}>
                   {need.hire > 0 ? `Hire ${need.hire}` : STATUS[need.status]}
                 </span>
@@ -341,7 +461,31 @@ export function CapacityView({
           ))}
         </ol>
         {!r.needs.length && <p className={css.panelLede}>No tutor in Wise has a subject that Hiring recruits for.</p>}
+        <p className={css.needLegend}>
+          <span className={css.needSpark} aria-hidden="true">
+            <i style={{ height: "40%" }} />
+            <i style={{ height: "70%" }} />
+            <i style={{ height: "100%" }} />
+          </span>
+          The three small bars are new students in each 30 days, oldest first.
+        </p>
       </section>
+      {r.demand && r.demand.subjects.length > 0 && (
+        <section className={css.panel}>
+          <h2 className={css.panelTitle}>New students in subjects that are not on the Hiring list</h2>
+          <p className={css.panelLede}>
+            General science is taught by Physics, Chemistry and Biology tutors. “Other or not known” holds interview
+            practice, tests, and classes whose title names no subject.
+          </p>
+          {r.demand.subjects.map((d) => (
+            <div key={d.subject} className={`${css.needRow} ${css.needOther}`}>
+              <span />
+              <span className={css.needName}>{d.subject}</span>
+              <DemandBar demand={d} max={max} />
+            </div>
+          ))}
+        </section>
+      )}
 
       <details className={css.capMore}>
         <summary>

@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { CapacityReport, CapacityTutor, HiringNeed } from "@/lib/hiring/capacity";
-import { CapacityScreen, CapacityView, NeedDetail, needReason } from "../capacity-screen";
+import type { DemandSubject } from "@/lib/hiring/demand";
+import { CapacityScreen, CapacityView, demandTrend, NeedDetail, needReason } from "../capacity-screen";
 
 const row = (given: number, booked: number) => ({
   given,
@@ -30,6 +31,18 @@ const tutor = (key: string, subjects: string[], given: number, booked: number, p
   issues: [],
   ...patch,
 });
+const starts = (subject: string, months: [number, number, number], patch: Partial<DemandSubject> = {}): DemandSubject => ({
+  subject,
+  onHiringList: true,
+  started: months[0] + months[1] + months[2],
+  months,
+  active: 50,
+  levels: [
+    { level: "Y9-11 / G8-10 (Int.)", started: months[0] + months[1] },
+    { level: "Y2-8 / G1-7 (Int.)", started: months[2] },
+  ],
+  ...patch,
+});
 const need = (subject: HiringNeed["subject"], patch: Partial<HiringNeed> = {}): HiringNeed => ({
   subject,
   wiseSubjects: [subject],
@@ -43,6 +56,8 @@ const need = (subject: HiringNeed["subject"], patch: Partial<HiringNeed> = {}): 
   hire: 0,
   status: "enough",
   tightest: "sunday",
+  demand: null,
+  score: 0,
   ...patch,
 });
 const report = (patch: Partial<CapacityReport> = {}): CapacityReport => ({
@@ -60,10 +75,24 @@ const report = (patch: Partial<CapacityReport> = {}): CapacityReport => ({
       idle: ["Rest"],
       review: 1,
       blocks: [block("weekday", 20, 8), block("saturday", 10, 7), block("sunday", 12, 11, 2)],
+      demand: starts("Physics", [4, 8, 12]),
+      score: 22,
     }),
-    need("Mathematics", { status: "watch", blocks: [block("weekday", 20, 8), block("saturday", 10, 7), block("sunday", 12, 8)] }),
+    need("Mathematics", {
+      status: "watch",
+      blocks: [block("weekday", 20, 8), block("saturday", 10, 7), block("sunday", 12, 8)],
+      demand: starts("Mathematics", [10, 5, 5]),
+      score: 13.3,
+    }),
     need("Thai"),
   ],
+  demand: {
+    from: "2026-08-20",
+    to: "2026-11-17",
+    started: 60,
+    unknown: 4,
+    subjects: [starts("Science (general)", [5, 5, 6], { onHiringList: false })],
+  },
   subjects: [
     { ...row(20, 18), subject: "Physics", hiringSubject: "Physics", hiring: false, rank: 2, tutors: 1, tutorKeys: ["Both"], bookedHere: 6, levels: [] },
     { ...row(30, 21), subject: "Math", hiringSubject: "Mathematics", hiring: true, rank: 1, tutors: 2, tutorKeys: ["Both", "Solo"], bookedHere: 15, levels: [] },
@@ -81,18 +110,27 @@ const view = (r = report(), error?: string) =>
   renderToStaticMarkup(<CapacityView report={r} reload={() => {}} busy={false} error={error} />);
 
 describe("CapacityView", () => {
-  it("leads with what to hire, in words", () => {
+  it("leads with the top of the list, in words", () => {
     const html = view();
-    expect(html).toContain("Hire this month");
-    expect(html).toContain("1 subject needs a new tutor");
-    expect(html).toContain("more than 75% full");
+    expect(html).toContain("Top priorities");
+    expect(html).toContain(">Physics · Mathematics<");
+    expect(html).toContain("New students are counted from 20 Aug to 17 Nov.");
+    expect(html).toContain("above 75% of the hours students come");
     expect(html).not.toContain("Wise data is old");
+    expect(html).not.toContain("could not load");
     expect(view(report({ needs: [need("Thai")] }))).toContain("No new tutor needed");
+    // A subject over the limit is named even with no new student.
+    expect(view(report({ needs: [need("History", { hire: 1, status: "hire" })] }))).toContain(">History<");
   });
 
-  it("gives each subject one status and one reason", () => {
+  it("shows each subject with its new students, how full the tutors are, and what to do", () => {
     const html = view();
+    expect(html).toContain('aria-label="1. Physics: 24 new students, hire 2.');
+    expect(html).toContain(">24<");
+    expect(html).toContain(">rising<");
+    expect(html).toContain(">falling<");
     expect(html).toContain(">Hire 2<");
+    expect(html).toContain(">92%<");
     expect(html).toContain(
       "Sundays are 92% full · 2 tutors · 1 more with no classes: check first · 1 not loaded from Wise · Hiring is switched off in Rules and setup",
     );
@@ -100,7 +138,14 @@ describe("CapacityView", () => {
     expect(html).toContain(">Enough tutors<");
     expect(html.indexOf(">Physics<")).toBeLessThan(html.indexOf(">Mathematics<"));
     // The working stays closed until a subject is clicked.
-    expect(html).not.toContain("are over the limit");
+    expect(html).not.toContain("are over");
+  });
+
+  it("shows the new students of subjects that are not on the Hiring list", () => {
+    const html = view();
+    expect(html).toContain("New students in subjects that are not on the Hiring list");
+    expect(html).toContain(">Science (general)<");
+    expect(html).toContain(">16<");
   });
 
   it("keeps the tutors with no classes and all the hours behind a click", () => {
@@ -112,9 +157,22 @@ describe("CapacityView", () => {
     expect(html).toContain("1.3 h a week of classes have a title");
   });
 
-  it("warns when the Wise data is old, and when a reload fails", () => {
+  it("warns when the Wise data is old, when a reload fails, and when the new-student numbers are missing", () => {
     expect(view(report({ stale: true }))).toContain("Wise data is old");
     expect(view(report(), "Server error.")).toContain("Could not reload, so these are the earlier numbers. Server error.");
+    const html = view(report({ demand: null }));
+    expect(html).toContain("The new-student numbers could not load.");
+    expect(html).not.toContain("not on the Hiring list");
+  });
+});
+
+describe("demandTrend", () => {
+  it("compares the last 30 days with the first 30, and says nothing for a few students", () => {
+    expect(demandTrend({ started: 24, months: [4, 8, 12] })).toBe("rising");
+    expect(demandTrend({ started: 20, months: [10, 5, 5] })).toBe("falling");
+    expect(demandTrend({ started: 31, months: [10, 10, 11] })).toBe("steady");
+    expect(demandTrend({ started: 6, months: [1, 1, 4] })).toBe("");
+    expect(demandTrend({ started: 10, months: [0, 10, 0] })).toBe("steady");
   });
 });
 
@@ -149,6 +207,18 @@ describe("NeedDetail", () => {
     expect(html).toContain("not counted: Rest.");
     expect(html).toContain("1 tutor of this subject did not load from Wise in the last sync and is not counted.");
     expect(html).toContain("38.0 of 40.0 h a week booked");
+  });
+
+  it("shows the new students by 30 days and by level, and why the subject has its place", () => {
+    const physics = need("Physics", { demand: starts("Physics", [4, 8, 12]), score: 22, blocks: [block("sunday", 12, 11)] });
+    const html = renderToStaticMarkup(<NeedDetail need={physics} report={report()} />);
+    expect(html).toContain("New students: 24 in the last 90 days");
+    expect(html).toContain("20 Aug to 18 Sep");
+    expect(html).toContain("19 Sep to 18 Oct");
+    expect(html).toContain("19 Oct to 17 Nov");
+    expect(html).toContain("Y9-11 / G8-10 (Int.)");
+    expect(html).toContain("50 students had a Physics class in the last 30 days.");
+    expect(html).toContain("Place in the list: 24 new students × 92% full = 22.");
   });
 
   it("has no sum when no hire is needed", () => {
