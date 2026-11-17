@@ -33,6 +33,8 @@ import { connectSeek, importSeek, readSeekPhones } from "./hiring-seek";
 const phoneTried = new Set<string>();
 /** Twelve panels with the 10-second watch pause add about two minutes to a 15-minute cycle. */
 const PHONE_READS_PER_CYCLE = 12;
+/** Failed phone walks in a row for each closed ad. After three, that ad is left alone until the worker restarts. */
+const phoneWalkFailures = new Map<string, number>();
 
 async function main() {
   if (Number(process.versions.node.split(".")[0]) < 24)
@@ -156,10 +158,13 @@ async function main() {
         let sawEveryCard = true;
         for (const { jobId } of config.seekJobs.filter((j) => !j.active)) {
           if (phoneBudget <= 0 || !phoneNeed.size) break;
+          if ((phoneWalkFailures.get(jobId) ?? 0) >= 3) continue;
           try {
             if (!(await readSeekPhones(profile, jobId, phoneReads())).complete) sawEveryCard = false;
+            phoneWalkFailures.delete(jobId);
           } catch (error) {
             sawEveryCard = false;
+            phoneWalkFailures.set(jobId, (phoneWalkFailures.get(jobId) ?? 0) + 1);
             // The error's own text can quote a candidate's name, so only its kind is printed.
             console.error(`Phone read on a closed SEEK ad failed: ${error instanceof Error ? error.name : "UnknownError"}`);
           }

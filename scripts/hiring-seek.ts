@@ -573,7 +573,8 @@ export async function readSeekPhones(profilePath: string, jobId: string, phones:
   let reads = 0;
   try {
     await walkSeek(browser, jobId, async ({ page, cards, index, id }) => {
-      if (reads >= phones.max) throw new PassStopped();
+      // Nothing left to read ends the walk too: a walk over hundreds of cards would only delay scoring.
+      if (reads >= phones.max || !phones.need.size) throw new PassStopped();
       if (!phones.need.has(id)) return;
       if (reads++) await new Promise((resolve) => setTimeout(resolve, SEEK_PAUSE_MS));
       if (!(await tryPhone(page, cards.nth(index), id, phones))) reads = phones.max;
