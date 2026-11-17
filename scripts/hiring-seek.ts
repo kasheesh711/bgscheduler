@@ -190,6 +190,8 @@ async function readApplication(
           const downloadPromise = page.waitForEvent("download", {
             timeout: 20000,
           });
+          // If the click fails first, nothing awaits this yet, and its timeout would end the worker process.
+          downloadPromise.catch(() => {});
           await downloadButton.click();
           const download = await downloadPromise;
           const file = path.join(dir, "resume");
@@ -322,6 +324,21 @@ export const seekSignedIn = (url: string) => {
   }
 };
 
+/**
+ * SEEK's "Hiring check-in" survey ("Were you able to fill this role using SEEK?") covers the candidate list and hides its
+ * folder buttons. From this call on, it is closed with its X before each click or wait on the page; it is never
+ * answered. Call it once per page. Waits on that page must not run side by side (no race of waits): two waits that see
+ * the survey together can both start the close, and Playwright then never releases one of them.
+ */
+export async function closeSeekCheckIn(page: Page) {
+  const survey = page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: "Hiring check-in", exact: true }) });
+  // Playwright does not catch a handler's error, so one would end the worker process. Caught here, a failed close only
+  // leaves the survey open, and the step that waits for the page fails on its own timeout.
+  await page.addLocatorHandler(survey, (dialog) =>
+    dialog.getByRole("button", { name: "Close", exact: true }).click({ timeout: 5000 }).catch(() => {}),
+  );
+}
+
 type SeekCard = { page: Page; cards: ReturnType<Page["getByTestId"]>; index: number; id: string; status: string };
 
 /** Opens each status folder and walks every page of cards. `visit` decides what to do with one card. */
@@ -334,6 +351,7 @@ async function walkSeek(
   const page = browser.pages()[0] ?? (await browser.newPage());
   await page.goto(`https://th.employer.seek.com/candidates/?jobid=${jobId}`);
   if (!seekSignedIn(page.url())) throw new SeekPageError(SEEK_SIGNED_OUT);
+  await closeSeekCheckIn(page);
   const statusButtons = page.getByRole("button", {
     name: /^(Inbox|Prescreen|Shortlist|Interview|Offer|Accept|Not Suitable).*applications?$/i,
   });
@@ -345,13 +363,11 @@ async function walkSeek(
     name: "How to check references",
     exact: true,
   });
-  // Filters can hydrate after the first candidate card is visible.
+  const list = statusButtons.first().or(compactFilter);
+  // Filters can hydrate after the first candidate card is visible. One wait for whichever shows first, not a race of
+  // waits: see closeSeekCheckIn.
   try {
-    await Promise.race([
-      statusButtons.first().waitFor({ state: "visible" }),
-      compactFilter.waitFor({ state: "visible" }),
-      notice.waitFor({ state: "visible" }),
-    ]);
+    await list.or(notice).filter({ visible: true }).first().waitFor({ state: "visible" });
   } catch (error) {
     if (!seekSignedIn(page.url())) throw new SeekPageError(SEEK_SIGNED_OUT);
     throw error;
@@ -361,10 +377,7 @@ async function walkSeek(
       .getByRole("button", { name: "Close", exact: true })
       .last()
       .click();
-    await Promise.race([
-      statusButtons.first().waitFor({ state: "visible" }),
-      compactFilter.waitFor({ state: "visible" }),
-    ]);
+    await list.filter({ visible: true }).first().waitFor({ state: "visible" });
   }
   let labels = await statusButtons.evaluateAll((elements) =>
     elements.map((el) => (el as HTMLElement).innerText),
