@@ -27,12 +27,14 @@ import {
   claudeChildEnv,
   type ClaudeRunnerDeps,
 } from "../src/lib/feedback-autowriter/nightly/claude-runner";
-import { connectSeek, importSeek } from "./hiring-seek";
+import { connectSeek, importSeek, readSeekPhones } from "./hiring-seek";
 
 /** SEEK applications already opened for a phone number since this worker started. */
 const phoneTried = new Set<string>();
 /** Twelve panels with the 10-second watch pause add about two minutes to a 15-minute cycle. */
 const PHONE_READS_PER_CYCLE = 12;
+/** Failed phone walks in a row for each closed ad. After three, that ad is left alone until the worker restarts. */
+const phoneWalkFailures = new Map<string, number>();
 
 async function main() {
   if (Number(process.versions.node.split(".")[0]) < 24)
@@ -125,6 +127,17 @@ async function main() {
         const phoneNeed = await seekPhonesWanted(db, config, phoneTried);
         const phoneAsked = phoneNeed.size;
         let phoneBudget = PHONE_READS_PER_CYCLE;
+        const phoneReads = () => ({
+          need: phoneNeed,
+          max: phoneBudget,
+          save: async (applicationId: string, read: { phone: string; email: string } | null) => {
+            phoneTried.add(applicationId);
+            phoneBudget--;
+            if (!read) return;
+            // One number serves all of a candidate's applications.
+            for (const id of await saveSeekPhone(applicationId, read.phone, read.email, db)) phoneNeed.delete(id);
+          },
+        });
         for (const { jobId } of config.seekJobs.filter((j) => j.active)) {
           const read = await importSeek(
             profile,
@@ -135,24 +148,30 @@ async function main() {
               observeSeekState(id, status, contacted, db),
             (candidateId, file) => keepResume(candidateId, file, db),
             budget,
-            {
-              need: phoneNeed,
-              max: phoneBudget,
-              save: async (applicationId, read) => {
-                phoneTried.add(applicationId);
-                phoneBudget--;
-                if (!read) return;
-                // One number serves all of a candidate's applications.
-                for (const id of await saveSeekPhone(applicationId, read.phone, read.email, db)) phoneNeed.delete(id);
-              },
-            },
+            phoneReads(),
           );
           budget -= read.imported;
           campaigns.push({ jobId, ...read });
         }
-        // A full pass over every active job that opened no panel means SEEK does not list these applications (an ad that
-        // is no longer read, for example). They are set aside, so they cannot keep the others waiting.
-        if (phoneAsked && phoneBudget === PHONE_READS_PER_CYCLE) for (const id of phoneNeed) phoneTried.add(id);
+        // An ad that is no longer imported from still holds people HR must call (most of the Calls list on 17 Nov 2026),
+        // so what is left of the phone budget is used there. A failure here is not an import failure.
+        let sawEveryCard = true;
+        for (const { jobId } of config.seekJobs.filter((j) => !j.active)) {
+          if (phoneBudget <= 0 || !phoneNeed.size) break;
+          if ((phoneWalkFailures.get(jobId) ?? 0) >= 3) continue;
+          try {
+            if (!(await readSeekPhones(profile, jobId, phoneReads())).complete) sawEveryCard = false;
+            phoneWalkFailures.delete(jobId);
+          } catch (error) {
+            sawEveryCard = false;
+            phoneWalkFailures.set(jobId, (phoneWalkFailures.get(jobId) ?? 0) + 1);
+            // The error's own text can quote a candidate's name, so only its kind is printed.
+            console.error(`Phone read on a closed SEEK ad failed: ${error instanceof Error ? error.name : "UnknownError"}`);
+          }
+        }
+        // Every card of every job was seen and no panel was opened: SEEK does not list these applications. They are set
+        // aside, so they cannot keep the others waiting.
+        if (phoneAsked && sawEveryCard && phoneBudget === PHONE_READS_PER_CYCLE) for (const id of phoneNeed) phoneTried.add(id);
         const imported = mergeSourceSummaries(campaigns);
         const cliVersion = execFileSync("claude", ["--version"], {
           encoding: "utf8",

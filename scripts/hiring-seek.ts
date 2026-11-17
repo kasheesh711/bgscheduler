@@ -482,11 +482,7 @@ export async function importSeek(
   // Known candidates with no phone number yet. At most `max` panels are opened for them in one pass, with the watch
   // pause between two, so the worker reads SEEK no faster than before. `save` gets null when SEEK shows no number
   // or the panel could not be read; it is called for every panel that was tried.
-  phones?: {
-    need: Set<string>;
-    max: number;
-    save: (applicationId: string, read: { phone: string; email: string } | null) => Promise<void>;
-  },
+  phones?: PhoneReads,
 ) {
   const browser = await chromium.launchPersistentContext(profilePath, {
     channel: "chrome",
@@ -513,12 +509,7 @@ export async function importSeek(
         await observe(id, status, contacted);
         if (phones?.need.has(id) && phoneReads < phones.max) {
           if (phoneReads++) await new Promise((resolve) => setTimeout(resolve, SEEK_PAUSE_MS));
-          phones.need.delete(id);
-          // The number is a help for HR, not part of the import: no failure here may stop the pass.
-          const read = await readPhone(page, cards.nth(index)).catch(() => null);
-          // A panel that will not close would take the next click, so the phone reads end for this pass.
-          if (!(await closeDetails(page))) phoneReads = phones.max;
-          await phones.save(id, read).catch(() => {});
+          if (!(await tryPhone(page, cards.nth(index), id, phones))) phoneReads = phones.max;
         }
       } else if (["Inbox", "Prescreen", "Shortlist"].includes(status)) {
         if (imported >= max) {
@@ -548,6 +539,54 @@ export async function importSeek(
 
 /** Thrown from a visit to end the walk early and cleanly. */
 class PassStopped extends Error {}
+
+type PhoneReads = {
+  need: Set<string>;
+  max: number;
+  save: (applicationId: string, read: { phone: string; email: string } | null) => Promise<void>;
+};
+
+/**
+ * One phone read that cannot fail its pass: the number is a help for HR, not part of the import. False means the panel
+ * will not close; it would take the next click, so the caller opens no more panels in this pass.
+ */
+async function tryPhone(page: Page, card: ReturnType<Page["getByTestId"]>, id: string, phones: PhoneReads) {
+  phones.need.delete(id);
+  const read = await readPhone(page, card).catch(() => null);
+  const closed = await closeDetails(page);
+  await phones.save(id, read).catch(() => {});
+  return closed;
+}
+
+/**
+ * Phone numbers only, for an ad the worker no longer imports from: HR still calls its candidates. It imports nobody and
+ * reports no SEEK status. The page actions are the walk itself, a click on a candidate's name and Close. It ends as
+ * soon as `max` panels were opened; `complete` is true only when it saw every card.
+ */
+export async function readSeekPhones(profilePath: string, jobId: string, phones: PhoneReads) {
+  const browser = await chromium.launchPersistentContext(profilePath, {
+    channel: "chrome",
+    headless: true,
+    acceptDownloads: false,
+    viewport: { width: 1440, height: 1000 },
+  });
+  let reads = 0;
+  try {
+    await walkSeek(browser, jobId, async ({ page, cards, index, id }) => {
+      // Nothing left to read ends the walk too: a walk over hundreds of cards would only delay scoring.
+      if (reads >= phones.max || !phones.need.size) throw new PassStopped();
+      if (!phones.need.has(id)) return;
+      if (reads++) await new Promise((resolve) => setTimeout(resolve, SEEK_PAUSE_MS));
+      if (!(await tryPhone(page, cards.nth(index), id, phones))) reads = phones.max;
+    });
+    return { complete: true };
+  } catch (error) {
+    if (error instanceof PassStopped) return { complete: false };
+    throw error;
+  } finally {
+    await browser.close();
+  }
+}
 
 /**
  * Read-only pass over every SEEK folder. For each card it asks `step` (see `createBackfillStep`) whether the profile still
