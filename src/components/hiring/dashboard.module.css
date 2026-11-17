@@ -208,6 +208,7 @@
 .tableSection { display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
 .tableTools { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 24px 0; }
 .tabs { display: flex; flex: 1; min-width: 0; gap: 9px; overflow-x: auto; scrollbar-width: none; }
+@media (max-width: 719px) { .tabs { flex-wrap: wrap; } }
 .surface .tabs button { flex-shrink: 0; padding: 4px 0 6px; border-bottom: 2px solid transparent; color: var(--muted); white-space: nowrap; transition: color 150ms; }
 .surface .tabs button:hover { color: var(--ink); }
 .surface .tabs button[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); font-weight: 500; }
@@ -243,17 +244,16 @@
 .table td.fitCell { min-width: 120px; max-width: 150px; }
 .table td.actionCell { max-width: none; overflow: visible; }
 .table td.wrapCell { min-width: 220px; white-space: normal; }
-/* The action column stays in view when the table scrolls sideways inside its wrapper. */
 .table td.softCell { min-width: 110px; max-width: 140px; white-space: normal; }
 /* The Calls table has ten columns; tighter padding lets it fit 1280px, and it scrolls inside its wrapper below that. */
 .table.denseTable :is(th, td) { padding-inline: 6px; }
 .table.denseTable td.candidateCell { max-width: 150px; }
 .table.denseTable :is(th, td):first-child { padding-left: 24px; }
-@media (min-width: 720px) {
-  .table :is(th, td).stickyEnd { position: sticky; right: 0; background: var(--paper); box-shadow: -1px 0 0 var(--line); }
-  .table th.stickyEnd { z-index: 3; }
-  .table tbody tr:is(:hover, [data-selected]) td.stickyEnd { background: var(--tint); }
-}
+/* The action column stays in view when the table scrolls sideways inside its wrapper; on a phone its buttons stack. */
+.table :is(th, td).stickyEnd { position: sticky; right: 0; background: var(--paper); box-shadow: -1px 0 0 var(--line); }
+.table th.stickyEnd { z-index: 3; }
+.table tbody tr:is(:hover, [data-selected]) td.stickyEnd { background: var(--tint); }
+@media (max-width: 719px) { .callActions { flex-direction: column; align-items: stretch; } }
 .table tbody tr { cursor: pointer; transition: background-color 120ms; }
 .table tbody tr:hover, .table tbody tr[data-selected] { background: var(--tint); }
 .candidateCell { min-width: 0; }
@@ -376,7 +376,7 @@
 /* Setup */
 .setupBar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 24px; border-bottom: 1px solid var(--line); background: var(--paper); }
 .setupGrid { display: grid; grid-template-columns: 1fr; }
-.setupSection { display: grid; align-content: start; gap: 8px; min-width: 0; padding: 12px 24px 16px; border-bottom: 1px solid var(--line); }
+.setupSection { display: grid; align-content: start; gap: 8px; min-width: 0; overflow-wrap: anywhere; padding: 12px 24px 16px; border-bottom: 1px solid var(--line); }
 .setupSection .panelLede { margin-bottom: 0; }
 .setupSection .secondary { margin-top: 0; }
 .weightBar { display: flex; gap: 2px; height: 10px; }
@@ -393,7 +393,8 @@
 .interviewerRow { display: grid; grid-template-columns: 1fr; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); }
 .interviewerRow .inlineLink { justify-self: start; align-self: center; }
 .subjectChecks { display: flex; flex-wrap: wrap; gap: 2px 12px; grid-column: 1 / -1; }
-.universityScroll { height: 340px; overflow: auto; }
+.universityScroll { min-height: 120px; max-height: 340px; overflow: auto; }
+.setupSection :is(input, select, textarea) { max-width: 100%; }
 .universityTable { width: 100%; min-width: 980px; border-collapse: collapse; }
 .universityTable th { position: sticky; top: 0; z-index: 1; padding: 4px 6px; background: var(--paper); color: var(--muted); font-weight: 500; text-align: left; }
 .universityTable td { padding: 2px 6px; border-top: 1px solid var(--line); white-space: nowrap; }
@@ -453,7 +454,7 @@
   /* The table always gets 480px; the column scrolls when the charts leave less. */
   .tableSection { flex: 1 0 480px; min-height: 0; }
   .tableScroll { flex: 1; min-height: 0; max-height: none; }
-  .setupGrid { grid-template-columns: 340px 340px minmax(0, 1fr); }
+  .setupGrid { grid-template-columns: minmax(0, 340px) minmax(0, 340px) minmax(0, 1fr); }
   .setupSection + .setupSection { border-left: 1px solid var(--line); }
   .setupWide { grid-column: auto; }
   .setupFull { border-left: 0; }
@@ -652,6 +653,7 @@
 @media (max-width: 719px) {
   .surface .needRow { grid-template-columns: 22px 1fr auto; }
   .needRow .needDemand, .needRow .needFull, .needRow .needWhy { grid-column: 2 / -1; }
+  .needRow .pill { grid-column: 3; grid-row: 1; }
   .surface .needHeadRow { display: none; }
 }
 

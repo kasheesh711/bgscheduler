@@ -22,10 +22,10 @@ const roundPct = (value: number) => Math.round(value * 10) / 10;
 const dateText = (iso: string) =>
   new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Bangkok" });
 
-/** "0.8 days median, 1.5 p90 (3 cases)". Few cases are named, because the median then moves a lot. */
+/** "0.8 d median · p90 1.5 d (3 cases)". Few cases are named, because the median then moves a lot. */
 export function daysText(stat: Stat | undefined) {
   if (!stat) return "No timed cases yet";
-  return `${stat.median} days median, ${stat.p90} p90 (${stat.n} ${stat.n === 1 ? "case" : "cases"}${stat.n < 5 ? ", few" : ""})`;
+  return `${stat.median} d median · p90 ${stat.p90} d (${stat.n} ${stat.n === 1 ? "case" : "cases"}${stat.n < 5 ? ", few" : ""})`;
 }
 
 /** The break-down choices: all, each campaign (most applied first), each ISO week (newest first). */

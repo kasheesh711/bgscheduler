@@ -38,7 +38,7 @@ describe("funnel panel", () => {
 
   it("names few cases and missing times", () => {
     expect(daysText(undefined)).toBe("No timed cases yet");
-    expect(daysText({ n: 3, median: 0.8, p90: 1.5 })).toBe("0.8 days median, 1.5 p90 (3 cases, few)");
+    expect(daysText({ n: 3, median: 0.8, p90: 1.5 })).toBe("0.8 d median · p90 1.5 d (3 cases, few)");
   });
 
   it("shows every count with a rate or a time, the stuck rule, and the owner", () => {
