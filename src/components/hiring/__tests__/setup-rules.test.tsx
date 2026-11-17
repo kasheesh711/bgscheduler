@@ -451,7 +451,7 @@ describe("worker warning", () => {
       { id: "d", name: "Deleted Person", resumeState: "deleted" },
     ];
     const html = rail({ candidates });
-    expect(html).toContain("2 with no file");
+    expect(html).toContain("2 of 4 (50%) with no file");
     expect(html).not.toContain("Hidden Person");
     expect(rail({ candidates: candidates.slice(2) })).toContain("All stored");
   });

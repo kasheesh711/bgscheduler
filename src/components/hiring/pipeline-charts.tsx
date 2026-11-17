@@ -96,7 +96,7 @@ export function KpiStrip({
         note={`${round(i.appointmentsThisWeek / 7)} a day${i.bookedWithoutAppointment ? ` · ${i.bookedWithoutAppointment} not held here` : ""}`}
       />
       <Tile
-        label="Message issues"
+        label="Send issues"
         value={i.messages.problems}
         note={`${percent(i.messages.problems, i.messages.sent + i.messages.problems)}% of ${i.messages.sent + i.messages.problems} messages · ${i.messages.sent} sent`}
       />

@@ -29,6 +29,10 @@ export function daysText(stat: Stat | undefined) {
   return `${stat.median} d median · p90 ${stat.p90} d (${stat.n} ${stat.n === 1 ? "case" : "cases"}${stat.n < 5 ? ", few" : ""})`;
 }
 
+/** The same figures as `daysText`, short enough for a table cell. */
+const daysShort = (stat: Stat | undefined) =>
+  stat ? `${stat.median} d · p90 ${stat.p90} d (n=${stat.n}${stat.n < 5 ? ", few" : ""})` : "No timed cases yet";
+
 /** The break-down choices: all, each campaign (most applied first), each ISO week (newest first). */
 export function groupOptions(report: FunnelReport, campaigns: Campaign[]) {
   const keys = Object.keys(report.groups);
@@ -192,7 +196,7 @@ export function FunnelView({
                   <th scope="row">{label}</th>
                   <td className={css.num}>{g.reached[step]}</td>
                   <td className={css.num}>{step === "applied" ? `${roundPct(applied / g.weeks)} a week` : pct(g.conv[step])}</td>
-                  <td>{step === "applied" ? "Start" : daysText(g.stepDays[STEP_TIMING[step]])}</td>
+                  <td>{step === "applied" ? "Start" : daysShort(g.stepDays[STEP_TIMING[step]])}</td>
                 </tr>
               ))}
             </tbody>

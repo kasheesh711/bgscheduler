@@ -16,7 +16,7 @@ One page. Open https://bgscheduler.vercel.app/hiring. The Overview opens first.
 4. Read **Next action** and **Owner** for that stage. Tell the owner.
 
 ## Task 3. How long do candidates spend in each stage?
-1. In **Funnel steps**, read **Time from step before** (median days, and p90: 9 in 10 candidates take this long or less).
+1. In **Funnel steps**, read **Time from step before**. A cell reads "0.8 d · p90 1.5 d (n=3)": median days, p90 (9 in 10 candidates take this long or less), and the number of cases.
 2. In **Candidates by current stage**, read **Days in stage**.
 3. "few" after a count means fewer than 5 cases. The median can move a lot.
 

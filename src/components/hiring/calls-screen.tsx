@@ -91,6 +91,8 @@ export function CallsScreen({
     void command(callCommand(c, result));
   };
   const threshold = data.config.callThreshold;
+  const [mountedAt] = useState(() => Date.now());
+  const oldestDays = rows.length ? Math.floor((mountedAt - Math.min(...rows.map((c) => new Date(String(c.updatedAt)).getTime()))) / 86400000) : null;
 
   if (cards) return <ResumeDeck data={data} rows={rows} command={command} busy={busy} onClose={() => setCards(false)} />;
   return (
@@ -106,7 +108,7 @@ export function CallsScreen({
           <p className={css.activeFilters}>
             {threshold === null
               ? "Calls are off. Set an HR call score in Rules and setup to use this list."
-              : `${rows.length} to call. Booked calls first, by time; then the highest SEEK score. A candidate at or above ${threshold} gets the pre-screen form only after a good call.`}
+              : `${rows.length} to call${oldestDays === null ? "" : ` · longest unchanged ${oldestDays} d`}. Booked calls first, by time; then the highest SEEK score. A candidate at or above ${threshold} gets the pre-screen form only after a good call.`}
           </p>
           {rows.length > 0 && (
             <div className={css.tableTools}>

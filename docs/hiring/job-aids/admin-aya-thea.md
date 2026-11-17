@@ -5,9 +5,10 @@ One page. Open https://bgscheduler.vercel.app/hiring. The Overview opens first.
 ## Task 1. Which paper do I print for each visit tomorrow?
 1. Click the **Visit day** tab.
 2. Click **Aya: print list**.
-3. Find the **Tomorrow** heading.
+3. Find the **Tomorrow** heading. **Today** is above it. If no visit is booked from today, **Last visit day** shows the most recent visit day first.
 4. For each row, click **Print <paper name>** in the **Paper** column. The file opens. Print it.
 5. If **Tomorrow** shows "No visits.", nothing needs printing for tomorrow. The list also shows each later day with a visit, up to 8 days ahead.
+6. The **Print** link opens the paper in a new tab.
 
 ## Task 2. Which room is each visit in?
 1. On **Aya: print list**, read the **Room** column.
@@ -15,7 +16,7 @@ One page. Open https://bgscheduler.vercel.app/hiring. The Overview opens first.
 3. Agree a free room with Kevin before the visit. Write it on the printed paper.
 
 ## Task 3. Which visits have no paper ("Needs review")?
-1. On **Aya: print list**, read the line at the top. It counts the visits that miss a head or a paper.
+1. On **Aya: print list**, read the line at the top. It reads "N of M visits from today to <day> miss a head or a paper." Start with those visits.
 2. Find each row with "Needs review" in the **Head** or **Paper** column.
 3. Read the reason. Example: "Needs review: no question paper for English Language in the paper library".
 4. Tell the person in the table below on the same day.

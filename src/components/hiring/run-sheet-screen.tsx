@@ -123,7 +123,7 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
       {tab === "sheet" && (
         <>
           <FirstUseHint id="hr-run-sheet">
-            HR: this list shows every visit from today, first visit first. &quot;Needs review&quot; tells you what is missing: tell
+            HR: this list shows every visit from today, first visit first. Old visits show under the list. &quot;Needs review&quot; tells you what is missing: tell
             Kevin. Full steps: the printed HR job aid.
           </FirstUseHint>
           <Table head={sheetColumns} rows={coming.map(sheetRow)} empty="No visits are booked from today." />
@@ -146,7 +146,7 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
       {tab === "print" && (
         <>
           <FirstUseHint id="aya-print-list">
-            Aya and Thea: under Tomorrow, click Print on each row and print the paper. Tell Kevin about each &quot;Needs review&quot;
+            Aya and Thea: under Tomorrow, click Print on each row and print the paper. With no visit ahead, read Last visit day. Tell Kevin about each &quot;Needs review&quot;
             row. Full steps: the printed Admin job aid.
           </FirstUseHint>
           <p role="status" className={printRows.some(staffGap) ? css.warnWord : undefined}>

@@ -7,7 +7,8 @@ One page. Open https://bgscheduler.vercel.app/hiring. The Overview opens first.
 2. Click **Heads: upcoming mocks**.
 3. Find the block with your name. It lists your subjects.
 4. Read the first row: time, candidate, subject.
-5. "You run the mock" means you take the mock. "Paper only: no mock" means the candidate sits the paper only.
+5. If you have no upcoming visit, the table says "No upcoming mocks or paper visits." and **Recent visits (last 8 weeks)** shows under it.
+6. "You run the mock" means you take the mock. "Paper only: no mock" means the candidate sits the paper only.
 
 ## Task 2. Which mocks do I have this week?
 1. Click the **4 Mock and paper** tab.

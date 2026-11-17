@@ -63,7 +63,7 @@
 .purpose { margin: 0; padding: 8px 24px 0; color: var(--support); }
 .notice { margin-left: auto; color: var(--good); }
 .viewSwitch { display: flex; flex-wrap: wrap; max-width: 100%; gap: 2px; padding: 2px; border-radius: 18px; background: var(--tint); }
-.surface .viewSwitch button { padding: 5px 14px; white-space: nowrap; border-radius: 999px; font-weight: 500; color: var(--muted); transition: color 150ms, background-color 150ms; }
+.surface .viewSwitch button { padding: 5px 14px; white-space: nowrap; border-radius: 999px; font-weight: 500; color: var(--support); transition: color 150ms, background-color 150ms; }
 .surface .viewSwitch button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
 .alert { margin: 8px 24px 0; padding: 8px 12px; border-radius: 8px; background: #fdecec; color: var(--danger); }
 .loading { padding: 32px 24px; color: var(--muted); }
@@ -209,6 +209,7 @@
 .tableSection { display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
 .tableTools { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 24px 0; }
 .tabs { display: flex; flex: 1; min-width: 0; gap: 9px; overflow-x: auto; scrollbar-width: none; }
+.panel > .tabs { flex: 0 0 auto; align-items: flex-start; }
 @media (max-width: 719px) { .tabs { flex-wrap: wrap; } }
 .surface .tabs button { flex-shrink: 0; padding: 4px 0 6px; border-bottom: 2px solid transparent; color: var(--muted); white-space: nowrap; transition: color 150ms; }
 .surface .tabs button:hover { color: var(--ink); }
@@ -496,6 +497,7 @@
 .sheetTable { width: 100%; margin-top: 6px; border-collapse: collapse; }
 .sheetTable th { padding: 3px 6px 3px 0; border-bottom: 1px solid var(--stone); color: var(--muted); font-weight: 500; text-align: left; }
 .sheetTable td { padding: 4px 6px 4px 0; border-bottom: 1px solid var(--line); color: var(--support); vertical-align: top; overflow-wrap: anywhere; }
+@media (max-width: 719px) { .sheetTable { min-width: 640px; } .sheetTable td { overflow-wrap: break-word; } }
 .scanSplit { display: grid; gap: 8px; margin-top: 6px; }
 .pointList { display: grid; gap: 2px; margin: 0 0 4px; padding: 0; list-style: none; }
 .pointGiven { color: var(--ink); }
@@ -671,7 +673,7 @@
 .funnelPanel .table tbody tr[data-stuck] th { color: var(--warn); }
 .funnelRule { color: var(--muted); }
 .funnelNote { margin-top: 6px; color: var(--muted); font-size: 12px; }
-@media (min-width: 1180px) { .funnelGrid { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); } }
+@media (min-width: 1600px) { .funnelGrid { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); } }
 
 /* First-use hint (one per role view, dismissed per browser) */
 .firstUseHint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--stone); border-radius: 8px; background: var(--paper); font-size: 13px; }

@@ -14,13 +14,14 @@ One page. Open https://bgscheduler.vercel.app/hiring. The Overview opens first.
 1. Click the **Visit day** tab.
 2. Click **Run sheet**.
 3. Read the rows. Today is first. Each row shows the time, candidate, subject, head, paper and room.
-4. To see old visits, tick **Show past visits (last 8 weeks)**.
+4. If no visit is booked from today, the page says "No visits are booked from today." and shows **Recent visits (last 8 weeks)** under it.
+5. If visits are booked, tick **Show past visits (last 8 weeks)** under the list to see old visits.
 
 ## Task 3. What stage is a candidate at?
 1. Click the **Overview** tab.
 2. Find the table under the meters, above the charts.
 3. Type the name in the search box marked "Search name, email or stage".
-4. Read the **Stage** column.
+4. Read the **Stage** column. From 1200 px wide, **Next action** and **Owner** show beside it: they say who acts next.
 5. Click the name to see the full record.
 
 > **What "Needs review" means**
