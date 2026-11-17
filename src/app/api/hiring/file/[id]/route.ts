@@ -26,7 +26,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
         "Content-Length": String(blob.blob.size),
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
-        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'self'; sandbox",
+        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'self'",
         "Content-Disposition": `inline; filename*=UTF-8''${name}`,
       },
     });

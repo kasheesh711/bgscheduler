@@ -131,7 +131,8 @@ describe("GET /api/hiring/resume/[id]", () => {
     expect(pdf.headers.get("Content-Type")).toBe(RESUME_TYPES.pdf);
     expect(pdf.headers.get("Cache-Control")).toBe("no-store");
     expect(pdf.headers.get("X-Content-Type-Options")).toBe("nosniff");
-    expect(pdf.headers.get("Content-Security-Policy")).toBe("default-src 'none'; frame-ancestors 'self'; sandbox");
+    // No sandbox token: with it, Chrome shows a gray frame instead of the PDF.
+    expect(pdf.headers.get("Content-Security-Policy")).toBe("default-src 'none'; frame-ancestors 'self'");
     expect(pdf.headers.get("Content-Disposition")).toBe("inline; filename*=UTF-8''cv.pdf");
     expect(await pdf.text()).toBe("%PDF-invented");
     // Only the stored path reaches storage.
@@ -222,7 +223,7 @@ describe("GET /api/hiring/brief/[token]/resume", () => {
     expect(response.headers.get("Content-Type")).toBe("application/pdf");
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
-    expect(response.headers.get("Content-Security-Policy")).toContain("sandbox");
+    expect(response.headers.get("Content-Security-Policy")).toBe("default-src 'none'; frame-ancestors 'self'");
     expect(response.headers.get("Content-Disposition")).toMatch(/^inline; /);
   });
 
