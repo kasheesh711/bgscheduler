@@ -10,6 +10,10 @@ import { callQueue, cancelOrphanCalls, readLimitUsage, recordCall, releaseCallIn
 import { observeSeekState } from "../sources";
 import { googleConnectionStatus, readHrBusy } from "../google";
 import { bookingToken } from "../tokens";
+import { deliverOutbox } from "../worker";
+import { resumeAttachment } from "../resume-files";
+import { createOutboundEmailSender } from "@/lib/email/outbound";
+import type { ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
 
 // The real slot builder runs against this database. Google, Wise and the tutor index are fake.
 vi.mock("../availability", async (actual) => ({
@@ -23,6 +27,7 @@ vi.mock("@/lib/search/index", () => ({ ensureIndex: vi.fn() }));
 vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
 vi.mock("../google", () => ({ deliverCalendar: vi.fn(), googleConnectionStatus: vi.fn(), readHrBusy: vi.fn() }));
 vi.mock("@/lib/line/client", () => ({ pushLineTextMessage: vi.fn(), LinePushError: class extends Error {} }));
+vi.mock("../resume-files", async (actual) => ({ ...(await actual<typeof import("../resume-files")>()), resumeAttachment: vi.fn() }));
 
 let handle: Awaited<ReturnType<typeof startTestDb>>, db: Database;
 const DAY = 86400000;
@@ -201,8 +206,8 @@ describe("booking a call", () => {
     // A click on an open Calls tab sends the revision it loaded, so a booking must not change it.
     expect(await candidate(a.id)).toMatchObject({ phone: "+66812345678", stage: "new", revision: a.revision });
     const jobs = await jobsOf(a.id);
-    expect(jobs.map((job) => [job.kind, job.bookingId]).sort()).toEqual([["calendar", call.id], ["email", call.id]]);
-    const text = String(jobs.find((job) => job.kind === "email")!.payload.text);
+    expect(jobs.map((job) => [job.kind, job.bookingId]).sort()).toEqual([["calendar", call.id], ["email", call.id], ["email", call.id]]);
+    const text = String(jobs.find((job) => job.key === `booking:${call.id}:email`)!.payload.text);
     expect(text).toContain("We will call: +66812345678");
     expect(text).toContain("09:00–09:15 (Bangkok)");
     expect(text).toMatch(/Move your call:\n\S+\/hiring\/book\//);
@@ -213,6 +218,56 @@ describe("booking a call", () => {
     expect(await callsOf(a.id)).toHaveLength(1);
     expect((await candidate(a.id)).phone).toBe("0898765432");
     expect(await callView(link(a.id), db)).toMatchObject({ call: { start: NINE, end: QUARTER }, canMove: true });
+  });
+
+  it("sends HR its own email with the stored résumé, and the candidate's copy goes without HR or the file", async () => {
+    const pdf = { name: "cv.pdf", type: "application/pdf" as const, content: Buffer.from("%PDF-1.4") };
+    const a = await seed();
+    await db.update(s.hiringCandidates).set({ resumePath: `hiring-resumes/${a.id}/${"a".repeat(64)}.pdf`, resumeType: "application/pdf" }).where(eq(s.hiringCandidates.id, a.id));
+    const b = await seed();
+    const [callA, callB] = [await book(a.id), await book(b.id, HALF)];
+    const hrJob = async (id: string) => (await db.select().from(s.hiringOutbox).where(eq(s.hiringOutbox.key, `booking:${id}:hr-email`)))[0];
+    expect((await hrJob(callA.id)).payload).toMatchObject({ to: HR_CALENDAR, cc: [], attachResume: true, subject: `Pre-screen call booked: ${a.name}` });
+    const hrText = String((await hrJob(callA.id)).payload.text);
+    expect(hrText).toContain("Phone: +66812345678");
+    expect(hrText).toContain("Résumé: Attached");
+    expect(hrText).not.toContain("/hiring/book/");
+    expect((await hrJob(callB.id)).payload).toMatchObject({ attachResume: false, text: expect.stringContaining("Résumé: No file stored") });
+    const sendEmail = vi.fn<ScheduleEmailSender["sendEmail"]>(async () => ({ id: "gmail" }));
+    vi.mocked(createOutboundEmailSender).mockReturnValue({ sendEmail });
+    vi.mocked(resumeAttachment).mockResolvedValue(pdf);
+    await deliverOutbox(db, await settingsConfig());
+    const sent = sendEmail.mock.calls.map(([input]) => input);
+    expect(sent.filter((m) => m.to === HR_CALENDAR).map((m) => [m.cc, m.attachments])).toEqual([[[], [pdf]], [[], undefined]]);
+    expect(sent.filter((m) => m.to !== HR_CALENDAR).map((m) => [m.cc, m.attachments])).toEqual([[[], undefined], [[], undefined]]);
+    expect(vi.mocked(resumeAttachment).mock.calls.map((c) => c[0])).toEqual([a.id]);
+    // A moved call tells HR again, with the old time.
+    const moved = await book(b.id, FRIDAY, { move: true });
+    expect((await hrJob(moved.id)).payload).toMatchObject({
+      subject: `Pre-screen call moved: ${b.name}`,
+      text: expect.stringContaining("The old time, Thursday 5 November at 09:30 (Bangkok), is cancelled."),
+    });
+  });
+
+  it("retries the HR email twice when the résumé cannot be read, then sends it without the file", async () => {
+    const a = await seed();
+    await db.update(s.hiringCandidates).set({ resumePath: `hiring-resumes/${a.id}/${"b".repeat(64)}.pdf`, resumeType: "application/pdf" }).where(eq(s.hiringCandidates.id, a.id));
+    const call = await book(a.id);
+    const sendEmail = vi.fn<ScheduleEmailSender["sendEmail"]>(async () => ({ id: "gmail" }));
+    vi.mocked(createOutboundEmailSender).mockReturnValue({ sendEmail });
+    vi.mocked(resumeAttachment).mockRejectedValue(new Error("Blob storage is down"));
+    const hrJob = async () => (await db.select().from(s.hiringOutbox).where(eq(s.hiringOutbox.key, `booking:${call.id}:hr-email`)))[0];
+    const toHr = () => sendEmail.mock.calls.map(([input]) => input).filter((m) => m.to === HR_CALENDAR);
+    for (const wait of [0, 121, 241]) {
+      vi.setSystemTime(new Date(Date.now() + wait * 1000));
+      await deliverOutbox(db, await settingsConfig());
+      if (wait < 241) expect([(await hrJob()).status, toHr()]).toEqual(["failed", []]);
+    }
+    expect((await hrJob()).status).toBe("sent");
+    expect(toHr().map((m) => m.attachments)).toEqual([undefined]);
+    expect(toHr()[0].text).toContain("Résumé: Could not be attached. See the Hiring page.");
+    expect(toHr()[0].html).toContain("Could not be attached. See the Hiring page.");
+    expect(toHr()[0].text).not.toContain("Attached to this email");
   });
 
   it("gives one time to one candidate when two confirm together", async () => {

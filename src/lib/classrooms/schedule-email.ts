@@ -98,6 +98,8 @@ export interface ScheduleEmailSendInput {
   html: string;
   text: string;
   idempotencyKey: string;
+  /** Files to attach. Only the Workspace Gmail sender sends them; other transports ignore them. */
+  attachments?: { name: string; type: string; content: Buffer }[];
 }
 
 export interface ScheduleEmailSender {

@@ -1465,6 +1465,10 @@ export async function callView(token: string, db: Database = getDb(), now = new 
   };
 }
 
+/** The HR call email's résumé line. The worker changes it when the file cannot be attached at send time. */
+export const RESUME_ATTACHED = "Attached to this email";
+export const RESUME_NOT_ATTACHED = "Could not be attached. See the Hiring page.";
+
 /** The candidate chooses a call time and gives the number to call. A move is this with `move: true`, once. */
 export async function bookCall(token: string, value: unknown, db: Database = getDb(), now = new Date()) {
   const input = callBookingSchema.parse(value);
@@ -1537,6 +1541,8 @@ export async function bookCall(token: string, value: unknown, db: Database = get
         kind: "email",
         payload: {
           to: candidate.email,
+          // HR gets its own email below, with the résumé. The candidate's copy must not carry the file.
+          cc: [],
           ...hiringEmail({
             subject: `BeGifted call ${own ? "moved" : "confirmed"}`,
             preheader: `${bangkok(call.startTime)} (Bangkok). We will call you by phone.`,
@@ -1556,6 +1562,34 @@ export async function bookCall(token: string, value: unknown, db: Database = get
           }),
         },
       });
+    const resume = !!storedResume(cap.id, candidate.resumePath, candidate.resumeType);
+    await enqueue(tx, {
+      key: `booking:${call.id}:hr-email`,
+      candidateId: cap.id,
+      bookingId: call.id,
+      kind: "email",
+      payload: {
+        to: HR_CALENDAR,
+        cc: [],
+        attachResume: resume,
+        ...hiringEmail({
+          subject: `Pre-screen call ${own ? "moved" : "booked"}: ${candidate.name}`,
+          preheader: `${bangkok(call.startTime)} (Bangkok). Call ${input.phone}.`,
+          title: `Pre-screen call ${own ? "moved" : "booked"}`,
+          name: "HR team",
+          paragraphs: [`${candidate.name} ${own ? "moved" : "booked"} a pre-screen call. Call this person at the time below.`],
+          details: [
+            { label: "Candidate", value: candidate.name },
+            { label: "Subject", value: subject },
+            { label: "Time", value: `${bangkok(call.startTime)}–${bangkokTime(call.endTime)} (Bangkok)` },
+            { label: "Phone", value: input.phone },
+            { label: "Email", value: candidate.email ?? "Not recorded" },
+            { label: "Résumé", value: resume ? RESUME_ATTACHED : "No file stored. See the Hiring page." },
+          ],
+          ...(own ? { after: [`The old time, ${bangkok(own.startTime)} (Bangkok), is cancelled.`] } : {}),
+        }),
+      },
+    });
     await enqueue(tx, {
       key: `booking:${call.id}:calendar`,
       candidateId: cap.id,

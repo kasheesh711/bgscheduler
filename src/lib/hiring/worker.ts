@@ -17,7 +17,7 @@ import { ScheduleEmailRejection } from "@/lib/classrooms/schedule-email";
 import { pushLineTextMessage, LinePushError } from "@/lib/line/client";
 import { progressUsesTutorBot } from "@/lib/line/progress-reminders";
 import {
-  isDecided, runtimeWritesAllowed, type HiringConfig } from "./model";
+  HR_CALENDAR, isDecided, runtimeWritesAllowed, type HiringConfig } from "./model";
 import {
   askForBriefs,
   assessWithEvidence,
@@ -32,11 +32,12 @@ import {
   type PreScreenAssessment,
 } from "./scoring";
 import { AWAITING_CALL, profileGate } from "./insights";
-import { audit, briefLink, candidateById, settings, sourceHash } from "./service";
+import { audit, briefLink, candidateById, RESUME_ATTACHED, RESUME_NOT_ATTACHED, settings, sourceHash } from "./service";
 import { callInviteSentAt, cancelOrphanCalls, formSentAt, releaseCallInvites, releaseQueues, replyCheck, runFollowUps } from "./queue";
 import { contactLines, deliverRecruitment, queueRecruitmentInvitation } from "./recruitment";
 import { deliverCalendar } from "./google";
 import { hiringEmailHtmlFromText } from "./email";
+import { resumeAttachment } from "./resume-files";
 import { syncTracker, mirrorTracker } from "./sources";
 import { redactProfile } from "./seek-text";
 import { assessPrestige } from "./prestige";
@@ -615,20 +616,33 @@ export async function deliverOutbox(
           subject: string;
           text: string;
           html?: string;
+          cc?: string[];
+          attachResume?: boolean;
         };
         // Result emails (edited by a person) and rows queued before the styled builders carry text only.
         const html = payload.html ?? hiringEmailHtmlFromText(payload.subject, payload.text);
+        // Only HR's own email carries the file, never a candidate's. Read before `submitted`: a storage error retries
+        // the email. From the third try HR gets it without the file, as the time and phone matter more.
+        const forHr = payload.attachResume === true && payload.to === HR_CALENDAR && !payload.cc?.length;
+        const resume = forHr
+          ? await resumeAttachment(candidate.id, db).catch((error) => {
+              if (claimed.attempts < 3) throw error;
+              return null;
+            })
+          : null;
+        const fileNote = (value: string) => (forHr && !resume ? value.replaceAll(RESUME_ATTACHED, RESUME_NOT_ATTACHED) : value);
         submitted = true;
         receipt = await createOutboundEmailSender("primary", {
           strictOutcome: true,
           audience: "candidate",
         }).sendEmail({
           to: payload.to,
-          cc: ["people@begiftededucation.com"],
+          cc: payload.cc ?? ["people@begiftededucation.com"],
           subject: payload.subject,
-          text: payload.text,
-          html,
+          text: fileNote(payload.text),
+          html: fileNote(html),
           idempotencyKey: job.id,
+          ...(resume ? { attachments: [resume] } : {}),
         });
       } else {
         if (!booking) throw new Error("Booking record is missing.");

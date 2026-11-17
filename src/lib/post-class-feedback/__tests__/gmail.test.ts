@@ -107,3 +107,34 @@ it("sends a validated CC header and rejects CC header injection before Google", 
   await expect(sender.sendEmail({ ...input, cc: ["hr@example.com\r\nBcc: leak@example.com"] })).rejects.toBeInstanceOf(ScheduleEmailRejection);
   expect(fetcher).toHaveBeenCalledTimes(1);
 });
+
+it("sends a file through the upload endpoint as a raw message, and refuses a bad file type", async () => {
+  const fetcher = vi.fn().mockResolvedValue(Response.json({ id: "with-file" }));
+  vi.stubGlobal("fetch", fetcher);
+  const pdf = Buffer.from("%PDF-1.4 résumé");
+  const sender = createGmailSender(async () => "access");
+  expect(await sender.sendEmail({ ...input, attachments: [{ name: "Ploy ภาษา CV.pdf", type: "application/pdf", content: pdf }] }))
+    .toEqual({ id: "with-file" });
+  const [url, init] = fetcher.mock.calls[0];
+  expect(url).toBe("https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media");
+  expect(new Headers(init.headers).get("content-type")).toBe("message/rfc822");
+  const raw = String(init.body);
+  expect(raw).toMatch(/Content-Type: multipart\/mixed; boundary="files_[a-f0-9]+"\r\n\r\n--files_[a-f0-9]+\r\nContent-Type: multipart\/alternative/);
+  expect(raw).toContain(Buffer.from(input.text).toString("base64"));
+  expect(raw).toContain(`Content-Type: application/pdf\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename="Ploy  CV.pdf"; filename*=UTF-8''Ploy%20%E0%B8%A0%E0%B8%B2%E0%B8%A9%E0%B8%B2%20CV.pdf\r\n\r\n${pdf.toString("base64")}\r\n`);
+  expect(raw.endsWith(`--${raw.match(/files_[a-f0-9]+/)![0]}--\r\n`)).toBe(true);
+  await expect(sender.sendEmail({ ...input, attachments: [{ name: "x.pdf", type: "application/pdf\r\nBcc: leak@example.com", content: pdf }] }))
+    .rejects.toBeInstanceOf(ScheduleEmailRejection);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a long Thai file name under the header line limit", async () => {
+  const fetcher = vi.fn().mockResolvedValue(Response.json({ id: "long-name" }));
+  vi.stubGlobal("fetch", fetcher);
+  await createGmailSender(async () => "access").sendEmail({
+    ...input, attachments: [{ name: `${"ก".repeat(120)}.pdf`, type: "application/pdf", content: Buffer.from("%PDF") }],
+  });
+  const line = String(fetcher.mock.calls[0][1].body).split("\r\n").find((l) => l.startsWith("Content-Disposition"))!;
+  expect(line.length).toBeLessThan(998);
+  expect(line).toMatch(/^Content-Disposition: attachment; filename="attachment\.pdf"; filename\*=UTF-8''(%E0%B8%81)+\.pdf$/);
+});
