@@ -116,7 +116,7 @@ export function CallsScreen({
             </div>
           )}
           <div className={css.tableScroll}>
-            <table className={css.table}>
+            <table className={`${css.table} ${css.denseTable}`}>
               <thead>
                 <tr>
                   <th>#</th>
@@ -128,7 +128,7 @@ export function CallsScreen({
                   <th>Call booking</th>
                   <th>Calls</th>
                   <th>SEEK</th>
-                  <th>Result</th>
+                  <th className={css.stickyEnd}>Result</th>
                 </tr>
               </thead>
               <tbody>
@@ -150,23 +150,23 @@ export function CallsScreen({
                         </button>
                         {c.profileAssessment?.briefSummary && <span className={css.email}>{c.profileAssessment.briefSummary}</span>}
                       </td>
-                      <td onClick={(e) => e.stopPropagation()}>
+                      <td className={css.actionCell} onClick={(e) => e.stopPropagation()}>
                         <PhoneLink phone={c.phone} />
                       </td>
-                      <td>
+                      <td className={css.fitCell} title={[subjects.main, ...subjects.other].join(", ")}>
                         {subjects.main}
                         {subjects.other.length > 0 && <span className={css.email}>Also {subjects.other.join(", ")}</span>}
                       </td>
-                      <td>{universityName(c)}</td>
+                      <td className={css.softCell} title={universityName(c)}>{universityName(c)}</td>
                       <td className={css.num}>{c.profileScore === null ? "–" : Math.round(c.profileScore * 10) / 10}</td>
-                      <td onClick={(e) => e.stopPropagation()}>
+                      <td className={css.softCell} onClick={(e) => e.stopPropagation()}>
                         {callState(c.id, data.calls, data.inviteOutbox)}
                       </td>
                       <td className={css.mutedCell}>{triesText(c.callReview)}</td>
-                      <td onClick={(e) => e.stopPropagation()}>
+                      <td className={css.actionCell} onClick={(e) => e.stopPropagation()}>
                         <SeekLinks candidate={c} fallbackJobId={data.config.seekJobs[0].jobId} className={css.seekButton} />
                       </td>
-                      <td>
+                      <td className={`${css.actionCell} ${css.stickyEnd}`}>
                         <div className={`${css.decisionActions} ${css.callActions}`}>
                           {(
                             [

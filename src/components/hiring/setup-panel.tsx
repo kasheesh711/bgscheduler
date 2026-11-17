@@ -693,7 +693,7 @@ export function SetupPanel({
               <tbody>
                 {!showUniversities && config.universities.length > 0 && (
                   <tr>
-                    <td colSpan={7}>Loading {config.universities.length} universities…</td>
+                    <td colSpan={7}>Loading {config.universities.length} {config.universities.length === 1 ? "university" : "universities"}…</td>
                   </tr>
                 )}
                 {(showUniversities ? config.universities : []).map((u, i) => (

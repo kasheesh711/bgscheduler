@@ -304,7 +304,7 @@ describe("Rules and setup", () => {
 
   it("paints the tab before the long university list", () => {
     const html = panel(make({ universities: [{ name: "MIT", country: "US", rank: null, edition: "2026-2027", sourceUrl: "https://www.usnews.com/education/best-global-universities", aliases: [] }] }));
-    expect(html).toContain("Loading 1 universities…");
+    expect(html).toContain("Loading 1 university…");
     expect(html).not.toContain('aria-label="University 1"');
   });
 

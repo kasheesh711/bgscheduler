@@ -57,8 +57,11 @@
   letter-spacing: -0.01em;
 }
 .subtitle { color: var(--muted); }
+/* Room for the wrapped subtitle on a phone, so the page does not jump when the data arrives. */
+@media (max-width: 719px) { .subtitle { min-height: 4.35em; } }
+.purpose { margin: 0; padding: 8px 24px 0; color: var(--support); }
 .notice { margin-left: auto; color: var(--good); }
-.viewSwitch { display: flex; flex-shrink: 0; gap: 2px; padding: 2px; border-radius: 999px; background: var(--tint); }
+.viewSwitch { display: flex; flex-wrap: wrap; max-width: 100%; gap: 2px; padding: 2px; border-radius: 18px; background: var(--tint); }
 .surface .viewSwitch button { padding: 5px 14px; white-space: nowrap; border-radius: 999px; font-weight: 500; color: var(--muted); transition: color 150ms, background-color 150ms; }
 .surface .viewSwitch button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
 .alert { margin: 8px 24px 0; padding: 8px 12px; border-radius: 8px; background: #fdecec; color: var(--danger); }
@@ -202,13 +205,13 @@
 .bucket:is(:hover, :focus-visible)::after { bottom: auto; top: 0; }
 
 /* Table */
-.tableSection { display: flex; flex-direction: column; }
+.tableSection { display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
 .tableTools { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 24px 0; }
 .tabs { display: flex; flex: 1; min-width: 0; gap: 9px; overflow-x: auto; scrollbar-width: none; }
 .surface .tabs button { flex-shrink: 0; padding: 4px 0 6px; border-bottom: 2px solid transparent; color: var(--muted); white-space: nowrap; transition: color 150ms; }
 .surface .tabs button:hover { color: var(--ink); }
 .surface .tabs button[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); font-weight: 500; }
-.tabCount { font-variant-numeric: tabular-nums; opacity: 0.7; }
+.tabCount { font-variant-numeric: tabular-nums; color: var(--muted); }
 .search, .input, .numberInput, .textarea {
   border: 1px solid var(--stone-dark);
   border-radius: 8px;
@@ -218,7 +221,7 @@
 }
 .search { flex: 0 1 160px; min-width: 150px; height: 28px; padding: 0 10px; }
 .activeFilters { display: flex; flex-shrink: 0; gap: 12px; padding: 4px 24px 0; color: var(--muted); }
-.tableScroll { max-height: 70vh; overflow: auto; }
+.tableScroll { max-width: 100%; max-height: 70vh; overflow: auto; }
 .table { width: 100%; border-collapse: collapse; }
 .table th {
   position: sticky;
@@ -234,14 +237,30 @@
 }
 .surface .table th button { font-weight: 500; color: var(--muted); }
 .surface .table th:first-child, .table td:first-child { padding-left: 24px; }
-.table td { max-width: 150px; padding: 4px 10px; border-bottom: 1px solid var(--line); color: var(--support); white-space: nowrap; }
+.table td { max-width: 150px; padding: 4px 10px; overflow: hidden; border-bottom: 1px solid var(--line); color: var(--support); text-overflow: ellipsis; white-space: nowrap; }
+/* A cell clips with an ellipsis (its full text is in the title) so it never runs into the next column. */
+.table td.candidateCell { max-width: 200px; }
+.table td.fitCell { min-width: 120px; max-width: 150px; }
+.table td.actionCell { max-width: none; overflow: visible; }
+.table td.wrapCell { min-width: 220px; white-space: normal; }
+/* The action column stays in view when the table scrolls sideways inside its wrapper. */
+.table td.softCell { min-width: 110px; max-width: 140px; white-space: normal; }
+/* The Calls table has ten columns; tighter padding lets it fit 1280px, and it scrolls inside its wrapper below that. */
+.table.denseTable :is(th, td) { padding-inline: 6px; }
+.table.denseTable td.candidateCell { max-width: 150px; }
+.table.denseTable :is(th, td):first-child { padding-left: 24px; }
+@media (min-width: 720px) {
+  .table :is(th, td).stickyEnd { position: sticky; right: 0; background: var(--paper); box-shadow: -1px 0 0 var(--line); }
+  .table th.stickyEnd { z-index: 3; }
+  .table tbody tr:is(:hover, [data-selected]) td.stickyEnd { background: var(--tint); }
+}
 .table tbody tr { cursor: pointer; transition: background-color 120ms; }
 .table tbody tr:hover, .table tbody tr[data-selected] { background: var(--tint); }
 .candidateCell { min-width: 0; }
-.surface .nameButton { display: block; max-width: 180px; overflow: hidden; color: var(--ink); font-weight: 500; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.surface .nameButton { display: block; max-width: 100%; overflow: hidden; color: var(--ink); font-weight: 500; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .phoneLink { color: var(--ink); font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; text-decoration: underline; text-underline-offset: 3px; }
 .phoneLarge { display: inline-block; margin: 2px 0; font-size: 24px; }
-.email { display: block; max-width: 180px; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.email { display: block; max-width: 100%; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .mutedCell { color: var(--muted); }
 .readyWord { margin-left: 6px; color: var(--accent-text); font-size: 12px; font-weight: 500; }
 .truncate { overflow: hidden; text-overflow: ellipsis; }
@@ -374,7 +393,7 @@
 .interviewerRow { display: grid; grid-template-columns: 1fr; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); }
 .interviewerRow .inlineLink { justify-self: start; align-self: center; }
 .subjectChecks { display: flex; flex-wrap: wrap; gap: 2px 12px; grid-column: 1 / -1; }
-.universityScroll { max-height: 340px; overflow: auto; }
+.universityScroll { height: 340px; overflow: auto; }
 .universityTable { width: 100%; min-width: 980px; border-collapse: collapse; }
 .universityTable th { position: sticky; top: 0; z-index: 1; padding: 4px 6px; background: var(--paper); color: var(--muted); font-weight: 500; text-align: left; }
 .universityTable td { padding: 2px 6px; border-top: 1px solid var(--line); white-space: nowrap; }
@@ -467,7 +486,7 @@
 .pickMenu label { display: flex; align-items: center; gap: 6px; padding: 2px 0; color: var(--support); }
 .pickMenu input[type="checkbox"] { accent-color: var(--ink); }
 .warnCell { color: var(--warn); }
-.uploadButton { display: inline-block; padding: 2px 10px; border: 1px solid var(--stone-dark); border-radius: 999px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.uploadButton { position: relative; display: inline-block; padding: 2px 10px; border: 1px solid var(--stone-dark); border-radius: 999px; font-weight: 500; cursor: pointer; white-space: nowrap; }
 .uploadButton:hover { background: var(--tint); }
 .uploadButton:focus-within { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 .tabsRow { flex-basis: 100%; }
@@ -641,7 +660,7 @@
 .funnelHead { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 16px; }
 .funnelGrid { display: grid; gap: 12px 24px; }
 .funnelPanel .tableScroll { max-height: none; }
-.funnelPanel .table td { max-width: none; white-space: normal; }
+.funnelPanel .table td { max-width: none; overflow: visible; white-space: normal; }
 .funnelPanel .table tbody th { position: static; color: var(--ink); white-space: normal; }
 .funnelPanel .table :is(th, td):first-child { padding-left: 0; }
 .funnelPanel .table tbody tr { cursor: default; }

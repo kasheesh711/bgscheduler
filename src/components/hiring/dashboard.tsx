@@ -60,6 +60,17 @@ const VIEWS = {
   setup: "Rules and setup",
 };
 export type HiringView = keyof typeof VIEWS;
+/** One line under the tabs, so a new user can name what each tab is for. */
+const PURPOSE: Record<HiringView, string> = {
+  overview: "Where every candidate stands, and who is ready for the next step.",
+  capacity: "Which subjects need new tutors first, from busy-hours use and new students.",
+  seek: "Everyone who applied on SEEK, with their score and the pre-screen send queue.",
+  calls: "Who HR phones next, and the result of each call.",
+  prescreen: "The pre-screen form and visit email for each candidate, and what they replied.",
+  visitday: "Who comes when, which paper to print, which head runs the mock.",
+  assessment: "Each visit's paper and mock results, and the hiring decision.",
+  setup: "Scores, limits, heads and messages. A change applies to every tab.",
+};
 
 export function HiringDashboard() {
   const [data, setData] = useState<HiringData | null>(null);
@@ -246,6 +257,7 @@ export function HiringDashboard() {
           ))}
         </div>
       </header>
+      <p className={css.purpose}>{PURPOSE[view]}</p>
       {error && view !== "setup" && (
         <p role="alert" className={css.alert}>
           {error}

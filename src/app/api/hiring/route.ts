@@ -142,7 +142,7 @@ export async function GET(request: Request) {
     if (params.has("capacity")) {
       const db = getDb();
       const { config } = await settings(db);
-      return NextResponse.json(await cachedHiringCapacity(config.subjectPriority), {
+      return NextResponse.json(await cachedHiringCapacity(config.subjectPriority, localDate(new Date())), {
         headers: { "Cache-Control": "no-store" },
       });
     }

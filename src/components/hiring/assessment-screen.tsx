@@ -894,8 +894,8 @@ export function AssessmentScreen({
                           </button>
                         </td>
                         <td>{row.subject}</td>
-                        <td>{row.headKey ? (heads.get(row.headKey) ?? row.headKey) : "–"}</td>
-                        <td className={css.preCell}>
+                        <td className={css.fitCell} title={row.headKey ? (heads.get(row.headKey) ?? row.headKey) : undefined}>{row.headKey ? (heads.get(row.headKey) ?? row.headKey) : "–"}</td>
+                        <td className={`${css.preCell} ${css.wrapCell}`}>
                           {rowPapers.length ? (
                             rowPapers.map((paper) => <span key={paper.id} className={css.pillNote}>{paperCell(paper, data.config)}</span>)
                           ) : row.kinds.includes("paper") && row.subject ? (
@@ -907,7 +907,7 @@ export function AssessmentScreen({
                             <span className={css.mutedCell}>–</span>
                           )}
                         </td>
-                        <td>
+                        <td className={css.actionCell}>
                           {rowMocks.length ? (
                             rowMocks.map((mock) => <span key={mock.id} className={css.pillNote}>{mockCell(mock)}</span>)
                           ) : row.kinds.includes("mock") && row.subject ? (
