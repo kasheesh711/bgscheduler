@@ -44,7 +44,8 @@ export const matchesFilter = (
   (filter.stage === "all" || (filter.stage === "ready" ? ready.has(c.id) : c.stage === filter.stage)) &&
   (filter.bucket === null ||
     (c.profileScore !== null && Math.min(Math.floor(c.profileScore / 10) * 10, 90) === filter.bucket)) &&
-  (!filter.subject || c.subjects.includes(filter.subject));
+  (!filter.subject || c.subjects.includes(filter.subject)) &&
+  (!filter.ids || filter.ids.includes(c.id));
 
 export function CandidateTable({
   candidates,
@@ -115,7 +116,7 @@ export function CandidateTable({
   const preCounts = PRE_SCREEN_FILTERS.map(
     (value) => candidates.filter((c) => matchesPreScreen(extras.get(c.id), value)).length,
   );
-  const isFiltered = filter.bucket !== null || !!filter.subject || filter.prescreen !== "all" || !!query;
+  const isFiltered = filter.bucket !== null || !!filter.subject || filter.prescreen !== "all" || !!filter.ids || !!query;
 
   return (
     <section className={css.tableSection} aria-label="Candidates">
@@ -126,7 +127,7 @@ export function CandidateTable({
               key={value}
               type="button"
               aria-pressed={filter.stage === value}
-              onClick={() => setFilter({ ...filter, stage: value })}
+              onClick={() => setFilter({ ...filter, stage: value, ids: undefined })}
             >
               {label} <span className={css.tabCount}>{count}</span>
             </button>
@@ -160,6 +161,7 @@ export function CandidateTable({
           {rows.length} shown
           {filter.bucket !== null && ` · Score ${filter.bucket}–${filter.bucket === 90 ? 100 : filter.bucket + 9}`}
           {filter.subject && ` · ${filter.subject}`}
+          {filter.ids && " · Stuck"}
           {filter.prescreen !== "all" && ` · ${filter.prescreen === "Visit booked" ? "Visit booked" : `Pre-screen ${filter.prescreen.toLowerCase()}`}`}
           <button
             type="button"

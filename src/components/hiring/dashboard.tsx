@@ -18,6 +18,8 @@ import { OperationsRail, WorkerBanner } from "./operations-rail";
 import { PreScreenScreen } from "./prescreen-screen";
 import { CallsScreen } from "./calls-screen";
 import { CapacityScreen } from "./capacity-screen";
+import { FunnelPanel } from "./funnel-panel";
+import { RunSheetScreen } from "./run-sheet-screen";
 import { SeekScreen } from "./seek-screen";
 import { SetupPanel } from "./setup-panel";
 import css from "./dashboard.module.css";
@@ -40,6 +42,8 @@ export type CandidateFilter = {
   prescreen: PreScreenFilter;
   bucket: number | null;
   subject: Subject | null;
+  /** Only these candidates, such as the stuck ones from the pipeline board. */
+  ids?: string[];
 };
 export type Command = (body: unknown) => Promise<boolean>;
 export const NO_FILTER: CandidateFilter = { stage: "all", prescreen: "all", bucket: null, subject: null };
@@ -50,6 +54,7 @@ const VIEWS = {
   seek: "1 Seek intake",
   calls: "2 Calls",
   prescreen: "3 Pre-screen",
+  visitday: "Visit day",
   assessment: "4 Mock and paper",
   setup: "Rules and setup",
 };
@@ -301,6 +306,9 @@ export function HiringDashboard() {
         <div hidden={view !== "prescreen"} className={css.viewPane}>
           <PreScreenScreen data={data} extras={extras} holds={holds} command={command} busy={busy} error={error} notice={notice} />
         </div>
+        <div hidden={view !== "visitday"} className={css.viewPane}>
+          <RunSheetScreen data={data} />
+        </div>
         <div hidden={view !== "assessment"} className={css.viewPane}>
           <AssessmentScreen data={data} onOpenRecord={openRecord} command={command} reload={() => load(true)} busy={busy} />
         </div>
@@ -310,6 +318,11 @@ export function HiringDashboard() {
               insights={insights}
               threshold={data.config.profileThreshold}
               onShowReady={() => setFilter({ ...NO_FILTER, stage: "ready" })}
+            />
+            <FunnelPanel
+              data={data}
+              campaigns={data.config.seekJobs}
+              onShowStuck={(stage, ids) => setFilter({ ...NO_FILTER, stage, ids })}
             />
             <LimitMeters usage={data.usage} headMocks={data.headMocks} config={data.config} tutors={data.tutors} />
             {/* The table is the main work surface, so it sits right under the meters. The charts follow and read the same filter. */}

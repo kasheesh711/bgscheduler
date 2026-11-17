@@ -1,7 +1,7 @@
 import { queueRecruitmentMock } from "./recruitment";
 import { createHash, randomUUID } from "node:crypto";
 import { fromZonedTime } from "date-fns-tz";
-import { and, asc, desc, eq, gte, inArray, isNotNull, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gte, inArray, isNotNull, like, or, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -54,13 +54,17 @@ import {
   inviteRows,
   linkSentAt,
   lockQueue,
+  callEntries,
   callQueue,
-  onsiteQueue,
-  preScreenQueue,
+  formCandidates,
+  onsiteEntries,
+  onsiteRows,
+  preScreenEntries,
   preScreenTotal,
   readLimitUsage,
 } from "./queue";
 import { profileGate } from "./insights";
+import { FUNNEL_AUDIT_ACTIONS, windowStart } from "./funnel";
 import { headDayState, weekWith } from "./rules";
 import { attendanceAccessForEmail } from "@/lib/tutor-attendance/access";
 import { attendanceConfig } from "@/lib/tutor-attendance/data";
@@ -571,7 +575,8 @@ export const MARKING_STUCK_AFTER_MS = 6 * 60_000;
  * shortcut: full marks go in every dashboard read. Fetch them on panel open if papers near 400, the 4.5 MB response limit.
  */
 async function assessmentData(db: Database, now: Date) {
-  const [papers, mocks, decisions, library] = await Promise.all([
+  const monthStart = fromZonedTime(`${localDate(now).slice(0, 7)}-01T00:00:00`, ZONE);
+  const [papers, mocks, decisions, library, [spent = { usd: 0, unknown: 0 }]] = await Promise.all([
     db.select().from(s.hiringPaperResults).orderBy(asc(s.hiringPaperResults.subject)),
     db.select().from(s.hiringMockResults).orderBy(asc(s.hiringMockResults.subject)),
     db.select().from(s.hiringDecisions).orderBy(desc(s.hiringDecisions.createdAt)),
@@ -581,20 +586,21 @@ async function assessmentData(db: Database, now: Date) {
         kind: s.hiringAssessmentFiles.kind,
         subject: s.hiringAssessmentFiles.subject,
         name: s.hiringAssessmentFiles.name,
+        // The run sheet offers only a ready paper.
+        status: s.hiringAssessmentFiles.status,
         createdAt: s.hiringAssessmentFiles.createdAt,
       })
       .from(s.hiringAssessmentFiles)
       .where(eq(s.hiringAssessmentFiles.active, true)),
+    // Each model call writes one audit row, so a repeat of a paper still counts.
+    db
+      .select({
+        usd: sql<number>`coalesce(sum((${s.hiringAudit.detail}->>'costUsd')::float), 0)::float`,
+        unknown: sql<number>`(count(*) filter (where ${s.hiringAudit.detail}->>'costUsd' is null))::int`,
+      })
+      .from(s.hiringAudit)
+      .where(and(eq(s.hiringAudit.action, "assessment-ai-call"), gte(s.hiringAudit.createdAt, monthStart))),
   ]);
-  const monthStart = fromZonedTime(`${localDate(now).slice(0, 7)}-01T00:00:00`, ZONE);
-  // Each model call writes one audit row, so a repeat of a paper still counts.
-  const [spent = { usd: 0, unknown: 0 }] = await db
-    .select({
-      usd: sql<number>`coalesce(sum((${s.hiringAudit.detail}->>'costUsd')::float), 0)::float`,
-      unknown: sql<number>`(count(*) filter (where ${s.hiringAudit.detail}->>'costUsd' is null))::int`,
-    })
-    .from(s.hiringAudit)
-    .where(and(eq(s.hiringAudit.action, "assessment-ai-call"), gte(s.hiringAudit.createdAt, monthStart)));
   return {
     papers: papers.map((row) => ({ ...row, aiMarks: undefined, stuck: row.status === "marking" && now.getTime() - row.updatedAt.getTime() > MARKING_STUCK_AFTER_MS })),
     mocks: mocks.map((row) => ({ ...row, aiRubric: undefined, stuck: row.status === "marking" && now.getTime() - row.updatedAt.getTime() > MARKING_STUCK_AFTER_MS })),
@@ -605,7 +611,14 @@ async function assessmentData(db: Database, now: Date) {
   };
 }
 
+// The dashboard never reads the profile text (5.5 MB over all rows). It only needs to know if there is any.
+const { profileText, ...candidateColumns } = getTableColumns(s.hiringCandidates);
+/** Not-blank text, as JS `.trim()` sees it: ASCII space and the Unicode spaces it also strips (NBSP, U+FEFF, U+3000…). Listed, so the Postgres locale cannot change it. */
+export const NOT_BLANK_PATTERN = "[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]";
+
 export async function dashboard(db: Database = getDb()) {
+  const now = new Date();
+  // Every read here is independent, so they go in one wave. Only visitClashes and the onsite entries wait for this one.
   const [
     { row, config },
     candidates,
@@ -614,10 +627,19 @@ export async function dashboard(db: Database = getDb()) {
     contacts,
     groups,
     auditRows,
+    preScreenUsage,
+    onsiteUsage,
+    forms,
+    enrollments,
+    schedules,
+    inviteOutbox,
+    assessment,
+    funnelAudit,
+    onsiteRead,
   ] = await Promise.all([
     settings(db),
     db
-      .select()
+      .select({ ...candidateColumns, hasSourceText: sql<boolean>`${profileText} ~ ${NOT_BLANK_PATTERN}` })
       .from(s.hiringCandidates)
       .orderBy(desc(s.hiringCandidates.updatedAt))
       .limit(2000),
@@ -648,6 +670,39 @@ export async function dashboard(db: Database = getDb()) {
       .from(s.hiringAudit)
       .orderBy(desc(s.hiringAudit.createdAt))
       .limit(50),
+    // The meters and the queue notes read the same counts and the same release function the worker uses. Postgres only.
+    readLimitUsage(db, "pre_screen", now),
+    readLimitUsage(db, "onsite", now),
+    // One read for the call queue and the form queue.
+    formCandidates(db),
+    db.select().from(s.tutorAttendanceEnrollments),
+    db.select().from(s.tutorAttendanceSchedules),
+    db
+      .select({
+        key: s.hiringOutbox.key,
+        candidateId: s.hiringOutbox.candidateId,
+        status: s.hiringOutbox.status,
+        error: s.hiringOutbox.error,
+        sentAt: s.hiringOutbox.sentAt,
+      })
+      .from(s.hiringOutbox)
+      .where(
+        sql`${s.hiringOutbox.key} = ${s.hiringOutbox.candidateId}::text || ':pre-screen' or ${s.hiringOutbox.key} = ${s.hiringOutbox.candidateId}::text || ':call-invite' or ${s.hiringOutbox.key} like ${s.hiringOutbox.candidateId}::text || ':visit-invite%' or ${s.hiringOutbox.key} like ${s.hiringOutbox.candidateId}::text || ':result:%'`,
+      )
+      .orderBy(desc(s.hiringOutbox.createdAt)),
+    assessmentData(db, now),
+    db
+      .select({ candidateId: s.hiringAudit.candidateId, action: s.hiringAudit.action, at: s.hiringAudit.createdAt })
+      .from(s.hiringAudit)
+      // The funnel counts only people first seen in its window, and their events come after that.
+      .where(
+        and(
+          inArray(s.hiringAudit.action, FUNNEL_AUDIT_ACTIONS),
+          gte(s.hiringAudit.createdAt, new Date(windowStart(now))),
+        ),
+      ),
+    // The onsite reads need no config; only the gate below does.
+    onsiteRows(db),
   ]);
   // The visit screens never see an HR call. The Calls tab reads `calls`.
   const bookings = allBookings.filter(isVisitBooking);
@@ -682,47 +737,27 @@ export async function dashboard(db: Database = getDb()) {
       },
     );
   }
-  // One shared read for all heads. Never fails the dashboard: a missing index reports stale.
+  // visitClashes is one shared read for all heads. It never fails the dashboard: a missing index reports stale.
+  // The queue gates below run after the suggested heads above, because they read config.
   const clashes = await visitClashes(db, bookings);
-  // The meters and the queue notes read the same counts and the same release function the worker uses. Postgres only.
-  const now = new Date();
-  const usage = {
-    preScreen: await readLimitUsage(db, "pre_screen", now),
-    onsite: await readLimitUsage(db, "onsite", now),
-  };
+  const usage = { preScreen: preScreenUsage, onsite: onsiteUsage };
   const holds: Record<string, QueueHold> = {};
   let preScreenOrder: string[] = [];
   // Booked calls first, in time order (the newest booking of a candidate decides); then the automatic order.
   const callAt = new Map<string, number>();
   for (const call of [...calls].reverse()) callAt.set(call.candidateId, call.start.getTime());
-  const toCall = (await callQueue(db, config)).map((entry) => entry.id);
+  const toCall = callEntries(forms, config).map((entry) => entry.id);
   const callOrder = [
     ...toCall.filter((id) => callAt.has(id)).sort((a, b) => callAt.get(a)! - callAt.get(b)!),
     ...toCall.filter((id) => !callAt.has(id)),
   ];
   for (const funnel of ["pre_screen", "onsite"] as const satisfies Funnel[]) {
-    const entries = funnel === "pre_screen" ? await preScreenQueue(db, config) : await onsiteQueue(db, config);
+    const entries = funnel === "pre_screen" ? preScreenEntries(forms, config) : onsiteEntries(onsiteRead, config);
     const { release, held, order } = releaseQueue(funnel, entries, funnel === "pre_screen" ? usage.preScreen : usage.onsite, config);
     if (funnel === "pre_screen") preScreenOrder = order;
     for (const e of release) holds[e.id] = { funnel, state: "next", position: 0, limit: null, subject: e.subject };
     for (const e of held) holds[e.id] = { funnel, state: "held", position: e.position, limit: e.limit, subject: e.subject };
   }
-  const enrollments = await db.select().from(s.tutorAttendanceEnrollments);
-  const schedules = await db.select().from(s.tutorAttendanceSchedules);
-  const inviteOutbox = await db
-    .select({
-      key: s.hiringOutbox.key,
-      candidateId: s.hiringOutbox.candidateId,
-      status: s.hiringOutbox.status,
-      error: s.hiringOutbox.error,
-      sentAt: s.hiringOutbox.sentAt,
-    })
-    .from(s.hiringOutbox)
-    .where(
-      sql`${s.hiringOutbox.key} = ${s.hiringOutbox.candidateId}::text || ':pre-screen' or ${s.hiringOutbox.key} = ${s.hiringOutbox.candidateId}::text || ':call-invite' or ${s.hiringOutbox.key} like ${s.hiringOutbox.candidateId}::text || ':visit-invite%' or ${s.hiringOutbox.key} like ${s.hiringOutbox.candidateId}::text || ':result:%'`,
-    )
-    .orderBy(desc(s.hiringOutbox.createdAt));
-  const assessment = await assessmentData(db, now);
   return {
     config,
     ...assessment,
@@ -755,13 +790,11 @@ export async function dashboard(db: Database = getDb()) {
           : null;
       return {
         ...c,
-        profileText: undefined,
         // The stored list can be long, and the screen only needs to know the row was moved.
         queueManual: !!c.queueManual,
         // The screen reads workRightsAnswer. This old column stays in the database only.
         workRightsConfirmed: undefined,
-        // The text itself is read on demand. This tells the screen whether there is any, such as for a person added from the tracker.
-        hasSourceText: c.profileText.trim().length > 0,
+        // The text itself is read on demand. hasSourceText (from SQL) tells the screen whether there is any, such as for a person added from the tracker.
         // The screen opens a file only through the guarded route, so it never gets the storage path.
         resumePath: undefined,
         resumeSha256: undefined,
@@ -791,6 +824,13 @@ export async function dashboard(db: Database = getDb()) {
     // The capped list above holds every kind of row, so the pre-screen screen reads its proof from this full read.
     inviteOutbox,
     audit: auditRows,
+    // The funnel dates stages from these. The audit list above holds the newest 50 rows only.
+    funnelEvents: [
+      ...funnelAudit,
+      ...allBookings
+        .filter((b) => b.kind === "call")
+        .map((b) => ({ candidateId: b.candidateId, action: "call-booked", at: b.createdAt })),
+    ],
     tutors: contacts.map((c) => ({
       canonicalKey: c.canonicalKey,
       name: c.displayName,

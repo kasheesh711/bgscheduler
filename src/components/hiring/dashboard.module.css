@@ -635,3 +635,17 @@
   .needRow .needDemand, .needRow .needFull, .needRow .needWhy { grid-column: 2 / -1; }
   .surface .needHeadRow { display: none; }
 }
+
+/* Funnel and pipeline board (Overview, under the summary) */
+.funnelPanel { flex-shrink: 0; border-bottom: 1px solid var(--line); }
+.funnelHead { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 16px; }
+.funnelGrid { display: grid; gap: 12px 24px; }
+.funnelPanel .tableScroll { max-height: none; }
+.funnelPanel .table td { max-width: none; white-space: normal; }
+.funnelPanel .table tbody th { position: static; color: var(--ink); white-space: normal; }
+.funnelPanel .table :is(th, td):first-child { padding-left: 0; }
+.funnelPanel .table tbody tr { cursor: default; }
+.funnelPanel .table tbody tr[data-stuck] th { color: var(--warn); }
+.funnelRule { color: var(--muted); }
+.funnelNote { margin-top: 6px; color: var(--muted); font-size: 12px; }
+@media (min-width: 1180px) { .funnelGrid { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); } }

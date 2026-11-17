@@ -67,7 +67,7 @@ export function KpiStrip({
   return (
     <section className={css.kpis} aria-label="Hiring summary">
       <div className={css.hero}>
-        <p className={css.heroLabel}>Ready to invite</p>
+        <p className={css.heroLabel}>Ready to invite · {percent(i.ready, i.active)}% of active</p>
         <p className={css.heroValue}>{i.ready}</p>
         <button type="button" className={css.heroLink} onClick={onShowReady} disabled={!i.ready}>
           Show them <span aria-hidden="true">→</span>
@@ -76,7 +76,7 @@ export function KpiStrip({
       <Tile
         label="Candidates"
         value={i.total}
-        note={i.parked ? `${i.active} active, including ${i.parked} with no reply or no booking` : `${i.active} active`}
+        note={`${i.active} active (${percent(i.active, i.total)}%)${i.parked ? `, including ${i.parked} with no reply or no booking` : ""}`}
       />
       <Tile
         label="Scored"
@@ -87,7 +87,7 @@ export function KpiStrip({
       <Tile
         label={`At or above ${threshold}`}
         value={i.aboveThreshold}
-        note={`Median ${i.median === null ? "none" : round(i.median)}`}
+        note={`${percent(i.aboveThreshold, i.scored)}% of scored · Median ${i.median === null ? "none" : round(i.median)}`}
       />
       <Tile label="Past review" value={i.pastReview} note={`${percent(i.pastReview, i.active)}% of active`} />
       <Tile
@@ -98,7 +98,7 @@ export function KpiStrip({
       <Tile
         label="Message issues"
         value={i.messages.problems}
-        note={`${i.messages.sent} sent`}
+        note={`${percent(i.messages.problems, i.messages.sent + i.messages.problems)}% of ${i.messages.sent + i.messages.problems} messages · ${i.messages.sent} sent`}
       />
     </section>
   );

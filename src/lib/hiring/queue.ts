@@ -162,7 +162,25 @@ export async function linkSentAt(db: Database, candidateId: string) {
   return link?.status === "sent" ? link.sentAt : null;
 }
 
-export const preScreenTotal = (candidate: Candidate, config: HiringConfig) =>
+/** The columns `replyCheck` and the onsite queue read. Never the profile text or the profile assessment. */
+const replyColumns = {
+  id: c.id,
+  createdAt: c.createdAt,
+  stage: c.stage,
+  email: c.email,
+  previouslyContacted: c.previouslyContacted,
+  workRightsAnswer: c.workRightsAnswer,
+  preScreen: c.preScreen,
+  preScreenAssessment: c.preScreenAssessment,
+  preScreenOverride: c.preScreenOverride,
+  preScreenResubmitted: c.preScreenResubmitted,
+  preScreenRepliedAt: c.preScreenRepliedAt,
+  universityAssessment: c.universityAssessment,
+  callReview: c.callReview,
+};
+type ReplyCandidate = Pick<Candidate, keyof typeof replyColumns>;
+
+export const preScreenTotal = (candidate: Pick<Candidate, "preScreen" | "preScreenAssessment" | "universityAssessment">, config: HiringConfig) =>
   preScreenPoints(
     candidate.preScreenAssessment!,
     config.preScreenWeights,
@@ -176,7 +194,7 @@ export const preScreenTotal = (candidate: Candidate, config: HiringConfig) =>
  * cycle looks again. `ready`: it may enter the onsite queue.
  */
 export function replyCheck(
-  candidate: Candidate,
+  candidate: ReplyCandidate,
   sentAt: Date | null,
   config: HiringConfig,
 ): { kind: "hold"; reason: string } | { kind: "wait" } | { kind: "ready"; subject: Subject; score: number } {
@@ -215,7 +233,7 @@ export const autoInviteEligible = (candidate: Candidate, sentAt: Date | null, co
  * Reads only the columns the gate and the score use, because profile text and the other large fields are not needed to rank.
  * A release locks and reads the full row before it sends anything.
  */
-const formCandidates = (db: Database, id?: string) =>
+export const formCandidates = (db: Database, id?: string) =>
   db
     .select({
       id: c.id,
@@ -244,8 +262,14 @@ const formCandidates = (db: Database, id?: string) =>
       ),
     );
 
+export type FormCandidate = Awaited<ReturnType<typeof formCandidates>>[number];
+
 export async function preScreenQueue(db: Database, config: HiringConfig): Promise<QueueEntry[]> {
-  const rows = await formCandidates(db);
+  return preScreenEntries(await formCandidates(db), config);
+}
+
+/** The form queue from rows already read, so the dashboard reads `formCandidates` once for both queues. */
+export function preScreenEntries(rows: FormCandidate[], config: HiringConfig): QueueEntry[] {
   return rows.flatMap((row) => {
     const { eligible, subject } = profileGate(row, config);
     return eligible && subject
@@ -268,7 +292,11 @@ export async function preScreenQueue(db: Database, config: HiringConfig): Promis
  * because the form could not go after the call.
  */
 export async function callQueue(db: Database, config: HiringConfig, id?: string): Promise<QueueEntry[]> {
-  const rows = await formCandidates(db, id);
+  return callEntries(await formCandidates(db, id), config);
+}
+
+/** The call queue from rows already read. Same rows and order as `callQueue`. */
+export function callEntries(rows: FormCandidate[], config: HiringConfig): QueueEntry[] {
   return rows
     .flatMap((row) => {
       const gate = profileGate(row, config);
@@ -410,10 +438,10 @@ export async function resetQueueOrder(actor: string, db: Database) {
   });
 }
 
-/** Any earlier invitation row keeps a candidate out: only a click can send another. */
-export async function onsiteQueue(db: Database, config: HiringConfig): Promise<QueueEntry[]> {
+/** The onsite queue's reads. They need no config, so the dashboard starts them with its other reads. */
+export async function onsiteRows(db: Database) {
   const rows = await db
-    .select()
+    .select(replyColumns)
     .from(c)
     .where(
       and(
@@ -422,12 +450,18 @@ export async function onsiteQueue(db: Database, config: HiringConfig): Promise<Q
         notExists(db.select({ id: o.id }).from(o).where(and(eq(o.candidateId, c.id), isOnsiteInvite))),
       ),
     );
-  if (!rows.length) return [];
-  // One read for every form row, not one per candidate. Same rule as formSentAt: only a sent row has a time.
+  if (!rows.length) return { rows, forms: [] };
+  // One read for every form row, not one per candidate.
   const forms = await db
     .select({ key: o.key, status: o.status, sentAt: o.sentAt })
     .from(o)
     .where(inArray(o.key, rows.map((row) => `${row.id}:pre-screen`)));
+  return { rows, forms };
+}
+
+/** Any earlier invitation row keeps a candidate out: only a click can send another. */
+export function onsiteEntries({ rows, forms }: Awaited<ReturnType<typeof onsiteRows>>, config: HiringConfig): QueueEntry[] {
+  // Same rule as formSentAt: only a sent row has a time.
   const sentAt = new Map(forms.map((f) => [f.key, f.status === "sent" ? f.sentAt : null]));
   const entries: QueueEntry[] = [];
   for (const row of rows) {
@@ -437,6 +471,8 @@ export async function onsiteQueue(db: Database, config: HiringConfig): Promise<Q
   }
   return entries;
 }
+
+export const onsiteQueue = async (db: Database, config: HiringConfig) => onsiteEntries(await onsiteRows(db), config);
 
 const lockCandidate = async (tx: Database, id: string) =>
   (await tx.select().from(c).where(eq(c.id, id)).for("update"))[0];
