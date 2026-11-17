@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { auth } from "@/lib/auth";
 import { configSchema, HiringError } from "../model";
-import { capacityReport } from "../capacity";
+import { hiringCapacity } from "../demand";
 import { headWeek } from "../head-schedule";
 import { GET } from "@/app/api/hiring/route";
 
@@ -15,7 +15,7 @@ vi.mock("next/server", async (actual) => ({
 vi.mock("../worker", () => ({ deliverBookingMessages: vi.fn() }));
 vi.mock("../google", () => ({ googleConnectionStatus: vi.fn() }));
 vi.mock("../head-schedule", () => ({ headWeek: vi.fn() }));
-vi.mock("../capacity", () => ({ capacityReport: vi.fn() }));
+vi.mock("../demand", () => ({ hiringCapacity: vi.fn() }));
 vi.mock("../service", () => ({
   settings: vi.fn(async () => ({ config: configSchema.parse({}) })),
   dashboard: vi.fn(),
@@ -31,7 +31,7 @@ const admin = (extra = {}) =>
 beforeEach(() => {
   vi.mocked(auth).mockReset();
   vi.mocked(headWeek).mockReset();
-  vi.mocked(capacityReport).mockReset();
+  vi.mocked(hiringCapacity).mockReset();
 });
 
 describe("GET /api/hiring?head=", () => {
@@ -79,16 +79,16 @@ describe("GET /api/hiring?capacity=1", () => {
     expect((await get("capacity=1")).status).toBe(401);
     admin({ allowedPages: ["/search"] });
     expect((await get("capacity=1")).status).toBe(403);
-    expect(capacityReport).not.toHaveBeenCalled();
+    expect(hiringCapacity).not.toHaveBeenCalled();
   });
 
   it("returns the report with no-store, in the saved subject priority", async () => {
     admin({ allowedPages: ["/hiring"] });
-    vi.mocked(capacityReport).mockResolvedValue({ weeks: 4 } as never);
+    vi.mocked(hiringCapacity).mockResolvedValue({ weeks: 4 } as never);
     const response = await get("capacity=1");
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(await response.json()).toEqual({ weeks: 4 });
-    expect(vi.mocked(capacityReport).mock.calls[0][0]).toEqual(configSchema.parse({}).subjectPriority);
+    expect(vi.mocked(hiringCapacity).mock.calls[0][0]).toEqual(configSchema.parse({}).subjectPriority);
   });
 });

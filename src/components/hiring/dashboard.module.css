@@ -590,7 +590,31 @@
 .needHero .heroValue { font-size: 36px; }
 .needList { margin: 4px 0 0; padding: 0; list-style: none; }
 .needList li + li { border-top: 1px solid var(--line); }
-.surface .needRow { display: grid; grid-template-columns: minmax(120px, 200px) 120px 1fr; align-items: center; gap: 4px 12px; width: 100%; min-height: 40px; padding: 6px; border-radius: 6px; text-align: left; transition: background-color 150ms; }
+.surface .needRow { display: grid; grid-template-columns: 22px minmax(110px, 190px) minmax(200px, 1.4fr) minmax(110px, 0.7fr) 118px; align-items: center; gap: 2px 14px; width: 100%; min-height: 44px; padding: 6px; border-radius: 6px; text-align: left; transition: background-color 150ms; }
+.surface .needHeadRow { min-height: 0; padding-bottom: 0; color: var(--muted); font-size: 12px; }
+.needRank { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+.needDemand { display: grid; grid-template-columns: 30px 1fr 22px 44px; align-items: center; gap: 8px; }
+.needNumber { font-family: var(--serif); font-size: 22px; line-height: 1; text-align: right; font-variant-numeric: tabular-nums; }
+.needTrack { position: relative; display: block; height: 10px; border-radius: 3px; background: var(--line); }
+.needTrack > span { display: block; height: 100%; min-width: 1px; border-radius: 3px; background: var(--ink); }
+.needTrack[data-limit]::after { content: ""; position: absolute; top: -3px; bottom: -3px; left: var(--limit, 75%); border-left: 1px solid var(--accent-text); }
+.needTrack > span[data-over="true"] { background: var(--accent-text); }
+.needSpark { display: inline-flex; align-items: flex-end; gap: 2px; height: 18px; }
+.needSpark i { display: block; width: 5px; border-radius: 1px; background: var(--stone-dark); }
+.needSpark i[data-empty="true"] { background: var(--stone); }
+.needTrend { color: var(--muted); font-size: 12px; }
+.needFull { display: grid; grid-template-columns: 1fr 38px; align-items: center; gap: 8px; }
+.needRow .needWhy { grid-column: 2 / -1; }
+.needOther { min-height: 32px; }
+.needLegend { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+.needHead { margin: 6px 0; font-size: 14px; font-weight: 500; }
+.needChart { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 20px; margin-bottom: 8px; }
+.needColumn { display: grid; justify-items: center; gap: 2px; width: 110px; text-align: center; }
+.needColumnValue { font-family: var(--serif); font-size: 22px; line-height: 1; }
+.needColumnBar { display: flex; align-items: flex-end; width: 44px; height: 72px; border-bottom: 1px solid var(--stone-dark); }
+.needColumnBar i { display: block; width: 100%; min-height: 1px; border-radius: 3px 3px 0 0; background: var(--ink); }
+.needLevels { flex: 1; min-width: 260px; max-width: 460px; align-self: stretch; }
+.needLevel { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(60px, 1fr) 28px; align-items: center; gap: 8px; color: var(--support); }
 .surface .needRow:hover, .surface .needRow[aria-expanded="true"] { background: var(--tint); }
 .needName { font-size: 15px; font-weight: 500; }
 .needRow .pill { justify-self: start; font-size: 13px; }
@@ -607,6 +631,7 @@
 .capMore > summary { padding: 10px 24px; font-weight: 500; cursor: pointer; }
 .capMore > .panelLede { max-width: 110ch; padding: 0 24px; }
 @media (max-width: 719px) {
-  .surface .needRow { grid-template-columns: 1fr auto; }
-  .needWhy { grid-column: 1 / -1; }
+  .surface .needRow { grid-template-columns: 22px 1fr auto; }
+  .needRow .needDemand, .needRow .needFull, .needRow .needWhy { grid-column: 2 / -1; }
+  .surface .needHeadRow { display: none; }
 }
