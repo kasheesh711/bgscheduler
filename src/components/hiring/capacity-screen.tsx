@@ -392,7 +392,7 @@ export function CapacityView({
   const first = r.needs.filter((n) => n.status !== "enough").slice(0, 3);
   const max = Math.max(1, ...r.needs.map((n) => n.demand?.started ?? 0), ...(r.demand?.subjects.map((d) => d.started) ?? []));
   return (
-    <div>
+    <div className={css.main}>
       {error && (
         <p role="alert" className={css.alert}>
           Could not reload, so these are the earlier numbers. {error}
