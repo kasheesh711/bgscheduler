@@ -93,7 +93,7 @@ export function KpiStrip({
       <Tile
         label="Next 7 days"
         value={i.appointmentsThisWeek}
-        note={i.bookedWithoutAppointment ? `${i.bookedWithoutAppointment} not held here` : "Appointments"}
+        note={`${round(i.appointmentsThisWeek / 7)} a day${i.bookedWithoutAppointment ? ` · ${i.bookedWithoutAppointment} not held here` : ""}`}
       />
       <Tile
         label="Message issues"
@@ -119,7 +119,7 @@ function MeterCard({ title, lede, meters, children }: { title: string; lede: str
               ) : (
                 <>
                   {m.used}
-                  <span className={css.meterMax}> of {m.max}</span>
+                  <span className={css.meterMax}>{` of ${m.max}${m.max ? ` · ${m.pct}%` : ""}`}</span>
                 </>
               )}
             </p>

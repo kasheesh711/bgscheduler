@@ -94,6 +94,7 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
   const coming = upcoming(rows, today);
   const days = printDays(rows, today);
   const printRows = coming.filter((r) => r.date <= shiftDate(today, 8));
+  const recent = pastVisits(rows, today);
   const heads = data.config.interviewers;
 
   const sheetRow = (r: RunSheetRow) => [
@@ -111,10 +112,6 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
       <h2 id="visit-day-title" className={css.panelTitle}>
         Visit day
       </h2>
-      <p className={css.panelLede}>
-        Who comes, when, which head runs the mock, which paper to print and which room. A missing head, paper or room shows
-        &quot;Needs review&quot; and the reason.
-      </p>
       <div className={css.tabs} role="group" aria-label="Visit day views">
         {(Object.keys(TABS) as RunSheetTab[]).map((name) => (
           <button key={name} type="button" aria-pressed={tab === name} onClick={() => setTab(name)}>
@@ -130,11 +127,19 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
             Kevin. Full steps: the printed HR job aid.
           </FirstUseHint>
           <Table head={sheetColumns} rows={coming.map(sheetRow)} empty="No visits are booked from today." />
-          <label className={css.fieldLabel}>
-            <input type="checkbox" checked={showPast} onChange={(e) => setShowPast(e.target.checked)} /> Show past visits (last 8
-            weeks)
-          </label>
-          {showPast && <Table head={sheetColumns} rows={pastVisits(rows, today).map(sheetRow)} empty="No visits in the last 8 weeks." />}
+          {!coming.length && recent.length > 0 && (
+            <>
+              <h3 className={css.panelTitle}>Recent visits (last 8 weeks)</h3>
+              <Table head={sheetColumns} rows={recent.map(sheetRow)} empty="" />
+            </>
+          )}
+          {coming.length > 0 && (
+            <label className={css.checkInline}>
+              <input type="checkbox" checked={showPast} onChange={(e) => setShowPast(e.target.checked)} />
+              Show past visits (last 8 weeks)
+            </label>
+          )}
+          {coming.length > 0 && showPast && <Table head={sheetColumns} rows={recent.map(sheetRow)} empty="No visits in the last 8 weeks." />}
         </>
       )}
 
@@ -148,6 +153,11 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
             {printRows.filter(staffGap).length} of {printRows.length} visits from today to {dayLabel(shiftDate(today, 8))} miss a
             head or a paper. No visit has a room yet.
           </p>
+          {!coming.length && recent.length > 0 && (
+            <p>
+              Last visit day: {dayLabel(recent[0].date)}.
+            </p>
+          )}
           {days.map((date) => (
             <div key={date}>
               <h3 className={css.panelTitle}>
@@ -187,6 +197,20 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
               ])}
               empty="No upcoming mocks or paper visits."
             />
+            {!headVisits(rows, h.canonicalKey, today).length && (() => {
+              // Same rule as headVisits: their mocks, and paper-only visits in their subjects.
+              const past = recent.filter((r) => r.hod?.key === h.canonicalKey || (!r.mockStart && r.subjectHeads.includes(h.canonicalKey)));
+              return past.length > 0 && (
+                <>
+                  <h3 className={css.panelTitle}>Recent visits (last 8 weeks)</h3>
+                  <Table
+                    head={["Time", "Candidate", "Subject", "Part"]}
+                    rows={past.map((r) => [`${dayLabel(r.date)} · ${times(r)}`, r.candidateName, r.subject ?? review(NO_SUBJECT), r.mockStart ? "Ran the mock" : "Paper only"])}
+                    empty=""
+                  />
+                </>
+              );
+            })()}
           </div>
         ))}
 

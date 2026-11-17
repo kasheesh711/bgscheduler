@@ -7,6 +7,7 @@ import {
   STEP_TIMING,
   PAYLOAD_ROW_CAP,
   STUCK_RULES,
+  WEEKS,
   type FunnelInput,
   type FunnelReport,
   type GroupFunnel,
@@ -152,7 +153,7 @@ export function FunnelView({
             Hiring funnel and pipeline
           </h2>
           <p className={css.panelLede}>
-            Candidates first seen from {dateText(report.windowStart)} to now (12 weeks). A step counts when a message, booking
+            Candidates first seen from {dateText(report.windowStart)} to now ({WEEKS} weeks). A step counts when a message, booking
             or record proves it, or when the current stage needs it.
           </p>
           {report.capped && (
@@ -190,7 +191,7 @@ export function FunnelView({
                 <tr key={step}>
                   <th scope="row">{label}</th>
                   <td className={css.num}>{g.reached[step]}</td>
-                  <td className={css.num}>{step === "applied" ? "100% of the window" : pct(g.conv[step])}</td>
+                  <td className={css.num}>{step === "applied" ? `${roundPct(applied / g.weeks)} a week` : pct(g.conv[step])}</td>
                   <td>{step === "applied" ? "Start" : daysText(g.stepDays[STEP_TIMING[step]])}</td>
                 </tr>
               ))}

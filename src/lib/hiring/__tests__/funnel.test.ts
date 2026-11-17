@@ -80,7 +80,8 @@ describe("buildFunnel", () => {
   });
 
   it("dates stages from events and marks stuck candidates", () => {
-    expect(all.currentStage["new (call booked)"]).toMatchObject({ n: 1, stuck: 0, stuckAfterDays: 3 });
+    // a's call is on 20 Nov, still ahead: days count from the call link (17 Nov), and it cannot be stuck yet.
+    expect(all.currentStage["new (call booked)"]).toMatchObject({ n: 1, stuck: 0, stuckAfterDays: null, medianDays: 0.6 });
     // c has no move-to-review event: its time starts at import, so it is stuck. d moved 2.6 days ago.
     expect(all.currentStage.review).toMatchObject({ n: 2, stuck: 1, sinceIsImportTime: 1, stuckIds: ["c"] });
     // The visit was 7.6 days ago, over the 3-day rule.
@@ -88,6 +89,34 @@ describe("buildFunnel", () => {
     expect(all.currentStage.paper_passed).toMatchObject({ stuck: 1, stuckAfterDays: 14 });
     expect(all.currentStage.new).toMatchObject({ n: 2, stuck: 2 });
     expect(all.stuck).toBe(5);
+  });
+
+  it("never gives negative days: a future call counts from its booking time", () => {
+    const r = buildFunnel(
+      {
+        ...empty,
+        candidates: [candidate("x", "new", "11-10"), candidate("y", "new", "11-01")],
+        calls: [
+          { candidateId: "x", start: day("11-25") },
+          { candidateId: "y", start: day("11-12") },
+        ],
+        // x booked on 12 Nov, then rebooked on 15 Nov: days count from the rebooking.
+        funnelEvents: [
+          { candidateId: "x", action: "call-booked", at: day("11-12") },
+          { candidateId: "x", action: "call-booked", at: day("11-15") },
+        ],
+      },
+      NOW,
+    );
+    expect(r.byCandidate.x).toEqual({ stageKey: "new (call booked)", daysInStage: 2.6041666666666665, stuck: false });
+    // y's call was 12 Nov and nobody recorded the result: 5.6 days after the call, over the 3-day rule.
+    expect(r.byCandidate.y).toMatchObject({ stageKey: "new (call booked)", stuck: true });
+    expect(r.byCandidate.y.daysInStage).toBeCloseTo(5.604);
+  });
+
+  it("covers every candidate in byCandidate, also those before the window", () => {
+    expect(Object.keys(report.byCandidate).sort()).toEqual(["a", "b", "c", "d", "e", "f", "g", "old"]);
+    expect(report.byCandidate.old).toMatchObject({ stageKey: "stopped", stuck: false });
   });
 
   it("measures days between steps only where both ends have a time", () => {

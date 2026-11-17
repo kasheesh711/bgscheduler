@@ -683,3 +683,14 @@
 .skeletonLine { height: 44px; border-radius: 6px; }
 /* The title block has a fixed basis, so whether the view switch wraps does not depend on the subtitle that loads later. */
 .topbar > div:first-child { flex: 1 1 60ch; min-width: 0; }
+/* Setup rows: the action never wraps per letter; inputs shrink instead; a status value keeps its word whole. */
+.interviewerRow > input { min-width: 0; }
+.interviewerRow .inlineLink { white-space: nowrap; }
+.statusRow > span:last-child { flex-shrink: 0; max-width: 60%; text-align: right; }
+.checkInline { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+/* A long status sentence wraps under its label instead of running out of the setup column. */
+.statusRow { flex-wrap: wrap; }
+.activeFilters { flex-wrap: wrap; }
+/* Next action and Owner only where the table has room for them beside the visit columns. */
+.widestOnly { display: none; }
+@media (min-width: 1360px) { .widestOnly { display: table-cell; } }

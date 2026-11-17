@@ -81,4 +81,26 @@ describe("RunSheetScreen", () => {
     expect(html).toContain("Oat");
     expect(html).toContain("Needs review: no subject");
   });
+
+  it("shows recent visits automatically when nothing is booked from today", () => {
+    const later = new Date("2026-12-30T02:00:00Z");
+    const sheet = renderToStaticMarkup(<RunSheetScreen data={data} now={later} initialTab="sheet" />);
+    expect(sheet).toContain("No visits are booked from today.");
+    expect(sheet).not.toContain("Show past visits");
+    expect(sheet).toContain("Recent visits (last 8 weeks)");
+    expect(sheet).toContain("Kim");
+    const print = renderToStaticMarkup(<RunSheetScreen data={data} now={later} initialTab="print" />);
+    expect(print).toContain("Last visit day:");
+  });
+
+  it("labels a head's past visits, counts paper-only visits in their subjects, and leaves no blank gap", () => {
+    const later = new Date("2026-12-30T02:00:00Z");
+    const heads = renderToStaticMarkup(<RunSheetScreen data={data} now={later} initialTab="heads" />);
+    expect(heads.match(/Recent visits \(last 8 weeks\)/g)).toHaveLength(2); // Peat ran Kim's mock; Mai's paper-only visit is Tito's subject
+    expect(heads).toContain("Mai");
+    expect(heads).not.toMatch(/<p[^>]*><\/p>/);
+    const noPast = renderToStaticMarkup(<RunSheetScreen data={data} now={new Date("2027-03-30T02:00:00Z")} initialTab="heads" />);
+    expect(noPast).not.toContain("Recent visits");
+    expect(noPast).not.toMatch(/<p[^>]*><\/p>/);
+  });
 });

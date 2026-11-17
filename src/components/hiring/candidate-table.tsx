@@ -1,6 +1,7 @@
 "use client";
 
 import { useDeferredValue, useMemo, useState } from "react";
+import { buildFunnel, STUCK_RULES, type FunnelInput } from "@/lib/hiring/funnel";
 import { ACTIVE_STAGES, CRITERIA, RESULTS, STAGE_LABELS } from "@/lib/hiring/insights";
 import type { HiringConfig, Stage } from "@/lib/hiring/model";
 import { preScreenNote, visitText, type CandidateExtras } from "@/lib/hiring/status";
@@ -8,7 +9,7 @@ import { NO_FILTER, type CandidateFilter, type HiringCandidate, type PreScreenFi
 import { CRITERION_LABELS, PILL_CLASS, RESULT_CLASS, RESULT_LABELS, type Insights } from "./pipeline-charts";
 import css from "./dashboard.module.css";
 
-type SortKey = "name" | "stage" | "score" | "updated";
+type SortKey = "name" | "stage" | "score" | "updated" | "days";
 const STAGE_ORDER = [...ACTIVE_STAGES, "no_reply", "no_booking", "hired", "rejected", "stopped"] as Stage[];
 const shortDate = (value: unknown) =>
   new Date(String(value)).toLocaleDateString("en-GB", {
@@ -61,6 +62,7 @@ export function CandidateTable({
   selected,
   onSelect,
   onOpenResume = onSelect,
+  funnelData,
 }: {
   candidates: HiringCandidate[];
   insights: Insights;
@@ -78,7 +80,11 @@ export function CandidateTable({
   onSelect: (id: string) => void;
   /** Opens the panel with the résumé viewer open. */
   onOpenResume?: (id: string) => void;
+  /** The /api/hiring payload: gives each row its days in stage and stuck mark, by the funnel board's rules. */
+  funnelData?: FunnelInput;
 }) {
+  // "now" moves with each load of the data, as on the funnel board.
+  const pipeline = useMemo(() => (funnelData ? buildFunnel(funnelData, new Date()).byCandidate : {}), [funnelData]);
   const [query, setQuery] = useState("");
   const deferred = useDeferredValue(query);
   const [sort, setSort] = useState<{ key: SortKey; descending: boolean }>({ key: "score", descending: true });
@@ -97,14 +103,16 @@ export function CandidateTable({
           ? STAGE_ORDER.indexOf(c.stage)
           : sort.key === "score"
             ? c.profileScore
-            : new Date(String(c.updatedAt)).getTime();
+            : sort.key === "days"
+              ? (pipeline[c.id]?.daysInStage ?? null)
+              : new Date(String(c.updatedAt)).getTime();
     return shown.sort((a, b) => {
       const [x, y] = [value(a), value(b)];
       // Unscored candidates stay last in either direction.
       if (x === null || y === null) return x === y ? 0 : x === null ? 1 : -1;
       return (x < y ? -1 : x > y ? 1 : 0) * (sort.descending ? -1 : 1);
     });
-  }, [candidates, ready, extras, filter, deferred, sort]);
+  }, [candidates, ready, extras, filter, deferred, sort, pipeline]);
 
   const tabs: [CandidateFilter["stage"], string, number][] = [
     ["all", "All", insights.total],
@@ -116,6 +124,8 @@ export function CandidateTable({
   const preCounts = PRE_SCREEN_FILTERS.map(
     (value) => candidates.filter((c) => matchesPreScreen(extras.get(c.id), value)).length,
   );
+  const isActive = (c: HiringCandidate) => ACTIVE_STAGES.includes(c.stage);
+  const activeTotal = candidates.filter(isActive).length;
   const isFiltered = filter.bucket !== null || !!filter.subject || filter.prescreen !== "all" || !!filter.ids || !!query;
 
   return (
@@ -156,25 +166,27 @@ export function CandidateTable({
           ))}
         </div>
       </div>
-      {isFiltered && (
-        <p className={css.activeFilters}>
-          {rows.length} shown
-          {filter.bucket !== null && ` · Score ${filter.bucket}–${filter.bucket === 90 ? 100 : filter.bucket + 9}`}
-          {filter.subject && ` · ${filter.subject}`}
-          {filter.ids && " · Stuck"}
-          {filter.prescreen !== "all" && ` · ${filter.prescreen === "Visit booked" ? "Visit booked" : `Pre-screen ${filter.prescreen.toLowerCase()}`}`}
-          <button
-            type="button"
-            className={css.inlineLink}
-            onClick={() => {
-              setFilter({ ...NO_FILTER, stage: filter.stage });
-              setQuery("");
-            }}
-          >
-            Clear filters
-          </button>
-        </p>
-      )}
+      <p className={css.activeFilters}>
+        {rows.length} shown · {rows.filter(isActive).length} of {activeTotal} active
+        {isFiltered && (
+          <>
+            {filter.bucket !== null && ` · Score ${filter.bucket}–${filter.bucket === 90 ? 100 : filter.bucket + 9}`}
+            {filter.subject && ` · ${filter.subject}`}
+            {filter.ids && " · Stuck"}
+            {filter.prescreen !== "all" && ` · ${filter.prescreen === "Visit booked" ? "Visit booked" : `Pre-screen ${filter.prescreen.toLowerCase()}`}`}
+            <button
+              type="button"
+              className={css.inlineLink}
+              onClick={() => {
+                setFilter({ ...NO_FILTER, stage: filter.stage });
+                setQuery("");
+              }}
+            >
+              Clear filters
+            </button>
+          </>
+        )}
+      </p>
       <div className={css.tableScroll}>
         <table className={css.table}>
           <thead>
@@ -198,6 +210,14 @@ export function CandidateTable({
                   </button>
                 </th>
               ))}
+              <th className={css.wideOnly} aria-sort={sort.key === "days" ? (sort.descending ? "descending" : "ascending") : "none"}>
+                <button type="button" onClick={() => setSort({ key: "days", descending: sort.key === "days" ? !sort.descending : true })}>
+                  Days in stage
+                  <span aria-hidden="true">{sort.key === "days" ? (sort.descending ? " ↓" : " ↑") : ""}</span>
+                </button>
+              </th>
+              <th className={css.widestOnly}>Next action</th>
+              <th className={css.widestOnly}>Owner</th>
               <th className={css.wideOnly}>Pre-screen</th>
               <th className={css.wideOnly}>Pre-screen score</th>
               <th className={css.wideOnly}>Visit</th>
@@ -225,6 +245,8 @@ export function CandidateTable({
           <tbody>
             {rows.map((c) => {
               const extra = extras.get(c.id);
+              const step = pipeline[c.id];
+              const rule = step && STUCK_RULES.find((r) => r.key === step.stageKey);
               const flags = [
                 c.previouslyContacted && "Contacted",
                 !c.email && "No email",
@@ -257,6 +279,11 @@ export function CandidateTable({
                   <td className={c.stage === "stopped" ? css.mutedCell : undefined}>
                     {STAGE_LABELS[c.stage]}
                     {ready.has(c.id) && <span className={css.readyWord}>Ready</span>}
+                    {step?.stuck && (
+                      <span className={css.clashWord} title={`Over the ${rule?.days}-day rule for ${rule?.label}. ${rule?.why ?? ""}`}>
+                        Stuck
+                      </span>
+                    )}
                     {/* The Visit column is hidden on a phone, so the marker sits here with the stage. */}
                     {clashes.has(c.id) && (
                       <span className={css.clashWord} title="The booked mock overlaps a Wise class, leave or sit-in. The app did not move the visit.">
@@ -285,6 +312,11 @@ export function CandidateTable({
                       </span>
                     )}
                   </td>
+                  <td className={`${css.wideOnly} ${css.num}`}>
+                    {step ? `${Math.round(step.daysInStage * 10) / 10} d` : <span className={css.mutedCell}>–</span>}
+                  </td>
+                  <td className={css.widestOnly} title={rule?.next}>{rule?.next ?? <span className={css.mutedCell}>–</span>}</td>
+                  <td className={css.widestOnly} title={rule?.owner}>{rule?.owner ?? <span className={css.mutedCell}>–</span>}</td>
                   <td className={`${css.wideOnly} ${css.preCell}`}>
                     {extra && (
                       <>

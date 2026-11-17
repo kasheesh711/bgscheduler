@@ -1,6 +1,8 @@
 /**
  * The hiring funnel, the time between steps and the stuck candidates, built from the /api/hiring payload only.
- * The rules copy .hillclimb/evidence/funnel.sql (18 Nov 2026), so the screen and that baseline count the same way.
+ * The rules copy .hillclimb/evidence/funnel.sql (18 Nov 2026), so the screen and that baseline count the same way,
+ * with two on-purpose differences: a call still ahead counts days from its latest booking and is never stuck, and days
+ * in stage are never below 0.
  * No stage-history table exists: a step counts when an event proves it or when the current stage implies it.
  */
 
@@ -58,7 +60,7 @@ export type StepName =
 const OLD_FLOW = ["paper_invited", "paper_booked", "paper_passed", "mock_booked"];
 const DAY = 86_400_000;
 const BANGKOK_MS = 7 * 3_600_000; // Bangkok has no daylight saving, so a fixed offset is exact.
-const WEEKS = 12;
+export const WEEKS = 12;
 /**
  * shortcut: dashboard() reads at most 2000 candidates (newest update first) and 2000 bookings, so above that the
  * funnel counts go low. The panel says so when the candidate list is full. Upgrade: aggregate in SQL when that happens.
@@ -103,6 +105,8 @@ export type GroupFunnel = {
   /** Share of the step before, 3 places; `null` when the step before has nobody. */
   conv: Record<Exclude<FunnelStep, "applied">, number | null>;
   stuck: number;
+  /** Weeks the group's applicants span: 1 for a week group, else from max(window start, first applicant) to now, at least 1. */
+  weeks: number;
   stepDays: Partial<Record<StepName, Stat>>;
   currentStage: Record<string, StageStat>;
 };
@@ -114,7 +118,10 @@ export type FunnelReport = {
   capped: boolean;
   /** "all", "campaign:<seekJobId or tracker-only>", "week:<ISO week>". */
   groups: Record<string, GroupFunnel>;
+  /** Every candidate in the payload, in the window or not: the stage key (a STUCK_RULES key), days in it and stuck. */
+  byCandidate: Record<string, CandidateStage>;
 };
+export type CandidateStage = { stageKey: string; daysInStage: number; stuck: boolean };
 
 const ms = (value: When) => (value ? new Date(value).getTime() : null);
 const least = (...values: (number | null)[]) => {
@@ -166,6 +173,7 @@ type Row = {
   stage: string;
   campaign: string;
   week: string;
+  firstSeen: number;
   reached: Record<FunnelStep, boolean>;
   stageKey: string;
   daysInStage: number;
@@ -197,6 +205,7 @@ export function buildFunnel(data: FunnelInput, now: Date): FunnelReport {
   const noReplyAt = event("no-reply", greatest);
   const noBookingAt = event("no-booking", greatest);
   const callBooked = event("call-booked");
+  const callRebooked = event("call-booked", greatest);
   const onsiteAudit = minBy(
     data.funnelEvents.filter((e) => e.action === "invite_onsite" || e.action === "onsite-release"),
     (e) => e.candidateId,
@@ -218,6 +227,7 @@ export function buildFunnel(data: FunnelInput, now: Date): FunnelReport {
 
   let excluded = 0;
   const rows: Row[] = [];
+  const byCandidate: Record<string, CandidateStage> = {};
   for (const c of data.candidates) {
     const id = c.id;
     const created = ms(c.createdAt)!;
@@ -232,8 +242,6 @@ export function buildFunnel(data: FunnelInput, now: Date): FunnelReport {
     const offer = offerAt.get(id) ?? null;
     const review = reviewAt.get(id) ?? null;
     const firstSeen = least(created, replied, callInv, formSent)!;
-    if (firstSeen < start) excluded++;
-    if (firstSeen < start || firstSeen >= nowMs) continue;
     const stage = c.stage;
     const callOpen = callGood === null;
     const reached: Record<FunnelStep, boolean> = {
@@ -249,7 +257,13 @@ export function buildFunnel(data: FunnelInput, now: Date): FunnelReport {
       offer: offer !== null || stage === "hired",
     };
     let since = created;
-    if (stage === "new") since = callAt !== null && callOpen ? callAt : callInv !== null && callOpen ? callInv : firstSeen;
+    // A call still ahead counts from when it was booked: its start would give negative days.
+    const callAhead = callAt !== null && callAt > nowMs;
+    if (stage === "new")
+      since =
+        callAt !== null && callOpen
+          ? callAhead ? (callRebooked.get(id) ?? callInv ?? firstSeen) : callAt
+          : callInv !== null && callOpen ? callInv : firstSeen;
     else if (stage === "review") since = review ?? created;
     else if (stage === "pre_screen") since = formSent ?? created;
     else if (stage === "no_reply") since = noReplyAt.get(id) ?? created;
@@ -263,8 +277,13 @@ export function buildFunnel(data: FunnelInput, now: Date): FunnelReport {
           ? "new (call link sent, no call)"
           : stage;
     const rule = STUCK_RULES.find((r) => r.key === stageKey)?.days ?? null;
-    const stuckAfter = stage === "onsite_booked" && visited === null ? null : rule;
-    const daysInStage = (nowMs - since) / DAY;
+    // The stuck clock starts at the visit or call time, so nobody is stuck before it.
+    const stuckAfter = (stage === "onsite_booked" && visited === null) || (stageKey === "new (call booked)" && callAhead) ? null : rule;
+    const daysInStage = Math.max(0, (nowMs - since) / DAY);
+    const stuck = stuckAfter !== null && daysInStage > stuckAfter;
+    byCandidate[id] = { stageKey, daysInStage, stuck };
+    if (firstSeen < start) excluded++;
+    if (firstSeen < start || firstSeen >= nowMs) continue;
     const steps: Partial<Record<StepName, number>> = {};
     const days = (a: number, b: number) => (b - a) / DAY;
     const contact = least(callInv, formSent, callGood);
@@ -282,11 +301,12 @@ export function buildFunnel(data: FunnelInput, now: Date): FunnelReport {
       stage,
       campaign: c.seekJobId ?? "tracker-only",
       week: isoWeek(firstSeen),
+      firstSeen,
       reached,
       stageKey,
       daysInStage,
       stuckAfter,
-      stuck: stuckAfter !== null && daysInStage > stuckAfter,
+      stuck,
       sinceIsImport: (stage === "review" && review === null) || [...OLD_FLOW, "stopped"].includes(stage),
       steps,
     });
@@ -299,17 +319,20 @@ export function buildFunnel(data: FunnelInput, now: Date): FunnelReport {
       list.push(row);
       keys.set(g, list);
     }
-  const groups = Object.fromEntries([...keys].map(([g, list]) => [g, summarize(list)]));
+  const weeksOf = (g: string, list: Row[]) =>
+    g.startsWith("week:") ? 1 : Math.max(1, (nowMs - Math.max(start, Math.min(...list.map((r) => r.firstSeen)))) / (7 * DAY));
+  const groups = Object.fromEntries([...keys].map(([g, list]) => [g, summarize(list, weeksOf(g, list))]));
   return {
     now: now.toISOString(),
     windowStart: new Date(start).toISOString(),
     excludedBeforeWindow: excluded,
     capped: data.candidates.length >= PAYLOAD_ROW_CAP,
     groups,
+    byCandidate,
   };
 }
 
-function summarize(rows: Row[]): GroupFunnel {
+function summarize(rows: Row[], weeks: number): GroupFunnel {
   const reached = Object.fromEntries(
     FUNNEL_STEPS.map(([step]) => [step, rows.filter((r) => r.reached[step]).length]),
   ) as Record<FunnelStep, number>;
@@ -339,5 +362,5 @@ function summarize(rows: Row[]): GroupFunnel {
       stuckIds: list.filter((r) => r.stuck).map((r) => r.id),
     };
   }
-  return { reached, conv, stuck: rows.filter((r) => r.stuck).length, stepDays, currentStage };
+  return { reached, conv, stuck: rows.filter((r) => r.stuck).length, weeks, stepDays, currentStage };
 }

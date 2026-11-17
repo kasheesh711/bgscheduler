@@ -36,6 +36,12 @@ describe("funnel panel", () => {
     ]);
   });
 
+  it("counts a week group as one week and a group from its first applicant, at least one week", () => {
+    expect(report.groups["week:2026-W47"].weeks).toBe(1);
+    expect(report.groups["campaign:95633167"].weeks).toBeCloseTo(17.6 / 7, 1);
+    expect(report.groups["campaign:tracker-only"].weeks).toBe(1); // 1.6 days, floored to one week
+  });
+
   it("names few cases and missing times", () => {
     expect(daysText(undefined)).toBe("No timed cases yet");
     expect(daysText({ n: 3, median: 0.8, p90: 1.5 })).toBe("0.8 d median · p90 1.5 d (3 cases, few)");
@@ -44,6 +50,7 @@ describe("funnel panel", () => {
   it("shows every count with a rate or a time, the stuck rule, and the owner", () => {
     const html = renderToStaticMarkup(<FunnelView report={report} campaigns={campaigns} onShowStuck={() => {}} />);
     expect(html).toContain("33.3%"); // 1 of 3 contacted
+    expect(html).toContain("1.2 a week"); // 3 applied since the first applicant 2.5 weeks ago, not over all 12 weeks
     expect(html).toContain("1 (33%)"); // review count with its share
     expect(html).toContain("1 stuck (100%)");
     expect(html).toContain("after 7 days");

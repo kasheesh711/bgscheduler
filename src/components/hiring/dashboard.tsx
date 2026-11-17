@@ -350,6 +350,7 @@ export function HiringDashboard() {
             {/* The table is the main work surface, so it sits right under the meters. The charts follow and read the same filter. */}
             <CandidateTable
               candidates={data.candidates}
+              funnelData={data}
               insights={insights}
               ready={ready}
               extras={extras}
