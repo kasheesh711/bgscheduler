@@ -31,7 +31,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
         "Content-Length": String(pdf.length),
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
-        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'self'; sandbox",
+        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'self'",
         "Content-Disposition": `inline; filename="marked-paper.pdf"`,
       },
     });

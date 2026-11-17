@@ -244,7 +244,7 @@ export function ResumeBody({
   const src = `/api/hiring/resume/${encodeURIComponent(id)}`;
   return (
     <>
-      {/* No sandbox attribute: Chrome blocks its PDF viewer in any sandboxed iframe, with every allow token. The route sends the sandbox as a CSP header, which the viewer accepts. */}
+      {/* No sandbox attribute: Chrome blocks its PDF viewer in any sandboxed iframe, with every allow token. A sandbox CSP header blocks it too, so the route sends none. */}
       {type === RESUME_TYPES.pdf && (
         <>
           <p className={css.inspectorMeta}>A link in a résumé can open another site. Do not sign in on a page that opens from a résumé.</p>

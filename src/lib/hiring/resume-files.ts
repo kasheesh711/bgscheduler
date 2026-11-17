@@ -79,7 +79,8 @@ export async function resumeResponse(candidateId: string, db: Database = getDb()
       "Content-Length": String(blob.blob.size),
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
-      "Content-Security-Policy": "default-src 'none'; frame-ancestors 'self'; sandbox",
+      // No sandbox: Chrome does not start its PDF viewer for a sandboxed document, so the page stays gray.
+      "Content-Security-Policy": "default-src 'none'; frame-ancestors 'self'",
       "Content-Disposition": `${stored.extension === "pdf" ? "inline" : "attachment"}; filename*=UTF-8''${name}`,
     },
   });
