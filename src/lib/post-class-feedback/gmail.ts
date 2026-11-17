@@ -43,15 +43,36 @@ function mime(input: ScheduleEmailSendInput, headers: GmailSenderHeaders = {}): 
   const replyTo = headers.replyTo && EMAIL_ADDRESS.test(headers.replyTo) ? headers.replyTo : FEEDBACK_MAILBOX;
   const key = createHash("sha256").update(input.idempotencyKey).digest("hex");
   const boundary = `feedback_${key}`;
-  const body = (value: string) => Buffer.from(value, "utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n") ?? "";
+  const body = (value: string | Buffer) =>
+    (typeof value === "string" ? Buffer.from(value, "utf8") : value).toString("base64").match(/.{1,76}/g)?.join("\r\n") ?? "";
+  const files = input.attachments ?? [];
+  if (files.some((file) => !/^[\w.+-]+\/[\w.+-]+$/.test(file.type))) throw new GmailRejection("Invalid attachment type.", true);
+  const mixed = `files_${key}`;
+  // RFC 2231 file name, so a Thai or accented name survives. A Thai letter takes 9 characters, so the name is cut to keep
+  // the header line under the 998-character limit; the ASCII copy is for mail apps that do not read the encoded name.
+  const encode = (name: string) => encodeURIComponent(name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  const fileName = (name: string) => {
+    const ext = /\.[A-Za-z0-9]{1,8}$/.exec(name)?.[0] ?? "";
+    const base = [...name.slice(0, name.length - ext.length)];
+    while (base.length && encode(base.join("") + ext).length > 600) base.pop();
+    const ascii = (base.join("") + ext).replace(/[^\x20-\x7e]|["\\]/g, "").trim();
+    return `filename="${ascii === ext ? `attachment${ext}` : ascii || "attachment"}"; filename*=UTF-8''${encode(base.join("") + ext)}`;
+  };
   return [
     `From: ${displayName} <${FEEDBACK_MAILBOX}>`, `Reply-To: ${replyTo}`, `To: ${input.to}`,
     ...(input.cc?.length ? [`Cc: ${[...new Set(input.cc)].join(", ")}`] : []),
     `Subject: ${encodedSubject(input.subject)}`, `Message-ID: <${key}@begiftededucation.com>`,
-    "MIME-Version: 1.0", `Content-Type: multipart/alternative; boundary="${boundary}"`, "",
+    "MIME-Version: 1.0",
+    ...(files.length ? [`Content-Type: multipart/mixed; boundary="${mixed}"`, "", `--${mixed}`] : []),
+    `Content-Type: multipart/alternative; boundary="${boundary}"`, "",
     `--${boundary}`, 'Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: base64", "", body(input.text),
     `--${boundary}`, 'Content-Type: text/html; charset="UTF-8"', "Content-Transfer-Encoding: base64", "", body(input.html),
-    `--${boundary}--`, "",
+    `--${boundary}--`,
+    ...files.flatMap((file) => [
+      `--${mixed}`, `Content-Type: ${file.type}`, "Content-Transfer-Encoding: base64",
+      `Content-Disposition: attachment; ${fileName(file.name)}`, "", body(file.content),
+    ]),
+    ...(files.length ? [`--${mixed}--`] : []), "",
   ].join("\r\n");
 }
 
@@ -62,7 +83,9 @@ export function createGmailSender(
   headers?: GmailSenderHeaders,
 ): ScheduleEmailSender {
   return { async sendEmail(input) {
-    const raw = Buffer.from(mime(input, headers)).toString("base64url");
+    const message = mime(input, headers);
+    // A file can make the message too large for the JSON endpoint; the upload endpoint takes the message as is, up to 35 MB.
+    const upload = !!input.attachments?.length;
     for (let authAttempt = 0; authAttempt < 2; authAttempt++) {
       let token: string;
       try { token = await accessToken(authAttempt === 1); }
@@ -76,9 +99,12 @@ export function createGmailSender(
         if (error instanceof ScheduleEmailRejection) throw error;
         throw new GmailRejection("Reminder eligibility could not be rechecked before submission.");
       }
-      const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
-        method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ raw }), signal: AbortSignal.timeout(20_000), cache: "no-store",
+      const response = await fetch(upload
+        ? "https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media"
+        : "https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+        method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": upload ? "message/rfc822" : "application/json" },
+        body: upload ? message : JSON.stringify({ raw: Buffer.from(message).toString("base64url") }),
+        signal: AbortSignal.timeout(upload ? 60_000 : 20_000), cache: "no-store",
       });
       if (response.status === 401 && authAttempt === 0) continue;
       if ([400, 401, 403, 404, 429].includes(response.status)) {

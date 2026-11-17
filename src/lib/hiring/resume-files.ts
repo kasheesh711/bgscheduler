@@ -85,6 +85,22 @@ export async function resumeResponse(candidateId: string, db: Database = getDb()
   });
 }
 
+/** The stored original as an email file, or null when none is stored. A storage error throws, so the email retries. */
+export async function resumeAttachment(candidateId: string, db: Database = getDb()) {
+  const c = s.hiringCandidates;
+  const [row] = await db.select({ path: c.resumePath, name: c.resumeName, type: c.resumeType }).from(c).where(eq(c.id, candidateId));
+  const stored = row && storedResume(candidateId, row.path, row.type);
+  if (!stored) return null;
+  // Under the worker's 120-second lease, with time left for the Gmail upload.
+  const blob = await get(stored.path, { access: "private", useCache: false, abortSignal: AbortSignal.timeout(30_000) });
+  if (!blob || blob.statusCode !== 200) return null;
+  return {
+    name: cleanResumeName(row.name ?? "", stored.extension),
+    type: stored.type,
+    content: Buffer.from(await new Response(blob.stream).arrayBuffer()),
+  };
+}
+
 /** A name safe for display and for a header: no controls, quotes or path parts, and the extension from the true type. */
 export function cleanResumeName(name: string, extension: ResumeExtension) {
   const base = name
