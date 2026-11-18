@@ -41,6 +41,7 @@ import {
   hardStops,
   preScreenPoints,
   profileScore,
+  workRightsPenalty,
   supportedVisitSubjects,
   topHiringSubject,
   workRightsAccepted,
@@ -804,6 +805,7 @@ export async function dashboard(db: Database = getDb()) {
               c.profileAssessment,
               config.profileWeights,
               c.universityAssessment?.fraction ?? 0,
+              workRightsPenalty(c.workRightsAnswer, config),
             )
           : null,
         // The pre-screen score is the eight-part total, not the profile formula.

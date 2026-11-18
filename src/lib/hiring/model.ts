@@ -314,6 +314,15 @@ export const baseConfigSchema = z
       .max(50)
       .default(["I have permanent work rights with no restrictions"]),
     seenWorkRights: z.array(z.string().trim().min(1).max(300)).max(200).default([]),
+    /** Points taken off the profile score for a work-rights answer. An answer with no row loses nothing. */
+    workRightsPenalties: z
+      .array(
+        z
+          .object({ answer: z.string().trim().min(1).max(300), points: z.number().int().min(1).max(100) })
+          .strict(),
+      )
+      .max(50)
+      .default([]),
     subjectPriority: z
       .array(z.object({ subject: subjectSchema, hiring: z.boolean() }).strict())
       .max(SUBJECTS.length)

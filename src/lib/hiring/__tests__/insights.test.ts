@@ -36,6 +36,7 @@ const config = {
   profileThreshold: 60,
   profileWeights: DEFAULT_WEIGHTS,
   acceptedWorkRights: ["I have permanent work rights with no restrictions"],
+  workRightsPenalties: [],
   subjectPriority: [{ subject: "Physics" as const, hiring: true }],
   interviewers: [{ canonicalKey: "Peat", email: "p@example.com", subjects: ["Physics" as const] }],
 };
@@ -67,6 +68,11 @@ describe("profileGate with the call score", () => {
   const at80 = { profileAssessment: assessment("met") };
   const calls = { ...config, callThreshold: 80 };
   const good = { good: { at: "2026-11-04T03:00:00.000Z", by: "hr@example.com" }, tries: [] };
+  it("takes the work-rights points off before the threshold and the call score", () => {
+    const points = (n: number) => ({ ...calls, workRightsPenalties: [{ answer: config.acceptedWorkRights[0], points: n }] });
+    expect(profileGate(candidate("a", "new", at80), points(10))).toMatchObject({ eligible: true, awaitingCall: false });
+    expect(profileGate(candidate("a", "new", at80), points(30)).short).toEqual(["Below profile threshold"]);
+  });
   it("holds a score at the call score until HR records a good call", () => {
     const gate = profileGate(candidate("a", "new", at80), calls);
     expect(gate).toMatchObject({ eligible: false, awaitingCall: true, review: [] });

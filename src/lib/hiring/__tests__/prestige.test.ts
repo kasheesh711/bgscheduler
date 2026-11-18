@@ -39,7 +39,10 @@ describe("university prestige evidence", () => {
     ).toBe(0.8);
     expect(
       prestigeFraction({ name: "Example", country: "US", rank: null }) * 20,
-    ).toBe(8);
+    ).toBe(0);
+    // The US/UK boost needs a rank in the top 1,000.
+    expect(prestigeFraction({ name: "Example", country: "GB", rank: 1001 })).toBe(0);
+    expect(prestigeFraction({ name: "Example", country: "GB", rank: 1000 })).toBe(0.5);
     expect(
       prestigeFraction({ name: "Example", country: "CA", rank: 5 }) * 20,
     ).toBe(12);
@@ -105,7 +108,7 @@ describe("university prestige evidence", () => {
     );
     expect(result.country).toBe("GB");
     expect(result.rank).toBeNull();
-    expect(result.fraction).toBe(0.4);
+    expect(result.fraction).toBe(0);
     expect(result.sources).toEqual(["https://ror.org/test"]);
   });
   it("resolves an official ROR name to the ranked campus without conflating campuses", async () => {
@@ -122,7 +125,7 @@ describe("university prestige evidence", () => {
     expect(result).toMatchObject({ name: "University of Michigan--Ann Arbor", rank: 21, fraction: 0.9 });
     expect(result.sources).toContain("https://ror.org/00jmfr291");
     const campus = await assessPrestige([{ name: "University of Michigan--Dearborn", evidence: "Degree from Dearborn", completedDegree: true }], config, "catalog", fetcher);
-    expect(campus).toMatchObject({ name: "University of Michigan--Dearborn", rank: 1200, fraction: 0.4 });
+    expect(campus).toMatchObject({ name: "University of Michigan--Dearborn", rank: 1200, fraction: 0 });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
   it("does not choose between multiple catalog matches for one ROR record", async () => {
@@ -156,5 +159,39 @@ describe("university prestige evidence", () => {
     expect(() =>
       validateAssessment(value, "A different education record"),
     ).toThrow(/source/);
+  });
+  describe("name match", () => {
+    const row = (name: string, country: string, rank: number | null) => ({ name, aliases: [], country, rank, edition: "2026-2027", sourceUrl: "https://www.usnews.com/x" });
+    const config = configSchema.parse({ universities: [
+      row("University of Queensland Australia", "AU", 42),
+      row("University of Texas--Austin", "US", 56),
+      row("University of Texas--El Paso", "US", 1238),
+      row("Arizona State University--Tempe", "US", 179),
+      row("Arizona State University--Downtown Phoenix", "US", 920),
+      row("Northeastern University", "US", 180),
+      row("Northeastern University - China", "CN", 384),
+      row("Thammasat University", "TH", 1500),
+      row("Mahidol University", "TH", 555),
+    ] });
+    const noRor = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [] }) });
+    const best = (name: string, fetcher = noRor) =>
+      assessPrestige([{ name, evidence: "Degree", completedDegree: true }], config, "catalog", fetcher);
+    it("matches the U.S. News spelling of a résumé name", async () => {
+      expect(await best("University of Queensland")).toMatchObject({ rank: 42, fraction: 0.5 });
+      expect(await best("The University of Texas at Austin")).toMatchObject({ rank: 56, fraction: 0.8 });
+    });
+    it("keeps an exact name ahead of a country-suffix name", async () => {
+      expect(await best("Northeastern University")).toMatchObject({ country: "US", rank: 180 });
+    });
+    it("gives a bare system name its lowest-ranked campus", async () => {
+      expect(await best("Arizona State University")).toMatchObject({ name: "Arizona State University--Downtown Phoenix", rank: 920 });
+      expect(await best("University of Texas")).toMatchObject({ rank: 1238, fraction: 0 });
+    });
+    it("matches a college that states its named Thai university, and no other", async () => {
+      expect(await best("Mahidol University International College")).toMatchObject({ name: "Mahidol University", fraction: 0.6 });
+      expect(await best("SIIT, Thammasat University")).toMatchObject({ name: "Thammasat University", fraction: 0.6 });
+      expect((await best("Mahidol Wittayanusorn School")).name).toBeNull();
+      expect((await best("New Thammasat Universitys")).name).toBeNull();
+    });
   });
 });

@@ -24,6 +24,7 @@ import {
   availabilityFraction,
   preScreenPoints,
   profileScore,
+  workRightsPenalty,
   validateAssessment,
   validateBriefs,
   validatePreScreenAssessment,
@@ -40,7 +41,7 @@ import { hiringEmailHtmlFromText } from "./email";
 import { resumeAttachment } from "./resume-files";
 import { syncTracker, mirrorTracker } from "./sources";
 import { redactProfile } from "./seek-text";
-import { assessPrestige } from "./prestige";
+import { assessPrestige, PRESTIGE_RULES } from "./prestige";
 
 /** `kind` tells the runner which prompt and JSON schema to use. */
 export type Assess = (
@@ -105,7 +106,7 @@ export async function assessCandidates(
         ? candidate.preScreenAssessment
         : candidate.profileAssessment;
     if (scoreOnly && assessment && oldHash === hash &&
-      candidate.universityAssessment?.catalogHash === sourceHash(config.universities)) continue;
+      candidate.universityAssessment?.catalogHash === sourceHash([PRESTIGE_RULES, config.universities])) continue;
     if (!assessment && oldHash === hash && !(scoreOnly && retryInvalid)) continue;
     if (!assessment || oldHash !== hash) {
       const validate = (value: unknown) => phase === "pre"
@@ -160,7 +161,7 @@ export async function assessCandidates(
         continue;
       }
     }
-    const catalogHash = sourceHash(config.universities);
+    const catalogHash = sourceHash([PRESTIGE_RULES, config.universities]);
     // Only the profile's universities count, so a reply keeps the stored result, as in scorePreScreens. A missing or
     // old-catalog result is recomputed from the profile. A changed profile is recomputed from its new assessment.
     const recomputed =
@@ -180,7 +181,7 @@ export async function assessCandidates(
         prestige = recomputed ?? fresh.universityAssessment!;
       if (
         fresh.revision !== candidate.revision ||
-        sourceHash(current.config.universities) !== catalogHash ||
+        sourceHash([PRESTIGE_RULES, current.config.universities]) !== catalogHash ||
         (scoreOnly ? current.config.enabled || current.config.deliveryEnabled : !current.config.enabled) ||
         !current.config.rubricApproved ||
         !runtimeWritesAllowed()
@@ -263,6 +264,7 @@ export async function assessCandidates(
                     assessment!,
                     current.config.profileWeights,
                     prestige.fraction,
+                    workRightsPenalty(fresh.workRightsAnswer, current.config),
                   ),
             university: prestige,
           },
@@ -301,7 +303,7 @@ export async function scorePreScreens(
       ),
     )
     .orderBy(asc(s.hiringCandidates.createdAt));
-  const catalogHash = sourceHash(config.universities);
+  const catalogHash = sourceHash([PRESTIGE_RULES, config.universities]);
   let calls = 0;
   for (const candidate of rows) {
     const source = preScreenSource(candidate);
@@ -342,7 +344,7 @@ export async function scorePreScreens(
         current = await settings(tx);
       if (
         fresh.revision !== candidate.revision ||
-        sourceHash(current.config.universities) !== catalogHash ||
+        sourceHash([PRESTIGE_RULES, current.config.universities]) !== catalogHash ||
         current.config.enabled ||
         current.config.deliveryEnabled ||
         !current.config.rubricApproved ||
