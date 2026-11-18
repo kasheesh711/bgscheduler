@@ -14,6 +14,7 @@ import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { configSchema, HiringError, type HiringConfig, type Slot } from "../model";
 import { bookingToken } from "../tokens";
+import { saveBriefDecision } from "../decisions";
 import {
   bookInterview,
   bookingView,
@@ -920,6 +921,41 @@ describe("hiring workflow persistence", () => {
       // A sent result ends the link for scores too.
       await db.update(s.hiringCandidates).set({ stage: "rejected" }).where(eq(s.hiringCandidates.id, row.id));
       await expect(saveBriefRubric(token, rubric(7), db, during)).rejects.toMatchObject({ status: 404 });
+    });
+    it("records the head's decision from the link, tells HR, and sends nothing to the candidate", async () => {
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      await deliverOutbox(db, base);
+      const token = vi.mocked(pushLineTextMessage).mock.calls[0][0].text.match(/\/hiring\/brief\/([\w.-]+)/)![1];
+      const [, mock] = await rowsOf(row.id);
+      const { config } = await settings(db);
+      await db.update(s.hiringSettings).set({ config: { ...config, recruitmentLineGroupId: "C" + "1".repeat(32) } });
+      const during = mock.startTime;
+      const hire = { decision: "hire" as const, reason: "" };
+      await expect(saveBriefDecision(token, hire, db, new Date(during.getTime() - 1))).rejects.toMatchObject({ status: 409 });
+      // A decision rests on scores.
+      await expect(saveBriefDecision(token, hire, db, during)).rejects.toMatchObject({ status: 409, message: "Send the mock scores first." });
+      await saveBriefRubric(token, { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 7])), comments: "" } as MockRubric, db, during);
+      await expect(saveBriefDecision(token, { decision: "reject", reason: "no" }, db, during)).rejects.toMatchObject({ status: 400 });
+      const queued = (await db.select().from(s.hiringOutbox)).length;
+      // No paper result yet, so no email draft: the decision is recorded and the notice gives the cause.
+      expect(await saveBriefDecision(token, hire, db, during)).toEqual({ draft: false });
+      expect(await saveBriefDecision(token, hire, db, during)).toEqual({ draft: false });
+      expect(await db.select().from(s.hiringDecisions)).toHaveLength(0);
+      const notices = (await db.select().from(s.hiringRecruitmentDeliveries)).filter((d) => d.notice === "head_decision");
+      // The second send of the same decision on the same day adds no second notice.
+      expect(notices).toHaveLength(1);
+      expect(notices[0].message).toMatch(/^Head decision: HIRE\nCandidate: .+ — Mathematics\nHead: Peat\n/);
+      expect(notices[0].message).toContain("No email draft yet: No paper result yet.");
+      expect((await briefView(token, db, during)).decision).toBe("hire");
+      expect((await dashboard(db)).headDecisions[0]).toMatchObject({ candidateId: row.id, decision: "hire", head: "Peat", draftProblem: expect.stringContaining("No paper result yet.") });
+      // A change of mind is a new notice. The reason goes with it.
+      await saveBriefDecision(token, { decision: "reject", reason: "Weak subject knowledge." }, db, during);
+      expect((await db.select().from(s.hiringRecruitmentDeliveries)).filter((d) => d.notice === "head_decision")).toHaveLength(2);
+      expect((await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "head-decision"))).map((a) => a.actor)).toEqual(Array(3).fill("interviewer:Peat"));
+      // Nothing went to the candidate, and the stage did not move.
+      expect(await db.select().from(s.hiringOutbox)).toHaveLength(queued);
+      expect((await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id)))[0].stage).toBe("onsite_booked");
     });
     it("links the head to the candidate page, and ends the link with the visit", async () => {
       const row = await invited({ phone: "+66812345678" });

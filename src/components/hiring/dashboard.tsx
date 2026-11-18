@@ -4,6 +4,7 @@ import { startTransition, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Instrument_Serif } from "next/font/google";
 import { signIn } from "next-auth/react";
+import { isRoleView } from "@/lib/hiring/role-views";
 import { GOOGLE_FREEBUSY_SCOPE, GOOGLE_SCOPES, type HiringConfig, type Stage, type Subject } from "@/lib/hiring/model";
 import { buildInsights, readyToInvite } from "@/lib/hiring/insights";
 import { dedupePriority, headDaysNotice } from "@/lib/hiring/rules";
@@ -15,6 +16,7 @@ import { CandidateTable, matchesFilter } from "./candidate-table";
 import { AveragePentagon, EvidenceChart, KpiStrip, LimitMeters, ScoreChart, StageChart, SubjectChart } from "./pipeline-charts";
 import { AssessmentScreen } from "./assessment-screen";
 import { OperationsRail, WorkerBanner } from "./operations-rail";
+import { AdminScreen, HeadsScreen, HrScreen } from "./role-screens";
 import { PreScreenScreen } from "./prescreen-screen";
 import { CallsScreen } from "./calls-screen";
 import { CapacityScreen } from "./capacity-screen";
@@ -58,6 +60,10 @@ const VIEWS = {
   visitday: "Visit day",
   assessment: "4 Mock and paper",
   setup: "Rules and setup",
+  // The simple screens, one for each role. Each has its own link: /hiring?view=hr, admin or heads.
+  hr: "HR",
+  admin: "Admin",
+  heads: "Heads",
 };
 export type HiringView = keyof typeof VIEWS;
 /** One line under the tabs, so a new user can name what each tab is for. */
@@ -70,7 +76,20 @@ const PURPOSE: Record<HiringView, string> = {
   visitday: "Who comes when, which paper to print, which head runs the mock.",
   assessment: "Each visit's paper and mock results, and the hiring decision.",
   setup: "Scores, limits, heads and messages. A change applies to every tab.",
+  hr: "Your calls this week, who to call next, and the decisions the heads sent.",
+  admin: "Who comes when, the paper to print, and where to upload the completed paper.",
+  heads: "Your candidates: the time, the résumé, then the scores and your decision.",
 };
+/** The browser remembers a role screen, so /hiring opens on it the next time. */
+const ROLE_KEY = "hiring-role-view";
+function remember(name: string | null) {
+  try {
+    if (name) window.localStorage.setItem(ROLE_KEY, name);
+    else window.localStorage.removeItem(ROLE_KEY);
+  } catch {
+    // Storage can be blocked. The link still opens the screen.
+  }
+}
 
 export function HiringDashboard() {
   const [data, setData] = useState<HiringData | null>(null);
@@ -83,8 +102,21 @@ export function HiringDashboard() {
   const view: HiringView = param && Object.hasOwn(VIEWS, param) ? (param as HiringView) : "overview";
   // Next.js keeps useSearchParams in step with pushState, and this does not reload the page.
   const setView = (name: HiringView) => {
+    // Leaving a role screen for the full dashboard forgets it. Opening one remembers it.
+    remember(isRoleView(name) ? name : null);
     if (name !== view) window.history.pushState(null, "", `?view=${name}`);
   };
+  const role = isRoleView(view);
+  useEffect(() => {
+    if (isRoleView(param)) return remember(param);
+    if (param) return;
+    try {
+      const saved = window.localStorage.getItem(ROLE_KEY);
+      if (isRoleView(saved)) window.history.replaceState(null, "", `?view=${saved}`);
+    } catch {
+      // As in remember().
+    }
+  }, [param]);
   const [selected, setSelected] = useState<string | null>(null);
   // The candidate whose résumé viewer is open. It loads the file only on request.
   const [resumeFor, setResumeFor] = useState<string | null>(null);
@@ -229,7 +261,9 @@ export function HiringDashboard() {
           </h1>
           {/* Always one line, so the tabs below do not move down when the data arrives. */}
           <p className={css.subtitle}>
-            {data ? (
+            {role ? (
+              VIEWS[view]
+            ) : data ? (
               <>
                 SEEK {campaignNames(data.config.seekJobs)} · Threshold {data.config.profileThreshold}/100 ·
                 Automation {data.config.enabled ? "on" : "paused"} · Messages{" "}
@@ -244,18 +278,26 @@ export function HiringDashboard() {
           {/* Rules and setup shows these beside its Save button, where they are in view. */}
           {view === "setup" ? "" : notice}
         </div>
-        <div className={css.viewSwitch} role="group" aria-label="Hiring views">
-          {(Object.keys(VIEWS) as HiringView[]).map((name) => (
-            <button
-              key={name}
-              type="button"
-              aria-pressed={view === name}
-              onClick={() => setView(name)}
-            >
-              {VIEWS[name]}
+        {role ? (
+          <div className={css.viewSwitch}>
+            <button type="button" onClick={() => setView("overview")}>
+              Full dashboard
             </button>
-          ))}
-        </div>
+          </div>
+        ) : (
+          <div className={css.viewSwitch} role="group" aria-label="Hiring views">
+            {(Object.keys(VIEWS) as HiringView[]).map((name) => (
+              <button
+                key={name}
+                type="button"
+                aria-pressed={view === name}
+                onClick={() => setView(name)}
+              >
+                {VIEWS[name]}
+              </button>
+            ))}
+          </div>
+        )}
       </header>
       <p className={css.purpose}>{PURPOSE[view]}</p>
       {error && view !== "setup" && (
@@ -263,19 +305,19 @@ export function HiringDashboard() {
           {error}
         </p>
       )}
-      {data?.workerError && (
+      {!role && data?.workerError && (
         <p role="alert" className={css.alert}>
           {data.workerError}
         </p>
       )}
-      {data && <WorkerBanner enabled={data.config.enabled} workerAt={data.workerAt} />}
-      {view !== "setup" && data && data.configProblems.length > 0 && (
+      {!role && data && <WorkerBanner enabled={data.config.enabled} workerAt={data.workerAt} />}
+      {!role && view !== "setup" && data && data.configProblems.length > 0 && (
         <p role="alert" className={css.alert}>
           The saved rules have a problem, so the worker has stopped. Open Rules and setup. {data.configProblems.join(" ")}
         </p>
       )}
       {/* The Mock and paper calendar explains its own clashes and old data. */}
-      {data && (clashes.size > 0 || data.visitClashes.stale) && (
+      {!role && data && (clashes.size > 0 || data.visitClashes.stale) && (
         <p role="alert" className={css.alert}>
           {clashes.size > 0
             ? `${clashes.size} booked visit${clashes.size === 1 ? "" : "s"} now clash${clashes.size === 1 ? "es" : ""} with a Wise class, leave or sit-in. The app did not move ${clashes.size === 1 ? "it" : "them"}. Staff must act. See the calendar in 4 Mock and paper.`
@@ -328,6 +370,9 @@ export function HiringDashboard() {
         <div hidden={view !== "prescreen"} className={css.viewPane}>
           <PreScreenScreen data={data} extras={extras} holds={holds} command={command} busy={busy} error={error} notice={notice} />
         </div>
+        {view === "hr" && <HrScreen data={data} command={command} busy={busy} onOpenResults={() => setView("assessment")} />}
+        {view === "admin" && <AdminScreen data={data} reload={() => load(true)} />}
+        {view === "heads" && <HeadsScreen data={data} />}
         <div hidden={view !== "visitday"} className={css.viewPane}>
           <RunSheetScreen data={data} />
         </div>

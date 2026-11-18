@@ -617,6 +617,19 @@ const { profileText, ...candidateColumns } = getTableColumns(s.hiringCandidates)
 /** Not-blank text, as JS `.trim()` sees it: ASCII space and the Unicode spaces it also strips (NBSP, U+FEFF, U+3000…). Listed, so the Postgres locale cannot change it. */
 export const NOT_BLANK_PATTERN = "[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]";
 
+/** No link secret means no head links. The dashboard must still load. */
+function briefPaths(bookings: { id: string; kind: string; status: string; endTime: Date }[], now: Date): Record<string, string> {
+  try {
+    return Object.fromEntries(
+      bookings
+        .filter((b) => b.kind === "mock" && b.status === "confirmed" && b.endTime.getTime() > now.getTime() - 8 * 86400000)
+        .map((b) => [b.id, new URL(briefLink(b)).pathname]),
+    );
+  } catch (error) {
+    if (error instanceof HiringError) return {};
+    throw error;
+  }
+}
 export async function dashboard(db: Database = getDb()) {
   const now = new Date();
   // Every read here is independent, so they go in one wave. Only visitClashes and the onsite entries wait for this one.
@@ -637,6 +650,7 @@ export async function dashboard(db: Database = getDb()) {
     assessment,
     funnelAudit,
     onsiteRead,
+    headDecisionRows,
   ] = await Promise.all([
     settings(db),
     db
@@ -704,6 +718,13 @@ export async function dashboard(db: Database = getDb()) {
       ),
     // The onsite reads need no config; only the gate below does.
     onsiteRows(db),
+    // Head decisions, newest first. The role screens show the newest one for each candidate.
+    db
+      .select({ candidateId: s.hiringAudit.candidateId, detail: s.hiringAudit.detail, at: s.hiringAudit.createdAt })
+      .from(s.hiringAudit)
+      .where(eq(s.hiringAudit.action, "head-decision"))
+      .orderBy(desc(s.hiringAudit.createdAt))
+      .limit(200),
   ]);
   // The visit screens never see an HR call. The Calls tab reads `calls`.
   const bookings = allBookings.filter(isVisitBooking);
@@ -820,6 +841,16 @@ export async function dashboard(db: Database = getDb()) {
     }),
     bookings,
     calls,
+    headDecisions: headDecisionRows.map((row) => ({
+      candidateId: row.candidateId,
+      decision: row.detail.decision === "hire" ? ("hire" as const) : ("reject" as const),
+      reason: String(row.detail.reason ?? ""),
+      head: String(row.detail.head ?? ""),
+      draftProblem: typeof row.detail.draftProblem === "string" ? row.detail.draftProblem : null,
+      at: row.at,
+    })),
+    // The head's page for each mock (scores and decision), as a path. The same link the head gets in LINE.
+    briefPaths: briefPaths(bookings, now),
     visitClashes: clashes,
     outbox,
     // The capped list above holds every kind of row, so the pre-screen screen reads its proof from this full read.
@@ -1178,7 +1209,7 @@ export const callResumeLink = (call: { id: string; endTime: Date }) =>
  * once. A stopped candidate or a sent result ends it too: a past mock stays `confirmed`, and a person who asked BeGifted
  * to stop must not stay readable. Every failure is the same 404, so a link tells nothing about a booking.
  */
-async function briefMock(token: string, db: Database, now: Date, kinds: ("mock" | "call")[] = ["mock"]) {
+export async function briefMock(token: string, db: Database, now: Date, kinds: ("mock" | "call")[] = ["mock"]) {
   const cap = readBookingToken(token, now);
   const [row] =
     cap.kind === "brief"
@@ -1226,7 +1257,15 @@ export async function briefView(token: string, db: Database = getDb(), now = new
   const { config } = await settings(db);
   // Only the head's own scores and the form's state go to the page, never the stored row.
   const own = await briefRubric(mock, db, now);
+  const [decided] = await db
+    .select({ detail: s.hiringAudit.detail })
+    .from(s.hiringAudit)
+    .where(and(eq(s.hiringAudit.candidateId, mock.candidateId), eq(s.hiringAudit.action, "head-decision")))
+    .orderBy(desc(s.hiringAudit.createdAt))
+    .limit(1);
   return {
+    // The last head decision for this candidate, so the page shows what was sent.
+    decision: decided?.detail.decision === "hire" ? ("hire" as const) : decided?.detail.decision === "reject" ? ("reject" as const) : null,
     name: candidate.name,
     subject: mock.subjects.join(", "),
     exam: exam ? `${bangkok(exam.startTime)}–${bangkokTime(exam.endTime)}` : null,

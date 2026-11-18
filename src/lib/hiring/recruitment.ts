@@ -80,6 +80,15 @@ export async function queueRecruitmentMock(db: Database, booking: typeof booking
   await enqueue(db, `mock:${booking.id}:${notice}`, config.recruitmentLineGroupId, text, booking.id, notice);
 }
 
+/** A head's decision after a mock. HR reads it here, then sends the result email from the Hiring page. One notice per candidate, decision and day. */
+export async function queueRecruitmentHeadDecision(db: Database, candidate: { id: string; name: string }, input: { decision: "hire" | "reject"; reason: string; head: string; subject: string | null; day: string; draftProblem: string | null }) {
+  const { config } = await settings(db);
+  if (!config.recruitmentLineGroupId) return;
+  await enqueue(db, `head-decision:${candidate.id}:${input.decision}:${input.day}`, config.recruitmentLineGroupId,
+    `Head decision: ${input.decision === "hire" ? "HIRE" : "DO NOT HIRE"}\nCandidate: ${candidate.name} — ${input.subject ?? "Subject not recorded"}\nHead: ${input.head}\nReason: ${input.reason || "None given"}\nHR: open Hiring, read the result email, then send it.${input.draftProblem ? `\nNo email draft yet: ${input.draftProblem}` : ""}`,
+    null, "head_decision");
+}
+
 /** Only a response to a sent application form reaches this hook. One notice per candidate. */
 export async function queueRecruitmentForm(db: Database, candidate: Pick<typeof candidates.$inferSelect, "id" | "name" | "email" | "phone" | "subjects">, submittedAt: Date) {
   const { config } = await settings(db);

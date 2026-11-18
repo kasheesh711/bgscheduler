@@ -3,8 +3,9 @@ import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
 import { hireBlockers } from "./assessment-view";
-import { HiringError, runtimeWritesAllowed, type HiringConfig } from "./model";
-import { audit, candidateById, endVisit, enqueue, settings } from "./service";
+import { HiringError, localDate, runtimeWritesAllowed, type HiringConfig } from "./model";
+import { queueRecruitmentHeadDecision } from "./recruitment";
+import { audit, briefMock, candidateById, endVisit, enqueue, settings } from "./service";
 
 export type Decision = "hire" | "reject";
 const d = s.hiringDecisions;
@@ -77,6 +78,39 @@ export async function draftDecision(candidateId: string, input: { decision: Deci
     await audit(tx, actor, "decision-draft", candidateId, { decision: input.decision, reason: input.reason.trim() });
     return draft;
   });
+}
+
+export const HEAD_DECISION = "head-decision";
+/**
+ * A head's decision after a mock (Kevin's decision, 18 Nov 2026): it is recorded and HR is told in the recruitment
+ * group. No email leaves here: HR reads and sends the result email. A draft is made when the rules allow one. When they
+ * do not (a paper is not marked yet, for example), the decision is still recorded and the notice gives the cause.
+ */
+export async function recordHeadDecision(candidateId: string, input: { decision: Decision; reason: string; head: string }, actor: string, db: Database, now = new Date()) {
+  if (!runtimeWritesAllowed()) throw new HiringError(503, "A decision can be saved only on the live site.");
+  const reason = input.reason.trim();
+  if (input.decision === "reject" && reason.length < 5) throw new HiringError(400, "Write a reason of at least 5 characters.");
+  const candidate = await candidateById(db, candidateId);
+  const { mocks } = await resultsOf(db, candidateId);
+  // A decision rests on scores a person can read, as the draft rule does.
+  if (!mocks.some((m) => m.source !== "tracker" && (m.status === "done" || m.status === "needs_check"))) throw new HiringError(409, "Send the mock scores first.");
+  let draftProblem: string | null = null;
+  try {
+    await draftDecision(candidateId, { decision: input.decision, reason: `Head ${input.head}: ${reason || "No reason given."}` }, actor, db);
+  } catch (error) {
+    if (!(error instanceof HiringError)) throw error;
+    draftProblem = error.message;
+  }
+  await audit(db, actor, HEAD_DECISION, candidateId, { decision: input.decision, reason, head: input.head, draftProblem });
+  await queueRecruitmentHeadDecision(db, candidate, { decision: input.decision, reason, head: input.head, subject: candidate.visitSubject ?? candidate.subjects[0] ?? null, day: localDate(now), draftProblem });
+  return { draft: !draftProblem };
+}
+/** The same decision from the interviewer link. The link is the only access check, as for the score form. */
+export async function saveBriefDecision(token: string, input: { decision: Decision; reason: string }, db: Database, now = new Date()) {
+  const mock = await briefMock(token, db, now);
+  if (now < mock.startTime) throw new HiringError(409, "You can send a decision after the mock lesson starts.");
+  const head = mock.interviewerKey ?? "Interviewer";
+  return recordHeadDecision(mock.candidateId, { ...input, head }, `interviewer:${mock.interviewerKey ?? "unknown"}`, db, now);
 }
 
 /** Keeps a person's edits while the switches are off or they stop for now. Nothing leaves until Send. */

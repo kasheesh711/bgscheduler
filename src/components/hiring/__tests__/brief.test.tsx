@@ -18,7 +18,7 @@ const brief = {
   form: "open",
 } as unknown as Parameters<typeof InterviewerBrief>[0]["brief"];
 const html = (patch = {}) =>
-  renderToStaticMarkup(<InterviewerBrief brief={{ ...brief, ...patch }} resumeUrl="/api/hiring/brief/t/resume" rubricUrl="/api/hiring/brief/t/rubric" />);
+  renderToStaticMarkup(<InterviewerBrief brief={{ ...brief, ...patch }} resumeUrl="/api/hiring/brief/t/resume" rubricUrl="/api/hiring/brief/t/rubric" decisionUrl="/api/hiring/brief/t/decision" />);
 
 describe("InterviewerBrief", () => {
   it("shows the visit facts, every answer with its label, and a résumé link that opens a new tab", () => {
