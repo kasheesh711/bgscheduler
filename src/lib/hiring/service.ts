@@ -1637,6 +1637,8 @@ export async function bookCall(token: string, value: unknown, db: Database = get
       kind: "calendar",
       payload: {},
     });
+    // After the phone update, so the notice carries the number HR will call.
+    await queueRecruitmentMock(tx, call, own ? "moved" : "booked", own?.startTime);
     // The phone number stays out of the audit row.
     await audit(tx, "candidate", own ? "call-moved" : "call-booked", cap.id, { start: slot.start });
     return call;

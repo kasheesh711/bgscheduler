@@ -316,6 +316,28 @@ describe("booking a call", () => {
     expect(await callView(link(a.id), db)).toMatchObject({ canMove: false, slots: [] });
   });
 
+  it("tells the recruitment group about a booked and a moved call, with the number HR will call", async () => {
+    const noGroup = await seed();
+    await book(noGroup.id, FRIDAY);
+    expect(await db.select().from(s.hiringRecruitmentDeliveries)).toEqual([]);
+    await setConfig({ recruitmentLineGroupId: "C" + "1".repeat(32) });
+    const a = await seed();
+    const first = await book(a.id);
+    // A retry of the same time queues nothing new.
+    await book(a.id);
+    const moved = await book(a.id, QUARTER, { move: true });
+    const rows = (await db.select().from(s.hiringRecruitmentDeliveries)).sort((x, y) => x.createdAt.getTime() - y.createdAt.getTime() || x.key.localeCompare(y.key));
+    expect(rows.map((row) => [row.key, row.notice, row.bookingId])).toEqual([
+      [`call:${first.id}:booked:0000`, "booked", first.id],
+      [`call:${moved.id}:moved:0000`, "moved", moved.id],
+    ]);
+    expect(rows[0].message).toBe(
+      `HR pre-screen call booked\nCandidate: ${a.name}\nEmail: ${a.email}\nPhone: +66812345678\nSubject: Mathematics\nTime: 5 Nov 2026, 09:00–09:15 (Bangkok)`,
+    );
+    expect(rows[1].message).toContain("HR pre-screen call moved");
+    expect(rows[1].message).toContain("Previous time: 5 Nov 2026, 09:00 (cancelled)");
+  });
+
   it("fails closed at confirm: no calendar read, a time gone from the calendar, a bad phone number, a wrong link", async () => {
     const a = await seed();
     vi.mocked(readHrBusy).mockRejectedValueOnce(new HiringError(502, "Google did not return the call calendar."));
