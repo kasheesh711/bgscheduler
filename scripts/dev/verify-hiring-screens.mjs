@@ -505,7 +505,8 @@ try {
     assert.ok(await page.getByRole("heading", { name: /Head decisions: send the result/ }).isVisible());
     assert.ok(await page.getByText("Kru Peat · Clear and warm lesson.").isVisible());
     await page.getByRole("button", { name: "Show the résumé of Sample Kim" }).click();
-    await page.getByTitle("Original résumé of Sample Kim").waitFor();
+    // The PDF pages need the app's PDF runtime route, which this fixture does not serve. The panel and its Download link prove the file is asked for.
+    await page.getByRole("link", { name: "Download" }).waitFor();
     await shot(page, "role-hr");
     await page.getByRole("button", { name: "Hide the résumé of Sample Kim" }).click();
     assert.equal(await page.getByRole("button", { name: "Good call" }).count(), 2);

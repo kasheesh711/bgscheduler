@@ -518,6 +518,31 @@ A stored setting that breaks a rule stops the worker with a message. The page st
 - **Open decision: links inside a PDF.** A crafted link in an applicant's PDF can replace the whole browser tab with another site after one click. Script does not run. The panel shows a warning line for now. The other options are to open a PDF in a new tab, or to render PDFs with pdf.js (a new dependency). Kevin has not decided. He must decide before go-live.
 - The files hold phone numbers, birth dates and photos. Access control, `no-store` and retention are the controls.
 
+## Role screens
+
+Kevin's decision, 18 November 2026: the full dashboard stays for the owner. HR, Admin and the heads each get one simple screen in `/hiring`, built from the same `GET /api/hiring` payload (`src/components/hiring/role-screens.tsx`, helpers in `src/lib/hiring/role-views.ts`).
+
+| Link | For | Shows |
+|---|---|---|
+| `/hiring?view=hr` | HR | The booked calls of this work week (Monday to Friday, Bangkok). One card for each candidate to call, in the Calls order: phone, résumé in the card, Good call, No answer, Bad call. The head decisions that wait for a result email. |
+| `/hiring?view=admin` | Admin | One card for each visit, by day: time, candidate, subject, head, Print the paper, Upload the completed paper. Past visits with no uploaded paper show first. |
+| `/hiring?view=heads` | Heads with an account | The head picks their name once. One card for each of their visits: time, candidate, résumé, and a link to the candidate page for the scores and the decision. |
+
+- A role screen hides the tabs and the owner alerts. `Full dashboard` leads back.
+- The browser remembers the last role screen (`localStorage`), so `/hiring` opens on it. `Full dashboard` clears this.
+- The screens add no access rule. A person needs a sign-in with Hiring access, as for the full dashboard.
+- Each button sends the same command as the full dashboard (`call_result`, `stop`, the paper upload).
+
+### Head decision
+
+The head sends `Hire` or `Do not hire` from the candidate page (`POST /api/hiring/brief/{token}/decision`, `saveBriefDecision` in `src/lib/hiring/decisions.ts`). The link is the only access check.
+
+- Refused before the mock starts, and until mock scores are recorded. `Do not hire` needs a reason of 5 characters or more.
+- The decision is stored as a `head-decision` row in `hiring_audit`. No migration.
+- HR gets one notice in the recruitment LINE group (`head_decision`, one for each candidate, decision and day).
+- When the result-email rules allow it, a decision draft is made for HR. When they do not (for example, the paper is not marked), the notice gives the cause.
+- No email goes to the candidate, and the stage does not change. HR reads and sends the result email in `4 Mock and paper`.
+
 ## Interviewer candidate page
 
 The interviewing tutor has no sign-in to Hiring. The head's LINE notice for a booked or moved mock ends with `Candidate page (answers and résumé): {link}` (Kevin's decision, 12 Nov 2026).

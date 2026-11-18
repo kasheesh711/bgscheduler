@@ -25,7 +25,7 @@ function ResumePeek({ candidate, months }: { candidate: HiringCandidate; months:
   const source = useSourceText(candidate.id, !pdf || check.status === "failed");
   return (
     <div className={r.resume}>
-      <ResumeBody id={candidate.id} name={candidate.name} state={candidate.resumeState} type={candidate.resumeType} months={months} check={check} viewer="#toolbar=0&navpanes=0&view=FitH" />
+      <ResumeBody id={candidate.id} name={candidate.name} state={candidate.resumeState} type={candidate.resumeType} months={months} check={check} />
       {(!pdf || check.status === "failed") && (
         <div className={css.sourceText}>
           <SourceTextBody id={candidate.id} {...source} />
