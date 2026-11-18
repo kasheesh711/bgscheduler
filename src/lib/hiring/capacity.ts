@@ -18,8 +18,8 @@
 //           HR checks that tutor first.
 //   CAP-06  Demand order. The list follows new students (demand.ts): the score
 //           is new starts in 90 days × how full the subject's tutors are.
-//   CAP-07  Weekend peak (measured 18 November 2026; owner to confirm in the
-//           morning). Staff said the rate felt low: half of all booked hours
+//   CAP-07  Weekend peak (measured 18 November 2026; confirmed by Kevin the
+//           same day). Staff said the rate felt low: half of all booked hours
 //           are at weekends, and the 09:00–18:00 block mixed quiet hours into
 //           the peak. Classes of the past 8 weeks and the next 4 weeks put the
 //           weekend peak at 10:00–15:00 (Sunday next 4 weeks: to 16:00), the
