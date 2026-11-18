@@ -6,7 +6,7 @@ import { briefCandidateId } from "@/lib/hiring/service";
 export const maxDuration = 60;
 
 /**
- * Public: the interviewer's link is the only access check. It opens the résumé of one confirmed mock's candidate.
+ * Public: the interviewer's link is the only access check. It opens the résumé of one confirmed mock's or HR call's candidate.
  * Every refusal is one plain 404, so the answer does not tell a link holder why (a cancel, an expiry, a deleted file).
  */
 export async function GET(_request: Request, context: { params: Promise<{ token: string }> }) {

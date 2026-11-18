@@ -1166,12 +1166,18 @@ export const briefLink = (mock: { id: string; endTime: Date }) =>
     `/hiring/brief/${bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + BRIEF_DAYS * 86400000))}`,
     process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
   ).toString();
+/** The résumé file alone, for the recruitment group's call notice. It ends BRIEF_DAYS after the call, or when the call does. */
+export const callResumeLink = (call: { id: string; endTime: Date }) =>
+  new URL(
+    `/api/hiring/brief/${bookingToken(call.id, "brief", new Date(call.endTime.getTime() + BRIEF_DAYS * 86400000))}/resume`,
+    process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
+  ).toString();
 /**
- * The mock behind an interviewer link. Only a confirmed mock opens it, so a cancel, a move or a no-show ends the link at
+ * The mock (or, for a call notice's résumé link, the HR call) behind a link. Only a confirmed booking opens it, so a cancel, a move or a no-show ends the link at
  * once. A stopped candidate or a sent result ends it too: a past mock stays `confirmed`, and a person who asked BeGifted
  * to stop must not stay readable. Every failure is the same 404, so a link tells nothing about a booking.
  */
-async function briefMock(token: string, db: Database, now: Date) {
+async function briefMock(token: string, db: Database, now: Date, kinds: ("mock" | "call")[] = ["mock"]) {
   const cap = readBookingToken(token, now);
   const [row] =
     cap.kind === "brief"
@@ -1180,16 +1186,16 @@ async function briefMock(token: string, db: Database, now: Date) {
           .from(s.hiringBookings)
           .innerJoin(s.hiringCandidates, eq(s.hiringCandidates.id, s.hiringBookings.candidateId))
           .where(
-            and(eq(s.hiringBookings.id, cap.id), eq(s.hiringBookings.kind, "mock"), eq(s.hiringBookings.status, "confirmed")),
+            and(eq(s.hiringBookings.id, cap.id), inArray(s.hiringBookings.kind, kinds), eq(s.hiringBookings.status, "confirmed")),
           )
       : [];
   if (!row || row.stage === "stopped" || isDecided(row.stage))
     throw new HiringError(404, "This link is invalid or has expired.");
   return row.mock;
 }
-/** The candidate whose stored résumé an interviewer link may open. */
+/** The candidate whose stored résumé an interviewer link, or a call notice's résumé link, may open. The brief page stays mock-only. */
 export async function briefCandidateId(token: string, db: Database = getDb(), now = new Date()) {
-  return (await briefMock(token, db, now)).candidateId;
+  return (await briefMock(token, db, now, ["mock", "call"])).candidateId;
 }
 /** What the interviewer sees. No contact details and no scores (Kevin's decision, 12 Nov 2026). */
 export async function briefView(token: string, db: Database = getDb(), now = new Date()) {
@@ -1637,6 +1643,8 @@ export async function bookCall(token: string, value: unknown, db: Database = get
       kind: "calendar",
       payload: {},
     });
+    // After the phone update, so the notice carries the number HR will call.
+    await queueRecruitmentMock(tx, call, own ? "moved" : "booked", own?.startTime);
     // The phone number stays out of the audit row.
     await audit(tx, "candidate", own ? "call-moved" : "call-booked", cap.id, { start: slot.start });
     return call;
