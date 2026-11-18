@@ -1,17 +1,18 @@
-/* BeGifted 4.0.0 surface. Scoped on purpose: /hiring does not use the app's theme tokens. */
+/* BeGifted 4.0.0 surface, on the app's theme tokens. */
 .surface {
-  --paper: #faf8f4;
-  --ink: #141414;
-  --support: #3a3a3a;
-  --muted: #6b6b6b;
-  --line: #e8e3da;
-  --tint: #f1ede7;
-  --stone: #d3ccc0;
-  --stone-dark: #85817a;
-  --accent-text: #b84a00;
-  --good: #17683e;
-  --warn: #795500;
-  --danger: #b52931;
+  /* Mapped onto the app tokens in globals.css; good, warn and the stone greys are mixed from them. */
+  --paper: var(--background);
+  --ink: var(--foreground);
+  --support: color-mix(in oklch, var(--foreground) 82%, var(--background));
+  --muted: var(--muted-foreground);
+  --line: var(--border);
+  --tint: color-mix(in oklch, var(--foreground) 5%, var(--background));
+  --stone: color-mix(in oklch, var(--foreground) 22%, var(--background));
+  --stone-dark: color-mix(in oklch, var(--foreground) 50%, var(--background));
+  --accent-text: color-mix(in oklch, var(--primary) 88%, black);
+  --good: color-mix(in oklch, var(--available) 48%, black);
+  --warn: color-mix(in oklch, var(--blocked) 48%, black);
+  --danger: color-mix(in oklch, var(--destructive) 85%, black);
   --serif: var(--font-instrument-serif), Georgia, serif;
   --sans: var(--font-inter), system-ui, sans-serif;
 
@@ -57,9 +58,12 @@
   letter-spacing: -0.01em;
 }
 .subtitle { color: var(--muted); }
+/* Room for the wrapped subtitle on a phone, so the page does not jump when the data arrives. */
+@media (max-width: 719px) { .subtitle { min-height: 4.35em; } }
+.purpose { margin: 0; padding: 8px 24px 0; color: var(--support); }
 .notice { margin-left: auto; color: var(--good); }
-.viewSwitch { display: flex; flex-shrink: 0; gap: 2px; padding: 2px; border-radius: 999px; background: var(--tint); }
-.surface .viewSwitch button { padding: 5px 14px; white-space: nowrap; border-radius: 999px; font-weight: 500; color: var(--muted); transition: color 150ms, background-color 150ms; }
+.viewSwitch { display: flex; flex-wrap: wrap; max-width: 100%; gap: 2px; padding: 2px; border-radius: 18px; background: var(--tint); }
+.surface .viewSwitch button { padding: 5px 14px; white-space: nowrap; border-radius: 999px; font-weight: 500; color: var(--support); transition: color 150ms, background-color 150ms; }
 .surface .viewSwitch button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
 .alert { margin: 8px 24px 0; padding: 8px 12px; border-radius: 8px; background: #fdecec; color: var(--danger); }
 .loading { padding: 32px 24px; color: var(--muted); }
@@ -202,13 +206,15 @@
 .bucket:is(:hover, :focus-visible)::after { bottom: auto; top: 0; }
 
 /* Table */
-.tableSection { display: flex; flex-direction: column; }
+.tableSection { display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
 .tableTools { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 24px 0; }
 .tabs { display: flex; flex: 1; min-width: 0; gap: 9px; overflow-x: auto; scrollbar-width: none; }
+.panel > .tabs { flex: 0 0 auto; align-items: flex-start; }
+@media (max-width: 719px) { .tabs { flex-wrap: wrap; } }
 .surface .tabs button { flex-shrink: 0; padding: 4px 0 6px; border-bottom: 2px solid transparent; color: var(--muted); white-space: nowrap; transition: color 150ms; }
 .surface .tabs button:hover { color: var(--ink); }
 .surface .tabs button[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); font-weight: 500; }
-.tabCount { font-variant-numeric: tabular-nums; opacity: 0.7; }
+.tabCount { font-variant-numeric: tabular-nums; color: var(--muted); }
 .search, .input, .numberInput, .textarea {
   border: 1px solid var(--stone-dark);
   border-radius: 8px;
@@ -218,7 +224,7 @@
 }
 .search { flex: 0 1 160px; min-width: 150px; height: 28px; padding: 0 10px; }
 .activeFilters { display: flex; flex-shrink: 0; gap: 12px; padding: 4px 24px 0; color: var(--muted); }
-.tableScroll { max-height: 70vh; overflow: auto; }
+.tableScroll { max-width: 100%; max-height: 70vh; overflow: auto; }
 .table { width: 100%; border-collapse: collapse; }
 .table th {
   position: sticky;
@@ -234,14 +240,29 @@
 }
 .surface .table th button { font-weight: 500; color: var(--muted); }
 .surface .table th:first-child, .table td:first-child { padding-left: 24px; }
-.table td { max-width: 150px; padding: 4px 10px; border-bottom: 1px solid var(--line); color: var(--support); white-space: nowrap; }
+.table td { max-width: 150px; padding: 4px 10px; overflow: hidden; border-bottom: 1px solid var(--line); color: var(--support); text-overflow: ellipsis; white-space: nowrap; }
+/* A cell clips with an ellipsis (its full text is in the title) so it never runs into the next column. */
+.table td.candidateCell { max-width: 200px; }
+.table td.fitCell { min-width: 120px; max-width: 150px; }
+.table td.actionCell { max-width: none; overflow: visible; }
+.table td.wrapCell { min-width: 220px; white-space: normal; }
+.table td.softCell { min-width: 110px; max-width: 140px; white-space: normal; }
+/* The Calls table has ten columns; tighter padding lets it fit 1280px, and it scrolls inside its wrapper below that. */
+.table.denseTable :is(th, td) { padding-inline: 6px; }
+.table.denseTable td.candidateCell { max-width: 150px; }
+.table.denseTable :is(th, td):first-child { padding-left: 24px; }
+/* The action column stays in view when the table scrolls sideways inside its wrapper; on a phone its buttons stack. */
+.table :is(th, td).stickyEnd { position: sticky; right: 0; background: var(--paper); box-shadow: -1px 0 0 var(--line); }
+.table th.stickyEnd { z-index: 3; }
+.table tbody tr:is(:hover, [data-selected]) td.stickyEnd { background: var(--tint); }
+@media (max-width: 719px) { .callActions { flex-direction: column; align-items: stretch; } }
 .table tbody tr { cursor: pointer; transition: background-color 120ms; }
 .table tbody tr:hover, .table tbody tr[data-selected] { background: var(--tint); }
 .candidateCell { min-width: 0; }
-.surface .nameButton { display: block; max-width: 180px; overflow: hidden; color: var(--ink); font-weight: 500; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.surface .nameButton { display: block; max-width: 100%; overflow: hidden; color: var(--ink); font-weight: 500; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .phoneLink { color: var(--ink); font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; text-decoration: underline; text-underline-offset: 3px; }
 .phoneLarge { display: inline-block; margin: 2px 0; font-size: 24px; }
-.email { display: block; max-width: 180px; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.email { display: block; max-width: 100%; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .mutedCell { color: var(--muted); }
 .readyWord { margin-left: 6px; color: var(--accent-text); font-size: 12px; font-weight: 500; }
 .truncate { overflow: hidden; text-overflow: ellipsis; }
@@ -342,7 +363,7 @@
 .subjectPicker legend { margin-bottom: 2px; color: var(--muted); }
 .subjectPicker label, .subjectChecks label { display: inline-flex; align-items: center; gap: 4px; color: var(--support); }
 .subjectPicker input, .subjectChecks input, .checkList input { accent-color: var(--ink); }
-.fieldLabel { display: grid; gap: 3px; color: var(--muted); }
+.fieldLabel { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; color: var(--muted); }
 .textarea { width: 100%; padding: 6px 8px; resize: vertical; }
 .decisionActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .callActions { flex-wrap: nowrap; white-space: nowrap; }
@@ -357,7 +378,7 @@
 /* Setup */
 .setupBar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 24px; border-bottom: 1px solid var(--line); background: var(--paper); }
 .setupGrid { display: grid; grid-template-columns: 1fr; }
-.setupSection { display: grid; align-content: start; gap: 8px; min-width: 0; padding: 12px 24px 16px; border-bottom: 1px solid var(--line); }
+.setupSection { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 8px; min-width: 0; overflow-wrap: anywhere; padding: 12px 24px 16px; border-bottom: 1px solid var(--line); }
 .setupSection .panelLede { margin-bottom: 0; }
 .setupSection .secondary { margin-top: 0; }
 .weightBar { display: flex; gap: 2px; height: 10px; }
@@ -371,10 +392,12 @@
 .input { width: 100%; height: 28px; padding: 0 8px; min-width: 0; }
 .checkList { display: grid; gap: 4px; }
 .checkList label { display: flex; align-items: center; gap: 6px; color: var(--support); }
-.interviewerRow { display: grid; grid-template-columns: 1fr; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); }
+.interviewerRow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); }
 .interviewerRow .inlineLink { justify-self: start; align-self: center; }
 .subjectChecks { display: flex; flex-wrap: wrap; gap: 2px 12px; grid-column: 1 / -1; }
-.universityScroll { max-height: 340px; overflow: auto; }
+.universityScroll { min-height: 120px; max-height: 340px; overflow: auto; }
+.setupSection :is(input, select, textarea) { max-width: 100%; box-sizing: border-box; }
+.setupSection :is(p, label, span, code) { min-width: 0; overflow-wrap: anywhere; }
 .universityTable { width: 100%; min-width: 980px; border-collapse: collapse; }
 .universityTable th { position: sticky; top: 0; z-index: 1; padding: 4px 6px; background: var(--paper); color: var(--muted); font-weight: 500; text-align: left; }
 .universityTable td { padding: 2px 6px; border-top: 1px solid var(--line); white-space: nowrap; }
@@ -389,7 +412,7 @@
   .charts { grid-template-columns: repeat(2, 1fr); }
   .charts .panel:nth-child(even) { border-left: 1px solid var(--line); }
   .wideOnly { display: table-cell; }
-  .interviewerRow { grid-template-columns: 1fr 1fr auto; }
+  .interviewerRow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
   .setupGrid { grid-template-columns: repeat(2, 1fr); }
   .setupFull { grid-column: 1 / -1; }
   .setupWide { grid-column: 1 / -1; }
@@ -434,11 +457,11 @@
   /* The table always gets 480px; the column scrolls when the charts leave less. */
   .tableSection { flex: 1 0 480px; min-height: 0; }
   .tableScroll { flex: 1; min-height: 0; max-height: none; }
-  .setupGrid { grid-template-columns: 340px 340px minmax(0, 1fr); }
+  .setupGrid { grid-template-columns: minmax(0, 340px) minmax(0, 340px) minmax(0, 1fr); }
   .setupSection + .setupSection { border-left: 1px solid var(--line); }
   .setupWide { grid-column: auto; }
   .setupFull { border-left: 0; }
-  .interviewerRow { grid-template-columns: minmax(120px, 1fr) minmax(160px, 1.3fr) auto; }
+  .interviewerRow { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto; }
 }
 /* Wide enough for the average beside the other charts, so Subject supply gets a full row and the table starts higher. */
 @media (min-width: 1360px) and (min-height: 720px) {
@@ -467,13 +490,14 @@
 .pickMenu label { display: flex; align-items: center; gap: 6px; padding: 2px 0; color: var(--support); }
 .pickMenu input[type="checkbox"] { accent-color: var(--ink); }
 .warnCell { color: var(--warn); }
-.uploadButton { display: inline-block; padding: 2px 10px; border: 1px solid var(--stone-dark); border-radius: 999px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.uploadButton { position: relative; display: inline-block; padding: 2px 10px; border: 1px solid var(--stone-dark); border-radius: 999px; font-weight: 500; cursor: pointer; white-space: nowrap; }
 .uploadButton:hover { background: var(--tint); }
 .uploadButton:focus-within { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 .tabsRow { flex-basis: 100%; }
 .sheetTable { width: 100%; margin-top: 6px; border-collapse: collapse; }
 .sheetTable th { padding: 3px 6px 3px 0; border-bottom: 1px solid var(--stone); color: var(--muted); font-weight: 500; text-align: left; }
 .sheetTable td { padding: 4px 6px 4px 0; border-bottom: 1px solid var(--line); color: var(--support); vertical-align: top; overflow-wrap: anywhere; }
+@media (max-width: 719px) { .sheetTable { min-width: 640px; } .sheetTable td { overflow-wrap: break-word; } }
 .scanSplit { display: grid; gap: 8px; margin-top: 6px; }
 .pointList { display: grid; gap: 2px; margin: 0 0 4px; padding: 0; list-style: none; }
 .pointGiven { color: var(--ink); }
@@ -633,5 +657,46 @@
 @media (max-width: 719px) {
   .surface .needRow { grid-template-columns: 22px 1fr auto; }
   .needRow .needDemand, .needRow .needFull, .needRow .needWhy { grid-column: 2 / -1; }
+  .needRow .pill { grid-column: 3; grid-row: 1; }
   .surface .needHeadRow { display: none; }
 }
+
+/* Funnel and pipeline board (Overview, under the summary) */
+.funnelPanel { flex-shrink: 0; border-bottom: 1px solid var(--line); }
+.funnelHead { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 16px; }
+.funnelGrid { display: grid; gap: 12px 24px; }
+.funnelPanel .tableScroll { max-height: none; }
+.funnelPanel .table td { max-width: none; overflow: visible; white-space: normal; }
+.funnelPanel .table tbody th { position: static; color: var(--ink); white-space: normal; }
+.funnelPanel .table :is(th, td):first-child { padding-left: 0; }
+.funnelPanel .table tbody tr { cursor: default; }
+.funnelPanel .table tbody tr[data-stuck] th { color: var(--warn); }
+.funnelRule { color: var(--muted); }
+.funnelNote { margin-top: 6px; color: var(--muted); font-size: 12px; }
+@media (min-width: 1600px) { .funnelGrid { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); } }
+
+/* First-use hint (one per role view, dismissed per browser) */
+.firstUseHint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--stone); border-radius: 8px; background: var(--paper); font-size: 13px; }
+.firstUseHint p { flex: 1 1 32ch; margin: 0; }
+.surface .firstUseHint .secondary { margin-top: 0; }
+.tableCaption { caption-side: top; text-align: left; padding: 0 0 6px; font-weight: 600; font-size: 13px; }
+/* Tab skeletons: grey blocks in the shape of the tab while its data loads. */
+.skeleton .loading { padding-bottom: 12px; }
+.skeletonHero, .skeletonLine { display: block; margin: 0 24px 10px; border-radius: 12px; background: var(--tint); }
+.skeletonHero { height: 76px; margin-bottom: 16px; }
+.skeletonLine { height: 44px; border-radius: 6px; }
+/* The title block has a fixed basis, so whether the view switch wraps does not depend on the subtitle that loads later. */
+.topbar > div:first-child { flex: 1 1 60ch; min-width: 0; }
+/* Setup rows: the action never wraps per letter; inputs shrink instead; a status value keeps its word whole. */
+.interviewerRow > input { min-width: 0; }
+.interviewerRow .inlineLink { white-space: nowrap; }
+.statusRow > span:last-child { flex: 1 1 8em; min-width: 0; text-align: right; }
+.checkInline { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+/* A long status sentence wraps under its label instead of running out of the setup column. */
+.statusRow { flex-wrap: wrap; }
+.activeFilters { flex-wrap: wrap; }
+/* Next action and Owner from 1200px. */
+.widestOnly { display: none; }
+@media (min-width: 1200px) { .widestOnly { display: table-cell; } }
+/* Lower-value columns (pre-screen score, university, flags, updated) leave room for Next action and Owner below 1360px. */
+@media (min-width: 720px) and (max-width: 1359px) { .surface .xwide { display: none; } }

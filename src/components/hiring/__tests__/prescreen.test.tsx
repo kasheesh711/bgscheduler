@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { candidateExtras, type CandidateExtras } from "@/lib/hiring/status";
 import { CandidateInspector } from "../candidate-inspector";
 import { CandidateTable, matchesFilter } from "../candidate-table";
-import { NO_FILTER, type HiringCandidate } from "../dashboard";
+import { NO_FILTER, type HiringCandidate, type HiringData } from "../dashboard";
+import { PreScreenScreen } from "../prescreen-screen";
 import type { Insights } from "../pipeline-charts";
 
 vi.mock("next/font/google", () => ({ Instrument_Serif: () => ({ variable: "" }) }));
@@ -284,5 +285,71 @@ describe("table for the visit stages and holds", () => {
     expect(html).toContain("Waiting to send");
     expect(html).toContain("The work-rights answer is missing or not accepted.");
     expect(html).toContain("There is no usable email.");
+  });
+});
+
+describe("PreScreenScreen chips", () => {
+  it("gives each count its share of all, and All the median days to reply", () => {
+    const replied = { ...people[2], preScreenRepliedAt: "2026-10-30T15:00:00Z" } as unknown as HiringCandidate;
+    const data = {
+      candidates: [people[0], people[1], replied, people[3]],
+      inviteOutbox: [job("a", "pre-screen", "2026-10-29T03:00:00Z"), job("b", "pre-screen", "2026-10-29T03:00:00Z"), job("c", "pre-screen", "2026-10-29T03:00:00Z")],
+      config: { preScreenThreshold: 60, preScreenWeights: weights },
+    } as unknown as HiringData;
+    const html = renderToStaticMarkup(
+      <PreScreenScreen data={data} extras={extras} holds={new Map()} command={async () => true} busy={false} error="" notice="" />,
+    );
+    // Three were sent the form; c replied 1.5 days after it.
+    expect(html).toMatch(/All <span[^>]*>3<\/span><span[^>]*> · 1.5 d to reply</);
+    expect(html).toMatch(/Replied <span[^>]*>1<\/span><span[^>]*> · 33%</);
+    expect(html).toMatch(/No reply <span[^>]*>2<\/span><span[^>]*> · 67%</);
+  });
+});
+
+describe("CandidateTable pipeline columns", () => {
+  const now = Date.now();
+  const iso = (daysAgo: number) => new Date(now - daysAgo * 86_400_000).toISOString();
+  const funnelData = {
+    candidates: [
+      { id: "a", stage: "pre_screen", createdAt: iso(20), seekJobId: null, preScreenRepliedAt: null, callReview: null },
+      { id: "b", stage: "pre_screen", createdAt: iso(3), seekJobId: null, preScreenRepliedAt: null, callReview: null },
+    ],
+    bookings: [],
+    calls: [],
+    inviteOutbox: [
+      { key: "a:pre-screen", status: "sent", sentAt: iso(10) },
+      { key: "b:pre-screen", status: "sent", sentAt: iso(2) },
+    ],
+    decisions: [],
+    funnelEvents: [],
+  };
+  const html = renderToStaticMarkup(
+    <CandidateTable
+      candidates={[people[0], people[1], people[3], person("z", { stage: "stopped" })]}
+      funnelData={funnelData}
+      insights={insights}
+      ready={new Set()}
+      extras={extras}
+      holds={new Map()}
+      clashes={new Set()}
+      weights={weights}
+      threshold={60}
+      filter={NO_FILTER}
+      setFilter={() => {}}
+      selected={null}
+      onSelect={() => {}}
+    />,
+  );
+  it("shows days in stage, the board's next action and owner, and a Stuck mark past the stage rule", () => {
+    expect(html).toContain("Days in stage");
+    expect(html).toContain(">10 d<");
+    expect(html).toContain(">2 d<");
+    expect(html).toContain("Candidate sends the form. The worker sends a reminder.");
+    expect(html).toContain(">HR<");
+    // Only a is over the 7-day pre-screen rule.
+    expect(html.match(/>Stuck</g)).toHaveLength(1);
+  });
+  it("says how many are shown of how many active", () => {
+    expect(html).toContain("4 shown · 3 of 3 active");
   });
 });

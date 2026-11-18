@@ -270,4 +270,14 @@ describe("the Scored tile", () => {
     expect(html).toContain("80%");
     expect(html).toContain("4 of 5, 5 with no source text");
   });
+  it("gives the next-7-days count a daily rate beside it", () => {
+    const html = renderToStaticMarkup(
+      <KpiStrip
+        insights={{ total: 10, active: 10, parked: 0, scored: 4, scorable: 5, ready: 0, median: null, aboveThreshold: 0, pastReview: 0, appointmentsThisWeek: 7, bookedWithoutAppointment: 2, messages: { sent: 0, waiting: 0, problems: 0 } } as unknown as Insights}
+        threshold={60}
+        onShowReady={() => {}}
+      />,
+    );
+    expect(html).toContain("1 a day · 2 not held here");
+  });
 });

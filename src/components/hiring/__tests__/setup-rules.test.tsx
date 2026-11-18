@@ -302,6 +302,12 @@ describe("Rules and setup", () => {
       expect(html).toContain(text);
   });
 
+  it("paints the tab before the long university list", () => {
+    const html = panel(make({ universities: [{ name: "MIT", country: "US", rank: null, edition: "2026-2027", sourceUrl: "https://www.usnews.com/education/best-global-universities", aliases: [] }] }));
+    expect(html).toContain("Loading 1 university…");
+    expect(html).not.toContain('aria-label="University 1"');
+  });
+
   it("describes the profile gate as the code applies it", () => {
     const html = panel(make());
     expect(html).toContain("waits at New");
@@ -328,12 +334,21 @@ describe("LimitMeters", () => {
     expect(html).toContain("Onsite invitations");
     for (const label of ["Sent today", "Sent this week", "Waiting for reply", "Mathematics open", "Invited this week", "Not booked", "Peat this week"])
       expect(html).toContain(label);
-    expect(html).toMatch(/Sent today[\s\S]*?>5<[\s\S]*?of 5</);
-    expect(html).toMatch(/Peat this week[\s\S]*?>2<[\s\S]*?of 2</);
+    expect(html).toMatch(/Sent today[\s\S]*?>5<[\s\S]*?of 5 · 100%</);
+    expect(html).toMatch(/Peat this week[\s\S]*?>2<[\s\S]*?of 2 · 100%</);
     // A full meter says so in words, not only in colour.
     expect(html.match(/data-full="true"/g)).toHaveLength(2);
     expect(html.match(/>Full</g)).toHaveLength(2);
     expect(html).toMatch(/style="width:100%"/);
+  });
+
+  it("reads a closed limit as 0 of 0 with no percent, still marked Full", () => {
+    const config = make({ preScreenLimits: { perDay: 0, perWeek: 16, waiting: 17, perSubject: 4 } });
+    const html = renderToStaticMarkup(
+      <LimitMeters config={config} tutors={tutors} headMocks={{}} usage={{ preScreen: usage(), onsite: usage() }} />,
+    );
+    expect(html).toMatch(/Sent today[\s\S]*?>0<[\s\S]*?of 0</);
+    expect(html).not.toContain("of 0 · ");
   });
 
   it("reads Over by N, not 17 of 12, when use is above a lowered limit, and still shows Full", () => {
@@ -355,7 +370,7 @@ describe("LimitMeters", () => {
       <LimitMeters config={config} tutors={tutors} headMocks={{}} usage={{ preScreen: usage({ perDay: 12 }), onsite: usage() }} />,
     );
     expect(at).not.toContain("Over by");
-    expect(at).toMatch(/Sent today[\s\S]*?>12<[\s\S]*?of 12</);
+    expect(at).toMatch(/Sent today[\s\S]*?>12<[\s\S]*?of 12 · 100%</);
   });
 
   it("says automatic onsite invitations are blocked with no pass score, and paused when switches are off", () => {
@@ -436,7 +451,7 @@ describe("worker warning", () => {
       { id: "d", name: "Deleted Person", resumeState: "deleted" },
     ];
     const html = rail({ candidates });
-    expect(html).toContain("2 with no file");
+    expect(html).toContain("2 of 4 (50%) with no file");
     expect(html).not.toContain("Hidden Person");
     expect(rail({ candidates: candidates.slice(2) })).toContain("All stored");
   });

@@ -44,6 +44,10 @@ const screen = (d = data()) =>
   renderToStaticMarkup(<CallsScreen data={d} extras={new Map()} holds={new Map()} onOpenRecord={() => {}} command={async () => true} busy={false} />);
 
 describe("CallsScreen", () => {
+  it("shows the first-use hint only when there is a row to call", () => {
+    expect(screen()).toContain("Full steps: the printed HR job aid.");
+    expect(screen(data({ callOrder: [] }))).not.toContain("Full steps");
+  });
   it("lists only the call queue, in the server's order, with the three results", () => {
     const html = screen();
     expect(html.indexOf("Sample B")).toBeLessThan(html.indexOf("Sample A"));

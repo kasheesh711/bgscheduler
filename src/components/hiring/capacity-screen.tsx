@@ -15,6 +15,7 @@ import {
 import type { DemandSubject } from "@/lib/hiring/demand";
 import { ZONE } from "@/lib/hiring/model";
 import css from "./dashboard.module.css";
+import { TabSkeleton } from "./tab-skeleton";
 
 const hours = (value: number) => value.toFixed(1);
 const percent = (value: number | null) => (value === null ? "–" : `${Math.round(value * 100)}%`);
@@ -42,7 +43,7 @@ export function needReason(need: HiringNeed) {
   return [
     full,
     need.idle.length > 0 && `${need.idle.length} more with no classes: check first`,
-    need.review > 0 && `${need.review} not loaded from Wise`,
+    need.review > 0 && `${need.review} of ${need.tutors + need.idle.length + need.review} not loaded from Wise`,
     need.hire > 0 && !need.hiring && "Hiring is switched off in Rules and setup",
   ]
     .filter(Boolean)
@@ -517,7 +518,7 @@ export function CapacityView({
   );
 }
 
-/** Loads the report the first time the tab opens. It does not wait for the main Hiring load. */
+/** Loads the report once, when the tab opens or the page is idle after mount. It does not wait for the main Hiring load. */
 export function CapacityScreen({ active }: { active: boolean }) {
   const [report, setReport] = useState<CapacityReport | null>(null);
   const [error, setError] = useState("");
@@ -537,11 +538,25 @@ export function CapacityScreen({ active }: { active: boolean }) {
       setBusy(false);
     }
   }
+  // One fetch: the first of "tab opens" or "dashboard idle after mount" starts it, so the first switch shows data at once.
   useEffect(() => {
     if (!active || asked.current) return;
     asked.current = true;
     void load();
   }, [active]);
+  useEffect(() => {
+    const start = () => {
+      if (asked.current) return;
+      asked.current = true;
+      void load();
+    };
+    const idle = typeof requestIdleCallback === "function" ? requestIdleCallback(start, { timeout: 2000 }) : undefined;
+    const timer = idle === undefined ? setTimeout(start, 500) : undefined;
+    return () => {
+      if (idle !== undefined) cancelIdleCallback(idle);
+      clearTimeout(timer);
+    };
+  }, []);
   if (report) return <CapacityView report={report} reload={load} busy={busy} error={error} />;
   return error ? (
     <p role="alert" className={css.alert}>
@@ -551,8 +566,6 @@ export function CapacityScreen({ active }: { active: boolean }) {
       </button>
     </p>
   ) : (
-    <p role="status" className={css.loading}>
-      Loading capacity…
-    </p>
+    <TabSkeleton label="Loading capacity…" />
   );
 }

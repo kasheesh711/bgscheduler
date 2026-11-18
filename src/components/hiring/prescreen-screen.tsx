@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { percentile } from "@/lib/hiring/funnel";
 import { ANSWER_LABELS, isDecided } from "@/lib/hiring/model";
 import { PRE_SCREEN_FILTERS, matchesPreScreenList, preScreenFinalScore, visitEmail, wasSentForm, type PreScreenListFilter, type VisitEmail } from "@/lib/hiring/prescreen-view";
 import { preScreenNote, type CandidateExtras } from "@/lib/hiring/status";
@@ -222,10 +223,14 @@ export function PreScreenScreen({
     return data.candidates.flatMap((candidate) => {
       const rows = jobs.get(candidate.id) ?? [];
       return wasSentForm(candidate, rows)
-        ? [{ candidate, email: visitEmail(candidate, rows, threshold, holds.get(candidate.id)?.short) }]
+        ? [{ candidate, email: visitEmail(candidate, rows, threshold, holds.get(candidate.id)?.short), sentAt: rows.find((j) => j.key === `${candidate.id}:pre-screen` && j.sentAt)?.sentAt }]
         : [];
     });
   }, [data.candidates, data.inviteOutbox, threshold, holds]);
+  // Days from form sent to reply, where both times are known: the All chip shows its median.
+  const waits = pool.flatMap(({ candidate: c, sentAt }) =>
+    c.preScreenRepliedAt && sentAt ? [(new Date(String(c.preScreenRepliedAt)).getTime() - new Date(String(sentAt)).getTime()) / 86_400_000] : [],
+  ).filter((d) => d >= 0);
   const counts = PRE_SCREEN_FILTERS.map((name) => pool.filter((row) => matchesPreScreenList(row.candidate, name, threshold, row.email)).length);
   const needle = query.trim().toLowerCase();
   const rows = pool
@@ -245,6 +250,11 @@ export function PreScreenScreen({
               {PRE_SCREEN_FILTERS.map((name, index) => (
                 <button key={name} type="button" aria-pressed={filter === name} onClick={() => setFilter(name)}>
                   {name} <span className={css.tabCount}>{counts[index]}</span>
+                  <span className={css.tabCount}>
+                    {index === 0
+                      ? waits.length ? ` · ${round(percentile(waits, 0.5))} d to reply` : ""
+                      : ` · ${pool.length ? Math.round((counts[index] / pool.length) * 100) : 0}%`}
+                  </span>
                 </button>
               ))}
             </div>

@@ -4,8 +4,10 @@ import { configSchema, HiringError } from "../model";
 import { hiringCapacity } from "../demand";
 import { headWeek } from "../head-schedule";
 import { GET } from "@/app/api/hiring/route";
+import { cacheTag } from "next/cache";
 
 vi.mock("server-only", () => ({}));
+vi.mock("next/cache", () => ({ cacheLife: vi.fn(), cacheTag: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn(() => ({})) }));
 vi.mock("next/server", async (actual) => ({
@@ -90,5 +92,7 @@ describe("GET /api/hiring?capacity=1", () => {
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(await response.json()).toEqual({ weeks: 4 });
     expect(vi.mocked(hiringCapacity).mock.calls[0][0]).toEqual(configSchema.parse({}).subjectPriority);
+    // Kept in the snapshot cache, so a Wise sync clears it.
+    expect(cacheTag).toHaveBeenCalledWith("snapshot");
   });
 });

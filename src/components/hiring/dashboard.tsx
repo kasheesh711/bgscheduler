@@ -18,8 +18,11 @@ import { OperationsRail, WorkerBanner } from "./operations-rail";
 import { PreScreenScreen } from "./prescreen-screen";
 import { CallsScreen } from "./calls-screen";
 import { CapacityScreen } from "./capacity-screen";
+import { FunnelPanel } from "./funnel-panel";
+import { RunSheetScreen } from "./run-sheet-screen";
 import { SeekScreen } from "./seek-screen";
 import { SetupPanel } from "./setup-panel";
+import { TabSkeleton } from "./tab-skeleton";
 import css from "./dashboard.module.css";
 
 const serif = Instrument_Serif({
@@ -40,6 +43,8 @@ export type CandidateFilter = {
   prescreen: PreScreenFilter;
   bucket: number | null;
   subject: Subject | null;
+  /** Only these candidates, such as the stuck ones from the pipeline board. */
+  ids?: string[];
 };
 export type Command = (body: unknown) => Promise<boolean>;
 export const NO_FILTER: CandidateFilter = { stage: "all", prescreen: "all", bucket: null, subject: null };
@@ -50,10 +55,22 @@ const VIEWS = {
   seek: "1 Seek intake",
   calls: "2 Calls",
   prescreen: "3 Pre-screen",
+  visitday: "Visit day",
   assessment: "4 Mock and paper",
   setup: "Rules and setup",
 };
 export type HiringView = keyof typeof VIEWS;
+/** One line under the tabs, so a new user can name what each tab is for. */
+const PURPOSE: Record<HiringView, string> = {
+  overview: "Where every candidate stands, and who is ready for the next step.",
+  capacity: "Which subjects need new tutors first, from busy-hours use and new students.",
+  seek: "Everyone who applied on SEEK, with their score and the pre-screen send queue.",
+  calls: "Who HR phones next, and the result of each call.",
+  prescreen: "The pre-screen form and visit email for each candidate, and what they replied.",
+  visitday: "Who comes when, which paper to print, which head runs the mock.",
+  assessment: "Each visit's paper and mock results, and the hiring decision.",
+  setup: "Scores, limits, heads and messages. A change applies to every tab.",
+};
 
 export function HiringDashboard() {
   const [data, setData] = useState<HiringData | null>(null);
@@ -210,13 +227,18 @@ export function HiringDashboard() {
           <h1 className={css.title}>
             Tutor <em>hiring</em>
           </h1>
-          {data && (
-            <p className={css.subtitle}>
-              SEEK {campaignNames(data.config.seekJobs)} · Threshold {data.config.profileThreshold}/100 ·
-              Automation {data.config.enabled ? "on" : "paused"} · Messages{" "}
-              {data.config.deliveryEnabled ? "on" : "paused"}
-            </p>
-          )}
+          {/* Always one line, so the tabs below do not move down when the data arrives. */}
+          <p className={css.subtitle}>
+            {data ? (
+              <>
+                SEEK {campaignNames(data.config.seekJobs)} · Threshold {data.config.profileThreshold}/100 ·
+                Automation {data.config.enabled ? "on" : "paused"} · Messages{" "}
+                {data.config.deliveryEnabled ? "on" : "paused"}
+              </>
+            ) : (
+              "\u00a0"
+            )}
+          </p>
         </div>
         <div role="status" className={css.notice}>
           {/* Rules and setup shows these beside its Save button, where they are in view. */}
@@ -235,6 +257,7 @@ export function HiringDashboard() {
           ))}
         </div>
       </header>
+      <p className={css.purpose}>{PURPOSE[view]}</p>
       {error && view !== "setup" && (
         <p role="alert" className={css.alert}>
           {error}
@@ -264,9 +287,13 @@ export function HiringDashboard() {
         <CapacityScreen active={view === "capacity"} />
       </div>
       {!data || !config || !insights ? (
-        <p role="status" className={css.loading} hidden={view === "capacity"}>
-          {error ? "Check the hiring setup and reload this page." : "Loading hiring…"}
-        </p>
+        error ? (
+          <p role="status" className={css.loading} hidden={view === "capacity"}>
+            Check the hiring setup and reload this page.
+          </p>
+        ) : (
+          <TabSkeleton label={`Loading hiring: ${VIEWS[view]}…`} hidden={view === "capacity"} />
+        )
       ) : (
         <>
         {view === "setup" && (
@@ -301,6 +328,9 @@ export function HiringDashboard() {
         <div hidden={view !== "prescreen"} className={css.viewPane}>
           <PreScreenScreen data={data} extras={extras} holds={holds} command={command} busy={busy} error={error} notice={notice} />
         </div>
+        <div hidden={view !== "visitday"} className={css.viewPane}>
+          <RunSheetScreen data={data} />
+        </div>
         <div hidden={view !== "assessment"} className={css.viewPane}>
           <AssessmentScreen data={data} onOpenRecord={openRecord} command={command} reload={() => load(true)} busy={busy} />
         </div>
@@ -311,10 +341,16 @@ export function HiringDashboard() {
               threshold={data.config.profileThreshold}
               onShowReady={() => setFilter({ ...NO_FILTER, stage: "ready" })}
             />
+            <FunnelPanel
+              data={data}
+              campaigns={data.config.seekJobs}
+              onShowStuck={(stage, ids) => setFilter({ ...NO_FILTER, stage, ids })}
+            />
             <LimitMeters usage={data.usage} headMocks={data.headMocks} config={data.config} tutors={data.tutors} />
             {/* The table is the main work surface, so it sits right under the meters. The charts follow and read the same filter. */}
             <CandidateTable
               candidates={data.candidates}
+              funnelData={data}
               insights={insights}
               ready={ready}
               extras={extras}

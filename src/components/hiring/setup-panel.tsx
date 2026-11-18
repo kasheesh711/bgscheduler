@@ -1,5 +1,6 @@
 "use client";
 
+import { startTransition, useEffect, useState } from "react";
 import { HR_CALENDAR, localDate, SUBJECTS, type HiringConfig } from "@/lib/hiring/model";
 import {
   daysOf,
@@ -105,6 +106,10 @@ export function SetupPanel({
     Object.fromEntries(data.tutors.map((t) => [t.canonicalKey, t.name])),
   );
   const priority = fullPriority(config.subjectPriority);
+  // The university list has about 2,600 rows of inputs (about 400 ms to mount). Paint the tab first, then add the
+  // rows in a transition that the browser can interrupt.
+  const [showUniversities, setShowUniversities] = useState(false);
+  useEffect(() => startTransition(() => setShowUniversities(true)), []);
   const setUniversity = (index: number, patch: Partial<University>) =>
     setConfig({
       ...config,
@@ -686,7 +691,12 @@ export function SetupPanel({
                 </tr>
               </thead>
               <tbody>
-                {config.universities.map((u, i) => (
+                {!showUniversities && config.universities.length > 0 && (
+                  <tr>
+                    <td colSpan={7}>Loading {config.universities.length} {config.universities.length === 1 ? "university" : "universities"}…</td>
+                  </tr>
+                )}
+                {(showUniversities ? config.universities : []).map((u, i) => (
                   <tr key={i}>
                     <td>
                       <input

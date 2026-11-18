@@ -8,6 +8,7 @@ import { universityName } from "@/lib/hiring/seek-view";
 import type { CandidateExtras } from "@/lib/hiring/status";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
 import { PhoneLink, SeekLinks } from "./candidate-inspector";
+import { FirstUseHint } from "./first-use-hint";
 import { ResumeDeck } from "./resume-deck";
 import { SeekPanel } from "./seek-screen";
 import css from "./dashboard.module.css";
@@ -90,16 +91,24 @@ export function CallsScreen({
     void command(callCommand(c, result));
   };
   const threshold = data.config.callThreshold;
+  const [mountedAt] = useState(() => Date.now());
+  const oldestDays = rows.length ? Math.floor((mountedAt - Math.min(...rows.map((c) => new Date(String(c.updatedAt)).getTime()))) / 86400000) : null;
 
   if (cards) return <ResumeDeck data={data} rows={rows} command={command} busy={busy} onClose={() => setCards(false)} />;
   return (
     <div className={css.layout}>
       <div className={css.main}>
         <section className={css.tableSection} aria-label="Candidates for HR to call">
+          {rows.length > 0 && (
+            <FirstUseHint id="hr-calls">
+              HR: call the first row. Click the number in Phone. After the call, click Good call, No answer or Bad call. Bad call
+              stops the candidate. Full steps: the printed HR job aid.
+            </FirstUseHint>
+          )}
           <p className={css.activeFilters}>
             {threshold === null
               ? "Calls are off. Set an HR call score in Rules and setup to use this list."
-              : `${rows.length} to call. Booked calls first, by time; then the highest SEEK score. A candidate at or above ${threshold} gets the pre-screen form only after a good call.`}
+              : `${rows.length} to call${oldestDays === null ? "" : ` · longest unchanged ${oldestDays} d`}. Booked calls first, by time; then the highest SEEK score. A candidate at or above ${threshold} gets the pre-screen form only after a good call.`}
           </p>
           {rows.length > 0 && (
             <div className={css.tableTools}>
@@ -109,7 +118,7 @@ export function CallsScreen({
             </div>
           )}
           <div className={css.tableScroll}>
-            <table className={css.table}>
+            <table className={`${css.table} ${css.denseTable}`}>
               <thead>
                 <tr>
                   <th>#</th>
@@ -121,7 +130,7 @@ export function CallsScreen({
                   <th>Call booking</th>
                   <th>Calls</th>
                   <th>SEEK</th>
-                  <th>Result</th>
+                  <th className={css.stickyEnd}>Result</th>
                 </tr>
               </thead>
               <tbody>
@@ -143,23 +152,23 @@ export function CallsScreen({
                         </button>
                         {c.profileAssessment?.briefSummary && <span className={css.email}>{c.profileAssessment.briefSummary}</span>}
                       </td>
-                      <td onClick={(e) => e.stopPropagation()}>
+                      <td className={css.actionCell} onClick={(e) => e.stopPropagation()}>
                         <PhoneLink phone={c.phone} />
                       </td>
-                      <td>
+                      <td className={css.fitCell} title={[subjects.main, ...subjects.other].join(", ")}>
                         {subjects.main}
                         {subjects.other.length > 0 && <span className={css.email}>Also {subjects.other.join(", ")}</span>}
                       </td>
-                      <td>{universityName(c)}</td>
+                      <td className={css.softCell} title={universityName(c)}>{universityName(c)}</td>
                       <td className={css.num}>{c.profileScore === null ? "–" : Math.round(c.profileScore * 10) / 10}</td>
-                      <td onClick={(e) => e.stopPropagation()}>
+                      <td className={css.softCell} onClick={(e) => e.stopPropagation()}>
                         {callState(c.id, data.calls, data.inviteOutbox)}
                       </td>
                       <td className={css.mutedCell}>{triesText(c.callReview)}</td>
-                      <td onClick={(e) => e.stopPropagation()}>
+                      <td className={css.actionCell} onClick={(e) => e.stopPropagation()}>
                         <SeekLinks candidate={c} fallbackJobId={data.config.seekJobs[0].jobId} className={css.seekButton} />
                       </td>
-                      <td>
+                      <td className={`${css.actionCell} ${css.stickyEnd}`}>
                         <div className={`${css.decisionActions} ${css.callActions}`}>
                           {(
                             [

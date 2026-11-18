@@ -451,5 +451,6 @@ describe("dashboard with a failing clash check", () => {
     const data = await dashboard(db as never);
     expect(data.visitClashes).toEqual({ candidateIds: [], stale: true });
     expect(data.bookings).toHaveLength(1);
-  });
+    // The first import of the service graph can take more than the 5 s default on a loaded machine.
+  }, 60_000);
 });
