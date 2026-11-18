@@ -6,7 +6,8 @@ import { fetchLineGroupSummary, pushLineTextMessage, replyLineMessage, LinePushE
 import { isScheduleBotAdmin } from "@/lib/line/schedule-bot";
 import { mentionedTheaText } from "@/lib/line/thea-query";
 import { runtimeWritesAllowed, ZONE } from "./model";
-import { audit, settings } from "./service";
+import { storedResume } from "./resume-files";
+import { audit, callResumeLink, settings } from "./service";
 
 const GROUP_NAME = "BeGifted Recruitment";
 const when = (date: Date) => date.toLocaleString("en-GB", { timeZone: ZONE, dateStyle: "medium", timeStyle: "short" });
@@ -64,12 +65,14 @@ export async function queueRecruitmentMock(db: Database, booking: typeof booking
   if (booking.kind !== "mock" && booking.kind !== "call") return;
   const { config } = await settings(db);
   if (!config.recruitmentLineGroupId) return;
-  const [candidate] = await db.select({ name: candidates.name, email: candidates.email, phone: candidates.phone }).from(candidates).where(eq(candidates.id, booking.candidateId));
+  const [candidate] = await db.select({ name: candidates.name, email: candidates.email, phone: candidates.phone,
+    resumePath: candidates.resumePath, resumeType: candidates.resumeType }).from(candidates).where(eq(candidates.id, booking.candidateId));
   if (!candidate) throw new Error(`The ${booking.kind} candidate is missing.`);
   const time = `${when(booking.startTime)}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: ZONE, hour: "2-digit", minute: "2-digit" })} (Bangkok)`;
   if (booking.kind === "call") {
     await enqueue(db, `call:${booking.id}:${notice}`, config.recruitmentLineGroupId,
-      `HR pre-screen call ${notice}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nTime: ${time}${movedFrom ? `\nPrevious time: ${when(movedFrom)} (cancelled)` : ""}`,
+      `HR pre-screen call ${notice}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nTime: ${time}${movedFrom ? `\nPrevious time: ${when(movedFrom)} (cancelled)` : ""}\nRésumé: ${
+        storedResume(booking.candidateId, candidate.resumePath, candidate.resumeType) ? callResumeLink(booking) : "No file stored. See the Hiring page."}`,
       booking.id, notice);
     return;
   }

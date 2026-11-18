@@ -4,8 +4,8 @@ import { ZodError } from "zod";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
-import { configSchema, HiringError, HR_CALENDAR, HR_CALL_KEY, type HiringConfig } from "../model";
-import { bookCall, bookingView, callCalendarState, callView, dashboard, reviewCandidate, visitView } from "../service";
+import { configSchema, HiringError, HR_CALENDAR, HR_CALL_KEY, RESUME_TYPES, type HiringConfig } from "../model";
+import { bookCall, bookingView, briefCandidateId, briefView, callCalendarState, callView, dashboard, reviewCandidate, visitView } from "../service";
 import { callQueue, cancelOrphanCalls, readLimitUsage, recordCall, releaseCallInvites, releaseQueues } from "../queue";
 import { observeSeekState } from "../sources";
 import { googleConnectionStatus, readHrBusy } from "../google";
@@ -332,10 +332,26 @@ describe("booking a call", () => {
       [`call:${moved.id}:moved:0000`, "moved", moved.id],
     ]);
     expect(rows[0].message).toBe(
-      `HR pre-screen call booked\nCandidate: ${a.name}\nEmail: ${a.email}\nPhone: +66812345678\nSubject: Mathematics\nTime: 5 Nov 2026, 09:00–09:15 (Bangkok)`,
+      `HR pre-screen call booked\nCandidate: ${a.name}\nEmail: ${a.email}\nPhone: +66812345678\nSubject: Mathematics\nTime: 5 Nov 2026, 09:00–09:15 (Bangkok)\nRésumé: No file stored. See the Hiring page.`,
     );
     expect(rows[1].message).toContain("HR pre-screen call moved");
     expect(rows[1].message).toContain("Previous time: 5 Nov 2026, 09:00 (cancelled)");
+  });
+
+  it("links the stored résumé in the call notice, and the link ends with the call", async () => {
+    await setConfig({ recruitmentLineGroupId: "C" + "1".repeat(32) });
+    const a = await seed();
+    await db.update(s.hiringCandidates).set({ resumePath: `hiring-resumes/${a.id}/${"a".repeat(64)}.pdf`, resumeType: RESUME_TYPES.pdf }).where(eq(s.hiringCandidates.id, a.id));
+    const call = await book(a.id);
+    const [row] = await db.select().from(s.hiringRecruitmentDeliveries);
+    const token = /\/api\/hiring\/brief\/([^/\s]+)\/resume$/.exec(row.message)?.[1];
+    expect(token).toBeTruthy();
+    expect(await briefCandidateId(token!, db)).toBe(a.id);
+    // The interviewer page stays for mocks only.
+    await expect(briefView(token!, db)).rejects.toMatchObject({ status: 404 });
+    await recordCall(a.id, "good", hr, db);
+    expect((await callsOf(a.id))[0]).toMatchObject({ id: call.id, status: "cancelled" });
+    await expect(briefCandidateId(token!, db)).rejects.toMatchObject({ status: 404 });
   });
 
   it("fails closed at confirm: no calendar read, a time gone from the calendar, a bad phone number, a wrong link", async () => {
