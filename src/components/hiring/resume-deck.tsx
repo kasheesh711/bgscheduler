@@ -96,6 +96,8 @@ export function ResumeDeck({
   const gesture = useRef<{ x: number; y: number; active: boolean; markX: number; markT: number; oldX: number; oldT: number } | null>(null);
   // True from the moment a card starts to fly off until the next card is on top.
   const leaving = useRef(false);
+  // The same fact as state: Undo, Confirm and the buttons wait until the flying card's choice is recorded.
+  const [flying, setFlying] = useState(false);
   const swipe = useRef<(choice: DeckChoice) => void>(() => {});
 
   useEffect(() => deck.current?.focus(), []);
@@ -116,6 +118,8 @@ export function ResumeDeck({
     const revision = byId.get(id)?.revision;
     if (choice === "reject" && revision !== undefined) setSeen(new Map(seen).set(id, revision));
     setFailed(0);
+    leaving.current = false;
+    setFlying(false);
     // A click moves focus to a button that then leaves the page; the arrow keys need the deck.
     deck.current?.focus();
   };
@@ -137,7 +141,7 @@ export function ResumeDeck({
     setFailed(list.length - done.size);
     setSending(false);
   };
-  const locked = busy || sending;
+  const locked = busy || sending || flying;
 
   /** The card follows the pointer through two CSS numbers, so a drag draws no React frame and no PDF again. */
   const move = (x: number, dragging = false) => {
@@ -151,6 +155,7 @@ export function ResumeDeck({
   const fly = (choice: DeckChoice) => {
     if (!card || locked || leaving.current) return;
     leaving.current = true;
+    setFlying(true);
     const id = card.id;
     move((choice === "keep" ? 1 : -1) * (window.innerWidth + 200));
     const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -158,10 +163,10 @@ export function ResumeDeck({
   };
   // Before the browser paints a new top card, the stage goes back to the centre.
   useLayoutEffect(() => {
-    leaving.current = false;
     move(0);
   }, [card?.id]);
-  useEffect(() => {
+  // In the same step as the new card, so a trackpad swipe never reaches the card that just left.
+  useLayoutEffect(() => {
     swipe.current = fly;
   });
   // A two-finger sideways swipe on a laptop trackpad moves the card, as a finger does on a phone.
@@ -205,6 +210,7 @@ export function ResumeDeck({
     const g = gesture.current;
     gesture.current = null;
     if (!g?.active) return;
+    if (cancelled) return move(0);
     // A pointer that stopped before the release has no speed, so only the distance counts.
     const fresh = e.timeStamp - g.markT < 30;
     const time = e.timeStamp - (fresh ? g.oldT : g.markT);
@@ -223,6 +229,8 @@ export function ResumeDeck({
       onKeyDown={(e) => {
         if (!card || locked || (e.target as HTMLElement).closest("input, textarea, select, a")) return;
         if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        // A held key is one choice, not one for each card that comes up.
+        if (e.repeat) return;
         // The key moves the card, not the page.
         e.preventDefault();
         fly(e.key === "ArrowLeft" ? "reject" : "keep");
@@ -259,6 +267,7 @@ export function ResumeDeck({
                 aria-hidden={!top}
                 onPointerDown={(e) => {
                   const target = e.target as HTMLElement;
+                  gesture.current = null;
                   // A mouse drag on the application text selects it.
                   if (locked || leaving.current || e.button !== 0 || target.closest("a, button") || (e.pointerType === "mouse" && target.closest("pre"))) return;
                   gesture.current = { x: e.clientX, y: e.clientY, active: false, markX: e.clientX, markT: e.timeStamp, oldX: e.clientX, oldT: e.timeStamp };
@@ -266,6 +275,8 @@ export function ResumeDeck({
                 onPointerMove={(e) => {
                   const g = gesture.current;
                   if (!g) return;
+                  // The button came up outside the card, so that press is over.
+                  if (e.buttons === 0) return endDrag(e, true);
                   const dx = e.clientX - g.x;
                   const dy = e.clientY - g.y;
                   if (!g.active) {

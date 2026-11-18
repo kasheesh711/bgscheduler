@@ -31,6 +31,7 @@ export function PdfPages({ src, title }: { src: string; title: string }) {
     let stopped = false;
     let task: ReturnType<typeof import("pdfjs-dist/legacy/build/pdf.mjs").getDocument> | undefined;
     const abort = new AbortController();
+    const holder = box.current;
     void (async () => {
       const response = await fetch(src, { cache: "no-store", signal: abort.signal });
       // A session that ended redirects to the login page, which is a 200.
@@ -50,6 +51,8 @@ export function PdfPages({ src, title }: { src: string; title: string }) {
       stopped = true;
       abort.abort();
       void task?.destroy();
+      // Safari on a phone frees a canvas late and has a total limit, so each one gives its memory back now.
+      for (const canvas of holder?.querySelectorAll("canvas") ?? []) canvas.width = canvas.height = 0;
     };
   }, [src]);
 
