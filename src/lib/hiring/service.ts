@@ -624,7 +624,7 @@ function briefPaths(bookings: { id: string; kind: string; status: string; endTim
   try {
     return Object.fromEntries(
       bookings
-        .filter((b) => b.kind === "mock" && b.status === "confirmed" && b.endTime.getTime() > now.getTime() - 8 * 86400000)
+        .filter((b) => b.kind === "mock" && b.status === "confirmed" && b.endTime.getTime() > now.getTime() - BRIEF_DAYS * 86400000)
         .map((b) => [b.id, new URL(briefLink(b)).pathname]),
     );
   } catch (error) {

@@ -101,9 +101,9 @@ export function HiringDashboard() {
   const param = useSearchParams().get("view");
   const view: HiringView = param && Object.hasOwn(VIEWS, param) ? (param as HiringView) : "overview";
   // Next.js keeps useSearchParams in step with pushState, and this does not reload the page.
-  const setView = (name: HiringView) => {
+  const setView = (name: HiringView, keepRole = false) => {
     // Leaving a role screen for the full dashboard forgets it. Opening one remembers it.
-    remember(isRoleView(name) ? name : null);
+    if (!keepRole) remember(isRoleView(name) ? name : null);
     if (name !== view) window.history.pushState(null, "", `?view=${name}`);
   };
   const role = isRoleView(view);
@@ -317,7 +317,7 @@ export function HiringDashboard() {
         </p>
       )}
       {/* The Mock and paper calendar explains its own clashes and old data. */}
-      {!role && data && (clashes.size > 0 || data.visitClashes.stale) && (
+      {view !== "hr" && data && (clashes.size > 0 || data.visitClashes.stale) && (
         <p role="alert" className={css.alert}>
           {clashes.size > 0
             ? `${clashes.size} booked visit${clashes.size === 1 ? "" : "s"} now clash${clashes.size === 1 ? "es" : ""} with a Wise class, leave or sit-in. The app did not move ${clashes.size === 1 ? "it" : "them"}. Staff must act. See the calendar in 4 Mock and paper.`
@@ -370,7 +370,7 @@ export function HiringDashboard() {
         <div hidden={view !== "prescreen"} className={css.viewPane}>
           <PreScreenScreen data={data} extras={extras} holds={holds} command={command} busy={busy} error={error} notice={notice} />
         </div>
-        {view === "hr" && <HrScreen data={data} command={command} busy={busy} onOpenResults={() => setView("assessment")} />}
+        {view === "hr" && <HrScreen data={data} command={command} busy={busy} onOpenResults={() => setView("assessment", true)} />}
         {view === "admin" && <AdminScreen data={data} reload={() => load(true)} />}
         {view === "heads" && <HeadsScreen data={data} />}
         <div hidden={view !== "visitday"} className={css.viewPane}>

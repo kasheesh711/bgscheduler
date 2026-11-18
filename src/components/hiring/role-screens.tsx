@@ -261,7 +261,7 @@ function HeadCard({ row, data, past }: { row: RunSheetRow; data: HiringData; pas
   const candidate = data.candidates.find((c) => c.id === row.candidateId);
   const mock = data.bookings.find((b) => b.kind === "mock" && b.status === "confirmed" && (b.visitId ?? b.id) === row.visitId);
   const path = mock ? data.briefPaths[mock.id] : undefined;
-  const scored = data.mocks.some((m) => m.candidateId === row.candidateId && m.source !== "tracker" && m.status === "done");
+  const scored = data.mocks.some((m) => m.candidateId === row.candidateId && m.source !== "tracker" && (m.status === "done" || m.status === "needs_check"));
   const decision = data.headDecisions.find((d) => d.candidateId === row.candidateId);
   return (
     <article className={r.card}>

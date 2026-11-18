@@ -528,7 +528,7 @@ Kevin's decision, 18 November 2026: the full dashboard stays for the owner. HR, 
 | `/hiring?view=admin` | Admin | One card for each visit, by day: time, candidate, subject, head, Print the paper, Upload the completed paper. Past visits with no uploaded paper show first. |
 | `/hiring?view=heads` | Heads with an account | The head picks their name once. One card for each of their visits: time, candidate, résumé, and a link to the candidate page for the scores and the decision. |
 
-- A role screen hides the tabs and the owner alerts. `Full dashboard` leads back.
+- A role screen hides the tabs and the owner alerts. The Admin and Heads screens keep the visit clash alert. `Full dashboard` leads back.
 - The browser remembers the last role screen (`localStorage`), so `/hiring` opens on it. `Full dashboard` clears this.
 - The screens add no access rule. A person needs a sign-in with Hiring access, as for the full dashboard.
 - Each button sends the same command as the full dashboard (`call_result`, `stop`, the paper upload).
@@ -539,8 +539,8 @@ The head sends `Hire` or `Do not hire` from the candidate page (`POST /api/hirin
 
 - Refused before the mock starts, and until mock scores are recorded. `Do not hire` needs a reason of 5 characters or more.
 - The decision is stored as a `head-decision` row in `hiring_audit`. No migration.
-- HR gets one notice in the recruitment LINE group (`head_decision`, one for each candidate, decision and day).
-- When the result-email rules allow it, a decision draft is made for HR. When they do not (for example, the paper is not marked), the notice gives the cause.
+- HR gets one notice in the recruitment LINE group (`head_decision`) for each recorded decision. The same decision with the same reason again is not recorded and sends no notice.
+- When the result-email rules allow it, a decision draft is made for HR. A draft of the same decision stays as it is, so HR's edits are kept. When they do not (for example, the paper is not marked), the notice gives the cause.
 - No email goes to the candidate, and the stage does not change. HR reads and sends the result email in `4 Mock and paper`.
 
 ## Interviewer candidate page

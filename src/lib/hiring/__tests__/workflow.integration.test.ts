@@ -944,7 +944,7 @@ describe("hiring workflow persistence", () => {
       expect(await saveBriefDecision(token, hire, db, during)).toEqual({ draft: false });
       expect(await db.select().from(s.hiringDecisions)).toHaveLength(0);
       const notices = (await db.select().from(s.hiringRecruitmentDeliveries)).filter((d) => d.notice === "head_decision");
-      // The second send of the same decision on the same day adds no second notice.
+      // The same decision again is not recorded and adds no second notice.
       expect(notices).toHaveLength(1);
       expect(notices[0].message).toMatch(/^Head decision: HIRE\nCandidate: .+ — Mathematics\nHead: Peat\n/);
       expect(notices[0].message).toContain("No email draft yet: No paper result yet.");
@@ -953,7 +953,13 @@ describe("hiring workflow persistence", () => {
       // A change of mind is a new notice. The reason goes with it.
       await saveBriefDecision(token, { decision: "reject", reason: "Weak subject knowledge." }, db, during);
       expect((await db.select().from(s.hiringRecruitmentDeliveries)).filter((d) => d.notice === "head_decision")).toHaveLength(2);
-      expect((await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "head-decision"))).map((a) => a.actor)).toEqual(Array(3).fill("interviewer:Peat"));
+      expect((await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "head-decision"))).map((a) => a.actor)).toEqual(Array(2).fill("interviewer:Peat"));
+      // HR's edits to a draft of the same decision stay when the head changes only the reason.
+      // (The visit is still ahead of the real clock here, so the head's send made no draft. HR's own draft stands in.)
+      const [draft] = await db.insert(s.hiringDecisions).values({ candidateId: row.id, decision: "reject", status: "draft", reason: "r", emailSubject: "s", emailBody: "HR's own words.", decidedBy: "owner" }).returning();
+      expect(await saveBriefDecision(token, { decision: "reject", reason: "Weak subject knowledge, slow pace." }, db, during)).toEqual({ draft: true });
+      expect(await db.select().from(s.hiringDecisions).where(eq(s.hiringDecisions.status, "draft"))).toMatchObject([{ id: draft.id, emailBody: "HR's own words." }]);
+      expect((await db.select().from(s.hiringRecruitmentDeliveries)).filter((d) => d.notice === "head_decision")).toHaveLength(3);
       // Nothing went to the candidate, and the stage did not move.
       expect(await db.select().from(s.hiringOutbox)).toHaveLength(queued);
       expect((await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id)))[0].stage).toBe("onsite_booked");
