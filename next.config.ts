@@ -15,6 +15,7 @@ const nextConfig: NextConfig = {
     "/api/progress-tests/workspace": ["./public/brand/progress-tests/**/*", "./node_modules/@sparticuz/chromium/bin/**/*", "./node_modules/jszip/dist/jszip.min.js", "./node_modules/docx-preview/dist/docx-preview.min.js", "./node_modules/katex/dist/**/*", "./node_modules/pdfjs-dist/{legacy/build,standard_fonts,cmaps,wasm}/**/*"],
     "/api/internal/progress-tests/process": ["./public/brand/progress-tests/**/*", "./node_modules/@sparticuz/chromium/bin/**/*", "./node_modules/jszip/dist/jszip.min.js", "./node_modules/docx-preview/dist/docx-preview.min.js", "./node_modules/katex/dist/**/*", "./node_modules/pdfjs-dist/{legacy/build,standard_fonts,cmaps,wasm}/**/*"],
     "/api/progress-tests/workspace/pdf-runtime/*": ["./node_modules/pdfjs-dist/build/pdf.worker.min.mjs", "./node_modules/pdfjs-dist/{standard_fonts,cmaps,wasm}/**/*"],
+    "/api/hiring/pdf-runtime/*": ["./node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs", "./node_modules/pdfjs-dist/{standard_fonts,cmaps,wasm}/**/*"],
     "/api/onsite-foot-traffic/reports/*/html": [
       "./node_modules/@fontsource/sarabun/files/*.woff2",
       "./node_modules/@fontsource/cormorant-garamond/files/*.woff2",
