@@ -80,6 +80,17 @@ const visitFor = (candidateId: string, visitId: string, startIso: string, head: 
   { id: visitId + "m", candidateId, kind: "mock", status: "confirmed", startTime: new Date(new Date(startIso).getTime() + 7200000).toISOString(), endTime: startIso, visitId, interviewerKey: head, subjects: [subject] },
 ];
 payload.bookings = [...visitFor("r1", "v1", "2026-11-01T03:00:00Z", "Peat", "Mathematics"), ...visitFor("r2", "v2", new Date(Date.now() + 86400000).toISOString(), "Ek", "Physics")] as never[];
+// The role screens (HR, Admin, Heads). Only with ?roles=1, so the checks of the other tabs read the same payload as before.
+Object.assign(payload, { calls: [], headDecisions: [], briefPaths: {}, funnelEvents: [] });
+if (location.search.includes("roles=1")) {
+  const at = (days: number, hour: number) => { const d = new Date(Date.now() + days * 86400000); d.setUTCHours(hour - 7, 0, 0, 0); return d.toISOString(); };
+  Object.assign(payload, {
+    calls: [{ candidateId: "k", start: at(0, 10), end: at(0, 10) }, { candidateId: "b", start: at(1, 14), end: at(1, 14) }],
+    headDecisions: [{ candidateId: "r1", decision: "hire", reason: "Clear and warm lesson.", head: "Kru Peat", draftProblem: null, at: at(0, 9) }],
+    briefPaths: { v2m: "/hiring/brief/sample-token" },
+    library: [{ id: "qp-phys", kind: "question_paper", subject: "Physics", name: "Physics paper.pdf", status: "ready" }],
+  });
+}
 payload.tutors = [{ canonicalKey: "Peat", name: "Kru Peat", email: "p@example.test", lineReady: true }, { canonicalKey: "Ek", name: "Kru Ek", email: "e@example.test", lineReady: true }] as never[];
 payload.config.interviewers = [{ canonicalKey: "Peat", email: "p@example.test", subjects: ["Mathematics"] }, { canonicalKey: "Ek", email: "e@example.test", subjects: ["Physics"] }] as never[];
 payload.config.paperPassRules = [{ subject: "Mathematics", level: "Key Stage 3", percent: 50 }, { subject: "Mathematics", level: "AS / A-Level", percent: 50 }, { subject: "Mathematics", level: "IB SL / HL", percent: 60 }];
@@ -89,6 +100,8 @@ const realFetch = window.fetch;
 (window as unknown as { posted: unknown[] }).posted = [];
 (window as unknown as { uploaded: unknown[] }).uploaded = [];
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  // The Capacity tab reads its own payload, which this fixture does not hold.
+  if (String(input).includes("capacity=1")) return new Response(JSON.stringify({ error: "Not in this fixture." }), { status: 503 });
   const url = new URL(String(input), location.origin);
   if (url.pathname === "/api/hiring/marking") {
     (window as unknown as { posted: unknown[] }).posted.push({ marking: JSON.parse(String(init?.body)) });
@@ -163,7 +176,7 @@ export const useSearchParams = () => new URLSearchParams(useSyncExternalStore(su
 const bundled = await build({
   stdin: { contents: ENTRY, resolveDir: ROOT, sourcefile: "hiring-synthetic.tsx", loader: "tsx" },
   bundle: true, write: false, outdir: "out", platform: "browser", format: "iife", target: "es2022", jsx: "automatic", tsconfig: path.join(ROOT, "tsconfig.json"),
-  define: { "process.env.NODE_ENV": JSON.stringify("production") }, minify: true, logLevel: "error", logOverride: { "module-level-directive": "silent" },
+  define: { "process.env.NODE_ENV": JSON.stringify("production") }, minify: !process.env.ONLY, logLevel: "error", logOverride: { "module-level-directive": "silent" },
   plugins: [{ name: "synthetic-framework", setup(bundler) {
     bundler.onResolve({ filter: /^next\/navigation$/ }, () => ({ path: "navigation", namespace: "fixture" }));
     bundler.onResolve({ filter: /^next\/font\/google$/ }, () => ({ path: "font", namespace: "fixture" }));
@@ -203,7 +216,9 @@ const shot = async (page, name) => {
   mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: path.join(OUT, `${name}.png`) });
 };
+// ONLY=<words> runs the checks whose name holds those words, such as ONLY="screen shows" for the role screens.
 const check = async (name, action) => {
+  if (process.env.ONLY && !name.includes(process.env.ONLY)) return;
   await action();
   process.stdout.write(`PASS ${name}\n`);
 };
@@ -215,6 +230,7 @@ try {
   const errors = [];
   page.on("pageerror", (error) => {
     errors.push(error.message);
+    if (process.env.ONLY) process.stderr.write(`${error.stack}\n`);
     process.stderr.write(`PAGE ERROR ${error.message}\n`);
   });
   const names = () => page.locator("[data-candidate]").allInnerTexts();
@@ -479,6 +495,50 @@ try {
     assert.equal(await page.getByLabel("Campaign 1 name").inputValue(), "Tutor ad");
     await page.getByLabel("Campaign 1 name").scrollIntoViewIfNeeded();
     await shot(page, "campaign-settings");
+  });
+  await check("the HR screen shows the week, the call cards with the résumé, and the heads' decisions", async () => {
+    await page.goto(`${origin}/?view=hr&roles=1`);
+    await page.getByRole("heading", { name: "My week: booked calls" }).waitFor();
+    // A role screen hides the tabs. One button leads back.
+    assert.equal(await page.getByRole("group", { name: "Hiring views" }).count(), 0);
+    assert.ok(await page.getByRole("button", { name: "Full dashboard" }).isVisible());
+    assert.ok(await page.getByRole("heading", { name: /Head decisions: send the result/ }).isVisible());
+    assert.ok(await page.getByText("Kru Peat · Clear and warm lesson.").isVisible());
+    await page.getByRole("button", { name: "Show the résumé of Sample Kim" }).click();
+    // The PDF pages need the app's PDF runtime route, which this fixture does not serve. The panel and its Download link prove the file is asked for.
+    await page.getByRole("link", { name: "Download" }).waitFor();
+    await shot(page, "role-hr");
+    await page.getByRole("button", { name: "Hide the résumé of Sample Kim" }).click();
+    assert.equal(await page.getByRole("button", { name: "Good call" }).count(), 2);
+    await shot(page, "role-hr-list");
+  });
+  await check("the Admin screen shows each visit with its paper to print and the upload", async () => {
+    await page.goto(`${origin}/?view=admin&roles=1`);
+    await page.getByRole("heading", { name: /^Tomorrow/ }).waitFor();
+    assert.equal(await page.getByRole("link", { name: "Print the paper" }).getAttribute("href"), "/api/hiring/file/qp-phys");
+    assert.ok(await page.getByText("Upload the completed paper").first().isVisible());
+    assert.ok(await page.getByText("Head: Kru Ek").isVisible());
+    await shot(page, "role-admin");
+  });
+  await check("the Heads screen shows the chosen head's candidates and remembers the screen", async () => {
+    await page.goto(`${origin}/?view=heads&roles=1`);
+    await page.getByRole("button", { name: "Kru Ek" }).click();
+    await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
+    assert.equal(await page.getByRole("link", { name: "Open the candidate page" }).getAttribute("href"), "/hiring/brief/sample-token");
+    await page.getByRole("button", { name: "Show the résumé of Reply Low" }).click();
+    await shot(page, "role-heads");
+    // The browser remembers the role screen and the head.
+    await page.goto(`${origin}/?roles=1`);
+    await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await shot(page, "role-heads-phone");
+    await page.goto(`${origin}/?view=hr&roles=1`);
+    await page.getByRole("heading", { name: /To call/ }).waitFor();
+    await shot(page, "role-hr-phone");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.getByRole("button", { name: "Full dashboard" }).click();
+    await page.getByRole("group", { name: "Hiring views" }).waitFor();
+    assert.equal(await page.evaluate(() => localStorage.getItem("hiring-role-view")), null);
   });
   await check("the page has no script errors", async () => assert.deepEqual(errors, []));
 } finally {

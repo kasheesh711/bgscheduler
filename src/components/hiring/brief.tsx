@@ -1,5 +1,7 @@
 import { ANSWER_LABELS } from "@/lib/hiring/model";
 import type { briefView } from "@/lib/hiring/service";
+import { BriefDecision } from "./brief-decision";
+import { BriefRubric } from "./brief-rubric";
 import c from "./booking.module.css";
 
 type Brief = Awaited<ReturnType<typeof briefView>>;
@@ -17,8 +19,8 @@ export const BriefGone = () => (
   </p>
 );
 
-/** The interviewer's page: who they will meet, the résumé, and the form answers. No contact details and no scores. */
-export function InterviewerBrief({ brief, resumeUrl }: { brief: Brief; resumeUrl: string }) {
+/** The interviewer's page: who they will meet, the résumé, the form answers, and the interviewer's own score form. No contact details and no AI scores. */
+export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: { brief: Brief; resumeUrl: string; rubricUrl: string; decisionUrl: string }) {
   const facts: [string, string][] = [
     ["Subject", brief.subject],
     ...(brief.exam ? ([["Exam", `${brief.exam} (Bangkok)`]] as [string, string][]) : []),
@@ -67,6 +69,16 @@ export function InterviewerBrief({ brief, resumeUrl }: { brief: Brief; resumeUrl
           <p className={c.note}>This candidate has no pre-screen reply.</p>
         )}
       </section>
+      <section className={c.facts}>
+        <h2 className={c.stepTitle}>Mock lesson scores</h2>
+        <BriefRubric saved={brief.rubric} form={brief.form} url={rubricUrl} />
+      </section>
+      {brief.form !== "wait" && (
+        <section className={c.facts}>
+          <h2 className={c.stepTitle}>Your decision</h2>
+          <BriefDecision sent={brief.decision} url={decisionUrl} />
+        </section>
+      )}
     </>
   );
 }

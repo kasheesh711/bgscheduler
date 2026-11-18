@@ -4,7 +4,8 @@ import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
 import { hireBlockers } from "./assessment-view";
 import { HiringError, runtimeWritesAllowed, type HiringConfig } from "./model";
-import { audit, candidateById, endVisit, enqueue, settings } from "./service";
+import { queueRecruitmentHeadDecision } from "./recruitment";
+import { audit, briefMock, candidateById, endVisit, enqueue, settings } from "./service";
 
 export type Decision = "hire" | "reject";
 const d = s.hiringDecisions;
@@ -77,6 +78,48 @@ export async function draftDecision(candidateId: string, input: { decision: Deci
     await audit(tx, actor, "decision-draft", candidateId, { decision: input.decision, reason: input.reason.trim() });
     return draft;
   });
+}
+
+export const HEAD_DECISION = "head-decision";
+/**
+ * A head's decision after a mock (Kevin's decision, 18 Nov 2026): it is recorded and HR is told in the recruitment
+ * group. No email leaves here: HR reads and sends the result email. A draft is made when the rules allow one. When they
+ * do not (a paper is not marked yet, for example), the decision is still recorded and the notice gives the cause.
+ */
+export async function recordHeadDecision(candidateId: string, input: { decision: Decision; reason: string; head: string }, actor: string, db: Database) {
+  if (!runtimeWritesAllowed()) throw new HiringError(503, "A decision can be saved only on the live site.");
+  const reason = input.reason.trim();
+  if (input.decision === "reject" && reason.length < 5) throw new HiringError(400, "Write a reason of at least 5 characters.");
+  const candidate = await candidateById(db, candidateId);
+  const { mocks } = await resultsOf(db, candidateId);
+  // A decision rests on scores a person can read, as the draft rule does.
+  if (!mocks.some((m) => m.source !== "tracker" && (m.status === "done" || m.status === "needs_check"))) throw new HiringError(409, "Send the mock scores first.");
+  const [last] = await db.select({ detail: s.hiringAudit.detail }).from(s.hiringAudit).where(and(eq(s.hiringAudit.candidateId, candidateId), eq(s.hiringAudit.action, HEAD_DECISION))).orderBy(desc(s.hiringAudit.createdAt)).limit(1);
+  const [standing] = await db.select({ id: d.id }).from(d).where(and(eq(d.candidateId, candidateId), eq(d.status, "draft"), eq(d.decision, input.decision))).limit(1);
+  // The same decision again (a second tap, a reload) changes nothing and tells HR nothing.
+  if (last?.detail.decision === input.decision && last.detail.reason === reason) return { draft: !!standing };
+  let draftProblem: string | null = null;
+  // A draft of this decision may hold HR's edits, so it stays. Only a new or changed decision makes a draft.
+  if (!standing)
+    try {
+      await draftDecision(candidateId, { decision: input.decision, reason: `Head ${input.head}: ${reason || "No reason given."}` }, actor, db);
+    } catch (error) {
+      if (!(error instanceof HiringError)) throw error;
+      draftProblem = error.message;
+    }
+  // One transaction: a recorded decision always has its notice. The notice key is the audit row, so each change tells HR.
+  await withDatabaseTransaction(db, async (tx) => {
+    const [row] = await tx.insert(s.hiringAudit).values({ actor, action: HEAD_DECISION, candidateId, detail: { decision: input.decision, reason, head: input.head, draftProblem } }).returning({ id: s.hiringAudit.id });
+    await queueRecruitmentHeadDecision(tx, candidate, { decision: input.decision, reason, head: input.head, subject: candidate.visitSubject ?? candidate.subjects[0] ?? null, key: row.id, draftProblem });
+  });
+  return { draft: !draftProblem };
+}
+/** The same decision from the interviewer link. The link is the only access check, as for the score form. */
+export async function saveBriefDecision(token: string, input: { decision: Decision; reason: string }, db: Database, now = new Date()) {
+  const mock = await briefMock(token, db, now);
+  if (now < mock.startTime) throw new HiringError(409, "You can send a decision after the mock lesson starts.");
+  const head = mock.interviewerKey ?? "Interviewer";
+  return recordHeadDecision(mock.candidateId, { ...input, head }, `interviewer:${mock.interviewerKey ?? "unknown"}`, db);
 }
 
 /** Keeps a person's edits while the switches are off or they stop for now. Nothing leaves until Send. */

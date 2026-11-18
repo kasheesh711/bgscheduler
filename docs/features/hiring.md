@@ -136,6 +136,20 @@ A person uploads one scanned PDF for each subject, up to 25 MB, on the row or in
 
 ### Mock rubric
 
+There are two ways to record the head's scores.
+
+**Score form on the interviewer link (the usual way, Kevin's decision of 13 November 2026).** The [interviewer candidate page](#interviewer-candidate-page) has a form with the 10 items and a comment box. It opens when the mock lesson starts. The head chooses a whole score from 1 to 10 for each item and sends it. No file and no AI are used.
+
+- `POST /api/hiring/brief/{token}/rubric` saves the scores (`saveBriefRubric`). The link is the only access check, with the same rules as the page: a cancel, a move, a stopped candidate, a sent result or the 7-day end closes it.
+- The result is stored with source `person` and status `done`, so it counts at once. The server calculates the total out of 100.
+- The head can send again while the link works, to correct the head's own scores. A send can replace only that head's own earlier send or a past tracker result. The audit row `mock-rubric-submitted` keeps what was replaced and names the head.
+- The form closes, and a send is refused, when an uploaded rubric is recorded, when a person with `/hiring` access has changed or confirmed the scores, or when a decision is drafted. The page then shows no scores.
+- A mock with more than one subject stores the scores under its first subject, the same subject the **Mock and paper** row uses.
+- It changes no stage and queues no message. The page shows the head only that head's own sent scores for this mock.
+- A person with `/hiring` access can still change a score afterward.
+
+**File upload by a person with `/hiring` access**, for a head who used the paper form:
+
 A person uploads the head's completed rubric as a PDF. The AI copies the 10 scores and the comments, and the server calculates the four part scores and the total out of 100. A blank score or one off the scale stays blank and needs a check, so the good scores are kept. A file with no score at all fails as the wrong form. A person can change scores, replace the file, or run the AI again. The AI's first read stays unchanged.
 
 ### Decision and result email
@@ -503,6 +517,31 @@ A stored setting that breaks a rule stops the worker with a message. The page st
 - **Retention.** A daily Vercel cron deletes a file after 12 months with no candidate activity. The number is editable (1 to 120 months). Only the file goes. The extracted text stays. Activity is the latest of the stored time, the pre-screen reply, a confirmed booking's end, and the newest audit row. Audit rows from the scoring, worker and backfill passes do not count as activity. Lowering the number can delete many files at the next nightly run. The panel then says the file was deleted by the retention rule.
 - **Open decision: links inside a PDF.** A crafted link in an applicant's PDF can replace the whole browser tab with another site after one click. Script does not run. The panel shows a warning line for now. The other options are to open a PDF in a new tab, or to render PDFs with pdf.js (a new dependency). Kevin has not decided. He must decide before go-live.
 - The files hold phone numbers, birth dates and photos. Access control, `no-store` and retention are the controls.
+
+## Role screens
+
+Kevin's decision, 18 November 2026: the full dashboard stays for the owner. HR, Admin and the heads each get one simple screen in `/hiring`, built from the same `GET /api/hiring` payload (`src/components/hiring/role-screens.tsx`, helpers in `src/lib/hiring/role-views.ts`).
+
+| Link | For | Shows |
+|---|---|---|
+| `/hiring?view=hr` | HR | The booked calls of this work week (Monday to Friday, Bangkok). One card for each candidate to call, in the Calls order: phone, résumé in the card, Good call, No answer, Bad call. The head decisions that wait for a result email. |
+| `/hiring?view=admin` | Admin | One card for each visit, by day: time, candidate, subject, head, Print the paper, Upload the completed paper. Past visits with no uploaded paper show first. |
+| `/hiring?view=heads` | Heads with an account | The head picks their name once. One card for each of their visits: time, candidate, résumé, and a link to the candidate page for the scores and the decision. |
+
+- A role screen hides the tabs and the owner alerts. The Admin and Heads screens keep the visit clash alert. `Full dashboard` leads back.
+- The browser remembers the last role screen (`localStorage`), so `/hiring` opens on it. `Full dashboard` clears this.
+- The screens add no access rule. A person needs a sign-in with Hiring access, as for the full dashboard.
+- Each button sends the same command as the full dashboard (`call_result`, `stop`, the paper upload).
+
+### Head decision
+
+The head sends `Hire` or `Do not hire` from the candidate page (`POST /api/hiring/brief/{token}/decision`, `saveBriefDecision` in `src/lib/hiring/decisions.ts`). The link is the only access check.
+
+- Refused before the mock starts, and until mock scores are recorded. `Do not hire` needs a reason of 5 characters or more.
+- The decision is stored as a `head-decision` row in `hiring_audit`. No migration.
+- HR gets one notice in the recruitment LINE group (`head_decision`) for each recorded decision. The same decision with the same reason again is not recorded and sends no notice.
+- When the result-email rules allow it, a decision draft is made for HR. A draft of the same decision stays as it is, so HR's edits are kept. When they do not (for example, the paper is not marked), the notice gives the cause.
+- No email goes to the candidate, and the stage does not change. HR reads and sends the result email in `4 Mock and paper`.
 
 ## Interviewer candidate page
 

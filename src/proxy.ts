@@ -43,6 +43,10 @@ function isPublicRoute(pathname: string) {
     // (briefView in src/lib/hiring/service.ts).
     /^\/hiring\/brief\/[^/]+$/.test(pathname) ||
     /^\/api\/hiring\/brief\/[^/]+\/resume$/.test(pathname) ||
+    // The interviewer's score form posts here; the same token is the access check (saveBriefRubric).
+    /^\/api\/hiring\/brief\/[^/]+\/rubric$/.test(pathname) ||
+    // The head's decision from the same link. It records the decision and tells HR. No email leaves.
+    /^\/api\/hiring\/brief\/[^/]+\/decision$/.test(pathname) ||
     /^\/room\/[^/]+$/.test(pathname) ||
     pathname === "/api/room/availability" ||
     pathname === "/api/room/reservations" ||
