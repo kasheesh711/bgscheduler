@@ -35,7 +35,6 @@ const config = {
   profileThreshold: 60,
   profileWeights: DEFAULT_WEIGHTS,
   acceptedWorkRights: ["I have permanent work rights with no restrictions"],
-  workRightsPenalties: [],
   subjectPriority: [{ subject: "Physics", hiring: true }],
   interviewers: [{ canonicalKey: "Peat", email: "p@example.com", subjects: ["Physics"] }],
 } as unknown as HiringConfig;

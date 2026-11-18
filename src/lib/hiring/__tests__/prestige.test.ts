@@ -174,11 +174,24 @@ describe("university prestige evidence", () => {
       row("Mahidol University", "TH", 555),
     ] });
     const noRor = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [] }) });
+    /** ROR knows exactly one institution of this name, in this country. */
+    const ror = (name: string, country: string) =>
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [{
+        id: "https://ror.org/x", names: [{ value: name }], locations: [{ geonames_details: { country_code: country } }],
+      }] }) });
     const best = (name: string, fetcher = noRor) =>
       assessPrestige([{ name, evidence: "Degree", completedDegree: true }], config, "catalog", fetcher);
     it("matches the U.S. News spelling of a résumé name", async () => {
-      expect(await best("University of Queensland")).toMatchObject({ rank: 42, fraction: 0.5 });
       expect(await best("The University of Texas at Austin")).toMatchObject({ rank: 56, fraction: 0.8 });
+    });
+    it("drops the country from a catalog name only when ROR verified that country", async () => {
+      expect(await best("University of Queensland", ror("University of Queensland", "AU"))).toMatchObject({ rank: 42, fraction: 0.5 });
+      expect((await best("University of Queensland Two")).name).toBeNull();
+      // The same name in another country must not take the rank.
+      expect(await best("University of Queensland Three", ror("University of Queensland Three", "NZ"))).toMatchObject({ rank: null, fraction: 0 });
+      const other = configSchema.parse({ universities: [row("Asia University Taiwan", "TW", 300)] });
+      const japan = await assessPrestige([{ name: "Asia University", evidence: "Degree", completedDegree: true }], other, "catalog", ror("Asia University", "JP"));
+      expect(japan).toMatchObject({ country: "JP", rank: null, fraction: 0 });
     });
     it("keeps an exact name ahead of a country-suffix name", async () => {
       expect(await best("Northeastern University")).toMatchObject({ country: "US", rank: 180 });
@@ -187,11 +200,24 @@ describe("university prestige evidence", () => {
       expect(await best("Arizona State University")).toMatchObject({ name: "Arizona State University--Downtown Phoenix", rank: 920 });
       expect(await best("University of Texas")).toMatchObject({ rank: 1238, fraction: 0 });
     });
-    it("matches a college that states its named Thai university, and no other", async () => {
+    it("gives a system with one campus in the catalog its rank only when ROR verified the name", async () => {
+      const one = configSchema.parse({ universities: [row("Ohio State University--Columbus", "US", 64), row("No Rank--A", "US", null), row("No Rank--B", "US", null)] });
+      const of = (name: string, fetcher: typeof noRor) => assessPrestige([{ name, evidence: "Degree", completedDegree: true }], one, "catalog", fetcher);
+      expect((await of("Ohio State University", noRor)).name).toBeNull();
+      expect(await of("The Ohio State University", ror("The Ohio State University", "US"))).toMatchObject({ rank: 64, fraction: 0.8 });
+      expect(await of("No Rank", noRor)).toMatchObject({ rank: null, fraction: 0 });
+    });
+    it("matches a college that states its named Thai university, and no school or hospital", async () => {
       expect(await best("Mahidol University International College")).toMatchObject({ name: "Mahidol University", fraction: 0.6 });
       expect(await best("SIIT, Thammasat University")).toMatchObject({ name: "Thammasat University", fraction: 0.6 });
-      expect((await best("Mahidol Wittayanusorn School")).name).toBeNull();
-      expect((await best("New Thammasat Universitys")).name).toBeNull();
+      for (const name of [
+        "Mahidol Wittayanusorn School",
+        "New Thammasat Universitys",
+        "Mahidol University International Demonstration School",
+        "Thammasat University Hospital",
+        "Satit Thammasat University Secondary School",
+      ])
+        expect((await best(name)).name).toBeNull();
     });
   });
 });

@@ -30,28 +30,35 @@ type CatalogRow = HiringConfig["universities"][number];
 const REGION = new Intl.DisplayNames(["en"], { type: "region" });
 /** U.S. News writes "University of Texas--Austin"; a résumé writes "The University of Texas at Austin". */
 const loose = (value: string) => normalized(value).replace(/^the /, "").replace(/ at /g, " ");
-/** U.S. News adds the country to some names ("University of Queensland Australia", "Northeastern University - China"). */
-function looseKeys(u: CatalogRow) {
-  const country = normalized(REGION.of(u.country) ?? "");
+/**
+ * U.S. News adds the country to some names ("University of Queensland Australia", "Northeastern University - China").
+ * The name without the country counts only with `country`: ROR must first prove the institution is in that country,
+ * or "Asia University" (Japan) would take the rank of "Asia University Taiwan".
+ */
+function looseKeys(u: CatalogRow, country: boolean) {
+  const suffix = country ? normalized(REGION.of(u.country) ?? "") : "";
   return [u.name, ...u.aliases].flatMap((n) => {
     const key = loose(n);
-    return country && key.endsWith(" " + country) ? [key, key.slice(0, -country.length - 1)] : [key];
+    return suffix && key.endsWith(" " + suffix) ? [key, key.slice(0, -suffix.length - 1)] : [key];
   });
 }
+/** A demonstration school or a hospital states the university's name and awards no degree of it. */
+const NOT_A_COLLEGE = /\b(demonstration|satit|secondary|high school|hospital)\b/;
 /**
  * The catalog rows for one institution's names. The first rule with a result decides:
  * 1. the exact name or alias;
  * 2. the same name in the other spelling (see `loose` and `looseKeys`);
  * 3. a college or faculty that states its named Thai university ("SIIT, Thammasat University").
  * More than one row is ambiguous and the caller gives no points.
+ * `country` is true when `rows` holds only the country that ROR verified.
  */
-export function catalogMatches(names: string[], rows: CatalogRow[]): CatalogRow[] {
+export function catalogMatches(names: string[], rows: CatalogRow[], country = false): CatalogRow[] {
   const exact = new Set(names.map(normalized));
   const wanted = new Set(names.map(loose));
-  const padded = names.map((n) => ` ${normalized(n)} `);
+  const padded = names.map((n) => ` ${normalized(n)} `).filter((n) => !NOT_A_COLLEGE.test(n));
   const rules: ((u: CatalogRow) => boolean)[] = [
     (u) => [u.name, ...u.aliases].some((n) => exact.has(normalized(n))),
-    (u) => looseKeys(u).some((k) => wanted.has(k)),
+    (u) => looseKeys(u, country).some((k) => wanted.has(k)),
     (u) =>
       THAI_PRIORITY_UNIVERSITIES.includes(u.name.toLowerCase()) &&
       padded.some((n) => n.includes(` ${normalized(u.name)} `)),
@@ -64,14 +71,15 @@ export function catalogMatches(names: string[], rows: CatalogRow[]): CatalogRow[
 }
 /**
  * The last resort: the names give only the university system before "--" ("Arizona State University").
- * No campus is named, so the lowest-ranked campus counts: no better rank is proven.
+ * With two or more campuses in the catalog, the lowest-ranked one counts: no better rank is proven.
+ * With one campus, the row counts only when ROR verified an institution of exactly this name, which is the main campus.
  */
-export function systemMatch(names: string[], rows: CatalogRow[]): CatalogRow[] {
+export function systemMatch(names: string[], rows: CatalogRow[], verified: boolean): CatalogRow[] {
   const wanted = new Set(names.map(loose));
-  return rows
-    .filter((u) => u.name.includes("--") && wanted.has(loose(u.name.split("--")[0])))
-    .sort((a, b) => (b.rank ?? Infinity) - (a.rank ?? Infinity))
-    .slice(0, 1);
+  const campuses = rows.filter((u) => u.name.includes("--") && wanted.has(loose(u.name.split("--")[0])));
+  if (campuses.length === 1 && !verified) return [];
+  const worst = (u: CatalogRow) => u.rank ?? Number.MAX_SAFE_INTEGER;
+  return campuses.sort((a, b) => worst(b) - worst(a)).slice(0, 1);
 }
 const countryCache = new Map<
   string,
@@ -163,8 +171,8 @@ export async function assessPrestige(
     const rows = institution
       ? config.universities.filter((u) => u.country === institution.country)
       : config.universities;
-    if (institution) matches = catalogMatches(names, rows);
-    if (!matches.length) matches = systemMatch(names, rows);
+    if (institution) matches = catalogMatches(names, rows, true);
+    if (!matches.length) matches = systemMatch(names, rows, !!institution);
     if (matches.length > 1) continue;
     const matched = matches[0];
     const country = matched

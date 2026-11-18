@@ -89,7 +89,7 @@ export function settingsProblems(config: HiringConfig): string[] {
   for (const [key, label] of Object.entries(PRE_SCREEN_WEIGHT_LABELS))
     if (!whole(config.preScreenWeights[key as keyof typeof PRE_SCREEN_WEIGHT_LABELS], 0, 100))
       problems.push(`Pre-screen ${label.toLowerCase()}: use a whole number from 0 to 100.`);
-  if (config.workRightsPenalties.some((p) => !whole(p.points, 1, 100)))
+  if (config.workRightsPenalties?.some((p) => !whole(p.points, 1, 100)))
     problems.push("Work-rights points off: use a whole number from 0 to 100.");
   if (!whole(config.profileThreshold, 0, 100)) problems.push("Invitation threshold: use a whole number from 0 to 100.");
   const total = Object.values(config.preScreenWeights).reduce((n, w) => n + w, 0);
@@ -164,7 +164,8 @@ export function setWorkRightsAccepted(config: HiringConfig, answer: string, on: 
   const seen = config.seenWorkRights;
   const remember = !on && !seen.some((a) => answerKey(a) === key) && seen.length < 200;
   return {
-    ...config,
+    // An answer that is not accepted keeps no hidden penalty.
+    ...(on ? config : setWorkRightsPenalty(config, answer, 0)),
     acceptedWorkRights: on ? [...rest, answer] : rest,
     seenWorkRights: remember ? [...seen, answer] : seen,
   };
@@ -172,8 +173,10 @@ export function setWorkRightsAccepted(config: HiringConfig, answer: string, on: 
 
 /** 0 removes the row. Any other value replaces it. */
 export function setWorkRightsPenalty(config: HiringConfig, answer: string, points: number): HiringConfig {
-  const rest = config.workRightsPenalties.filter((p) => answerKey(p.answer) !== answerKey(answer));
-  return { ...config, workRightsPenalties: points ? [...rest, { answer, points }] : rest };
+  const rest = (config.workRightsPenalties ?? []).filter((p) => answerKey(p.answer) !== answerKey(answer));
+  const next = points ? [...rest, { answer, points }] : rest;
+  // No rows: no key, so settings with no penalty stay readable by older code.
+  return { ...config, workRightsPenalties: next.length ? next : undefined };
 }
 
 export const HEAD_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"] as const;

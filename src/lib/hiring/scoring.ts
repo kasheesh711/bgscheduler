@@ -211,7 +211,7 @@ export function preScreenPoints(
 export const answerKey = (value: string) => value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 /** The points the settings take off the profile score for this answer. No answer or no row: 0. */
 export const workRightsPenalty = (answer: string | null, config: Pick<HiringConfig, "workRightsPenalties">) =>
-  (answer && config.workRightsPenalties.find((p) => answerKey(p.answer) === answerKey(answer))?.points) || 0;
+  (answer && config.workRightsPenalties?.find((p) => answerKey(p.answer) === answerKey(answer))?.points) || 0;
 /** Only an exact answer from the accepted list passes. A missing answer never passes. */
 export function workRightsAccepted(answer: string | null, accepted: string[]) {
   return !!answer?.trim() && accepted.some((a) => answerKey(a) === answerKey(answer));

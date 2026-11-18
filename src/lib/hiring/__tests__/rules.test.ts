@@ -266,7 +266,11 @@ describe("accepted work-rights answers", () => {
     const set = setWorkRightsPenalty(base(), ACCEPTED.toUpperCase(), 10);
     expect(workRightsRows(set)[0].penalty).toBe(10);
     expect(setWorkRightsPenalty(set, ACCEPTED, 15).workRightsPenalties).toEqual([{ answer: ACCEPTED, points: 15 }]);
-    expect(setWorkRightsPenalty(set, ACCEPTED, 0).workRightsPenalties).toEqual([]);
+    // No rows: no key, so older code can still read the saved settings.
+    expect(setWorkRightsPenalty(set, ACCEPTED, 0).workRightsPenalties).toBeUndefined();
+    expect("workRightsPenalties" in configSchema.parse({})).toBe(false);
+    // An unticked answer keeps no hidden penalty.
+    expect(setWorkRightsAccepted(set, ACCEPTED, false).workRightsPenalties).toBeUndefined();
     expect(settingsProblems(setWorkRightsPenalty(base(), ACCEPTED, 2.5))).toContain("Work-rights points off: use a whole number from 0 to 100.");
   });
   it("keeps a row after it is unticked, even when the answer was never recorded as seen", () => {
