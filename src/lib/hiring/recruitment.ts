@@ -6,7 +6,8 @@ import { fetchLineGroupSummary, pushLineTextMessage, replyLineMessage, LinePushE
 import { isScheduleBotAdmin } from "@/lib/line/schedule-bot";
 import { mentionedTheaText } from "@/lib/line/thea-query";
 import { runtimeWritesAllowed, ZONE } from "./model";
-import { audit, settings } from "./service";
+import { storedResume } from "./resume-files";
+import { audit, callResumeLink, settings } from "./service";
 
 const GROUP_NAME = "BeGifted Recruitment";
 const when = (date: Date) => date.toLocaleString("en-GB", { timeZone: ZONE, dateStyle: "medium", timeStyle: "short" });
@@ -48,7 +49,7 @@ export async function receiveRecruitmentSetup(db: Database, raw: unknown): Promi
     await audit(tx, `line:${event.source!.userId}`, "recruitment-group", null, group);
   });
   if (event.replyToken) await replyLineMessage({ tutorBot: true, replyToken: event.replyToken,
-    text: "Thea recruitment notices are connected. Mock bookings, changes and cancellations will appear here. The weekly summary is sent on Mondays at 09:00 Bangkok." });
+    text: "Thea recruitment notices are connected. Mock bookings, changes and cancellations, and HR call bookings and moves, will appear here. The weekly summary is sent on Mondays at 09:00 Bangkok." });
   return true;
 }
 
@@ -58,15 +59,24 @@ async function enqueue(db: Database, key: string, groupId: string, text: string,
   }))).onConflictDoNothing({ target: deliveries.key });
 }
 
-/** Called inside the booking transaction, so a rolled-back booking cannot send a notice. */
+/** Mock and HR call notices. Called inside the booking transaction, so a rolled-back booking cannot send a notice. */
 export async function queueRecruitmentMock(db: Database, booking: typeof bookings.$inferSelect,
   notice: "booked" | "moved" | "cancelled", movedFrom?: Date) {
-  if (booking.kind !== "mock") return;
+  if (booking.kind !== "mock" && booking.kind !== "call") return;
   const { config } = await settings(db);
   if (!config.recruitmentLineGroupId) return;
-  const [candidate] = await db.select({ name: candidates.name, email: candidates.email, phone: candidates.phone }).from(candidates).where(eq(candidates.id, booking.candidateId));
-  if (!candidate) throw new Error("The mock candidate is missing.");
-  const text = `Mock teaching ${notice}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nInterviewer: ${booking.interviewerKey ?? "To be confirmed"}\nTime: ${when(booking.startTime)}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: ZONE, hour: "2-digit", minute: "2-digit" })} (Bangkok)\nPlace: ${config.location}${movedFrom ? `\nPrevious time: ${when(movedFrom)} (cancelled)` : ""}`;
+  const [candidate] = await db.select({ name: candidates.name, email: candidates.email, phone: candidates.phone,
+    resumePath: candidates.resumePath, resumeType: candidates.resumeType }).from(candidates).where(eq(candidates.id, booking.candidateId));
+  if (!candidate) throw new Error(`The ${booking.kind} candidate is missing.`);
+  const time = `${when(booking.startTime)}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: ZONE, hour: "2-digit", minute: "2-digit" })} (Bangkok)`;
+  if (booking.kind === "call") {
+    await enqueue(db, `call:${booking.id}:${notice}`, config.recruitmentLineGroupId,
+      `HR pre-screen call ${notice}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nTime: ${time}${movedFrom ? `\nPrevious time: ${when(movedFrom)} (cancelled)` : ""}\nRésumé: ${
+        storedResume(booking.candidateId, candidate.resumePath, candidate.resumeType) ? callResumeLink(booking) : "No file stored. See the Hiring page."}`,
+      booking.id, notice);
+    return;
+  }
+  const text = `Mock teaching ${notice}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nInterviewer: ${booking.interviewerKey ?? "To be confirmed"}\nTime: ${time}\nPlace: ${config.location}${movedFrom ? `\nPrevious time: ${when(movedFrom)} (cancelled)` : ""}`;
   await enqueue(db, `mock:${booking.id}:${notice}`, config.recruitmentLineGroupId, text, booking.id, notice);
 }
 
