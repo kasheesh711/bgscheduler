@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { RESUME_TYPES } from "@/lib/hiring/model";
 import { universityName } from "@/lib/hiring/seek-view";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
@@ -17,15 +17,16 @@ export function rejectCommand(candidate: Pick<HiringCandidate, "id" | "revision"
   return { action: "stop", id: candidate.id, revision: candidate.revision, subjects: candidate.subjects, reason: RESUME_REJECT_REASON };
 }
 
-/** Where a drag ends: left rejects, right keeps, a short drag does nothing. */
-export function swipeChoice(dx: number, width: number): DeckChoice | null {
-  const limit = Math.min(140, width * 0.25);
+const FLY_MS = 260;
+/** Where a drag ends: left rejects, right keeps, a short drag does nothing. A fast flick (pixels per millisecond) needs less distance. */
+export function swipeChoice(dx: number, width: number, speed = 0): DeckChoice | null {
+  const limit = Math.abs(speed) > 0.6 && dx * speed > 0 ? 40 : Math.min(140, width * 0.25);
   return dx <= -limit ? "reject" : dx >= limit ? "keep" : null;
 }
 
-/** The next card: the first candidate, in the Calls order, with no choice yet. */
-export function nextCard<T extends { id: string }>(rows: T[], choices: ReadonlyMap<string, DeckChoice>) {
-  return rows.find((row) => !choices.has(row.id));
+/** The top card and the one below it: the first two candidates, in the Calls order, with no choice yet. */
+export function nextCards<T extends { id: string }>(rows: T[], choices: ReadonlyMap<string, DeckChoice>) {
+  return rows.filter((row) => !choices.has(row.id)).slice(0, 2);
 }
 
 // shortcut: kept marks live in this browser only, so another HR computer shows those cards again; move them to the
@@ -60,8 +61,6 @@ function ResumeCard({ candidate, data }: { candidate: HiringCandidate; data: Hir
         type={candidate.resumeType}
         months={data.config.resumeRetentionMonths}
         check={check}
-        // The file is the card: no thumbnail strip or toolbar, and the page as wide as the card.
-        viewer="#toolbar=0&navpanes=0&view=FitH"
       />
       {(!pdf || check.status === "failed") && (
         <div className={css.sourceText}>
@@ -87,17 +86,23 @@ export function ResumeDeck({
 }) {
   // The deck opens from a click, so it never renders on the server and can read the browser's kept marks at once.
   const [choices, setChoices] = useState<Map<string, DeckChoice>>(() => new Map(readKept().map((id) => [id, "keep" as const])));
-  const [dx, setDx] = useState(0);
   const [sending, setSending] = useState(false);
   const [failed, setFailed] = useState(0);
   // The revision of each card when HR rejected it. A record that changed since then is refused by the server.
   const [seen, setSeen] = useState<Map<string, number>>(new Map());
-  const [drag, setDrag] = useState<{ x: number; width: number } | null>(null);
   const deck = useRef<HTMLDivElement>(null);
+  const stage = useRef<HTMLDivElement>(null);
+  // Two marks, about 60 ms apart, of where the pointer was: the speed at release is not one noisy sample.
+  const gesture = useRef<{ x: number; y: number; active: boolean; markX: number; markT: number; oldX: number; oldT: number } | null>(null);
+  // True from the moment a card starts to fly off until the next card is on top.
+  const leaving = useRef(false);
+  const swipe = useRef<(choice: DeckChoice) => void>(() => {});
 
   useEffect(() => deck.current?.focus(), []);
 
-  const card = nextCard(rows, choices);
+  // The card below shows as the top card moves, with its file already drawn.
+  const upcoming = nextCards(rows, choices);
+  const card = upcoming[0];
   const byId = new Map(rows.map((c) => [c.id, c]));
   const rejected = [...choices].flatMap(([id, choice]) => (choice === "reject" ? (byId.get(id) ?? []) : []));
   const kept = rows.filter((c) => choices.get(c.id) === "keep").length;
@@ -111,7 +116,6 @@ export function ResumeDeck({
     const revision = byId.get(id)?.revision;
     if (choice === "reject" && revision !== undefined) setSeen(new Map(seen).set(id, revision));
     setFailed(0);
-    setDx(0);
     // A click moves focus to a button that then leaves the page; the arrow keys need the deck.
     deck.current?.focus();
   };
@@ -134,8 +138,81 @@ export function ResumeDeck({
     setSending(false);
   };
   const locked = busy || sending;
-  const subjects = card ? callSubjects(card, data.config.subjectPriority) : null;
-  const lean = card && drag ? swipeChoice(dx, drag.width) : null;
+
+  /** The card follows the pointer through two CSS numbers, so a drag draws no React frame and no PDF again. */
+  const move = (x: number, dragging = false) => {
+    const el = stage.current;
+    if (!el) return;
+    el.style.setProperty("--x", String(x));
+    el.style.setProperty("--p", String(Math.min(1, Math.abs(x) / 140)));
+    el.toggleAttribute("data-dragging", dragging);
+  };
+  /** The card flies off its side, then the choice is recorded. Buttons, arrow keys and swipes all end here. */
+  const fly = (choice: DeckChoice) => {
+    if (!card || locked || leaving.current) return;
+    leaving.current = true;
+    const id = card.id;
+    move((choice === "keep" ? 1 : -1) * (window.innerWidth + 200));
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.setTimeout(() => choose(id, choice), still ? 0 : FLY_MS);
+  };
+  // Before the browser paints a new top card, the stage goes back to the centre.
+  useLayoutEffect(() => {
+    leaving.current = false;
+    move(0);
+  }, [card?.id]);
+  useEffect(() => {
+    swipe.current = fly;
+  });
+  // A two-finger sideways swipe on a laptop trackpad moves the card, as a finger does on a phone.
+  const hasCard = Boolean(card);
+  useEffect(() => {
+    const el = stage.current;
+    if (!el) return;
+    let x = 0;
+    let quiet = 0;
+    // shortcut: after a swipe, the trackpad's coasting is ignored until it stops, so a second swipe in the same
+    // half second does nothing; read the wheel's acceleration if HR swipes faster than that.
+    let spent = false;
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+      // Without this, Safari and Chrome read the swipe as "go back a page".
+      e.preventDefault();
+      window.clearTimeout(quiet);
+      quiet = window.setTimeout(() => {
+        if (!spent && !leaving.current) move(0);
+        x = 0;
+        spent = false;
+      }, 140);
+      if (spent || leaving.current) return;
+      x -= e.deltaX;
+      move(x, true);
+      const choice = swipeChoice(x, el.offsetWidth);
+      if (!choice) return;
+      spent = true;
+      el.removeAttribute("data-dragging");
+      swipe.current(choice);
+      // A locked deck refuses the swipe, so the card goes back.
+      if (!leaving.current) move(0);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      window.clearTimeout(quiet);
+    };
+  }, [hasCard]);
+  const endDrag = (e: React.PointerEvent, cancelled: boolean) => {
+    const g = gesture.current;
+    gesture.current = null;
+    if (!g?.active) return;
+    // A pointer that stopped before the release has no speed, so only the distance counts.
+    const fresh = e.timeStamp - g.markT < 30;
+    const time = e.timeStamp - (fresh ? g.oldT : g.markT);
+    const speed = time >= 16 && time < 200 ? (e.clientX - (fresh ? g.oldX : g.markX)) / time : 0;
+    const choice = cancelled ? null : swipeChoice(e.clientX - g.x, stage.current?.offsetWidth ?? 0, speed);
+    move(0);
+    if (choice) fly(choice);
+  };
 
   return (
     <div
@@ -145,13 +222,15 @@ export function ResumeDeck({
       aria-label="Résumé cards"
       onKeyDown={(e) => {
         if (!card || locked || (e.target as HTMLElement).closest("input, textarea, select, a")) return;
-        if (e.key === "ArrowLeft") choose(card.id, "reject");
-        if (e.key === "ArrowRight") choose(card.id, "keep");
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        // The key moves the card, not the page.
+        e.preventDefault();
+        fly(e.key === "ArrowLeft" ? "reject" : "keep");
       }}
     >
       <div className={css.deckBar}>
         <p className={css.inspectorMeta}>
-          {rows.filter((c) => !choices.has(c.id)).length} left · {kept} kept · {rejected.length} to reject. Left arrow rejects, right arrow keeps.
+          {rows.filter((c) => !choices.has(c.id)).length} left · {kept} kept · {rejected.length} to reject. Swipe a card left to reject, right to keep. The arrow keys do the same.
         </p>
         <div className={css.decisionActions}>
           {kept > 0 && (
@@ -165,58 +244,89 @@ export function ResumeDeck({
         </div>
       </div>
 
-      {card && subjects ? (
-        <article
-          className={css.deckCard}
-          data-lean={lean ?? undefined}
-          style={dx ? { transform: `translateX(${dx}px) rotate(${dx / 40}deg)`, transition: "none" } : undefined}
-        >
-          <header
-            className={css.deckHandle}
-            onPointerDown={(e) => {
-              if (locked || e.button !== 0) return;
-              setDrag({ x: e.clientX, width: e.currentTarget.offsetWidth });
-              e.currentTarget.setPointerCapture(e.pointerId);
-            }}
-            onPointerMove={(e) => drag && setDx(e.clientX - drag.x)}
-            onPointerUp={(e) => {
-              if (!drag) return;
-              const choice = swipeChoice(e.clientX - drag.x, drag.width);
-              setDrag(null);
-              if (choice) choose(card.id, choice);
-              else setDx(0);
-            }}
-            onPointerCancel={() => {
-              setDrag(null);
-              setDx(0);
-            }}
-          >
-            <div>
-              <h2 className={css.deckName}>{card.name}</h2>
-              <span onPointerDown={(e) => e.stopPropagation()}>
-                <PhoneLink phone={card.phone} large />
-              </span>
-              <p className={css.inspectorMeta}>
-                {subjects.main}
-                {subjects.other.length > 0 && `, also ${subjects.other.join(", ")}`} · {universityName(card)}
-              </p>
-              {card.profileAssessment?.briefSummary && <p className={css.inspectorMeta}>{card.profileAssessment.briefSummary}</p>}
-            </div>
-            <p className={css.inspectorScore}>
-              {card.profileScore === null ? "–" : Math.round(card.profileScore)}
-              <span>/100</span>
-            </p>
-          </header>
-          <ResumeCard key={card.id} candidate={card} data={data} />
-          <footer className={css.deckActions}>
-            <button type="button" className={`${css.secondary} ${css.stopButton}`} disabled={locked} onClick={() => choose(card.id, "reject")}>
-              ← Reject
-            </button>
-            <button type="button" className={css.primary} disabled={locked} onClick={() => choose(card.id, "keep")}>
-              Keep →
-            </button>
-          </footer>
-        </article>
+      {card ? (
+        <div ref={stage} className={css.deckStage}>
+          {upcoming.map((c, i) => {
+            const top = i === 0;
+            const subjects = callSubjects(c, data.config.subjectPriority);
+            return (
+              <article
+                key={c.id}
+                className={css.deckCard}
+                data-pos={top ? "top" : "next"}
+                // The card below is a picture of what comes next. Nobody can click or tab into it.
+                inert={!top}
+                aria-hidden={!top}
+                onPointerDown={(e) => {
+                  const target = e.target as HTMLElement;
+                  // A mouse drag on the application text selects it.
+                  if (locked || leaving.current || e.button !== 0 || target.closest("a, button") || (e.pointerType === "mouse" && target.closest("pre"))) return;
+                  gesture.current = { x: e.clientX, y: e.clientY, active: false, markX: e.clientX, markT: e.timeStamp, oldX: e.clientX, oldT: e.timeStamp };
+                }}
+                onPointerMove={(e) => {
+                  const g = gesture.current;
+                  if (!g) return;
+                  const dx = e.clientX - g.x;
+                  const dy = e.clientY - g.y;
+                  if (!g.active) {
+                    if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+                    // An up-and-down move reads the résumé. Only a sideways move takes the card.
+                    if (Math.abs(dy) > Math.abs(dx)) {
+                      gesture.current = null;
+                      return;
+                    }
+                    g.active = true;
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                  }
+                  if (e.timeStamp - g.markT > 60) {
+                    g.oldX = g.markX;
+                    g.oldT = g.markT;
+                    g.markX = e.clientX;
+                    g.markT = e.timeStamp;
+                  }
+                  move(dx, true);
+                }}
+                onPointerUp={(e) => endDrag(e, false)}
+                onPointerCancel={(e) => endDrag(e, true)}
+              >
+                {top && (
+                  <>
+                    <span className={css.deckStamp} data-choice="keep" aria-hidden>
+                      Keep
+                    </span>
+                    <span className={css.deckStamp} data-choice="reject" aria-hidden>
+                      Reject
+                    </span>
+                  </>
+                )}
+                <header className={css.deckHandle}>
+                  <div>
+                    <h2 className={css.deckName}>{c.name}</h2>
+                    <PhoneLink phone={c.phone} large />
+                    <p className={css.inspectorMeta}>
+                      {subjects.main}
+                      {subjects.other.length > 0 && `, also ${subjects.other.join(", ")}`} · {universityName(c)}
+                    </p>
+                    {c.profileAssessment?.briefSummary && <p className={css.inspectorMeta}>{c.profileAssessment.briefSummary}</p>}
+                  </div>
+                  <p className={css.inspectorScore}>
+                    {c.profileScore === null ? "–" : Math.round(c.profileScore)}
+                    <span>/100</span>
+                  </p>
+                </header>
+                <ResumeCard candidate={c} data={data} />
+                <footer className={css.deckActions}>
+                  <button type="button" className={`${css.secondary} ${css.stopButton}`} disabled={locked} onClick={() => fly("reject")}>
+                    ← Reject
+                  </button>
+                  <button type="button" className={css.primary} disabled={locked} onClick={() => fly("keep")}>
+                    Keep →
+                  </button>
+                </footer>
+              </article>
+            );
+          })}
+        </div>
       ) : (
         <p className={css.empty}>
           {rows.length ? "No cards are left. Confirm the rejections below, or go back to the list." : "Nobody is waiting for a call."}

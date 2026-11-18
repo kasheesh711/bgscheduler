@@ -2,9 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { RESUME_TYPES } from "@/lib/hiring/model";
 import { CallsScreen } from "../calls-screen";
-import { ResumeBody } from "../candidate-inspector";
 import type { HiringCandidate, HiringData } from "../dashboard";
-import { nextCard, rejectCommand, RESUME_REJECT_REASON, ResumeDeck, swipeChoice, type DeckChoice } from "../resume-deck";
+import { nextCards, rejectCommand, RESUME_REJECT_REASON, ResumeDeck, swipeChoice, type DeckChoice } from "../resume-deck";
 
 vi.mock("next/font/google", () => ({ Instrument_Serif: () => ({ variable: "" }) }));
 
@@ -54,21 +53,18 @@ describe("résumé deck rules", () => {
     expect(swipeChoice(-80, 320)).toBe("reject");
     expect(swipeChoice(79, 320)).toBeNull();
   });
-  it("shows the first candidate with no choice, in the Calls order", () => {
-    const rows = [{ id: "a" }, { id: "b" }, { id: "c" }];
-    expect(nextCard(rows, new Map())).toEqual({ id: "a" });
-    expect(nextCard(rows, new Map<string, DeckChoice>([["a", "keep"], ["b", "reject"]]))).toEqual({ id: "c" });
-    expect(nextCard(rows, new Map<string, DeckChoice>([["a", "keep"], ["b", "reject"], ["c", "keep"]]))).toBeUndefined();
+  it("a fast flick needs a short drag, and only in its own direction", () => {
+    expect(swipeChoice(50, 900, 0.9)).toBe("keep");
+    expect(swipeChoice(-50, 900, -0.9)).toBe("reject");
+    expect(swipeChoice(30, 900, 0.9)).toBeNull();
+    // The finger went right, then came back fast: no choice.
+    expect(swipeChoice(50, 900, -0.9)).toBeNull();
   });
-});
-
-describe("ResumeBody viewer options", () => {
-  it("adds them to the iframe only, so Download keeps the plain address", () => {
-    const html = renderToStaticMarkup(
-      <ResumeBody id="a" name="Sample A" state="available" type={RESUME_TYPES.pdf} months={12} check={{ status: "ready" }} viewer="#toolbar=0" />,
-    );
-    expect(html).toContain('src="/api/hiring/resume/a#toolbar=0"');
-    expect(html).toContain('href="/api/hiring/resume/a"');
+  it("shows the first candidate with no choice, in the Calls order, and the next one below", () => {
+    const rows = [{ id: "a" }, { id: "b" }, { id: "c" }];
+    expect(nextCards(rows, new Map())).toEqual([{ id: "a" }, { id: "b" }]);
+    expect(nextCards(rows, new Map<string, DeckChoice>([["a", "keep"], ["b", "reject"]]))).toEqual([{ id: "c" }]);
+    expect(nextCards(rows, new Map<string, DeckChoice>([["a", "keep"], ["b", "reject"], ["c", "keep"]]))).toEqual([]);
   });
 });
 
@@ -76,7 +72,9 @@ describe("ResumeDeck", () => {
   it("shows one card with the name, subject, score and both actions, and writes nothing yet", () => {
     const html = deck([candidate(), candidate({ id: "b", name: "Sample B" })]);
     expect(html).toContain("Sample A");
-    expect(html).not.toContain("Sample B");
+    // The next card waits below the top one. Nobody can click or tab into it.
+    expect(html).toMatch(/data-pos="next"[^>]*inert[^>]*>[\s\S]*Sample B/);
+    expect(html.match(/data-pos="top"/g)).toHaveLength(1);
     expect(html).toContain("Mathematics");
     expect(html).toContain("Chulalongkorn University");
     expect(html).toContain(">86<");
