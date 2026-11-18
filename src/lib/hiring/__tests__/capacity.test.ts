@@ -191,12 +191,12 @@ describe("buildCapacityReport", () => {
 
 describe("hiring need (CAP-05)", () => {
   const SUNDAYS = ["2026-11-22", "2026-11-29", "2026-12-06", "2026-12-13"];
-  // A Physics tutor who gives Sunday 09:00–13:00 and teaches `booked` hours of it each Sunday.
+  // A Physics tutor who gives Sunday 10:00–14:00 and teaches `booked` hours of it each Sunday.
   const sundayTutor = (key: string, booked: number, extra: Partial<IndexedTutorGroup> = {}) =>
     group(key, {
       qualifications: [tag("Physics")],
-      availabilityWindows: [hours(0, 9, 13)],
-      sessionBlocks: booked ? SUNDAYS.map((date) => lesson(date, 9, 9 + booked, "In-Person Session-Physics")) : [],
+      availabilityWindows: [hours(0, 10, 14)],
+      sessionBlocks: booked ? SUNDAYS.map((date) => lesson(date, 10, 10 + booked, "In-Person Session-Physics")) : [],
       ...extra,
     });
   const need = (groups: IndexedTutorGroup[], subject = "Physics") => report(groups).needs.find((n) => n.subject === subject)!;
@@ -256,12 +256,12 @@ describe("hiring need (CAP-05)", () => {
   });
 
   it("takes the hours one tutor gives as the average of tutors who give different hours", () => {
-    // Sunday: A gives 09:00–18:00 (9 h) and B gives 09:00–12:00 (3 h); both are full. 12 h booked of 12 h.
-    // The limit is 9 h, so 3 h are over. A tutor gives 6 h on average, 4.5 h at 75%: one hire.
+    // Sunday peak: A gives 10:00–16:00 (6 h) and B gives 10:00–12:00 (2 h); both are full. 8 h booked of 8 h.
+    // The limit is 6 h, so 2 h are over. A tutor gives 4 h on average, 3 h at 75%: one hire.
     const full = (key: string, to: number) =>
-      sundayTutor(key, 0, { availabilityWindows: [hours(0, 9, to)], sessionBlocks: SUNDAYS.map((d) => lesson(d, 9, to, "Physics")) });
-    const n = need([full("A", 18), full("B", 12)]);
-    expect(n.blocks.find((b) => b.key === "sunday")).toMatchObject({ given: 12, booked: 12, givers: 2, hire: 1 });
+      sundayTutor(key, 0, { availabilityWindows: [hours(0, 10, to)], sessionBlocks: SUNDAYS.map((d) => lesson(d, 10, to, "Physics")) });
+    const n = need([full("A", 16), full("B", 12)]);
+    expect(n.blocks.find((b) => b.key === "sunday")).toMatchObject({ given: 8, booked: 8, givers: 2, hire: 1 });
   });
 
   it("names the block that sets the number, not a fuller block that asks for fewer people", () => {
@@ -275,11 +275,11 @@ describe("hiring need (CAP-05)", () => {
         availabilityWindows: [1, 2, 3, 4, 5].map((d) => hours(d, 16, 20)),
         sessionBlocks: WEEKDAYS.flatMap((d) => (weekday(d) === 5 ? [lesson(d, 16, 18, "Physics")] : [lesson(d, 16, 20, "Physics")])),
       });
-    // One tutor gives Saturday 09:00–13:00 and teaches all of it: 100% full, 1 hire.
+    // One tutor gives Saturday 10:00–14:00 and teaches all of it: 100% full, 1 hire.
     const saturday = group("Sat", {
       qualifications: [tag("Physics")],
-      availabilityWindows: [hours(6, 9, 13)],
-      sessionBlocks: ["2026-11-21", "2026-11-28", "2026-12-05", "2026-12-12"].map((d) => lesson(d, 9, 13, "Physics")),
+      availabilityWindows: [hours(6, 10, 14)],
+      sessionBlocks: ["2026-11-21", "2026-11-28", "2026-12-05", "2026-12-12"].map((d) => lesson(d, 10, 14, "Physics")),
     });
     const n = need([...Array.from({ length: 10 }, (_, i) => evening(`E${i}`)), saturday]);
     expect(n.blocks.map((b) => [b.key, b.used, b.hire])).toEqual([

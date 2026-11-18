@@ -37,7 +37,7 @@ export function needReason(need: HiringNeed) {
       ? "No tutor with classes to measure"
       : "No tutor has this subject in Wise"
     : block
-      ? `${blockLabel(block.key)} are ${percent(block.used)} full · ${count(need.tutors, "tutor")}`
+      ? `${blockLabel(block.key)}: ${percent(block.used)} full · ${count(need.tutors, "tutor")}`
       : `No busy hours in Wise · ${count(need.tutors, "tutor")}`;
   return [
     full,
@@ -427,8 +427,12 @@ export function CapacityView({
               New students are counted from {day(r.demand.from)} to {day(r.demand.to)}.{" "}
             </>
           )}
-          Tutors are full above {TARGET}% of the hours students come: weekday evenings (16:00–20:00), Saturdays and Sundays
-          (09:00–18:00), from {day(r.from)} to {day(r.to)}. Click a subject to see why.
+          Tutors are full above {TARGET}% of the hours students come, from {day(r.from)} to {day(r.to)}. Click a subject
+          to see why.
+        </p>
+        <p className={css.panelLede}>
+          Hours that count: {BUSY_BLOCKS.map((b) => b.label).join(" · ")}. These are the hours most classes are booked;
+          half of all class hours are at weekends, so quiet weekend hours are left out.
         </p>
         <div className={`${css.needRow} ${css.needHeadRow}`} aria-hidden="true">
           <span />
