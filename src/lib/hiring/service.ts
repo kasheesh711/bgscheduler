@@ -1,4 +1,5 @@
 import { queueRecruitmentMock } from "./recruitment";
+import { PRESTIGE_RULES } from "./prestige";
 import { createHash, randomUUID } from "node:crypto";
 import { fromZonedTime } from "date-fns-tz";
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNotNull, like, or, sql } from "drizzle-orm";
@@ -41,6 +42,7 @@ import {
   hardStops,
   preScreenPoints,
   profileScore,
+  workRightsPenalty,
   supportedVisitSubjects,
   topHiringSubject,
   workRightsAccepted,
@@ -804,11 +806,13 @@ export async function dashboard(db: Database = getDb()) {
               c.profileAssessment,
               config.profileWeights,
               c.universityAssessment?.fraction ?? 0,
+              workRightsPenalty(c.workRightsAnswer, config),
             )
           : null,
         // The pre-screen score is the eight-part total, not the profile formula.
         preScreenScore: parts?.total ?? null,
         preScreenParts: parts,
+        workRightsPenalty: workRightsPenalty(c.workRightsAnswer, config),
         workRightsAccepted: workRightsAccepted(
           c.workRightsAnswer,
           config.acceptedWorkRights,
@@ -2059,6 +2063,9 @@ export async function reviewCandidate(
   });
 }
 // Postgres JSONB reorders keys; evidence hashes must survive that round trip.
+/** The hash a stored university result carries: the catalog and the version of the match rules. */
+export const prestigeCatalogHash = (universities: HiringConfig["universities"]) =>
+  sourceHash([PRESTIGE_RULES, universities]);
 export const sourceHash = (value: unknown) =>
   createHash("sha256")
     .update(

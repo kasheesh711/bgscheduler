@@ -1,5 +1,5 @@
 import { isDecided, SUBJECTS, type HiringConfig, type Stage, type Subject } from "./model";
-import { profileScore, topHiringSubject, workRightsAccepted, type Assessment } from "./scoring";
+import { profileScore, topHiringSubject, workRightsAccepted, workRightsPenalty, type Assessment } from "./scoring";
 import type { CallReview } from "./limits";
 
 export const STAGE_LABELS: Record<Stage, string> = {
@@ -95,7 +95,7 @@ type InsightCandidate = {
 };
 type GateConfig = Pick<
   HiringConfig,
-  "profileThreshold" | "profileWeights" | "acceptedWorkRights" | "subjectPriority" | "callThreshold"
+  "profileThreshold" | "profileWeights" | "acceptedWorkRights" | "workRightsPenalties" | "subjectPriority" | "callThreshold"
 >;
 type InsightInput = {
   config: GateConfig & Pick<HiringConfig, "interviewers">;
@@ -154,7 +154,7 @@ export function profileGate(
   let awaitingCall = false;
   if (!assessment) add("The profile is not scored.", "Not scored");
   else {
-    const score = profileScore(assessment, config.profileWeights, candidate.universityAssessment?.fraction ?? 0);
+    const score = profileScore(assessment, config.profileWeights, candidate.universityAssessment?.fraction ?? 0, workRightsPenalty(candidate.workRightsAnswer, config));
     if (score < config.profileThreshold) add("The profile score is below the threshold.", "Below profile threshold");
     awaitingCall = config.callThreshold !== null && score >= config.callThreshold && !called;
     if (assessment.criteria.some((c) => c.id === "degree" && c.result === "not_met"))

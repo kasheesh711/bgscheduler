@@ -16,6 +16,7 @@ import {
   setHiring,
   setLimit,
   setWorkRightsAccepted,
+  setWorkRightsPenalty,
   settingsProblems,
   startsSending,
   timeToMinutes,
@@ -460,17 +461,36 @@ export function SetupPanel({
           <h3 className={css.inspectorHeading}>Accepted SEEK work-rights answers</h3>
           <div className={css.checkList}>
             {workRightsRows(config).map((row) => (
-              <label key={row.answer}>
-                <input
-                  type="checkbox"
-                  checked={row.accepted}
-                  onChange={(e) => setConfig(setWorkRightsAccepted(config, row.answer, e.target.checked))}
-                />
-                <span>{row.answer}</span>
-              </label>
+              <div key={row.answer}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={row.accepted}
+                    onChange={(e) => setConfig(setWorkRightsAccepted(config, row.answer, e.target.checked))}
+                  />
+                  <span>{row.answer}</span>
+                </label>
+                {row.accepted && (
+                  <label>
+                    Points off the profile score
+                    <input
+                      className={css.numberInput}
+                      type="number"
+                      min={0}
+                      max={100}
+                      aria-label={`Points off for: ${row.answer}`}
+                      value={row.penalty}
+                      onChange={(e) => setConfig(setWorkRightsPenalty(config, row.answer, Number(e.target.value)))}
+                    />
+                  </label>
+                )}
+              </div>
             ))}
           </div>
-          <p className={css.railMeta}>A new answer from SEEK appears here, not accepted, until you tick it.</p>
+          <p className={css.railMeta}>
+            A new answer from SEEK appears here, not accepted, until you tick it. Points off lower the profile score of an
+            accepted answer. 0 takes nothing off.
+          </p>
         </section>
 
         <section className={css.setupSection}>

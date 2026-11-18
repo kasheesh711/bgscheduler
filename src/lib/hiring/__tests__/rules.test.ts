@@ -24,6 +24,7 @@ import {
   setHiring,
   setLimit,
   setWorkRightsAccepted,
+  setWorkRightsPenalty,
   settingsProblems,
   startsSending,
   timeToMinutes,
@@ -244,11 +245,11 @@ describe("accepted work-rights answers", () => {
   it("lists every seen answer with a tick box, and a new answer starts unticked", () => {
     const config = base({ seenWorkRights: [RESIDENT, ACCEPTED] });
     expect(workRightsRows(config)).toEqual([
-      { answer: ACCEPTED, accepted: true },
-      { answer: RESIDENT, accepted: false },
+      { answer: ACCEPTED, accepted: true, penalty: 0 },
+      { answer: RESIDENT, accepted: false, penalty: 0 },
     ]);
     // An accepted answer that was never seen still shows.
-    expect(workRightsRows(base())).toEqual([{ answer: ACCEPTED, accepted: true }]);
+    expect(workRightsRows(base())).toEqual([{ answer: ACCEPTED, accepted: true, penalty: 0 }]);
     // The same answer with other spacing or case is one row.
     expect(workRightsRows(base({ seenWorkRights: [ACCEPTED.toUpperCase().replace(/ /g, "  ")] }))).toHaveLength(1);
   });
@@ -261,15 +262,26 @@ describe("accepted work-rights answers", () => {
     expect(setWorkRightsAccepted(ticked, RESIDENT.toUpperCase(), false).acceptedWorkRights).toEqual([ACCEPTED]);
     expect(setWorkRightsAccepted(config, ACCEPTED, false).acceptedWorkRights).toEqual([]);
   });
+  it("sets, replaces and removes the points off for an answer", () => {
+    const set = setWorkRightsPenalty(base(), ACCEPTED.toUpperCase(), 10);
+    expect(workRightsRows(set)[0].penalty).toBe(10);
+    expect(setWorkRightsPenalty(set, ACCEPTED, 15).workRightsPenalties).toEqual([{ answer: ACCEPTED, points: 15 }]);
+    // No rows: no key, so older code can still read the saved settings.
+    expect(setWorkRightsPenalty(set, ACCEPTED, 0).workRightsPenalties).toBeUndefined();
+    expect("workRightsPenalties" in configSchema.parse({})).toBe(false);
+    // An unticked answer keeps no hidden penalty.
+    expect(setWorkRightsAccepted(set, ACCEPTED, false).workRightsPenalties).toBeUndefined();
+    expect(settingsProblems(setWorkRightsPenalty(base(), ACCEPTED, 2.5))).toContain("Work-rights points off: use a whole number from 0 to 100.");
+  });
   it("keeps a row after it is unticked, even when the answer was never recorded as seen", () => {
     const config = base();
     expect(config.seenWorkRights).toEqual([]);
     const off = setWorkRightsAccepted(config, ACCEPTED, false);
     expect(off.seenWorkRights).toEqual([ACCEPTED]);
-    expect(workRightsRows(off)).toEqual([{ answer: ACCEPTED, accepted: false }]);
+    expect(workRightsRows(off)).toEqual([{ answer: ACCEPTED, accepted: false, penalty: 0 }]);
     // Ticking it again brings it back, and nothing is recorded twice.
     const on = setWorkRightsAccepted(off, ACCEPTED.toUpperCase(), true);
-    expect(workRightsRows(on)).toEqual([{ answer: ACCEPTED.toUpperCase(), accepted: true }]);
+    expect(workRightsRows(on)).toEqual([{ answer: ACCEPTED.toUpperCase(), accepted: true, penalty: 0 }]);
     expect(setWorkRightsAccepted(on, ACCEPTED, false).seenWorkRights).toEqual([ACCEPTED]);
     // The settings hold 200 seen answers at most.
     const full = base({ seenWorkRights: Array.from({ length: 200 }, (_, i) => `Answer ${i}`) });

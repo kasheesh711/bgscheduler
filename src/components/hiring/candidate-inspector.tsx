@@ -363,7 +363,9 @@ export function CandidateInspector({
             <dt>Work rights</dt>
             <dd>
               {candidate.workRightsAnswer
-                ? `${candidate.workRightsAccepted ? "Accepted" : "Not accepted"}: ${candidate.workRightsAnswer}`
+                ? `${candidate.workRightsAccepted ? "Accepted" : "Not accepted"}: ${candidate.workRightsAnswer}${
+                    candidate.workRightsPenalty ? ` (${candidate.workRightsPenalty} points off the profile score)` : ""
+                  }`
                 : "No answer on file"}
             </dd>
           </div>
