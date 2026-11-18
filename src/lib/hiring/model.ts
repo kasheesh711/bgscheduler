@@ -314,6 +314,19 @@ export const baseConfigSchema = z
       .max(50)
       .default(["I have permanent work rights with no restrictions"]),
     seenWorkRights: z.array(z.string().trim().min(1).max(300)).max(200).default([]),
+    /**
+     * Points taken off the profile score for a work-rights answer. An answer with no row loses nothing.
+     * Optional with no default, so the key enters the saved settings only when a person sets a penalty:
+     * the schema is strict, and an app or Mac worker on older code cannot read a key it does not know.
+     */
+    workRightsPenalties: z
+      .array(
+        z
+          .object({ answer: z.string().trim().min(1).max(300), points: z.number().int().min(1).max(100) })
+          .strict(),
+      )
+      .max(200)
+      .optional(),
     subjectPriority: z
       .array(z.object({ subject: subjectSchema, hiring: z.boolean() }).strict())
       .max(SUBJECTS.length)

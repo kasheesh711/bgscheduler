@@ -128,14 +128,18 @@ export function profileScore(
     prestige?: number;
   } = DEFAULT_WEIGHTS,
   prestige = 0,
+  /** Points off for the work-rights answer (see `workRightsPenalty`). The score never goes below 0. */
+  penalty = 0,
 ) {
-  return (
+  return Math.max(
+    0,
     assessment.criteria.reduce(
       // A pre-screen assessment also holds `written`, which has no profile weight.
       (n, c) => n + ((weights as Record<string, number | undefined>)[c.id] ?? 0) * VALUE[c.result],
       0,
     ) +
-    (weights.prestige ?? 0) * prestige
+    (weights.prestige ?? 0) * prestige -
+    penalty,
   );
 }
 export function degreeEligible(degree: string): boolean | null {
@@ -205,6 +209,9 @@ export function preScreenPoints(
 }
 /** The one key for a work-rights answer: the import records it and the check compares it. */
 export const answerKey = (value: string) => value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+/** The points the settings take off the profile score for this answer. No answer or no row: 0. */
+export const workRightsPenalty = (answer: string | null, config: Pick<HiringConfig, "workRightsPenalties">) =>
+  (answer && config.workRightsPenalties?.find((p) => answerKey(p.answer) === answerKey(answer))?.points) || 0;
 /** Only an exact answer from the accepted list passes. A missing answer never passes. */
 export function workRightsAccepted(answer: string | null, accepted: string[]) {
   return !!answer?.trim() && accepted.some((a) => answerKey(a) === answerKey(answer));

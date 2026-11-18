@@ -9,6 +9,7 @@ import type { Command, HiringCandidate } from "./dashboard";
 import { CRITERION_LABELS, PILL_CLASS, RESULT_CLASS, RESULT_LABELS } from "./pipeline-charts";
 import { Pentagon } from "./pentagon";
 import { phoneView } from "@/lib/hiring/phone";
+import { PdfPages } from "./pdf-pages";
 import css from "./dashboard.module.css";
 
 const POINTS = { met: 1, partial: 0.5, not_met: 0, unknown: 0 };
@@ -114,7 +115,7 @@ export function AssessmentBlock({
 
 const RESUME_FAILED = "The résumé could not be opened. Try again.";
 type ResumeCheck = { status: "checking" | "ready" } | { status: "failed"; message: string };
-/** An iframe cannot read a 404, so the route is asked first. Its message reaches the panel in place of raw JSON. */
+/** The route is asked first, so its message (deleted, gone, sign in again) reaches the panel in plain words. */
 export async function checkResume(src: string): Promise<ResumeCheck> {
   try {
     const response = await fetch(src, { cache: "no-store" });
@@ -221,7 +222,6 @@ export function ResumeBody({
   type,
   months,
   check,
-  viewer = "",
 }: {
   id: string;
   name: string;
@@ -229,8 +229,6 @@ export function ResumeBody({
   type: string | null;
   months: number;
   check: ResumeCheck;
-  /** PDF viewer options for the iframe only, such as "#toolbar=0". The download link never gets them. */
-  viewer?: string;
 }) {
   if (state === "deleted")
     return (
@@ -244,13 +242,7 @@ export function ResumeBody({
   const src = `/api/hiring/resume/${encodeURIComponent(id)}`;
   return (
     <>
-      {/* No sandbox attribute: Chrome blocks its PDF viewer in any sandboxed iframe, with every allow token. The route sends the sandbox as a CSP header, which the viewer accepts. */}
-      {type === RESUME_TYPES.pdf && (
-        <>
-          <p className={css.inspectorMeta}>A link in a résumé can open another site. Do not sign in on a page that opens from a résumé.</p>
-          <iframe className={css.resumeFrame} src={src + viewer} title={`Original résumé of ${name}`} />
-        </>
-      )}
+      {type === RESUME_TYPES.pdf && <PdfPages key={src} src={src} title={`Original résumé of ${name}`} />}
       <a className={css.sourceLink} href={src} download>
         Download
       </a>
@@ -371,7 +363,9 @@ export function CandidateInspector({
             <dt>Work rights</dt>
             <dd>
               {candidate.workRightsAnswer
-                ? `${candidate.workRightsAccepted ? "Accepted" : "Not accepted"}: ${candidate.workRightsAnswer}`
+                ? `${candidate.workRightsAccepted ? "Accepted" : "Not accepted"}: ${candidate.workRightsAnswer}${
+                    candidate.workRightsPenalty ? ` (${candidate.workRightsPenalty} points off the profile score)` : ""
+                  }`
                 : "No answer on file"}
             </dd>
           </div>

@@ -24,6 +24,63 @@ const normalized = (value: string) =>
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
+/** Bump when the match or the bands change, so the worker computes every stored result again. */
+export const PRESTIGE_RULES = 2;
+type CatalogRow = HiringConfig["universities"][number];
+const REGION = new Intl.DisplayNames(["en"], { type: "region" });
+/** U.S. News writes "University of Texas--Austin"; a résumé writes "The University of Texas at Austin". */
+const loose = (value: string) => normalized(value).replace(/^the /, "").replace(/ at /g, " ");
+/**
+ * U.S. News adds the country to some names ("University of Queensland Australia", "Northeastern University - China").
+ * The name without the country counts only with `country`: ROR must first prove the institution is in that country,
+ * or "Asia University" (Japan) would take the rank of "Asia University Taiwan".
+ */
+function looseKeys(u: CatalogRow, country: boolean) {
+  const suffix = country ? normalized(REGION.of(u.country) ?? "") : "";
+  return [u.name, ...u.aliases].flatMap((n) => {
+    const key = loose(n);
+    return suffix && key.endsWith(" " + suffix) ? [key, key.slice(0, -suffix.length - 1)] : [key];
+  });
+}
+/** A demonstration school or a hospital states the university's name and awards no degree of it. */
+const NOT_A_COLLEGE = /\b(demonstration|satit|secondary|high school|hospital)\b/;
+/**
+ * The catalog rows for one institution's names. The first rule with a result decides:
+ * 1. the exact name or alias;
+ * 2. the same name in the other spelling (see `loose` and `looseKeys`);
+ * 3. a college or faculty that states its named Thai university ("SIIT, Thammasat University").
+ * More than one row is ambiguous and the caller gives no points.
+ * `country` is true when `rows` holds only the country that ROR verified.
+ */
+export function catalogMatches(names: string[], rows: CatalogRow[], country = false): CatalogRow[] {
+  const exact = new Set(names.map(normalized));
+  const wanted = new Set(names.map(loose));
+  const padded = names.map((n) => ` ${normalized(n)} `).filter((n) => !NOT_A_COLLEGE.test(n));
+  const rules: ((u: CatalogRow) => boolean)[] = [
+    (u) => [u.name, ...u.aliases].some((n) => exact.has(normalized(n))),
+    (u) => looseKeys(u, country).some((k) => wanted.has(k)),
+    (u) =>
+      THAI_PRIORITY_UNIVERSITIES.includes(u.name.toLowerCase()) &&
+      padded.some((n) => n.includes(` ${normalized(u.name)} `)),
+  ];
+  for (const rule of rules) {
+    const found = rows.filter(rule);
+    if (found.length) return found;
+  }
+  return [];
+}
+/**
+ * The last resort: the names give only the university system before "--" ("Arizona State University").
+ * With two or more campuses in the catalog, the lowest-ranked one counts: no better rank is proven.
+ * With one campus, the row counts only when ROR verified an institution of exactly this name, which is the main campus.
+ */
+export function systemMatch(names: string[], rows: CatalogRow[], verified: boolean): CatalogRow[] {
+  const wanted = new Set(names.map(loose));
+  const campuses = rows.filter((u) => u.name.includes("--") && wanted.has(loose(u.name.split("--")[0])));
+  if (campuses.length === 1 && !verified) return [];
+  const worst = (u: CatalogRow) => u.rank ?? Number.MAX_SAFE_INTEGER;
+  return campuses.sort((a, b) => worst(b) - worst(a)).slice(0, 1);
+}
 const countryCache = new Map<
   string,
   { country: string; source: string; names: string[] } | null
@@ -33,8 +90,10 @@ export function prestigeFraction(
 ) {
   if (THAI_PRIORITY_UNIVERSITIES.includes(university.name.toLowerCase()))
     return 0.6;
-  const countryBoost = ["US", "GB"].includes(university.country) ? 0.4 : 0;
   const rank = university.rank;
+  // The US/UK boost needs a rank in the top 1,000: a country alone proves nothing about the school.
+  const countryBoost =
+    rank !== null && rank <= 1000 && ["US", "GB"].includes(university.country) ? 0.4 : 0;
   const rankingBoost =
     rank === null
       ? 0
@@ -104,21 +163,16 @@ export async function assessPrestige(
     catalogHash,
   };
   for (const school of evidence.filter((s) => s.completedDegree)) {
-    let matches = config.universities.filter((u) =>
-      [u.name, ...u.aliases].some(
-        (n) => normalized(n) === normalized(school.name),
-      ),
-    );
-    if (matches.length > 1) continue;
-    const institution = matches.length
-      ? null
-      : await verifiedCountry(school.name, fetchImpl).catch(() => null);
-    // ROR's names identify one institution; never strip campus names or use fuzzy matching.
-    if (!matches.length && institution)
-      matches = config.universities.filter((u) =>
-        u.country === institution.country &&
-        [u.name, ...u.aliases].some((n) => institution.names.includes(normalized(n))),
-      );
+    let matches = catalogMatches([school.name], config.universities);
+    // ROR settles the country when the name alone finds no row or more than one.
+    const institution =
+      matches.length === 1 ? null : await verifiedCountry(school.name, fetchImpl).catch(() => null);
+    const names = [school.name, ...(institution?.names ?? [])];
+    const rows = institution
+      ? config.universities.filter((u) => u.country === institution.country)
+      : config.universities;
+    if (institution) matches = catalogMatches(names, rows, true);
+    if (!matches.length) matches = systemMatch(names, rows, !!institution);
     if (matches.length > 1) continue;
     const matched = matches[0];
     const country = matched

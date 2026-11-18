@@ -23,6 +23,7 @@ import {
   hardStops,
   preScreenPoints,
   profileScore,
+  workRightsPenalty,
   supportedVisitSubjects,
   visitSubject,
 } from "./scoring";
@@ -277,7 +278,7 @@ export function preScreenEntries(rows: FormCandidate[], config: HiringConfig): Q
           {
             id: row.id,
             subject,
-            score: profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0),
+            score: profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0, workRightsPenalty(row.workRightsAnswer, config)),
             createdAt: row.createdAt,
             manual: row.queueManual,
           },
@@ -305,7 +306,7 @@ export function callEntries(rows: FormCandidate[], config: HiringConfig): QueueE
             {
               id: row.id,
               subject: gate.subject,
-              score: profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0),
+              score: profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0, workRightsPenalty(row.workRightsAnswer, config)),
               createdAt: row.createdAt,
             },
           ]

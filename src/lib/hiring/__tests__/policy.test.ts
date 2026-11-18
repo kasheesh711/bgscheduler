@@ -19,6 +19,7 @@ import {
   preScreenAssessmentSchema,
   preScreenPoints,
   profileScore,
+  workRightsPenalty,
   topHiringSubject,
   assessmentSchema,
   assessmentOutputSchema,
@@ -137,6 +138,13 @@ describe("hiring decision boundaries", () => {
       english: 20,
     };
     expect(profileScore(assessment, changed)).toBe(50);
+    // The work-rights points come off the total, and the score stops at 0.
+    const penalties = configSchema.parse({ workRightsPenalties: [{ answer: "Temporary  Visa", points: 10 }] });
+    expect(workRightsPenalty("temporary visa", penalties)).toBe(10);
+    expect(workRightsPenalty("other", penalties)).toBe(0);
+    expect(workRightsPenalty(null, penalties)).toBe(0);
+    expect(profileScore(assessment, DEFAULT_WEIGHTS, 0, 10)).toBe(50);
+    expect(profileScore(assessment, DEFAULT_WEIGHTS, 0, 100)).toBe(0);
     expect(
       configSchema.safeParse({
         profileWeights: { ...DEFAULT_WEIGHTS, english: 19 },

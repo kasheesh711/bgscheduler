@@ -29,6 +29,7 @@ import {
   saveSettings,
   settings,
   sourceHash,
+  prestigeCatalogHash,
   visitView,
   type Candidate,
 } from "../service";
@@ -542,7 +543,7 @@ describe("hiring workflow persistence", () => {
     });
     it("scores one candidate on request and keeps the profile's university result", async () => {
       const [one, two] = await seed();
-      const kept = { name: "Kept", country: "GB", rank: 5, edition: "2025-2026", fraction: 1, reason: "kept", sources: [], catalogHash: sourceHash(paused.universities) };
+      const kept = { name: "Kept", country: "GB", rank: 5, edition: "2025-2026", fraction: 1, reason: "kept", sources: [], catalogHash: prestigeCatalogHash(paused.universities) };
       await db.update(s.hiringCandidates).set({ universityAssessment: kept }).where(eq(s.hiringCandidates.id, one.id));
       const assess = vi.fn(async () => six());
       expect(await scorePreScreens(db, paused, assess, { candidateId: one.id })).toBe(1);
@@ -617,7 +618,7 @@ describe("hiring workflow persistence", () => {
     });
     it("leaves a university correction made during the model call alone", async () => {
       const [one] = await seed();
-      const catalogHash = sourceHash(paused.universities);
+      const catalogHash = prestigeCatalogHash(paused.universities);
       const before = { name: "Before", country: "GB", rank: 5, edition: "2025-2026", fraction: 1, reason: "before", sources: [], catalogHash };
       const corrected = { ...before, name: "Corrected", fraction: 0.5, reason: "corrected by a person" };
       await db.update(s.hiringCandidates).set({ universityAssessment: before }).where(eq(s.hiringCandidates.id, one.id));
@@ -650,7 +651,7 @@ describe("hiring workflow persistence", () => {
       expect(await scorePreScreens(db, custom, async () => six(), { candidateId: one.id })).toBe(1);
       const [row] = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, one.id));
       expect(row.universityAssessment?.name).toBe("Test University");
-      expect(row.universityAssessment?.catalogHash).toBe(sourceHash(custom.universities));
+      expect(row.universityAssessment?.catalogHash).toBe(prestigeCatalogHash(custom.universities));
       const audit = (await db.select().from(s.hiringAudit)).find((a) => a.action === "pre-screen-score-only");
       expect(audit?.detail).toMatchObject({ sourceHash: row.preScreenHash });
     });

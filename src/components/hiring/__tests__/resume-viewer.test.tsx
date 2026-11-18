@@ -9,7 +9,6 @@ import { NO_FILTER } from "../dashboard";
 vi.mock("next/font/google", () => ({ Instrument_Serif: () => ({ variable: "" }) }));
 
 const ID = "00000000-0000-4000-8000-000000000001";
-const LINK_WARNING = "A link in a résumé can open another site. Do not sign in on a page that opens from a résumé.";
 const body = (patch = {}) =>
   renderToStaticMarkup(
     <ResumeBody id={ID} name="Invented" state="available" type={RESUME_TYPES.pdf} months={12} check={{ status: "ready" }} {...patch} />,
@@ -18,25 +17,24 @@ const body = (patch = {}) =>
 afterEach(() => vi.unstubAllGlobals());
 
 describe("ResumeBody", () => {
-  it("shows a PDF in an iframe from the guarded route, never a storage address", () => {
+  it("draws a PDF on the page with no frame, so Safari and phones show it, and keeps Download on the guarded route", () => {
     const html = body();
-    expect(html).toContain("<iframe");
-    expect(html).toContain(`src="/api/hiring/resume/${ID}"`);
+    expect(html).not.toContain("<iframe");
+    expect(html).toContain('aria-label="Original résumé of Invented"');
+    expect(html).toContain("Opening the file");
+    expect(html).toContain(`href="/api/hiring/resume/${ID}"`);
     expect(html).not.toContain("blob.vercel");
     expect(html).toContain("Download");
-    expect(html).toContain(LINK_WARNING);
   });
-  it("shows Download for a Word file, with no iframe and no link warning", () => {
+  it("shows Download for a Word file, with no viewer", () => {
     const html = body({ type: RESUME_TYPES.docx });
-    expect(html).not.toContain("<iframe");
-    expect(html).not.toContain(LINK_WARNING);
+    expect(html).not.toContain("Original résumé of");
     expect(html).toContain("Download");
     expect(html).toContain(`href="/api/hiring/resume/${ID}"`);
   });
   it("says there is no file yet", () => {
     const html = body({ state: "none" });
     expect(html).toContain("No original file");
-    expect(html).not.toContain(LINK_WARNING);
     expect(html).not.toContain("<iframe");
     expect(html).not.toContain("href=");
   });

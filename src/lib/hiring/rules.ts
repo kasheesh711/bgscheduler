@@ -1,6 +1,6 @@
 import { applicableSchedule, type Week } from "@/lib/tutor-attendance/model";
 import { configRuleErrors, localDate, SUBJECTS, VISIT_LINK_DAYS, type HiringConfig } from "./model";
-import { answerKey } from "./scoring";
+import { answerKey, workRightsPenalty } from "./scoring";
 
 /**
  * Pure helpers for the Rules and setup screen. The screen calls these, and the tests call them,
@@ -89,6 +89,8 @@ export function settingsProblems(config: HiringConfig): string[] {
   for (const [key, label] of Object.entries(PRE_SCREEN_WEIGHT_LABELS))
     if (!whole(config.preScreenWeights[key as keyof typeof PRE_SCREEN_WEIGHT_LABELS], 0, 100))
       problems.push(`Pre-screen ${label.toLowerCase()}: use a whole number from 0 to 100.`);
+  if (config.workRightsPenalties?.some((p) => !whole(p.points, 1, 100)))
+    problems.push("Work-rights points off: use a whole number from 0 to 100.");
   if (!whole(config.profileThreshold, 0, 100)) problems.push("Invitation threshold: use a whole number from 0 to 100.");
   const total = Object.values(config.preScreenWeights).reduce((n, w) => n + w, 0);
   if (total !== 100) problems.push(`Pre-screen weights total ${total}. They must total 100.`);
@@ -145,14 +147,14 @@ export const setHiring = (list: Priority, index: number, hiring: boolean): Prior
   list.map((p, i) => (i === index ? { ...p, hiring } : p));
 
 /** Every answer the settings know, accepted or only seen, once each. A new answer from SEEK starts unticked. */
-export function workRightsRows(config: HiringConfig): { answer: string; accepted: boolean }[] {
+export function workRightsRows(config: HiringConfig): { answer: string; accepted: boolean; penalty: number }[] {
   const accepted = new Set(config.acceptedWorkRights.map(answerKey));
   const seen = new Set<string>();
   return [...config.acceptedWorkRights, ...config.seenWorkRights].flatMap((answer) => {
     const key = answerKey(answer);
     if (seen.has(key)) return [];
     seen.add(key);
-    return [{ answer, accepted: accepted.has(key) }];
+    return [{ answer, accepted: accepted.has(key), penalty: workRightsPenalty(answer, config) }];
   });
 }
 export function setWorkRightsAccepted(config: HiringConfig, answer: string, on: boolean): HiringConfig {
@@ -162,10 +164,19 @@ export function setWorkRightsAccepted(config: HiringConfig, answer: string, on: 
   const seen = config.seenWorkRights;
   const remember = !on && !seen.some((a) => answerKey(a) === key) && seen.length < 200;
   return {
-    ...config,
+    // An answer that is not accepted keeps no hidden penalty.
+    ...(on ? config : setWorkRightsPenalty(config, answer, 0)),
     acceptedWorkRights: on ? [...rest, answer] : rest,
     seenWorkRights: remember ? [...seen, answer] : seen,
   };
+}
+
+/** 0 removes the row. Any other value replaces it. */
+export function setWorkRightsPenalty(config: HiringConfig, answer: string, points: number): HiringConfig {
+  const rest = (config.workRightsPenalties ?? []).filter((p) => answerKey(p.answer) !== answerKey(answer));
+  const next = points ? [...rest, { answer, points }] : rest;
+  // No rows: no key, so settings with no penalty stay readable by older code.
+  return { ...config, workRightsPenalties: next.length ? next : undefined };
 }
 
 export const HEAD_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"] as const;

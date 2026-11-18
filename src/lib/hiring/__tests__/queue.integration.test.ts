@@ -12,7 +12,7 @@ import {
   updateGoogleSheetRangeValues,
 } from "@/lib/sales-dashboard/sheets";
 import { configSchema, HiringError, type HiringConfig } from "../model";
-import { bookingView, inviteToVisit, reviewCandidate, sourceHash, type Candidate } from "../service";
+import { bookingView, inviteToVisit, reviewCandidate, prestigeCatalogHash, sourceHash, type Candidate } from "../service";
 import { readyToInvite } from "../insights";
 import { isNewFlow, mirrorTracker, parseFormTimestamp, syncTracker } from "../sources";
 import { assessCandidates, deliverOutbox, preScreenText, runHiringCycle } from "../worker";
@@ -798,7 +798,7 @@ describe("follow-ups", () => {
   });
 });
 describe("university result on a live reply", () => {
-  const catalog = sourceHash(config.universities);
+  const catalog = prestigeCatalogHash(config.universities);
   const stored = { name: "Stored", country: "US", rank: 5, edition: "e", fraction: 0.75, reason: "r", sources: [], catalogHash: catalog };
   const inCatalog = config.universities.find((u) => u.rank)!;
   // A live reply: the app sent the form, then the reply came.
