@@ -1,6 +1,7 @@
 import { inArray, sql } from "drizzle-orm";
 import { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { NEAR_HORIZON_DAYS, resolveAvailabilityHorizonDays } from "./fetchers";
 import type { WiseLeave } from "./types";
 
@@ -82,6 +83,30 @@ export function isFarCacheFresh(
 }
 
 /**
+ * drizzle-orm 0.45 wraps every driver error in a DrizzleQueryError whose
+ * message is `Failed query: <sql>` — it names this table on ANY failure, so
+ * the message cannot tell a pending migration from an outage. Only SQLSTATE
+ * 42P01 (undefined_table) is the migration case. The read names no other relation,
+ * so here 42P01 means this table is missing.
+ */
+function isMissingCacheTable(error: unknown): boolean {
+  return sqlStateOf(error) === "42P01";
+}
+
+/**
+ * The driver's SQLSTATE and message, for logs. A DrizzleQueryError's own
+ * message is the failed SQL plus every param (hundreds of teacher ids on a
+ * read, the leave JSON on a write) and never says why the query failed.
+ */
+function describeDbFailure(error: unknown): string {
+  const cause = error instanceof Error ? error.cause : undefined;
+  const driverError = cause === undefined || cause === null ? error : cause;
+  if (typeof driverError !== "object" || driverError === null) return String(driverError);
+  const { code, message } = driverError as { code?: unknown; message?: unknown };
+  return [code, message].filter((part) => typeof part === "string" && part !== "").join(" ") || "unknown error";
+}
+
+/**
  * Load cached far-leave rows for the given Wise teacher user ids.
  *
  * Returns an EMPTY map on any read failure — a missing table (migration not yet
@@ -123,13 +148,12 @@ export async function loadFarLeaveCache(
     }
     return cache;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (message.includes("wise_teacher_availability_cache") || message.includes("does not exist")) {
+    if (isMissingCacheTable(err)) {
       console.info(
         "wise_teacher_availability_cache is unavailable; every teacher will fetch far leaves live.",
       );
     } else {
-      console.error("[wise-availability-cache] far-leave cache read failed:", message);
+      console.error("[wise-availability-cache] far-leave cache read failed:", describeDbFailure(err));
     }
     return new Map();
   }
@@ -183,8 +207,7 @@ export async function saveFarLeaveCache(
     }
     return values.length;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[wise-availability-cache] far-leave cache write failed:", message);
+    console.error("[wise-availability-cache] far-leave cache write failed:", describeDbFailure(err));
     return 0;
   }
 }

@@ -2,6 +2,7 @@ import { applyNightlyReminderHealth } from "@/lib/post-class-feedback/nightly-re
 import { desc, eq, getTableColumns, gte, lte, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { sqlStateOf } from "@/lib/db/sql-state";
 import { isApiSnapshotStale } from "@/lib/ops/stale";
 import { effectiveCronJob, CRON_JOBS, isManuallyRunnable, manuallyRunnableCronJobs, statusRank, type CronJobDefinition } from "./cron-registry";
 import { evaluateCronJobStatus, type InvocationEvidence, type RunEvidence } from "./status";
@@ -883,6 +884,20 @@ export const INVOCATIONS_PER_JOB = 8;
 const INVOCATIONS_LOOKBACK_DAYS = 45;
 
 /**
+ * drizzle-orm 0.45 wraps every driver error in a DrizzleQueryError whose
+ * message is `Failed query: <sql>` — it names cron_invocations on ANY failure
+ * (timeout, dropped connection, permission), so the message cannot tell a
+ * missing table from an outage. Decide on SQLSTATE 42P01 (undefined_table).
+ * The read names no other relation, so here 42P01 means this table is missing.
+ * Keep it that way: Postgres also raises 42P01 for a missing FROM-clause entry
+ * (e.g. an outer-query reference to cron_invocations instead of the ranked
+ * subquery), which would degrade just as quietly.
+ */
+function isMissingCronInvocationsTable(error: unknown): boolean {
+  return sqlStateOf(error) === "42P01";
+}
+
+/**
  * Latest invocations per jobKey (not a global recency window). A global
  * LIMIT used to let chatty 30-minute jobs push a daily job's only invocation
  * out of the window within hours, flipping its health evidence to stale
@@ -907,8 +922,7 @@ async function fetchCronInvocations(db: Database, now = new Date()): Promise<Cro
     // eslint-disable-next-line @typescript-eslint/no-unused-vars -- strips the window-rank helper column
     return rows.map(({ rowNumber: _rowNumber, ...invocation }) => invocation as CronInvocation);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    if (message.includes("cron_invocations") || message.includes("relation") || message.includes("does not exist")) {
+    if (isMissingCronInvocationsTable(error)) {
       console.info("cron_invocations table is unavailable; Data Health will use inferred run-table proof.");
       return [];
     }
