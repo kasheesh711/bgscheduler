@@ -59,6 +59,15 @@ function previous(overrides: Partial<PreviousAssignmentRow> = {}): PreviousAssig
 }
 
 describe("reconcileClassroomAssignments", () => {
+  it("moves a previously published class out of a staff room even when its preference is frozen", () => {
+    const current = session();
+    const result = reconcileClassroomAssignments({
+      sessions: [current], previousRows: [previous({ assignedRoom: "Now" })], rooms,
+      frozenSessionIds: new Set([current.wiseSessionId]),
+    });
+    expect(result.rows[0]).toMatchObject({ assignedRoom: "Room A", changeType: "moved", publishStatus: "not_published" });
+  });
+
   it("carries unchanged rows forward with publish state intact", () => {
     const current = session();
     const result = reconcileClassroomAssignments({

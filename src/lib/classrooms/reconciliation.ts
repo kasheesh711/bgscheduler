@@ -13,6 +13,7 @@ import {
 } from "./assignment-engine";
 import {
   NO_ROOM_AVAILABLE,
+  UNAVAILABLE_CLASSROOM_NAMES,
   normalizeTutorName,
   type ClassroomRoomDefinition,
 } from "./rooms";
@@ -330,7 +331,8 @@ export function reconcileClassroomAssignments(input: ReconcileInput): Reconcilia
       && session.startMinute === previous.startMinute && session.endMinute === previous.endMinute
       && session.sessionType === previous.sessionType && session.studentCount === previous.studentCount
       && session.classType === previous.classType;
-    if ((changeType === "carried" || protectedPreference) && previous && previous.status !== "no_room" && !overrideChanged) {
+    if ((changeType === "carried" || protectedPreference) && previous && previous.status !== "no_room"
+      && !UNAVAILABLE_CLASSROOM_NAMES.has(previous.assignedRoom) && !overrideChanged) {
       carriedRows.push(carryRow(session, previous, fingerprint));
       continue;
     }

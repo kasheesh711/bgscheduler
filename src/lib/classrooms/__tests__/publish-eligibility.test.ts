@@ -47,12 +47,12 @@ const baseRow = {
 };
 
 describe("isClassroomPublishEligible", () => {
-  it("blocks a saved Eureka assignment even when its saved status is assigned", () => {
-    expect(isClassroomPublishEligible({ ...baseRow, assignedRoom: "Eureka" })).toEqual({
-      eligible: false, reason: "Eureka is unavailable; review the room assignment",
+  it.each(["Eureka", "Now", "Productive"])("blocks a saved assignment in %s", (room) => {
+    expect(isClassroomPublishEligible({ ...baseRow, assignedRoom: room })).toEqual({
+      eligible: false, reason: `${room} is unavailable; review the room assignment`,
     });
-    const catalog = buildWisePublishLocationCatalog(DEFAULT_CLASSROOM_ROOMS, ["Eureka"]);
-    expect(resolveWisePublishLocation(catalog, "Eureka")).toMatchObject({ ok: false });
+    const catalog = buildWisePublishLocationCatalog(DEFAULT_CLASSROOM_ROOMS, [room]);
+    expect(resolveWisePublishLocation(catalog, room)).toMatchObject({ ok: false });
   });
 
   it("allows assigned offline rows with Wise ids", () => {

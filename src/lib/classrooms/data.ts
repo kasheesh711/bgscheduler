@@ -33,6 +33,7 @@ import {
 } from "./assignment-engine";
 import {
   DEFAULT_CLASSROOM_ROOMS,
+  UNAVAILABLE_CLASSROOM_NAMES,
   NO_ROOM_AVAILABLE,
   TV_ROOM_NAME_BY_PHYSICAL_NAME,
   type ClassroomRoomDefinition,
@@ -638,7 +639,7 @@ async function loadRowsForRun(db: Database, runId: string): Promise<ClassroomRow
       schema.classroomAssignmentRows.startTime,
       schema.classroomAssignmentRows.tutorDisplayName,
     );
-  return rows.map(row => row.assignedRoom === "Eureka" ? {
+  return rows.map(row => UNAVAILABLE_CLASSROOM_NAMES.has(row.assignedRoom) ? {
     ...row,
     status: "needs_review" as const,
     warnings: [...new Set([...row.warnings, "assigned_room_unavailable"])],
@@ -1332,7 +1333,7 @@ export function isClassroomPublishEligible(
   if (row.status === "remote" || row.assignedRoom === REMOTE_NO_ROOM_NEEDED) {
     return { eligible: false, reason: "Remote online session has no Wise location to publish" };
   }
-  if (row.assignedRoom === "Eureka") return { eligible: false, reason: "Eureka is unavailable; review the room assignment" };
+  if (UNAVAILABLE_CLASSROOM_NAMES.has(row.assignedRoom)) return { eligible: false, reason: `${row.assignedRoom} is unavailable; review the room assignment` };
   if (row.status !== "assigned") return { eligible: false, reason: "Only assigned rows can publish" };
   if (!row.assignedRoom || row.assignedRoom === NO_ROOM_AVAILABLE) {
     return { eligible: false, reason: "No assigned room to publish" };

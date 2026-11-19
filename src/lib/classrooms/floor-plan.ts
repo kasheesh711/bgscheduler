@@ -317,12 +317,12 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
   },
   {
     roomName: "Now",
-    label: "Now",
-    labelLines: ["Now"],
+    label: "Now (HR room)",
+    labelLines: ["Now", "HR room"],
     d: rectPath(1830, 405, 230, 80),
     labelX: 1945,
     labelY: 445,
-    assignable: true,
+    assignable: false,
     section: "right",
   },
   {
@@ -387,12 +387,12 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
   },
   {
     roomName: "Productive",
-    label: "Productive",
-    labelLines: ["Productive"],
+    label: "Productive (Tutor break room)",
+    labelLines: ["Productive", "Tutor break room"],
     d: rectPath(1830, 865, 230, 110),
     labelX: 1945,
     labelY: 920,
-    assignable: true,
+    assignable: false,
     section: "right",
   },
   {

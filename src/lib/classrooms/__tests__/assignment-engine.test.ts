@@ -68,11 +68,11 @@ describe("assignClassrooms", () => {
     }
   });
 
-  it("rejects Eureka allocations and overrides", () => {
-    const result = assignClassrooms([session()], roomsFor("Eureka", "Focus"), new Map([["session-1", "Eureka"]]));
+  it.each(["Eureka", "Now", "Productive"])("rejects %s allocations and overrides", (room) => {
+    const result = assignClassrooms([session()], roomsFor(room, "Focus"), new Map([["session-1", room]]));
     expect(result.rows[0].assignedRoom).toBe("Focus");
     expect(result.rows[0].warnings).toContain("invalid_override_room");
-    expect(assignClassrooms([session()], roomsFor("Eureka")).rows[0].status).toBe("no_room");
+    expect(assignClassrooms([session()], roomsFor(room)).rows[0].status).toBe("no_room");
   });
 
   it("uses Dream. Plan. Do. before Trust the Process when only last-resort rooms remain", () => {
