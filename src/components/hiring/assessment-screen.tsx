@@ -560,7 +560,7 @@ export function MockView({ mock, command, reload, busy }: { mock: Mock; command:
 type DecisionRow = HiringData["decisions"][number];
 
 /** A result email's state from the outbox, as on the Pre-screen screen: stage alone is not proof that it left. */
-function resultEmailState(key: string | null, outbox: HiringData["inviteOutbox"]) {
+export function resultEmailState(key: string | null, outbox: HiringData["inviteOutbox"]) {
   const row = outbox.find((job) => job.key === key);
   if (!row) return { label: "Not found", tone: css.warnWord, error: null };
   if (row.status === "sent") return { label: row.sentAt ? `Sent ${when(new Date(row.sentAt))}` : "Sent", tone: css.goodWord, error: null };

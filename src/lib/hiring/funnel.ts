@@ -74,7 +74,7 @@ export const PAYLOAD_ROW_CAP = 2000;
 export const STUCK_RULES: { key: string; stage: string; label: string; days: number | null; why: string; next: string; owner: string }[] = [
   { key: "new", stage: "new", label: "New, no call link", days: 14, why: "The worker checks the gate each cycle. Two weeks means a setting holds it.", next: "Check the gate reason. Change the rules or stop the candidate.", owner: "Kevin" },
   { key: "new (call link sent, no call)", stage: "new", label: "New, call link sent", days: 7, why: "A call link lasts 14 days. A week with no booking is a stall.", next: "Candidate books the HR call.", owner: "HR" },
-  { key: "new (call booked)", stage: "new", label: "New, call booked", days: 3, why: "After the call time, HR must record the result.", next: "Record the call result on 2 Calls.", owner: "HR" },
+  { key: "new (call booked)", stage: "new", label: "New, call booked", days: 3, why: "After the call time, HR must record the result.", next: "Record the call result under HR calls.", owner: "HR" },
   { key: "review", stage: "review", label: "In review", days: 7, why: "It waits on a person.", next: "Read the record. Invite, move on or stop.", owner: "HR" },
   { key: "pre_screen", stage: "pre_screen", label: "Pre-screen", days: 7, why: "Form and reminder window.", next: "Candidate sends the form. The worker sends a reminder.", owner: "HR" },
   { key: "onsite_invited", stage: "onsite_invited", label: "Onsite invited", days: 7, why: "Invite link lifetime.", next: "Candidate books a visit.", owner: "Kevin" },

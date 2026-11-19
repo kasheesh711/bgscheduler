@@ -45,7 +45,7 @@
 .tag[data-tone="reject"] { background: color-mix(in oklch, var(--danger) 12%, var(--paper)); color: var(--danger); }
 .actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; grid-column: 3; }
 .callContext .card .cardMain, .callContext .card .actions { grid-column: 1; justify-content: flex-start; }
-.resume { grid-column: 1 / -1; }
+.reviewActions, .resume { grid-column: 1 / -1; }
 .resume iframe { height: 75vh; }
 
 /* Buttons: at least 44px tall, for a phone or a tablet at the front desk. */

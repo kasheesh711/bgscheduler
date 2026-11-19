@@ -7,7 +7,7 @@ import { buildRunSheet, headName, headVisits, pastVisits, upcoming, type RunShee
 import { dayTitle, openHeadDecisions, weekCalls } from "@/lib/hiring/role-views";
 import { universityName } from "@/lib/hiring/seek-view";
 import { FinalReview } from "./final-review";
-import { ResultUpload } from "./assessment-screen";
+import { resultEmailState, ResultUpload } from "./assessment-screen";
 import { callCommand, callState, callSubjects, triesText } from "./calls-screen";
 import { PhoneLink, ResumeBody, SourceTextBody, useResumeCheck, useSourceText } from "./candidate-inspector";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
@@ -171,6 +171,83 @@ export function TodayCalls({ data, command, busy, readOnly = false, children }: 
   );
 }
 
+function ReviewRecommendations({ data, onOpenResults, readOnly, reload }: {
+  data: HiringData;
+  onOpenResults: (id: string | null) => void;
+  readOnly?: boolean;
+  reload?: () => Promise<void>;
+}) {
+  const byId = new Map(data.candidates.map((candidate) => [candidate.id, candidate]));
+  const decisions = openHeadDecisions(data.headDecisions, data.decisions)
+    .filter(({ candidateId }) => !reload || (candidateId && !["hired", "rejected", "stopped"].includes(byId.get(candidateId)?.stage ?? "")));
+  if (!decisions.length && !reload) return null;
+  return (
+    <Section title="Tutor recommendations" count={decisions.length}>
+      {!decisions.length && <p className={r.quiet}>No candidates are waiting for final review.</p>}
+      <div className={r.cards}>
+        {decisions.map((d) => (
+          <article key={d.candidateId} className={r.card}>
+            <div className={r.cardMain}>
+              <p className={r.name}>{byId.get(d.candidateId!)?.name ?? "Candidate"}</p>
+              <p className={r.meta}>
+                <span className={r.tag} data-tone={d.decision}>
+                  {d.decision === "hire" ? "Yes" : "No"}
+                </span>
+                {d.head} · {d.reason || "No reason given"}
+              </p>
+              {d.draftProblem && <p className={r.warn}>No email draft yet: {d.draftProblem}</p>}
+            </div>
+            <div className={reload && d.decision === "hire" ? r.reviewActions : r.actions}>
+              {!readOnly && d.decision === "hire" && d.candidateId && (data.reviewAccess?.hr || data.reviewAccess?.gift)
+                ? <FinalReview id={d.candidateId} onChanged={reload} />
+                : <button type="button" className={r.big} disabled={readOnly} onClick={() => onOpenResults(d.candidateId)}>Open assessment</button>}
+            </div>
+          </article>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+export function HiringReviewScreen({ data, offers, onOpenResults, reload }: {
+  data: HiringData;
+  offers: boolean;
+  onOpenResults: (id: string | null) => void;
+  reload: () => Promise<void>;
+}) {
+  if (!offers) return (
+    <div className={r.screen}>
+      <ReviewRecommendations data={data} onOpenResults={onOpenResults} reload={reload} />
+    </div>
+  );
+
+  const candidates = new Map(data.candidates.filter((candidate) => candidate.stage === "hired").map((candidate) => [candidate.id, candidate]));
+  const approved = data.decisions.filter((decision) => decision.status === "sent" && decision.decision === "hire" && candidates.has(decision.candidateId));
+  return (
+    <div className={r.screen}>
+      <Section title="Approved offers" count={approved.length}>
+        {!approved.length && <p className={r.quiet}>There are no approved offers.</p>}
+        <div className={r.cards}>
+          {approved.map((decision) => {
+            const email = resultEmailState(decision.outboxKey, data.inviteOutbox);
+            return (
+              <article key={decision.id} className={r.card}>
+                <div className={r.cardMain}>
+                  <p className={r.name}>{candidates.get(decision.candidateId)?.name}</p>
+                  <p className={r.meta}>Offer email <strong>{email.label}</strong></p>
+                </div>
+                {(data.reviewAccess?.hr || data.reviewAccess?.gift) && (
+                  <div className={r.actions}><FinalReview id={decision.candidateId} signing /></div>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      </Section>
+    </div>
+  );
+}
+
 export function HrScreen({ data, command, busy, onOpenResults, readOnly = false }: { data: HiringData; command: Command; busy: boolean; onOpenResults: () => void; readOnly?: boolean }) {
   const [resume, setResume] = useState<string | null>(null);
   // A new clock for each data load keeps the booking link states current.
@@ -178,7 +255,6 @@ export function HrScreen({ data, command, busy, onOpenResults, readOnly = false 
   const now = useMemo(() => new Date(), [data]);
   const byId = useMemo(() => new Map(data.candidates.map((c) => [c.id, c])), [data.candidates]);
   const rows = data.callOrder.flatMap((id) => byId.get(id) ?? []);
-  const decisions = openHeadDecisions(data.headDecisions, data.decisions);
   const act = (c: HiringCandidate, result: "good" | "no_answer" | "bad") => {
     if (result === "bad" && !window.confirm(`Stop ${c.name}? Nothing is sent to them, and they leave every queue.`)) return;
     void command(callCommand(c, result));
@@ -186,31 +262,7 @@ export function HrScreen({ data, command, busy, onOpenResults, readOnly = false 
   return (
     <div className={`${r.screen} ${r.hrScreen}`}>
       <TodayCalls data={data} command={command} busy={busy} readOnly={readOnly}>
-        {decisions.length > 0 && (
-          <Section title="Tutor recommendations" count={decisions.length}>
-            <div className={r.cards}>
-              {decisions.map((d) => (
-                <article key={d.candidateId} className={r.card}>
-                  <div className={r.cardMain}>
-                    <p className={r.name}>{byId.get(d.candidateId!)?.name ?? "Candidate"}</p>
-                    <p className={r.meta}>
-                      <span className={r.tag} data-tone={d.decision}>
-                        {d.decision === "hire" ? "Yes" : "No"}
-                      </span>
-                      {d.head} · {d.reason || "No reason given"}
-                    </p>
-                    {d.draftProblem && <p className={r.warn}>No email draft yet: {d.draftProblem}</p>}
-                  </div>
-                  <div className={r.actions}>
-                    {!readOnly && d.decision === "hire" && d.candidateId && (data.reviewAccess?.hr || data.reviewAccess?.gift)
-                      ? <FinalReview id={d.candidateId} />
-                      : <button type="button" className={r.big} disabled={readOnly} onClick={onOpenResults}>Open assessment</button>}
-                  </div>
-                </article>
-              ))}
-            </div>
-          </Section>
-        )}
+        <ReviewRecommendations data={data} onOpenResults={onOpenResults} readOnly={readOnly} />
       </TodayCalls>
 
       <Section title="To call" count={rows.length}>
@@ -375,7 +427,7 @@ function HeadCard({ row, data, past, readOnly }: { row: RunSheetRow; data: Hirin
           )}
           {decision && (
             <span className={r.tag} data-tone={decision.decision}>
-              Decision: {decision.decision === "hire" ? "Hire" : "Do not hire"}
+              Recommendation: {decision.decision === "hire" ? "Yes" : "No"}
             </span>
           )}
         </p>
@@ -384,7 +436,7 @@ function HeadCard({ row, data, past, readOnly }: { row: RunSheetRow; data: Hirin
         {candidate && <ResumeButton open={resume} onToggle={() => setResume(!resume)} name={row.candidateName} />}
         {path && !readOnly && (
           <a className={r.big} data-tone={past ? "hire" : undefined} href={path} target="_blank" rel="noopener noreferrer">
-            {past ? "Score and decide" : "Open the candidate page"}
+            {past ? "Score and recommend" : "Open the candidate page"}
           </a>
         )}
       </div>
@@ -441,7 +493,7 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
             </div>
           </Section>
           {done.length > 0 && (
-            <Section title="After the mock: score and decide" count={done.length}>
+            <Section title="After the mock: score and recommend" count={done.length}>
               <div className={r.cards}>
                 {done.map((row) => (
                   <HeadCard key={row.visitId} row={row} data={data} past readOnly={readOnly} />

@@ -83,7 +83,7 @@ const visitFor = (candidateId: string, visitId: string, startIso: string, head: 
 payload.bookings = [...visitFor("r1", "v1", "2026-11-01T03:00:00Z", "Peat", "Mathematics"), ...visitFor("r2", "v2", new Date(Date.now() + 86400000).toISOString(), "Ek", "Physics")] as never[];
 // The role screens (HR, Admin, Heads). Only with ?roles=1, so the checks of the other tabs read the same payload as before.
 Object.assign(payload, { calls: [], headDecisions: [], briefPaths: {}, funnelEvents: [] });
-if (location.search.includes("roles=1")) {
+if (/roles=1|pipeline=1/.test(location.search)) {
   const at = (days: number, hour: number) => { const d = new Date(Date.now() + days * 86400000); d.setUTCHours(hour - 7, 0, 0, 0); return d.toISOString(); };
   Object.assign(payload, {
     reviewAccess: { hr: true, gift: false },
@@ -91,6 +91,13 @@ if (location.search.includes("roles=1")) {
     headDecisions: [{ candidateId: "r1", decision: "hire", reason: "Clear and warm lesson.", head: "Kru Peat", draftProblem: null, at: at(0, 9) }],
     briefPaths: { v2m: "/hiring/brief/sample-token" },
     library: [{ id: "qp-phys", kind: "question_paper", subject: "Physics", name: "Physics paper.pdf", status: "ready" }],
+  });
+}
+if (location.search.includes("pipeline=1")) {
+  candidates.push(person("offer", "Sample Offer", { stage: "hired" }));
+  payload.decisions.push({ id: "approved", candidateId: "offer", decision: "hire", status: "sent", outboxKey: "offer:result:approved" });
+  (payload.inviteOutbox as Record<string, unknown>[]).push({
+    key: "offer:result:approved", status: "sent", sentAt: "2026-11-19T02:00:00Z",
   });
 }
 if (location.search.includes("scroll=1")) {
@@ -114,6 +121,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   // The Capacity tab reads its own payload, which this fixture does not hold.
   if (String(input).includes("capacity=1")) return new Response(JSON.stringify({ error: "Not in this fixture." }), { status: 503 });
   const url = new URL(String(input), location.origin);
+  if (url.pathname === "/api/hiring/review/offer") {
+    return new Response(JSON.stringify({ access: { hr: true, gift: false }, stage: "hired",
+      callNotes: "", packet: null, appointment: "2026-11-20T02:30:00Z" }));
+  }
   if (url.pathname === "/api/hiring/review/r1") {
     if (init?.method === "POST") {
       const body = JSON.parse(String(init.body));
@@ -291,8 +302,8 @@ try {
   });
   await check("the tab opens from the address and changes the address", async () => {
     await page.goto(`${origin}/?view=seek`);
-    await page.getByRole("button", { name: "1 Seek intake" }).waitFor();
-    assert.equal(await page.getByRole("button", { name: "1 Seek intake" }).getAttribute("aria-pressed"), "true");
+    await page.getByRole("button", { name: "SEEK intake" }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "SEEK intake" }).getAttribute("aria-pressed"), "true");
     await page.getByRole("button", { name: "Overview" }).click();
     assert.match(page.url(), /view=overview/);
     await page.getByLabel("Filter by stage").waitFor();
@@ -385,7 +396,7 @@ try {
     assert.ok(await panel.getByText("I require a visa").isVisible());
   });
   await check("the pre-screen tab lists everyone sent a form, with proof of the visit email", async () => {
-    await page.getByRole("button", { name: "3 Pre-screen" }).click();
+    await page.getByRole("button", { name: "Pre-screen form" }).click();
     const list = page.getByRole("region", { name: "Pre-screen responses" });
     const rows = list.locator("tbody tr");
     await rows.first().waitFor();
@@ -415,7 +426,7 @@ try {
     assert.deepEqual(posted.at(-1), { action: "pre_screen_score", id: "r2", revision: 1, score: 70, reason: "Strong in a call" });
   });
   await check("the mock and paper tab lists visits with date, head and results", async () => {
-    await page.getByRole("button", { name: "4 Mock and paper" }).click();
+    await page.getByRole("button", { name: "Paper test" }).click();
     const list = page.getByRole("region", { name: "Mock and paper" });
     await list.locator("tbody tr").first().waitFor();
     assert.deepEqual(await list.locator("tbody button").allInnerTexts(), ["Reply Low", "Reply Passed"]);
@@ -609,7 +620,7 @@ try {
     await page.goto(`${origin}/?view=hr&roles=1`);
     await page.getByRole("heading", { name: "Booked calls by day" }).waitFor();
     // A role screen hides the tabs. One button leads back.
-    assert.equal(await page.getByRole("group", { name: "Hiring views" }).count(), 0);
+    assert.equal(await page.getByRole("navigation", { name: "Hiring steps" }).count(), 0);
     assert.ok(await page.getByRole("button", { name: "Full dashboard" }).isVisible());
     assert.ok(await page.getByRole("heading", { name: "Tutor recommendations" }).isVisible());
     assert.ok(await page.getByText("Kru Peat · Clear and warm lesson.").isVisible());
@@ -647,8 +658,51 @@ try {
     await shot(page, "role-hr-phone");
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.getByRole("button", { name: "Full dashboard" }).click();
-    await page.getByRole("group", { name: "Hiring views" }).waitFor();
+    await page.getByRole("navigation", { name: "Hiring steps" }).waitFor();
     assert.equal(await page.evaluate(() => localStorage.getItem("hiring-role-view")), null);
+  });
+  await check("the hiring steps open the correct workspaces on desktop and phone", async () => {
+    await page.goto(`${origin}/?view=calls&pipeline=1`);
+    const workflow = page.getByRole("navigation", { name: "Hiring steps" });
+    const tools = page.getByRole("navigation", { name: "Hiring tools" });
+    assert.deepEqual(await workflow.getByRole("button").allTextContents(),
+      ["1SEEK intake", "2HR calls", "3Pre-screen form", "4Paper test", "5Mock teaching", "6Final review", "7Offer & signing"]);
+    assert.ok(await tools.getByRole("button", { name: "Visit schedule" }).isVisible());
+    assert.equal(await workflow.getByRole("button", { name: "HR calls" }).getAttribute("aria-pressed"), "true");
+    await page.getByRole("region", { name: "Candidates for HR to call" }).waitFor();
+    for (const width of [1440, 768, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      assert.ok(await workflow.evaluate((nav) => nav.scrollWidth <= nav.clientWidth));
+      await shot(page, `hiring-workflow-${width}`);
+    }
+    const paper = workflow.getByRole("button", { name: "Paper test" });
+    await paper.focus();
+    await paper.press("Enter");
+    await page.getByRole("region", { name: "Mock and paper" }).waitFor();
+    assert.match(page.url(), /view=assessment$/);
+    await shot(page, "hiring-paper-phone");
+    await workflow.getByRole("button", { name: "Mock teaching" }).click();
+    await page.getByRole("group", { name: "Choose your name" }).waitFor();
+    await shot(page, "hiring-mock-phone");
+    await workflow.getByRole("button", { name: "Final review" }).click();
+    await page.getByRole("button", { name: "Open final review" }).click();
+    const assessment = page.getByLabel("Behavioral assessment from the pre-screen call");
+    await assessment.waitFor();
+    assert.equal(await assessment.inputValue(), "Gave a specific example of adapting a lesson.");
+    await shot(page, "hiring-review-phone");
+    await workflow.getByRole("button", { name: "Offer & signing" }).click();
+    await page.getByText(/Sent Thu 19 Nov, 09:00/).waitFor();
+    await page.getByRole("button", { name: "Check contract signing" }).click();
+    await page.getByText(/Contract signing booked for 20 Nov 2026, 09:30/).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Send to Gift" }).count(), 0);
+    assert.deepEqual(await page.evaluate(() => window.posted), []);
+    await shot(page, "hiring-offer-phone");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await shot(page, "hiring-offer-desktop");
+    await page.evaluate(() => document.documentElement.classList.add("dark"));
+    assert.equal(await workflow.getByRole("button", { name: "Offer & signing" }).getAttribute("aria-pressed"), "true");
+    await shot(page, "hiring-offer-dark");
+    await page.evaluate(() => document.documentElement.classList.remove("dark"));
   });
   await check("the page has no script errors", async () => assert.deepEqual(errors, []));
 } finally {

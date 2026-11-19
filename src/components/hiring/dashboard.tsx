@@ -6,6 +6,7 @@ import { Instrument_Serif } from "next/font/google";
 import { signIn } from "next-auth/react";
 import { isRoleView } from "@/lib/hiring/role-views";
 import { GOOGLE_FREEBUSY_SCOPE, GOOGLE_SCOPES, type HiringConfig, type Stage, type Subject } from "@/lib/hiring/model";
+import { assessmentRows } from "@/lib/hiring/assessment-view";
 import { buildInsights, readyToInvite } from "@/lib/hiring/insights";
 import { dedupePriority, headDaysNotice } from "@/lib/hiring/rules";
 import { candidateExtras, holdNote } from "@/lib/hiring/status";
@@ -16,7 +17,7 @@ import { CandidateTable, matchesFilter } from "./candidate-table";
 import { AveragePentagon, EvidenceChart, KpiStrip, LimitMeters, ScoreChart, StageChart, SubjectChart } from "./pipeline-charts";
 import { AssessmentScreen } from "./assessment-screen";
 import { OperationsRail, WorkerBanner } from "./operations-rail";
-import { AdminScreen, HeadsScreen, HrScreen, TodayCalls } from "./role-screens";
+import { AdminScreen, HeadsScreen, HrScreen, HiringReviewScreen, TodayCalls } from "./role-screens";
 import { PreScreenScreen } from "./prescreen-screen";
 import { CallsScreen } from "./calls-screen";
 import { CapacityScreen } from "./capacity-screen";
@@ -26,6 +27,7 @@ import { SeekScreen } from "./seek-screen";
 import { SetupPanel } from "./setup-panel";
 import { TabSkeleton } from "./tab-skeleton";
 import css from "./dashboard.module.css";
+import nav from "./pipeline-nav.module.css";
 
 const serif = Instrument_Serif({
   variable: "--font-instrument-serif",
@@ -55,11 +57,14 @@ export const NO_FILTER: CandidateFilter = { stage: "all", prescreen: "all", buck
 const VIEWS = {
   overview: "Overview",
   capacity: "Capacity",
-  seek: "1 Seek intake",
-  calls: "2 Calls",
-  prescreen: "3 Pre-screen",
-  visitday: "Visit day",
-  assessment: "4 Mock and paper",
+  seek: "SEEK intake",
+  calls: "HR calls",
+  prescreen: "Pre-screen form",
+  visitday: "Visit schedule",
+  assessment: "Paper test",
+  mock: "Mock teaching",
+  review: "Final review",
+  offer: "Offer & signing",
   setup: "Rules and setup",
   // The simple screens, one for each role. Each has its own link: /hiring?view=hr, admin or heads.
   hr: "HR",
@@ -67,19 +72,24 @@ const VIEWS = {
   heads: "Heads",
 };
 export type HiringView = keyof typeof VIEWS;
+const STEPS = ["seek", "calls", "prescreen", "assessment", "mock", "review", "offer"] as const;
+const TOOLS = ["overview", "capacity", "visitday", "setup", "hr", "admin", "heads"] as const;
 /** One line under the tabs, so a new user can name what each tab is for. */
 const PURPOSE: Record<HiringView, string> = {
   overview: "Where every candidate stands, and who is ready for the next step.",
   capacity: "Which subjects need new tutors first, from busy-hours use and new students.",
-  seek: "Everyone who applied on SEEK, with their score and the pre-screen send queue.",
-  calls: "Who HR phones next, and the result of each call.",
-  prescreen: "The pre-screen form and visit email for each candidate, and what they replied.",
-  visitday: "Who comes when, which paper to print, which head runs the mock.",
-  assessment: "Each visit's paper and mock results, and the hiring decision.",
+  seek: "Check applications from SEEK and their ATS scores.",
+  calls: "HR speaks to the candidate and records the call outcome and notes.",
+  prescreen: "Review the candidate’s form and invite them to sit the paper test.",
+  visitday: "See arrival times, papers to print and the tutors assigned to mock teaching.",
+  assessment: "Admin uploads the scanned paper for grading. The candidate waits until you confirm a pass and send the mock invitation.",
+  mock: "The tutor gets the graded paper and résumé before the mock. After the rubric, Yes goes to HR and No queues a rejection email.",
+  review: "HR adds the behavioral assessment and sends the packet to Gift for approval or rejection.",
+  offer: "After approval, the candidate receives an offer letter and can book a 30-minute signing with HR on site.",
   setup: "Scores, limits, heads and messages. A change applies to every tab.",
   hr: "Your calls this week, who to call next, and the decisions the heads sent.",
   admin: "Who comes when, the paper to print, and where to upload the completed paper.",
-  heads: "Your candidates: the time, the résumé, then the scores and your decision.",
+  heads: "See your mock bookings, mark the rubric and record your recommendation.",
 };
 /** The browser remembers a role screen, so /hiring opens on it the next time. */
 const ROLE_KEY = "hiring-role-view";
@@ -298,8 +308,8 @@ export function HiringDashboard() {
             </button>
           </div>
         ) : (
-          <div className={css.viewSwitch} role="group" aria-label="Hiring views">
-            {(Object.keys(VIEWS) as HiringView[]).map((name) => (
+          <nav className={nav.tools} aria-label="Hiring tools">
+            {TOOLS.map((name) => (
               <button
                 key={name}
                 type="button"
@@ -309,7 +319,21 @@ export function HiringDashboard() {
                 {VIEWS[name]}
               </button>
             ))}
-          </div>
+          </nav>
+        )}
+        {!role && (
+          <nav className={nav.workflow} aria-label="Hiring steps">
+            <ol className={nav.steps} role="list">
+              {STEPS.map((name, index) => (
+                <li key={name}>
+                  <button type="button" aria-pressed={view === name} onClick={() => setView(name)}>
+                    <span aria-hidden="true">{index + 1}</span>
+                    {VIEWS[name]}
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </nav>
         )}
       </header>
       {view !== "hr" && <p className={css.purpose}>{PURPOSE[view]}</p>}
@@ -329,12 +353,12 @@ export function HiringDashboard() {
           The saved rules have a problem, so the worker has stopped. Open Rules and setup. {data.configProblems.join(" ")}
         </p>
       )}
-      {/* The Mock and paper calendar explains its own clashes and old data. */}
+      {/* The assessment calendar explains its own clashes and old data. */}
       {view !== "hr" && data && (clashes.size > 0 || data.visitClashes.stale) && (
         <p role="alert" className={css.alert}>
           {clashes.size > 0
-            ? `${clashes.size} booked visit${clashes.size === 1 ? "" : "s"} now clash${clashes.size === 1 ? "es" : ""} with a Wise class, leave or sit-in. The app did not move ${clashes.size === 1 ? "it" : "them"}. Staff must act. See the calendar in 4 Mock and paper.`
-            : "Wise data is old or missing, so visit clashes may not show. Check the calendar in 4 Mock and paper."}
+            ? `${clashes.size} booked visit${clashes.size === 1 ? "" : "s"} now clash${clashes.size === 1 ? "es" : ""} with a Wise class, leave or sit-in. The app did not move ${clashes.size === 1 ? "it" : "them"}. Staff must act. See the calendar under Paper test.`
+            : "Wise data is old or missing, so visit clashes may not show. Check the calendar under Paper test."}
         </p>
       )}
       {/* Outside the main load: this tab reads its own endpoint, so it opens at once and survives a failed load. */}
@@ -389,7 +413,14 @@ export function HiringDashboard() {
           setAssessmentVisit(id);
           setView("assessment", true);
         }} />}
-        {view === "heads" && <HeadsScreen data={data} />}
+        {(view === "heads" || view === "mock") && <HeadsScreen data={data} />}
+        {(view === "review" || view === "offer") && (
+          <HiringReviewScreen key={view} data={data} offers={view === "offer"} reload={() => load(true)} onOpenResults={(id) => {
+            const rows = assessmentRows(data.bookings, data.papers, data.mocks).filter((row) => row.candidateId === id);
+            setAssessmentVisit((rows.find((row) => row.mockAt) ?? rows[0])?.key ?? null);
+            setView("assessment");
+          }} />
+        )}
         <div hidden={view !== "visitday"} className={css.viewPane}>
           <RunSheetScreen data={data} />
         </div>
