@@ -19,7 +19,7 @@ const CHROME = process.env.CHROME_BIN || "/Applications/Google Chrome.app/Conten
 const ENTRY = `
 import { Suspense } from "react";
 import { createRoot } from "react-dom/client";
-import { baseConfigSchema } from "@/lib/hiring/model";
+import { baseConfigSchema, localDate } from "@/lib/hiring/model";
 import { HiringDashboard } from "@/components/hiring/dashboard";
 import { HiringStaffPreview } from "@/components/hiring/staff-preview";
 
@@ -91,6 +91,14 @@ if (location.search.includes("roles=1")) {
     briefPaths: { v2m: "/hiring/brief/sample-token" },
     library: [{ id: "qp-phys", kind: "question_paper", subject: "Physics", name: "Physics paper.pdf", status: "ready" }],
   });
+}
+if (location.search.includes("scroll=1")) {
+  const start = new Date(localDate(new Date()) + "T10:00:00+07:00");
+  Object.assign(payload, { calls: candidates.map((candidate, index) => ({
+    candidateId: candidate.id,
+    start: new Date(start.getTime() + index * 900000).toISOString(),
+    end: new Date(start.getTime() + (index + 1) * 900000).toISOString(),
+  })) });
 }
 payload.tutors = [{ canonicalKey: "Peat", name: "Kru Peat", email: "p@example.test", lineReady: true }, { canonicalKey: "Ek", name: "Kru Ek", email: "e@example.test", lineReady: true }] as never[];
 payload.config.interviewers = [{ canonicalKey: "Peat", email: "p@example.test", subjects: ["Mathematics"] }, { canonicalKey: "Ek", email: "e@example.test", subjects: ["Physics"] }] as never[];
@@ -168,7 +176,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/hiring") return new Response(JSON.stringify(payload));
   return realFetch(input, init);
 }) as typeof fetch;
-createRoot(document.getElementById("root")!).render(<Suspense fallback="Loading">{location.search.includes("preview=1") ? <HiringStaffPreview role="hr" /> : <HiringDashboard />}</Suspense>);
+createRoot(document.getElementById("root")!).render(<Suspense fallback="Loading">{location.search.includes("preview=1") ? <div className="flex min-h-0 flex-1 flex-col overflow-auto"><HiringStaffPreview role="hr" /></div> : <HiringDashboard />}</Suspense>);
 `;
 
 // Only the framework parts that need a Next.js server are replaced. The components stay real.
@@ -529,6 +537,30 @@ try {
     assert.equal(await card.getByRole("button", { name: "Save notes" }).count(), 0);
     assert.ok(await card.getByRole("button", { name: "Good call" }).isDisabled());
     assert.deepEqual(await page.evaluate(() => window.posted), []);
+  });
+  await check("the Hiring pages scroll to the last call card", async () => {
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      for (const query of ["view=hr", "view=calls", "preview=1"]) {
+        await page.goto(`${origin}/?${query}&roles=1&scroll=1`);
+        const heading = page.getByRole("heading", { name: /Today’s calls/ });
+        await heading.waitFor();
+        // Use a wheel event: scrollIntoView can move even an overflow:hidden container.
+        const card = page.locator("article").filter({ has: page.getByRole("button", { name: "Résumé and notes" }) }).last();
+        const before = (await card.boundingBox()).y;
+        assert.ok(before > 800, `${query} at ${width}px: last call starts at ${before}px`);
+        const box = await heading.boundingBox();
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.wheel(0, before - 400);
+        await page.waitForFunction(() => {
+          const cards = [...document.querySelectorAll("article")].filter((item) =>
+            [...item.querySelectorAll("button")].some((button) => button.textContent === "Résumé and notes"));
+          const last = cards.at(-1).getBoundingClientRect();
+          return last.top >= 0 && last.bottom <= innerHeight;
+        }, undefined, { timeout: 5000 });
+      }
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
   });
   await check("the HR screen shows the week, the call cards with the résumé, and the heads' decisions", async () => {
     await page.goto(`${origin}/?view=hr&roles=1`);

@@ -20,7 +20,7 @@ export function HiringStaffPreview({ role }: { role: RoleView }) {
   if (failed) return <p role="alert">Could not open the Hiring preview.</p>;
   if (!data) return <p role="status">Loading Hiring preview…</p>;
   return (
-    <div className={css.surface} style={{ margin: 0 }}>
+    <div className={`${css.surface} ${css.previewSurface}`}>
       {role === "hr" && <HrScreen data={data} command={async () => false} onOpenResults={() => {}} busy={false} readOnly />}
       {role === "admin" && <AdminScreen data={data} reload={async () => {}} readOnly />}
       {role === "heads" && <HeadsScreen data={data} readOnly />}
