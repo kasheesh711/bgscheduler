@@ -1018,6 +1018,7 @@ describe("hiring workflow persistence", () => {
       const choices = (await contractView(contract, db)).slots;
       expect(choices.length).toBeGreaterThan(1);
       const [first, second] = choices;
+      await expect(bookContract(contract, { start: `${first.date}T11:45:00+07:00` }, db)).rejects.toThrow(/no longer available/);
       const other = await invited();
       await db.insert(s.hiringBookings).values({ candidateId: other.id, kind: "call", subjects: ["Mathematics"],
         interviewerKey: "hr-call", interviewerEmail: "people@begiftededucation.com", calendarOwner: "people@begiftededucation.com",

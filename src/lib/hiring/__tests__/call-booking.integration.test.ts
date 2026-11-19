@@ -167,8 +167,8 @@ describe("the call booking link", () => {
     vi.mocked(readHrBusy).mockResolvedValue([{ start: new Date(NINE), end: new Date("2026-11-05T02:20:00.000Z") }]);
     await book(b.id, HALF);
     const view = await callView(link(a.id), db);
-    // 36 times a day for 5 days, less 09:00 and 09:15 (the calendar) and 09:30 (the other candidate).
-    expect(view.slots).toHaveLength(36 * 5 - 3);
+    // 31 times outside lunch on each day, less 09:00 and 09:15 (the calendar) and 09:30 (the other candidate).
+    expect(view.slots).toHaveLength(31 * 5 - 3);
     expect(view.slots[0]).toEqual({ date: "2026-11-05", start: "2026-11-05T02:45:00.000Z", end: "2026-11-05T03:00:00.000Z" });
     expect(view.slots.at(-1)!.end).toBe("2026-11-11T11:00:00.000Z");
     expect(view).toMatchObject({ kind: "call", minutes: 15, enabled: true, call: null, canMove: false, notice: null });
@@ -362,8 +362,8 @@ describe("booking a call", () => {
     await expect(book(a.id)).rejects.toMatchObject({ status: 409 });
     await expect(bookCall(link(a.id), { start: NINE, phone: "call me" }, db)).rejects.toBeInstanceOf(ZodError);
     await expect(bookCall(link(a.id), { start: NINE }, db)).rejects.toBeInstanceOf(ZodError);
-    // A time that is not on the list: Saturday, 18:00, and a time off the quarter hour.
-    for (const start of ["2026-11-07T02:00:00.000Z", "2026-11-05T11:00:00.000Z", "2026-11-05T02:05:00.000Z"])
+    // Saturday, 18:00, off the quarter hour, and 12:00 even when the calendar is free.
+    for (const start of ["2026-11-07T02:00:00.000Z", "2026-11-05T11:00:00.000Z", "2026-11-05T02:05:00.000Z", "2026-11-05T05:00:00.000Z"])
       await expect(book(a.id, start)).rejects.toMatchObject({ status: 409 });
     for (const token of [bookingToken(a.id, "visit", LINK), bookingToken(a.id, "call", after(-1)), bookingToken(a.id, "brief", LINK)])
       await expect(bookCall(token, { start: NINE, phone: "+66812345678" }, db)).rejects.toMatchObject({ status: 404 });
