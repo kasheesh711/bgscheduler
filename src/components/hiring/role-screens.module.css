@@ -6,24 +6,32 @@
 .quiet { color: var(--muted); }
 .warn { color: var(--warn); font-size: 13px; font-weight: 500; }
 
-/* HR week strip */
-.week { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
-.day { display: flex; flex-direction: column; gap: 6px; min-height: 96px; padding: 10px; border: 1px solid var(--line); border-radius: 14px; }
-.day[data-today] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
-.dayName { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-weight: 600; }
-.slot.slot { padding: 6px 8px; border-radius: 8px; background: var(--tint); text-align: left; overflow-wrap: anywhere; }
-.slot:hover { background: var(--stone); }
-.slot b { font-variant-numeric: tabular-nums; }
-@media (max-width: 719px) {
-  .week { grid-template-columns: 1fr; }
-  .day { min-height: 0; }
+/* The day list leads. Dates and pending recommendations stay beside it on wide screens. */
+.hrScreen, .callWorkspace { width: 100%; max-width: 1640px; margin-inline: auto; }
+.hrScreen { padding-inline: clamp(16px, 2.4vw, 40px); gap: 28px; }
+.callWorkspace { display: grid; font-size: 15px; gap: 24px; align-items: start; padding: 16px clamp(16px, 2.4vw, 40px); }
+.hrScreen > .callWorkspace { padding: 0; }
+.callWorkspace > * { min-width: 0; }
+.sectionHead { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
+.callContext { display: grid; gap: 24px; }
+.week { display: grid; border-top: 1px solid var(--line); }
+.day.day { display: flex; align-items: center; justify-content: space-between; min-height: 44px; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--line); text-align: left; }
+.day:hover, .day[aria-pressed="true"] { background: var(--tint); }
+.day[aria-pressed="true"] { font-weight: 600; }
+.agenda > .card { border-width: 1px 0 0; border-radius: 0; padding-inline: 0; }
+.agenda > .card:last-child { border-bottom-width: 1px; }
+
+@media (min-width: 1120px) {
+  .callWorkspace { grid-template-columns: minmax(0, 1fr) minmax(260px, 21%); gap: 32px; }
+  .callContext { border-left: 1px solid var(--line); padding-left: 20px; }
+  .cards.queue { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .queue .actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
+.callContext .card { grid-template-columns: minmax(0, 1fr); padding-inline: 12px; }
 
 /* Cards */
 .cards { display: flex; flex-direction: column; gap: 10px; }
 .card { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); }
-.card[data-tone="hire"] { border-left: 4px solid var(--good); }
-.card[data-tone="reject"] { border-left: 4px solid var(--danger); }
 .cardMain { display: flex; flex-direction: column; gap: 3px; min-width: 0; grid-column: 2; }
 .card > .cardMain:first-child { grid-column: 1 / span 2; }
 .time { display: flex; flex-direction: column; min-width: 68px; font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.1; }
@@ -36,6 +44,7 @@
 .tag[data-tone="hire"] { background: color-mix(in oklch, var(--good) 14%, var(--paper)); color: var(--good); }
 .tag[data-tone="reject"] { background: color-mix(in oklch, var(--danger) 12%, var(--paper)); color: var(--danger); }
 .actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; grid-column: 3; }
+.callContext .card .cardMain, .callContext .card .actions { grid-column: 1; justify-content: flex-start; }
 .resume { grid-column: 1 / -1; }
 .resume iframe { height: 75vh; }
 
@@ -57,11 +66,14 @@
   .actions > * { flex: 1 1 auto; }
 }
 
-.date { display: flex; align-items: center; gap: 8px; }
+.dateTools, .date { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.date { font-size: 14px; }
+.date input { min-height: 44px; max-width: 100%; }
 .date input, .notes textarea { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--paper); color: var(--ink); }
-.callDetail { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) minmax(220px, 1fr); gap: 16px; }
+.callDetail { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 3fr) minmax(220px, 2fr); gap: 20px; }
 .callDetail .resume { grid-column: auto; }
-.notes textarea { display: block; width: 100%; margin: 4px 0 10px; }
+.notes textarea { display: block; width: 100%; margin: 4px 0 10px; resize: vertical; }
+.notes textarea:read-only { background: var(--tint); }
 @media (max-width: 719px) {
   .callDetail { grid-template-columns: 1fr; }
 }

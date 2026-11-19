@@ -219,7 +219,7 @@ const script = bundled.outputFiles.find((f) => f.path.endsWith(".js")).text;
 const moduleCss = bundled.outputFiles.find((f) => f.path.endsWith(".css"))?.text ?? "";
 const from = path.join(ROOT, "src/app/globals.css");
 const globalCss = (await postcss([tailwind({ base: ROOT })]).process(readFileSync(from, "utf8"), { from })).css;
-const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${globalCss}${moduleCss}#root{display:flex;flex-direction:column;height:100vh;padding:12px 24px;overflow:hidden}</style></head><body><div id="root"></div><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`;
+const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${globalCss}${moduleCss}#root{--font-inter:system-ui;--font-instrument-serif:Georgia;display:flex;flex-direction:column;height:100vh;padding:12px 24px;overflow:hidden}</style></head><body><div id="root"></div><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`;
 const PDF = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF";
 
 const resumeRequests = [];
@@ -541,6 +541,20 @@ try {
     await page.getByLabel("Date (Bangkok)").fill(tomorrow);
     await card.getByText("Sample Ben", { exact: true }).waitFor();
     assert.equal(await card.getByText("Sample Kim", { exact: true }).count(), 0);
+    await page.getByRole("button", { name: "Today", exact: true }).click();
+    await card.getByText("Sample Kim", { exact: true }).waitFor();
+    const datePicker = page.getByLabel("Date (Bangkok)");
+    const today = await datePicker.inputValue();
+    const weekday = page.getByRole("button", { name: /booked calls$/, pressed: false }).first();
+    await weekday.press("Enter");
+    await page.getByRole("heading", { name: /^Calls for/ }).waitFor();
+    assert.notEqual(await datePicker.inputValue(), today);
+    await page.getByRole("button", { name: "Today", exact: true }).click();
+    await page.getByRole("heading", { name: /^Today’s calls/ }).waitFor();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await card.getByRole("textbox", { name: "Call notes" }).waitFor();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
+    await page.setViewportSize({ width: 1440, height: 900 });
 
     await page.goto(`${origin}/?view=calls&roles=1`);
     await card.getByText("Sample Kim", { exact: true }).waitFor();
@@ -559,6 +573,7 @@ try {
         await page.goto(`${origin}/?${query}&roles=1&scroll=1`);
         const heading = page.getByRole("heading", { name: /Today’s calls/ });
         await heading.waitFor();
+        if (query === "view=hr") await shot(page, width === 1440 ? "hiring-desktop" : "hiring-phone");
         // Use a wheel event: scrollIntoView can move even an overflow:hidden container.
         const card = page.locator("article").filter({ has: page.getByRole("button", { name: "Résumé and notes" }) }).last();
         const before = (await card.boundingBox()).y;
@@ -592,7 +607,7 @@ try {
   });
   await check("the HR screen shows calls and recommendations", async () => {
     await page.goto(`${origin}/?view=hr&roles=1`);
-    await page.getByRole("heading", { name: "My week: booked calls" }).waitFor();
+    await page.getByRole("heading", { name: "Booked calls by day" }).waitFor();
     // A role screen hides the tabs. One button leads back.
     assert.equal(await page.getByRole("group", { name: "Hiring views" }).count(), 0);
     assert.ok(await page.getByRole("button", { name: "Full dashboard" }).isVisible());

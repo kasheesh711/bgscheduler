@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { formatInTimeZone } from "date-fns-tz";
 import { localDate, RESUME_TYPES, ZONE, type Subject } from "@/lib/hiring/model";
 import { buildRunSheet, headName, headVisits, pastVisits, upcoming, type RunSheetRow } from "@/lib/hiring/run-sheet";
@@ -44,13 +44,16 @@ function ResumeButton({ open, onToggle, name }: { open: boolean; onToggle: () =>
   );
 }
 
-function Section({ title, count, children }: { title: string; count?: number; children: ReactNode }) {
+function Section({ title, count, children, controls }: { title: string; count?: number; children: ReactNode; controls?: ReactNode }) {
   return (
     <section className={r.section}>
-      <h2 className={r.heading}>
-        {title}
-        {count !== undefined && <span className={r.count}>{count}</span>}
-      </h2>
+      <div className={r.sectionHead}>
+        <h2 className={r.heading}>
+          {title}
+          {count !== undefined && <span className={r.count}>{count}</span>}
+        </h2>
+        {controls}
+      </div>
       {children}
     </section>
   );
@@ -88,8 +91,11 @@ function CallNotes({ candidate, command, busy, readOnly }: { candidate: HiringCa
   );
 }
 
-export function TodayCalls({ data, command, busy, readOnly = false }: { data: HiringData; command: Command; busy: boolean; readOnly?: boolean }) {
-  const [date, setDate] = useState(() => localDate(new Date()));
+export function TodayCalls({ data, command, busy, readOnly = false, children }: { data: HiringData; command: Command; busy: boolean; readOnly?: boolean; children?: ReactNode }) {
+  const [today] = useState(() => localDate(new Date()));
+  const [date, setDate] = useState(today);
+  const dateField = useRef<HTMLInputElement>(null);
+  const week = weekCalls(data.calls, data.candidates, new Date(`${date}T12:00:00+07:00`));
   const [open, setOpen] = useState<string | null>(null);
   const byId = new Map(data.candidates.map((candidate) => [candidate.id, candidate]));
   const rows = [
@@ -98,119 +104,123 @@ export function TodayCalls({ data, command, busy, readOnly = false }: { data: Hi
   ].filter((call) => localDate(new Date(call.start)) === date)
     .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
   return (
-    <Section title="Today’s calls" count={rows.length}>
-      <label className={r.date}>Date (Bangkok) <input type="date" value={date} onChange={(event) => {
-        if (event.target.value) setDate(event.target.value);
-      }} /></label>
-      {!rows.length && <p className={r.quiet}>No calls for this date.</p>}
-      <div className={r.cards}>
-        {rows.map((call) => {
-          const candidate = byId.get(call.candidateId);
-          const key = `${call.candidateId}:${call.start}`;
-          const active = candidate && !call.missed && data.callOrder.includes(candidate.id);
-          return (
-            <article className={r.card} key={key}>
-              <p className={r.time}>{formatInTimeZone(new Date(call.start), ZONE, "HH:mm")}</p>
-              <div className={r.cardMain}>
-                <p className={r.name}>{candidate?.name ?? "Candidate record unavailable"}</p>
-                {candidate && <p className={r.meta}>{callSubjects(candidate, data.config.subjectPriority).main}</p>}
-                {candidate && (readOnly ? <p>{candidate.phone}</p> : <PhoneLink phone={candidate.phone} large />)}
-                {call.missed && <p className={r.meta}>No answer</p>}
-              </div>
-              {candidate && (
-                <div className={r.actions}>
-                  <button type="button" className={r.ghost} aria-expanded={open === key}
-                    onClick={() => setOpen(open === key ? null : key)}>Résumé and notes</button>
-                  {active && (["good", "no_answer", "bad"] as const).map((result, index) => (
-                    <button key={result} type="button" className={r.big} disabled={busy || readOnly} onClick={() => {
-                      if (result === "bad" && !window.confirm(`Stop ${candidate.name}?`)) return;
-                      void command(callCommand(candidate, result));
-                    }}>{["Good call", "No answer", "Bad call"][index]}</button>
-                  ))}
+    <div className={r.callWorkspace}>
+      <Section title={date === today ? "Today’s calls" : `Calls for ${shortDay(date)}`} count={rows.length} controls={
+        <div className={r.dateTools}>
+          <label className={r.date}>Date (Bangkok) <input ref={dateField} type="date" value={date} onChange={(event) => {
+            if (event.target.value) setDate(event.target.value);
+          }} /></label>
+          {date !== today && <button type="button" className={r.ghost} onClick={() => setDate(today)}>Today</button>}
+        </div>
+      }>
+        {!rows.length && <p className={r.quiet}>No calls for this date.</p>}
+        <div className={r.agenda}>
+          {rows.map((call) => {
+            const candidate = byId.get(call.candidateId);
+            const key = `${call.candidateId}:${call.start}`;
+            const active = candidate && !call.missed && data.callOrder.includes(candidate.id);
+            return (
+              <article className={r.card} key={key}>
+                <p className={r.time}>{formatInTimeZone(new Date(call.start), ZONE, "HH:mm")}</p>
+                <div className={r.cardMain}>
+                  <p className={r.name}>{candidate?.name ?? "Candidate record unavailable"}</p>
+                  {candidate && <p className={r.meta}>{callSubjects(candidate, data.config.subjectPriority).main}</p>}
+                  {candidate && (readOnly ? <p>{candidate.phone}</p> : <PhoneLink phone={candidate.phone} large />)}
+                  {call.missed && <p className={r.meta}>No answer</p>}
                 </div>
-              )}
-              {candidate && open === key && <div className={r.callDetail}>
-                <ResumePeek candidate={candidate} months={data.config.resumeRetentionMonths} />
-                <CallNotes candidate={candidate} command={command} busy={busy} readOnly={readOnly} />
-              </div>}
-            </article>
-          );
-        })}
-      </div>
-    </Section>
+                {candidate && (
+                  <div className={r.actions}>
+                    <button type="button" className={r.ghost} aria-expanded={open === key}
+                      onClick={() => setOpen(open === key ? null : key)}>Résumé and notes</button>
+                    {active && (["good", "no_answer", "bad"] as const).map((result, index) => (
+                      <button key={result} type="button" className={r.big} data-tone={result === "good" ? "hire" : undefined} disabled={busy || readOnly} onClick={() => {
+                        if (result === "bad" && !window.confirm(`Stop ${candidate.name}?`)) return;
+                        void command(callCommand(candidate, result));
+                      }}>{["Good call", "No answer", "Bad call"][index]}</button>
+                    ))}
+                  </div>
+                )}
+                {candidate && open === key && <div className={r.callDetail}>
+                  <ResumePeek candidate={candidate} months={data.config.resumeRetentionMonths} />
+                  <CallNotes candidate={candidate} command={command} busy={busy} readOnly={readOnly} />
+                </div>}
+              </article>
+            );
+          })}
+        </div>
+      </Section>
+      <aside className={r.callContext}>
+        <Section title="Booked calls by day">
+          <div className={r.week}>
+            {week.map((day) => (
+              <button key={day.date} type="button" className={r.day} aria-pressed={day.date === date}
+                aria-label={`${shortDay(day.date)}, ${day.calls.length} booked calls`}
+                onClick={() => {
+                  setDate(day.date);
+                  dateField.current?.scrollIntoView({ block: "nearest" });
+                }}>
+                <span>{shortDay(day.date)}</span>
+                <span className={r.count}>{day.calls.length}</span>
+              </button>
+            ))}
+          </div>
+        </Section>
+        {children}
+      </aside>
+    </div>
   );
 }
 
 export function HrScreen({ data, command, busy, onOpenResults, readOnly = false }: { data: HiringData; command: Command; busy: boolean; onOpenResults: () => void; readOnly?: boolean }) {
   const [resume, setResume] = useState<string | null>(null);
-  // A new clock for each data load, so the week and the link states do not go stale.
+  // A new clock for each data load keeps the booking link states current.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const now = useMemo(() => new Date(), [data]);
   const byId = useMemo(() => new Map(data.candidates.map((c) => [c.id, c])), [data.candidates]);
   const rows = data.callOrder.flatMap((id) => byId.get(id) ?? []);
-  const week = weekCalls(data.calls, data.candidates, now);
   const decisions = openHeadDecisions(data.headDecisions, data.decisions);
-  const jump = (id: string) => document.getElementById(`call-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
   const act = (c: HiringCandidate, result: "good" | "no_answer" | "bad") => {
     if (result === "bad" && !window.confirm(`Stop ${c.name}? Nothing is sent to them, and they leave every queue.`)) return;
     void command(callCommand(c, result));
   };
   return (
-    <div className={r.screen}>
-      <TodayCalls data={data} command={command} busy={busy} readOnly={readOnly} />
-      <Section title="My week: booked calls">
-        <div className={r.week}>
-          {week.map((day) => (
-            <div key={day.date} className={r.day} data-today={day.today ? "" : undefined}>
-              <p className={r.dayName}>
-                {shortDay(day.date)}
-                <span className={r.count}>{day.calls.length}</span>
-              </p>
-              {day.calls.map((call) => (
-                <button key={`${call.candidateId}${call.time}`} type="button" className={r.slot} onClick={() => jump(call.candidateId)}>
-                  <b>{call.time}</b> {call.name}
-                </button>
+    <div className={`${r.screen} ${r.hrScreen}`}>
+      <TodayCalls data={data} command={command} busy={busy} readOnly={readOnly}>
+        {decisions.length > 0 && (
+          <Section title="Tutor recommendations" count={decisions.length}>
+            <div className={r.cards}>
+              {decisions.map((d) => (
+                <article key={d.candidateId} className={r.card}>
+                  <div className={r.cardMain}>
+                    <p className={r.name}>{byId.get(d.candidateId!)?.name ?? "Candidate"}</p>
+                    <p className={r.meta}>
+                      <span className={r.tag} data-tone={d.decision}>
+                        {d.decision === "hire" ? "Yes" : "No"}
+                      </span>
+                      {d.head} · {d.reason || "No reason given"}
+                    </p>
+                    {d.draftProblem && <p className={r.warn}>No email draft yet: {d.draftProblem}</p>}
+                  </div>
+                  <div className={r.actions}>
+                    {!readOnly && d.decision === "hire" && d.candidateId && (data.reviewAccess?.hr || data.reviewAccess?.gift)
+                      ? <FinalReview id={d.candidateId} />
+                      : <button type="button" className={r.big} disabled={readOnly} onClick={onOpenResults}>Open assessment</button>}
+                  </div>
+                </article>
               ))}
-              {!day.calls.length && <p className={r.quiet}>No calls</p>}
             </div>
-          ))}
-        </div>
-      </Section>
-
-      {decisions.length > 0 && (
-        <Section title="Tutor recommendations" count={decisions.length}>
-          <div className={r.cards}>
-            {decisions.map((d) => (
-              <article key={d.candidateId} className={r.card} data-tone={d.decision}>
-                <div className={r.cardMain}>
-                  <p className={r.name}>{byId.get(d.candidateId!)?.name ?? "Candidate"}</p>
-                  <p className={r.meta}>
-                    <span className={r.tag} data-tone={d.decision}>
-                      {d.decision === "hire" ? "Yes" : "No"}
-                    </span>
-                    {d.head} · {d.reason || "No reason given"}
-                  </p>
-                  {d.draftProblem && <p className={r.warn}>No email draft yet: {d.draftProblem}</p>}
-                </div>
-                <div className={r.actions}>
-                  {!readOnly && d.decision === "hire" && d.candidateId && (data.reviewAccess?.hr || data.reviewAccess?.gift)
-                    ? <FinalReview id={d.candidateId} />
-                    : <button type="button" className={r.big} disabled={readOnly} onClick={onOpenResults}>Open assessment</button>}
-                </div>
-              </article>
-            ))}
-          </div>
-        </Section>
-      )}
+          </Section>
+        )}
+      </TodayCalls>
 
       <Section title="To call" count={rows.length}>
         {!rows.length && <p className={r.quiet}>Nobody is waiting for a call.</p>}
-        <div className={r.cards}>
+        <div className={`${r.cards} ${r.queue}`}>
           {rows.map((c, index) => {
             const subjects = callSubjects(c, data.config.subjectPriority);
             const state = callState(c.id, data.calls, data.inviteOutbox, now);
             return (
-              <article key={c.id} id={`call-${c.id}`} className={r.card}>
+              <article key={c.id} className={r.card}>
                 <div className={r.cardMain}>
                   <p className={r.name}>
                     <span className={r.order}>{index + 1}</span>
