@@ -326,6 +326,9 @@
 .facts div { display: flex; justify-content: space-between; gap: 12px; }
 .facts dt { color: var(--muted); }
 .facts dd { text-align: right; }
+.intakeScore { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; }
+.intakeScore > summary { min-height: 44px; padding-block: 11px; color: var(--accent-text); font-weight: 600; cursor: pointer; }
+.intakeScore .facts dt { flex-shrink: 0; }
 .inspectorSection { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 .inspectorHeading { display: flex; justify-content: space-between; font-size: 14px; font-weight: 500; }
 .inspectorText { margin-top: 4px; color: var(--support); }

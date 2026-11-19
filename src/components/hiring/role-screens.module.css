@@ -38,7 +38,6 @@
 .time span { color: var(--muted); font-size: 12px; font-weight: 500; }
 .name { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; }
 .order { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--tint); color: var(--support); font-size: 12px; }
-.score { padding: 1px 8px; border-radius: 999px; background: var(--ink); color: var(--paper); font-size: 12px; font-variant-numeric: tabular-nums; }
 .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--support); font-size: 14px; }
 .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--tint); color: var(--support); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .tag[data-tone="hire"] { background: color-mix(in oklch, var(--good) 14%, var(--paper)); color: var(--good); }

@@ -9,7 +9,7 @@ import { universityName } from "@/lib/hiring/seek-view";
 import { FinalReview } from "./final-review";
 import { resultEmailState, ResultUpload } from "./assessment-screen";
 import { callCommand, callState, callSubjects, triesText } from "./calls-screen";
-import { PhoneLink, ResumeBody, SourceTextBody, useResumeCheck, useSourceText } from "./candidate-inspector";
+import { PhoneLink, ResumeBody, SeekIntakeScore, SourceTextBody, useResumeCheck, useSourceText } from "./candidate-inspector";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
 import css from "./dashboard.module.css";
 import r from "./role-screens.module.css";
@@ -140,6 +140,7 @@ export function TodayCalls({ data, command, busy, readOnly = false, children }: 
                     ))}
                   </div>
                 )}
+                {candidate && <SeekIntakeScore candidate={candidate} config={data.config} />}
                 {candidate && open === key && <div className={r.callDetail}>
                   <ResumePeek candidate={candidate} months={data.config.resumeRetentionMonths} />
                   <CallNotes candidate={candidate} command={command} busy={busy} readOnly={readOnly} />
@@ -277,7 +278,6 @@ export function HrScreen({ data, command, busy, onOpenResults, readOnly = false 
                   <p className={r.name}>
                     <span className={r.order}>{index + 1}</span>
                     {c.name}
-                    {c.profileScore !== null && <span className={r.score}>{Math.round(c.profileScore)}</span>}
                   </p>
                   <p className={r.meta}>
                     {subjects.main}
@@ -303,6 +303,7 @@ export function HrScreen({ data, command, busy, onOpenResults, readOnly = false 
                     Bad call
                   </button>
                 </div>
+                <SeekIntakeScore candidate={c} config={data.config} />
                 {resume === c.id && <ResumePeek candidate={c} months={data.config.resumeRetentionMonths} />}
               </article>
             );

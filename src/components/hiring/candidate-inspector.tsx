@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { criterionValues, STAGE_LABELS } from "@/lib/hiring/insights";
 import { ANSWER_LABELS, DEFAULT_PRE_SCREEN_WEIGHTS, isDecided, RESUME_TYPES, SUBJECTS, type HiringConfig, type Subject } from "@/lib/hiring/model";
 import type { Assessment, PreScreenAssessment } from "@/lib/hiring/scoring";
+import { workRightsText } from "@/lib/hiring/seek-view";
 import { preScreenNote, visitText, type CandidateExtras } from "@/lib/hiring/status";
 import type { Command, HiringCandidate } from "./dashboard";
 import { CRITERION_LABELS, PILL_CLASS, RESULT_CLASS, RESULT_LABELS } from "./pipeline-charts";
@@ -110,6 +111,64 @@ export function AssessmentBlock({
         </details>
       ))}
     </section>
+  );
+}
+
+export function ProfileScoreBreakdown({ candidate, weights }: { candidate: HiringCandidate; weights: HiringConfig["profileWeights"] }) {
+  const university = candidate.universityAssessment;
+  return (
+    <>
+      {candidate.profileAssessment && (
+        <AssessmentBlock title="Why this score" score={candidate.profileScore} assessment={candidate.profileAssessment} weights={weights} />
+      )}
+      {(candidate.profileAssessment || university) && (
+        <section className={css.inspectorSection}>
+          <h3 className={css.inspectorHeading}>
+            University points
+            <span className={css.num}>{Math.round((university?.fraction ?? 0) * weights.prestige * 100) / 100}/{weights.prestige}</span>
+          </h3>
+          <p className={css.inspectorText}>{university?.reason ?? "No university confirmed."}</p>
+        </section>
+      )}
+      {candidate.profileScore !== null && candidate.workRightsPenalty > 0 && (
+        <p className={css.inspectorText}>Work rights deduction: {round(candidate.workRightsPenalty)} points.</p>
+      )}
+    </>
+  );
+}
+
+export function SeekIntakeScore({ candidate, config }: { candidate: HiringCandidate; config: HiringConfig }) {
+  const [open, setOpen] = useState(false);
+  const goodCall = candidate.callReview?.good;
+  return (
+    <details className={css.intakeScore} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>SEEK intake score · {candidate.profileScore === null ? "Not scored" : `${round(candidate.profileScore)}/100`}</summary>
+      {open && (
+        <>
+          <dl className={css.facts}>
+            <div>
+              <dt>Current profile minimum</dt>
+              <dd>{config.profileThreshold}/100</dd>
+            </div>
+            <div>
+              <dt>Current HR call minimum</dt>
+              <dd>{config.callThreshold === null ? "Calls off" : `${config.callThreshold}/100`}</dd>
+            </div>
+            <div>
+              <dt>Work rights</dt>
+              <dd>{workRightsText(candidate)}{candidate.workRightsAnswer && (candidate.workRightsAccepted ? " · Accepted" : " · Not accepted")}</dd>
+            </div>
+            {goodCall && (
+              <div>
+                <dt>HR call</dt>
+                <dd>{goodCall.manual ? "Manual pre-screen invitation" : "Good call recorded"}</dd>
+              </div>
+            )}
+          </dl>
+          <ProfileScoreBreakdown candidate={candidate} weights={config.profileWeights} />
+        </>
+      )}
+    </details>
   );
 }
 
