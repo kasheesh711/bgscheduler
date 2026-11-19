@@ -117,9 +117,6 @@ describe("cron status evaluation", () => {
     expect(result.lateAfterAt?.toISOString()).toBe("2026-06-15T03:00:00.000Z");
   });
 
-  // credit_control declares maxDuration 800 (mirroring its route), so a run
-  // is only stuck past 800s + the 60s buffer. A 300s registry value used to
-  // report healthy 372-390s production runs as failing.
   it("marks long-running jobs as failing after maxDuration plus buffer", () => {
     const running = run({
       status: "running",
@@ -127,7 +124,7 @@ describe("cron status evaluation", () => {
       finishedAt: null,
     });
     const evaluateAt = (now: string) => evaluateCronJobStatus({
-      job: job("credit_control"),
+      job: job("wise_snapshot"),
       now: new Date(now),
       latestInvocation: null,
       latestCronInvocation: null,
@@ -174,14 +171,15 @@ describe("cron status evaluation", () => {
 
 describe("retired shared-data health", () => {
   afterEach(() => vi.unstubAllEnvs());
-  it("does not let skipped heartbeat ticks hide an old snapshot", () => {
+  it("shows the last successful manual-only copy even after a skipped tick", () => {
     vi.stubEnv("CREDIT_CONTROL_MODE", "retired");
     const previous = run({ startedAt: new Date("2026-09-09T23:20:00Z"), finishedAt: new Date("2026-09-09T23:25:00Z") });
     const now = new Date("2026-09-11T03:00:00Z");
     const result = evaluateCronJobStatus({ job: job("credit_control"), now,
       latestInvocation: null, latestCronInvocation: { receivedAt: now, finishedAt: now, outcome: "skipped", responseStatus: 200, durationMs: 1, errorSummary: null },
       latestRun: previous, latestSuccessfulRun: previous, latestFailedRun: null, runningRun: null });
-    expect(result.status).toBe("late");
+    expect(result.status).toBe("manual-only");
+    expect(result.nextExpectedAt).toBeNull();
     expect(result.lastSuccessAt).toEqual(previous.finishedAt);
   });
   it("reports paused alerts without stale or failure alarms", () => {
