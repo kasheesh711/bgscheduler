@@ -18,7 +18,7 @@ import {
   type SeekFilter,
 } from "@/lib/hiring/seek-view";
 import { preScreenNote, type CandidateExtras } from "@/lib/hiring/status";
-import { AssessmentBlock, PhoneLink, ResumeBody, SeekLinks, SourceTextBody, useResumeCheck, useSourceText } from "./candidate-inspector";
+import { PhoneLink, ProfileScoreBreakdown, ResumeBody, SeekLinks, SourceTextBody, useResumeCheck, useSourceText } from "./candidate-inspector";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
 import { PILL_CLASS } from "./pipeline-charts";
 import css from "./dashboard.module.css";
@@ -147,7 +147,6 @@ export function SeekPanel({
   // A PDF shows itself. Any other file, no file, or a file that will not open shows the extracted text in its place.
   const showText = !pdf || check.status === "failed";
   const text = useSourceText(candidate.id, showText);
-  const university = candidate.universityAssessment;
   return (
     <aside className={`${css.inspector} ${css.seekPanel}`} aria-label={`Résumé and score of ${candidate.name}`}>
       <header className={css.inspectorHead}>
@@ -222,25 +221,7 @@ export function SeekPanel({
             </div>
           )}
         </section>
-        {candidate.profileAssessment && (
-          <AssessmentBlock
-            title="Why this score"
-            score={candidate.profileScore}
-            assessment={candidate.profileAssessment}
-            weights={data.config.profileWeights}
-          />
-        )}
-        {university && (
-          <section className={css.inspectorSection}>
-            <h3 className={css.inspectorHeading}>
-              University points
-              <span className={css.num}>
-                {Math.round(university.fraction * data.config.profileWeights.prestige * 100) / 100}/{data.config.profileWeights.prestige}
-              </span>
-            </h3>
-            <p className={css.inspectorText}>{university.reason}</p>
-          </section>
-        )}
+        <ProfileScoreBreakdown candidate={candidate} weights={data.config.profileWeights} />
       </div>
     </aside>
   );

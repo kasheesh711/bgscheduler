@@ -126,7 +126,7 @@ export function CallsScreen({
                   <th>Phone</th>
                   <th>Subject</th>
                   <th>University</th>
-                  <th>Score</th>
+                  <th>SEEK score</th>
                   <th>Call booking</th>
                   <th>Calls</th>
                   <th>SEEK</th>

@@ -5,7 +5,7 @@ import { percentile } from "@/lib/hiring/funnel";
 import { ANSWER_LABELS, isDecided } from "@/lib/hiring/model";
 import { PRE_SCREEN_FILTERS, matchesPreScreenList, preScreenFinalScore, visitEmail, wasSentForm, type PreScreenListFilter, type VisitEmail } from "@/lib/hiring/prescreen-view";
 import { preScreenNote, type CandidateExtras } from "@/lib/hiring/status";
-import { AssessmentBlock, ONSITE_STAGES } from "./candidate-inspector";
+import { AssessmentBlock, ONSITE_STAGES, SeekIntakeScore } from "./candidate-inspector";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
 import { PILL_CLASS } from "./pipeline-charts";
 import css from "./dashboard.module.css";
@@ -116,6 +116,7 @@ function PreScreenPanel({
             </div>
           ))}
         </dl>
+        <SeekIntakeScore candidate={candidate} config={data.config} />
         {email.error && <p className={css.errorText}>{email.error}</p>}
         {candidate.preScreen && candidate.preScreenHash && !candidate.preScreenAssessment && (
           <p className={css.inspectorNote}>The AI could not verify the evidence in this response, so it has no score.</p>
