@@ -19,14 +19,14 @@ describe("Credit Control retirement", () => {
     const response = creditControlErrorResponse("test", new Error(CREDIT_CONTROL_RETIRED), "error");
     expect(response.status).toBe(503); expect(await response.json()).toMatchObject({ code: CREDIT_CONTROL_RETIRED });
   });
-  it("restores APIs and cadence without changing recorded access or digest preferences", async () => {
+  it("restores API access while the copy job stays manual", async () => {
     vi.stubEnv("CREDIT_CONTROL_MODE", "active");
     vi.mocked(auth).mockResolvedValue({ user: { email: "staff@example.com", name: "Staff" } } as never);
     expect(await requireCreditControlSession()).toEqual({ email: "staff@example.com", name: "Staff" });
     const job = getCronJobDefinition("credit_control")!;
-    expect(effectiveCronJob(job).cadenceMinutes).toBe(30);
+    expect(effectiveCronJob(job)).toMatchObject({ manualOnly: true, schedule: null, cadenceMinutes: null });
     vi.stubEnv("CREDIT_CONTROL_MODE", "retired");
-    expect(effectiveCronJob(job)).toMatchObject({ label: "Shared Student Data", cadenceMinutes: 1440, requiresSuccessfulRun: true });
+    expect(effectiveCronJob(job)).toMatchObject({ label: "Shared Student Data", cadenceMinutes: null, requiresSuccessfulRun: true });
     expect(effectiveCronJob(getCronJobDefinition("line_credit_digest")!).paused).toBe(true);
     expect(effectiveCronJob(getCronJobDefinition("progress_tests")!)).toMatchObject({ paused: true, manualOnly: true });
   });

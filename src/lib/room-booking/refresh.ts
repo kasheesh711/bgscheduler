@@ -278,20 +278,9 @@ export async function refreshRoomOccupancy(
     const days = [];
     for (const date of dates) {
       try {
-        await withDatabaseTransaction(db, async (tx) => {
-          const state = await lockRoomDay(tx, date);
-          if (state.leaseUntil && state.leaseUntil.getTime() < Date.now()) {
-            await tx
-              .update(s.roomDayStates)
-              .set({
-                leaseOwner: null,
-                leaseUntil: null,
-                checkedAt: null,
-                revision: sql`${s.roomDayStates.revision} + 1`,
-              })
-              .where(eq(s.roomDayStates.date, date));
-          } else assertRoomDayIdle(state);
-        });
+        await withDatabaseTransaction(db, async (tx) =>
+          assertRoomDayIdle(await lockRoomDay(tx, date)),
+        );
         const day = await loadRoomDay(db, date);
         if (!day.rooms.length)
           throw new Error("The active room catalog is empty");

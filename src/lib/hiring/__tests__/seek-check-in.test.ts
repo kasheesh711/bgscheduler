@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { chromium, type Browser, type Page } from "playwright-core";
-import { closeSeekCheckIn } from "../../../../scripts/hiring-seek";
+import { closeSeekCheckIn, importSeek } from "../../../../scripts/hiring-seek";
 
 // A copy of SEEK's survey: a modal over the list that hides the list from role queries, with an X that removes it.
 // An answer or a Submit must never happen.
@@ -81,4 +81,29 @@ describe("closeSeekCheckIn", () => {
     }
     expect(crashes).toEqual([]);
   });
+});
+
+it("scans SEEK when a deferred page asset never finishes", { timeout: 15000 }, async ({ skip }) => {
+  if (!browser) skip();
+  const context = await browser!.newContext();
+  context.setDefaultNavigationTimeout(2000);
+  const statuses = ["Inbox", "Prescreen", "Shortlist", "Interview", "Offer", "Accept", "Not Suitable"];
+  await context.route("https://th.employer.seek.com/**", async (route) => {
+    if (new URL(route.request().url()).pathname === "/slow.js") return;
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<script defer src="/slow.js"></script>
+        ${statuses.map((status, index) => `<button>${status} ${index === 0 ? 1 : 0} applications</button>`).join("")}
+        <div data-testid="job-application-card"><input id="checkbox-example"></div>`,
+    });
+  });
+  const launch = vi.spyOn(chromium, "launchPersistentContext").mockResolvedValueOnce(context);
+  const observe = vi.fn();
+  try {
+    const result = await importSeek("", "example", new Set(["example"]), vi.fn(), observe, vi.fn());
+    expect(result.scanned).toBe(1);
+    expect(observe).toHaveBeenCalledWith("example", "Inbox", false);
+  } finally {
+    launch.mockRestore();
+  }
 });

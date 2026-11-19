@@ -349,7 +349,8 @@ async function walkSeek(
 ) {
   let scanned = 0;
   const page = browser.pages()[0] ?? (await browser.newPage());
-  await page.goto(`https://th.employer.seek.com/candidates/?jobid=${jobId}`);
+  // Wait for SEEK controls below so a slow page asset cannot block a visible candidate list.
+  await page.goto(`https://th.employer.seek.com/candidates/?jobid=${jobId}`, { waitUntil: "commit" });
   if (!seekSignedIn(page.url())) throw new SeekPageError(SEEK_SIGNED_OUT);
   await closeSeekCheckIn(page);
   const statusButtons = page.getByRole("button", {
@@ -409,7 +410,7 @@ async function walkSeek(
     const filter = status === "Not Suitable" ? "Rejected" : status;
     await page.goto(
       `https://th.employer.seek.com/candidates/?jobid=${jobId}&s=${encodeURIComponent(filter)}`,
-      { waitUntil: "domcontentloaded" },
+      { waitUntil: "commit" },
     );
     await page
       .getByTestId("job-application-card")

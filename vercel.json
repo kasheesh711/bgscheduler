@@ -12,20 +12,12 @@
       "schedule": "*/30 * * * *"
     },
     {
-      "path": "/api/internal/sync-sales-dashboard",
-      "schedule": "10,40 * * * *"
-    },
-    {
       "path": "/api/internal/sync-unearned-revenue",
       "schedule": "30 18 * * *"
     },
     {
       "path": "/api/internal/sync-onsite-foot-traffic",
       "schedule": "18 18 * * *"
-    },
-    {
-      "path": "/api/internal/sync-credit-control",
-      "schedule": "20,50 * * * *"
     },
     {
       "path": "/api/internal/sync-wise-activity",
@@ -72,20 +64,8 @@
       "schedule": "3 2 * * *"
     },
     {
-      "path": "/api/internal/room-booking",
-      "schedule": "1,5,9,13,17,21,25,29,33,37,41,45,49,53,57 * * * *"
-    },
-    {
       "path": "/api/internal/class-assignments/publish-recovery",
       "schedule": "1-56/5 * * * *"
-    },
-    {
-      "path": "/api/internal/tutor-sit-ins",
-      "schedule": "4,14,24,34,44,54 * * * *"
-    },
-    {
-      "path": "/api/internal/tutor-sit-ins/digest",
-      "schedule": "0 1 * * *"
     },
     {
       "path": "/api/internal/post-class-feedback/reminder-nightly",
