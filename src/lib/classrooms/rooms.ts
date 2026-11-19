@@ -29,14 +29,12 @@ export const CORE_TEACHING_ROOM_PRIORITY = [
   // Right wing (floor plan PR #233): non-TV, so they fill before the spare TV rooms.
   "Consistency Wins",
   "Shift",
-  "Now",
   "Win or Learn",
   "Possible",
   "Momentum",
   "Try",
   "Gain",
   "Think Different",
-  "Productive",
 ] as const;
 export const CORE_TEACHING_ROOM_RANK = new Map<string, number>(
   CORE_TEACHING_ROOM_PRIORITY.map((roomName, index) => [roomName, index]),
@@ -98,15 +96,19 @@ export const DEFAULT_CLASSROOM_ROOMS: ClassroomRoomDefinition[] = [
   { name: "Shift", hasTv: false, capacity: 2, category: "standard", active: true, sortOrder: 26 },
   { name: "Trust the Process", hasTv: false, capacity: 2, category: "overflow_only", active: true, sortOrder: 27 },
   { name: "Eureka", hasTv: false, capacity: 2, category: "standard", active: false, sortOrder: 28 },
-  { name: "Now", hasTv: false, capacity: 2, category: "standard", active: true, sortOrder: 29 },
+  { name: "Now", hasTv: false, capacity: 2, category: "standard", active: false, sortOrder: 29 },
   { name: "Win or Learn", hasTv: false, capacity: 2, category: "standard", active: true, sortOrder: 30 },
   { name: "Possible", hasTv: false, capacity: 2, category: "standard", active: true, sortOrder: 31 },
   { name: "Momentum", hasTv: false, capacity: 2, category: "standard", active: true, sortOrder: 32 },
   { name: "Try", hasTv: false, capacity: 2, category: "standard", active: true, sortOrder: 33 },
   { name: "Gain", hasTv: false, capacity: 2, category: "standard", active: true, sortOrder: 34 },
   { name: "Think Different", hasTv: false, capacity: 2, category: "standard", active: true, sortOrder: 35 },
-  { name: "Productive", hasTv: false, capacity: 2, category: "standard", active: true, sortOrder: 36 },
+  { name: "Productive", hasTv: false, capacity: 2, category: "standard", active: false, sortOrder: 36 },
 ];
+
+export const UNAVAILABLE_CLASSROOM_NAMES = new Set(
+  DEFAULT_CLASSROOM_ROOMS.filter(room => !room.active).map(room => room.name),
+);
 
 export const TV_REQUIRED_TUTORS = new Set(
   [

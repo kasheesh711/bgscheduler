@@ -1,4 +1,4 @@
-import { normalizeTutorName } from "./rooms";
+import { normalizeTutorName, UNAVAILABLE_CLASSROOM_NAMES } from "./rooms";
 import { isOnlineSessionType } from "./session-mode";
 
 export const CLASSROOM_ALGORITHM_VERSION = "room-pairs-v2";
@@ -118,7 +118,12 @@ export function policiesFromMetadata(metadata: Record<string, unknown>): Map<str
     if (!value || typeof value !== "object") continue;
     const policy = value as TutorRoomPolicy;
     if (typeof policy.canonicalKey !== "string" || !Array.isArray(policy.rooms) || !policy.rooms.every(room => typeof room === "string")) continue;
-    policies.set(policy.canonicalKey.toLowerCase(), policy);
+    const teachingRoom = (room: string) => !UNAVAILABLE_CLASSROOM_NAMES.has(room);
+    policies.set(policy.canonicalKey.toLowerCase(), {
+      ...policy,
+      rooms: policy.rooms.filter(teachingRoom),
+      unavailableRooms: Array.isArray(policy.unavailableRooms) ? policy.unavailableRooms.filter(teachingRoom) : [],
+    });
   }
   return policies;
 }
