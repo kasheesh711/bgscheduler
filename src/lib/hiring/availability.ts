@@ -530,15 +530,15 @@ export async function verifyLiveSlot(db: Database, slot: Slot) {
   return { checkedAt: live.checkedAt, source: "wise-live", snapshotId: live.snapshotId };
 }
 
-/**
- * The times a candidate can book the HR call: every CALL_MINUTES step of the call day on each date, without the past and
- * without any time that touches `busy` (HR's calendar and the calls already booked). `dates` are business dates, so a
- * weekend or a closed date never appears. It proves nothing itself: the caller must pass a complete busy list or none.
- */
+const HR_LUNCH_START = 12 * 60;
+const HR_LUNCH_END = 13 * 60 + 15;
+
+/** HR call and signing slots on business dates. The caller must supply the complete busy list. */
 export function callSlots(dates: string[], busy: { start: Date; end: Date }[], now: Date, duration = CALL_MINUTES) {
   const slots: { date: string; start: string; end: string }[] = [];
   for (const date of dates)
     for (let minute = CALL_DAY_START; minute + duration <= CALL_DAY_END; minute += CALL_MINUTES) {
+      if (minute < HR_LUNCH_END && minute + duration > HR_LUNCH_START) continue;
       const range = { start: instant(date, minute), end: instant(date, minute + duration) };
       if (range.start > now && !busy.some((other) => overlap(range, other)))
         slots.push({ date, start: range.start.toISOString(), end: range.end.toISOString() });

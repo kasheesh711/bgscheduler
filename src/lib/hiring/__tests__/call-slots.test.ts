@@ -1,23 +1,33 @@
 import { describe, expect, it } from "vitest";
 import { callSlots } from "../availability";
-import { businessDates, callBookingSchema, phoneSchema } from "../model";
+import { businessDates, CALL_MINUTES, callBookingSchema, CONTRACT_MINUTES, phoneSchema } from "../model";
 
 // Wednesday 12:00 in Bangkok.
 const now = new Date("2026-11-04T05:00:00Z");
 const range = (start: string, end: string) => ({ start: new Date(start), end: new Date(end) });
 
 describe("callSlots", () => {
-  it("offers every quarter hour from 09:00 to 17:45 on a free day", () => {
+  it("offers quarter hours from 09:00 to 17:45 outside lunch on a free day", () => {
     const slots = callSlots(["2026-11-05"], [], now);
-    expect(slots).toHaveLength(36);
+    expect(slots).toHaveLength(31);
     expect(slots[0]).toEqual({ date: "2026-11-05", start: "2026-11-05T02:00:00.000Z", end: "2026-11-05T02:15:00.000Z" });
     expect(slots.at(-1)).toEqual({ date: "2026-11-05", start: "2026-11-05T10:45:00.000Z", end: "2026-11-05T11:00:00.000Z" });
   });
 
+  it.each([[CALL_MINUTES, "04:45"], [CONTRACT_MINUTES, "04:30"]])(
+    "keeps appointments of %i minutes clear of lunch and allows both edges",
+    (minutes, lastStart) => {
+      const slots = callSlots(["2026-11-05"], [], now, minutes);
+      const afterLunch = slots.findIndex((slot) => slot.start >= "2026-11-05T06:15:00.000Z");
+      expect(slots[afterLunch - 1]).toMatchObject({ start: `2026-11-05T${lastStart}:00.000Z`, end: "2026-11-05T05:00:00.000Z" });
+      expect(slots[afterLunch]?.start).toBe("2026-11-05T06:15:00.000Z");
+    },
+  );
+
   it("drops every time that a busy block touches, and keeps a time that only meets its edge", () => {
     // 10:00–10:20 in Bangkok takes 10:00 and 10:15. 09:45 ends at 10:00 and 10:30 starts after it, so both stay.
     const starts = callSlots(["2026-11-05"], [range("2026-11-05T03:00:00Z", "2026-11-05T03:20:00Z")], now).map((slot) => slot.start);
-    expect(starts).toHaveLength(34);
+    expect(starts).toHaveLength(29);
     expect(starts).not.toContain("2026-11-05T03:00:00.000Z");
     expect(starts).not.toContain("2026-11-05T03:15:00.000Z");
     expect(starts).toContain("2026-11-05T02:45:00.000Z");
