@@ -11,7 +11,7 @@ type Review = {
   packet: { id: string; behavioral: string; offer: string } | null;
 };
 
-export function FinalReview({ id }: { id: string }) {
+export function FinalReview({ id, signing = false, onChanged }: { id: string; signing?: boolean; onChanged?: () => Promise<void> }) {
   const url = `/api/hiring/review/${id}`;
   const [review, setReview] = useState<Review>();
   const [behavioral, setBehavioral] = useState("");
@@ -40,7 +40,10 @@ export function FinalReview({ id }: { id: string }) {
         setViewed(false);
       }
       await load();
-      if (body) setMessage("Saved.");
+      if (body) {
+        setMessage("Saved.");
+        await onChanged?.();
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not save the review.");
     } finally {
@@ -50,16 +53,16 @@ export function FinalReview({ id }: { id: string }) {
 
   const closed = review && ["hired", "rejected", "stopped"].includes(review.stage);
   return (
-    <section className={css.inspectorSection} id={`review-${id}`} aria-label="Final hiring review">
-      <h3 className={css.inspectorHeading}>Final hiring review</h3>
-      {!review && <button type="button" className={css.secondary} disabled={busy} onClick={() => void act()}>Open final review</button>}
-      {review?.packet && (
+    <section className={signing ? undefined : css.inspectorSection} id={`review-${id}`} aria-label={signing ? "Contract signing" : "Final hiring review"}>
+      {!signing && <h3 className={css.inspectorHeading}>Final hiring review</h3>}
+      {!review && <button type="button" className={css.secondary} disabled={busy} onClick={() => void act()}>{signing ? "Check contract signing" : "Open final review"}</button>}
+      {!signing && review?.packet && (
         <div className={css.decisionActions}>
           <a className={css.inlineLink} href={`${url}?file=html`} target="_blank" rel="noreferrer" onClick={() => setViewed(true)}>Read review packet</a>
           <a className={css.inlineLink} href={`${url}?file=zip`}>Download packet and files</a>
         </div>
       )}
-      {review?.access.hr && !closed && (
+      {!signing && review?.access.hr && !closed && (
         <>
           <label className={css.fieldLabel}>Behavioral assessment from the pre-screen call
             <textarea className={css.textarea} rows={5} maxLength={10000} value={behavioral} onChange={(event) => setBehavioral(event.target.value)} />
@@ -72,7 +75,7 @@ export function FinalReview({ id }: { id: string }) {
             onClick={() => void act({ action: "submit", behavioral, offer })}>Send to Gift</button>
         </>
       )}
-      {review?.access.gift && !closed && (review.packet ? (
+      {!signing && review?.access.gift && !closed && (review.packet ? (
         <>
           <label className={css.fieldLabel}>Sign-off note (required to reject)
             <textarea className={css.textarea} rows={2} maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} />
@@ -91,7 +94,7 @@ export function FinalReview({ id }: { id: string }) {
       ) : <p>Waiting for HR to submit the packet.</p>)}
       {closed && <p>{review.stage === "hired" ? (review.appointment
         ? `Contract signing booked for ${new Date(review.appointment).toLocaleString("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium", timeStyle: "short" })} (Bangkok).`
-        : "Offer approved. Waiting for the contract booking.") : `Application ${review.stage}.`}</p>}
+        : review.packet ? "Offer approved. Waiting for the contract booking." : "There is no contract booking on record.") : `Application ${review.stage}.`}</p>}
       {message && <p role="status">{message}</p>}
     </section>
   );

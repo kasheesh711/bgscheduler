@@ -60,7 +60,8 @@
 }
 .subtitle { color: var(--muted); }
 /* Room for the wrapped subtitle on a phone, so the page does not jump when the data arrives. */
-@media (max-width: 719px) { .topbar:not([data-compact]) .subtitle { min-height: 4.35em; } }
+@media (max-width: 719px) { .topbar:not([data-compact]) .subtitle { min-height: 2.9em; } }
+@media (max-width: 374px) { .topbar:not([data-compact]) .subtitle { min-height: 4.35em; } }
 .purpose { margin: 0; padding: 8px 24px 0; color: var(--support); }
 .notice { margin-left: auto; color: var(--good); }
 .viewSwitch { display: flex; flex-wrap: wrap; max-width: 100%; gap: 2px; padding: 2px; border-radius: 18px; background: var(--tint); }

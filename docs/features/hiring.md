@@ -6,11 +6,14 @@ The Hiring page has seven tabs. Each opens by address (`/hiring?view=seek`).
 
 - **Overview** (`view=overview`): summary figures, limit meters, the candidate table, charts, and worker, delivery and activity status.
 - **Capacity** (`view=capacity`): which subject to hire for first and why, from new students in the last 90 days and tutor hours in the next 4 weeks. See [Capacity](#capacity).
-- **1 Seek intake** (`view=seek`): see [Seek intake](#seek-intake).
-- **2 Calls** (`view=calls`): see [HR calls](#hr-calls).
-- **3 Pre-screen** (`view=prescreen`): see [Pre-screen screen](#pre-screen-screen).
-- **4 Mock and paper** (`view=assessment`): see [Mock and paper](#mock-and-paper), including the calendar of heads.
-- **Rules and setup** (`view=setup`): the rules, plus pass marks and the paper library.
+- **SEEK intake** (`view=seek`): see [Seek intake](#seek-intake).
+- **HR calls** (`view=calls`): see [HR calls](#hr-calls).
+- **Pre-screen form** (`view=prescreen`): see [Pre-screen screen](#pre-screen-screen).
+- **Paper test** (`view=assessment`): see [Mock and paper](#mock-and-paper), including the calendar of heads.
+- **Mock teaching** (`view=mock`): find the assigned tutor’s candidates, open their papers and résumés, and enter the rubric and recommendation.
+- **Final review** (`view=review`): HR adds the call assessment and offer terms. Gift reviews the packet and signs off.
+- **Offer & signing** (`view=offer`): check whether an approved offer email went out and whether the candidate booked a signing.
+- **Hiring tools**: Overview, Capacity, Visit schedule, Rules and setup, and the HR, Admin and Heads staff views.
 
 The Hiring workspace follows a candidate from a SEEK application through paper grading, mock teaching, final review and contract booking. See [Paper, tutor recommendation and final review](#paper-tutor-recommendation-and-final-review). The one-visit rules below describe the earlier combined visit.
 
@@ -45,7 +48,7 @@ The list holds people with a SEEK application. People only in the tracker are in
 
 ## HR calls
 
-HR phones the strongest applicants before the pre-screen form goes. A candidate who passes the [profile gate](#profile-score) with a profile score at or above the **HR call score** (Rules and setup, starts at 80) waits on the **2 Calls** tab. The form cannot go until HR records a good call. A candidate below the call score gets the form automatically, as before. A blank call score turns the step off.
+HR phones the strongest applicants before the pre-screen form goes. A candidate who passes the [profile gate](#profile-score) with a profile score at or above the **HR call score** (Rules and setup, starts at 80) waits on the **HR calls** tab. The form cannot go until HR records a good call. A candidate below the call score gets the form automatically, as before. A blank call score turns the step off.
 
 **The candidate books the call** (Kevin's decisions, 12 Nov 2026). The worker emails each person on the list one link to `/hiring/book/{token}` (token kind `call`). The page reads the `people@begiftededucation.com` calendar live and offers the free 15-minute times, Monday to Friday, 09:00–18:00 Bangkok, on the next five business dates. The candidate picks a time and types the phone number that HR calls. The Calls tab shows the booked time and the number, with booked calls first. HR still records the result with the three buttons.
 
@@ -396,7 +399,7 @@ A signed, expiring link at `/hiring/book/{token}` offers the visit.
 
 ## Head schedules
 
-These open from the Calendar switch in **4 Mock and paper**.
+These open from the Calendar switch in **Paper test**.
 
 The **Head schedules** view shows one head's Monday-to-Friday week at a time. A head switch and a week switch choose what to show. The week switch starts at the current week and cannot go back, because Wise omits past sessions. For each day the view shows the head's office hours, Wise classes, leave, sit-ins, exams and mocks. A list shows that head's visits. No student name reaches the page. Only a mock and an exam block name the candidate.
 
@@ -748,11 +751,11 @@ Thea also posts a short notice when a completed pre-screen response is imported 
 
 ## Paper, tutor recommendation and final review
 
-New onsite invitations book the two-hour paper only. Existing combined booking links retain their original terms. In **Admin**, upload the candidate’s scan after the assessment. In **Mock and paper**, check the marks and select **Confirm pass and invite to mock teaching**. The grade must meet a saved pass mark and the candidate must have an original résumé on file. The candidate waits for the mock invitation.
+New onsite invitations book the two-hour paper only. Existing combined booking links retain their original terms. In **Admin**, upload the candidate’s scan after the assessment. In **Paper test**, check the marks and select **Confirm pass and invite to mock teaching**. The grade must meet a saved pass mark and the candidate must have an original résumé on file. The candidate waits for the mock invitation.
 
 After the mock booking, the assigned tutor receives an email with links to the résumé and marked exam. The links are valid for that booking. After the session ends, the tutor submits the rubric on the candidate page. **No** queues a rejection email. **Yes** goes to the HR review list.
 
-HR opens **Hiring → HR → Tutor recommendations**, reviews the saved call notes, records the behavioral assessment, and enters the proposed offer letter. **Send to Gift** saves the evidence and sends Gift a review link. The Private Office packet includes the original résumé, marked exam, rubric, call assessment and application-stage ATS assessment. The ATS score uses the saved rubric settings at the time HR submits the packet. The ZIP contains the HTML report and both source files. Gift reads the packet before choosing **Approve and send offer** or **Reject and inform candidate**. If the evidence changes, HR submits the new packet before Gift signs off.
+HR opens **Hiring → Final review**, reviews the saved call notes, records the behavioral assessment, and enters the proposed offer letter. **Send to Gift** saves the evidence and sends Gift a review link. The Private Office packet includes the original résumé, marked exam, rubric, call assessment and application-stage ATS assessment. The ATS score uses the saved rubric settings at the time HR submits the packet. The ZIP contains the HTML report and both source files. Gift reads the packet before choosing **Approve and send offer** or **Reject and inform candidate**. If the evidence changes, HR submits the new packet before Gift signs off.
 
 Approval queues the approved offer letter with a 14-day link. The candidate selects a 30-minute onsite slot on the HR calendar. The page offers weekdays from 09:00 to 18:00 Bangkok, subject to HR availability. Booking checks Google again and prevents overlap with other contract signings and HR calls. HR and the candidate receive a calendar invitation. The candidate also receives an email confirmation. A booking records the appointment. HR completes the actual signing onsite.
 

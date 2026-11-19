@@ -1,0 +1,70 @@
+.tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 12px;
+}
+
+.tools.tools > button {
+  min-height: 36px;
+  padding-inline: 4px;
+  color: var(--support);
+}
+
+.tools button:hover, .tools button[aria-pressed="true"] {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.workflow {
+  flex: 0 0 100%;
+  min-width: 0;
+  border-top: 1px solid var(--line);
+}
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 8px;
+  margin: 0;
+  padding: 8px 0 0;
+  list-style: none;
+}
+
+.steps > li > button {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 11px 9px;
+  border-radius: 8px;
+  text-align: left;
+  font-weight: 600;
+}
+
+.steps button span {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.steps button:hover {
+  background: var(--tint);
+}
+
+.steps button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.steps button[aria-pressed="true"] span {
+  color: inherit;
+}
+
+@media (min-width: 720px) {
+  .steps { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+@media (min-width: 1100px) {
+  .steps { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+}
