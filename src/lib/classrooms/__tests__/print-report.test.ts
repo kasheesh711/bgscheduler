@@ -20,7 +20,7 @@ describe("shared classroom print data", () => {
     expect(buildClassroomPrintDay(run, [{ ...online, status: "remote", assignedRoom: "REMOTE_NO_ROOM_NEEDED" }], catalog, rosters).draft).toBe(false);
   });
   it("omits room preference and change notes only from print reports, while retaining real warnings", () => {
-    const savedRun = { ...run, changeSummary: { roomPolicies: [{ canonicalKey: "a", revision: 1, rooms: ["Usual room"] }] } };
+    const savedRun = { ...run, changeSummary: { roomPolicies: [{ canonicalKey: "a", revision: 1, rooms: ["Productive", "Usual room"], unavailableRooms: ["Productive"] }] } };
     const rows = [row("a", { assignedRoom: "Room A" }), row("b", { canonicalKey: "a", tutorDisplayName: "Tutor a", startMinute: 600, endMinute: 660 })];
     const rosters = new Map(rows.map(r => [r.id, roster()]));
     const schedule = buildTeacherSchedule(rows, run.assignmentDate, savedRun.changeSummary);
@@ -29,6 +29,7 @@ describe("shared classroom print data", () => {
     ]);
     const day = buildClassroomPrintDay(savedRun, rows, catalog, rosters);
     expect(day.draft).toBe(false);
+    expect(day.tutors[0].usualRooms).toEqual(["Usual room"]);
     for (const view of ["tutors", "rooms"] as const) {
       for (const card of buildPrintCards(report(day), view)[0].cards) {
         const html = renderToStaticMarkup(createElement(ClassroomPrintCard, { card }));
