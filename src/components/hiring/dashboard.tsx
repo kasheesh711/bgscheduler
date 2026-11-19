@@ -16,7 +16,7 @@ import { CandidateTable, matchesFilter } from "./candidate-table";
 import { AveragePentagon, EvidenceChart, KpiStrip, LimitMeters, ScoreChart, StageChart, SubjectChart } from "./pipeline-charts";
 import { AssessmentScreen } from "./assessment-screen";
 import { OperationsRail, WorkerBanner } from "./operations-rail";
-import { AdminScreen, HeadsScreen, HrScreen } from "./role-screens";
+import { AdminScreen, HeadsScreen, HrScreen, TodayCalls } from "./role-screens";
 import { PreScreenScreen } from "./prescreen-screen";
 import { CallsScreen } from "./calls-screen";
 import { CapacityScreen } from "./capacity-screen";
@@ -153,6 +153,17 @@ export function HiringDashboard() {
       const value = await response.json();
       if (!response.ok) throw new Error(value.error);
       const action = (body as { action: string }).action;
+      if (action === "call_notes") {
+        const { id } = body as { id: string };
+        const notes = value.notes as NonNullable<NonNullable<HiringCandidate["callReview"]>["notes"]>;
+        setData((current) => current && {
+          ...current,
+          candidates: current.candidates.map((candidate) => candidate.id === id
+            ? { ...candidate, callReview: { good: null, tries: [], ...candidate.callReview, notes } }
+            : candidate),
+        });
+        return true;
+      }
       let saved = "Saved.";
       if (action === "head_days") {
         // The server checked the revision before it saved, so the new one belongs to this draft. A head with no
@@ -365,6 +376,7 @@ export function HiringDashboard() {
           />
         </div>
         <div hidden={view !== "calls"} className={css.viewPane}>
+          {view === "calls" && <TodayCalls data={data} command={command} busy={busy} />}
           <CallsScreen data={data} extras={extras} holds={holds} onOpenRecord={openRecord} command={command} busy={busy} />
         </div>
         <div hidden={view !== "prescreen"} className={css.viewPane}>

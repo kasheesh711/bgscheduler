@@ -1,3 +1,5 @@
+import { LEARNING_PLANS_ROUTE } from "@/lib/learning-plans/access-policy";
+
 export type NavSectionId =
   | "scheduling-tutors"
   | "student-lifecycle"
@@ -337,6 +339,42 @@ export function visibleSections(allowedPages: string[] | null): Array<NavSection
     ...section,
     tools: sectionTools(section.id, allowedPages),
   })).filter((section) => section.tools.length > 0);
+}
+
+export function navigationAccess(allowedPages: string[] | null, grants: {
+  postClassFeedbackAccess: boolean;
+  unearnedRevenueAccess: boolean;
+  learningPlansAccess: boolean;
+  attendanceAccess: boolean;
+  sitInAccess: boolean;
+  classCaptureAccess: boolean;
+  creditControlEnabled: boolean;
+}) {
+  const financeAllowedPages = allowedPages && [
+    ...allowedPages,
+    ...(grants.postClassFeedbackAccess && !allowedPages.includes("/post-class-feedback") ? ["/post-class-feedback"] : []),
+    ...(grants.unearnedRevenueAccess && !allowedPages.includes("/unearned-revenue") ? ["/unearned-revenue"] : []),
+  ];
+  const scopedTools = [
+    [LEARNING_PLANS_ROUTE, grants.learningPlansAccess],
+    ["/tutor-attendance", grants.attendanceAccess],
+    ["/tutor-sit-ins", grants.sitInAccess],
+    ["/class-capture", grants.classCaptureAccess],
+  ] as const;
+  const visibleAllowedPages = financeAllowedPages && [
+    ...financeAllowedPages.filter((page) => !scopedTools.some(([href]) => href === page)),
+    ...scopedTools.flatMap(([href, allowed]) => allowed ? [href] : []),
+  ];
+  const sections = visibleSections(visibleAllowedPages).map((section) => ({
+    ...section,
+    tools: section.tools.filter((tool) =>
+      (grants.creditControlEnabled || tool.id !== "credit-control") &&
+      (grants.attendanceAccess || tool.id !== "tutor-attendance") &&
+      (grants.sitInAccess || tool.id !== "tutor-sit-ins") &&
+      (grants.classCaptureAccess || tool.id !== "class-capture") &&
+      (grants.unearnedRevenueAccess || tool.id !== "unearned-revenue")),
+  })).filter((section) => section.tools.length > 0);
+  return { financeAllowedPages, visibleAllowedPages, sections };
 }
 
 export function activeSection(pathname: string, allowedPages: string[] | null): NavSectionId | null {

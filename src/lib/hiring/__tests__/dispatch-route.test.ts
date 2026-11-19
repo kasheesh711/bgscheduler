@@ -2,13 +2,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { GET, POST } from "@/app/api/internal/hiring-delivery/route";
 import { deliveryAuthorization } from "../dispatch";
-import { deliverRecruitment } from "../recruitment";
+import { deliverRecruitment, queueRecruitmentDailyCalls } from "../recruitment";
 import { deliverOutbox } from "../worker";
 import { getDb } from "@/lib/db";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 
 vi.mock("@/lib/db", () => ({ getDb: vi.fn().mockReturnValue({}) }));
-vi.mock("../recruitment", () => ({ deliverRecruitment: vi.fn().mockResolvedValue(0) }));
+vi.mock("../recruitment", () => ({ deliverRecruitment: vi.fn().mockResolvedValue(0), queueRecruitmentDailyCalls: vi.fn().mockResolvedValue(false) }));
 vi.mock("../worker", () => ({ deliverOutbox: vi.fn() }));
 vi.mock("../service", () => ({
   settings: vi
@@ -85,10 +85,12 @@ it("delivers booking rows only on the cron, behind the shared secret", async () 
   expect((await cron()).status).toBe(401);
   expect((await cron("Bearer wrong")).status).toBe(401);
   expect(deliverOutbox).not.toHaveBeenCalled();
+  expect(queueRecruitmentDailyCalls).not.toHaveBeenCalled();
   vi.mocked(deliverOutbox).mockResolvedValue(3);
   const response = await cron("Bearer cron-secret");
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ sent: 3, recruitmentSent: 0 });
+  expect(await response.json()).toEqual({ sent: 3, recruitmentSent: 0, callsQueued: false });
+  expect(queueRecruitmentDailyCalls).toHaveBeenCalledOnce();
   expect(deliverOutbox).toHaveBeenCalledWith(expect.anything(), { connectedEmail: "owner@example.com" }, 20, true);
 });
 

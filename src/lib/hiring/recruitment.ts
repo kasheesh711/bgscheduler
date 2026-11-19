@@ -5,7 +5,7 @@ import { hiringBookings as bookings, hiringCandidates as candidates, hiringOutbo
 import { fetchLineGroupSummary, pushLineTextMessage, replyLineMessage, LinePushError } from "@/lib/line/client";
 import { isScheduleBotAdmin } from "@/lib/line/schedule-bot";
 import { mentionedTheaText } from "@/lib/line/thea-query";
-import { runtimeWritesAllowed, ZONE } from "./model";
+import { localDate, runtimeWritesAllowed, shiftDate, ZONE } from "./model";
 import { storedResume } from "./resume-files";
 import { audit, callResumeLink, settings } from "./service";
 
@@ -145,6 +145,35 @@ export async function queueRecruitmentWeekly(db: Database, now = new Date()) {
   });
 }
 
+export async function queueRecruitmentDailyCalls(db: Database, now = new Date()) {
+  if (!runtimeWritesAllowed()) return false;
+  const date = localDate(now);
+  const start = new Date(`${date}T00:00:00+07:00`);
+  const end = new Date(`${shiftDate(date, 1)}T00:00:00+07:00`);
+  const minute = (now.getTime() - start.getTime()) / 60000;
+  // Hiring delivery runs at 08:59 Bangkok, with morning recovery ticks at 09:19, 09:35 and 09:48.
+  if (minute < 8 * 60 + 59 || minute >= 9 * 60 + 50) return false;
+  return withDatabaseTransaction(db, async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-recruitment-daily-calls'))`);
+    const { config } = await settings(tx);
+    if (!config.enabled || !config.deliveryEnabled || !config.recruitmentLineGroupId) return false;
+    const key = `daily-calls:${date}`;
+    const [exists] = await tx.select({ id: deliveries.id }).from(deliveries).where(eq(deliveries.key, `${key}:0000`));
+    if (exists) return false;
+    const calls = await tx.select({ name: candidates.name, start: bookings.startTime }).from(bookings)
+      .innerJoin(candidates, eq(bookings.candidateId, candidates.id))
+      .where(and(eq(bookings.kind, "call"), eq(bookings.status, "confirmed"),
+        gte(bookings.startTime, start), lt(bookings.startTime, end), sql`${bookings.endTime} > ${now.toISOString()}::timestamptz`))
+      .orderBy(asc(bookings.startTime), asc(candidates.name));
+    if (!calls.length) return false;
+    const lines = calls.map((call) => `${call.start.toLocaleTimeString("en-GB", { timeZone: ZONE, hour: "2-digit", minute: "2-digit" })} ${call.name}`);
+    const url = new URL("/hiring?view=hr", process.env.APP_BASE_URL || "https://bgscheduler.vercel.app");
+    await enqueue(tx, key, config.recruitmentLineGroupId,
+      `Today’s HR calls · ${date} (Bangkok)\n\n${lines.join("\n")}\n\nOpen today’s calls\n${url}`, null, "daily-calls");
+    return true;
+  });
+}
+
 export async function deliverRecruitment(db: Database, now = new Date()) {
   if (!runtimeWritesAllowed()) return 0;
   const { config } = await settings(db);
@@ -166,11 +195,12 @@ export async function deliverRecruitment(db: Database, now = new Date()) {
         break;
       }
       const [booking] = row.bookingId ? await db.select().from(bookings).where(eq(bookings.id, row.bookingId)) : [];
-      const obsolete = row.groupId !== latest.recruitmentLineGroupId || (row.bookingId && (!booking ||
+      const expiredDigest = row.notice === "daily-calls" && !row.key.startsWith(`daily-calls:${localDate(now)}:`);
+      const obsolete = expiredDigest || row.groupId !== latest.recruitmentLineGroupId || (row.bookingId && (!booking ||
         (row.notice !== "cancelled" && (booking.status !== "confirmed" || booking.endTime <= now))));
       if (obsolete || (row.firstAttemptAt && now.getTime() - row.firstAttemptAt.getTime() >= 23 * 3600000)) {
-        await db.update(deliveries).set({ status: obsolete ? "cancelled" : "uncertain", leaseUntil: null,
-          error: obsolete ? "The booking or recruitment group changed." : "Retry window expired. Check delivery before resending." }).where(eq(deliveries.id, row.id));
+        await db.update(deliveries).set({ status: obsolete && !(expiredDigest && row.firstAttemptAt) ? "cancelled" : "uncertain", leaseUntil: null,
+          error: expiredDigest ? "The date of the call digest passed." : obsolete ? "The booking or recruitment group changed." : "Retry window expired. Check delivery before resending." }).where(eq(deliveries.id, row.id));
         continue;
       }
       const receipt = await pushLineTextMessage({ to: row.groupId, text: row.message, retryKey: row.id, tutorBot: true, signal: AbortSignal.timeout(20000) });

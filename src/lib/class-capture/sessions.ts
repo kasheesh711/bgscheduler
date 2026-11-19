@@ -28,7 +28,10 @@ function pilotEmails(): string[] {
 
 /** Every pilot receives exactly one current tutor binding, including full admins. */
 export async function requireCaptureScope(): Promise<CaptureScope> {
-  const session = await auth();
+  return captureScope(await auth());
+}
+
+async function captureScope(session: { user: { email?: string | null; role?: string | null; adminAccessVersion?: number } } | null): Promise<CaptureScope> {
   const email = normalizeCaptureEmail(session?.user?.email);
   if (!email) throw new CaptureError(401, "Sign in to use Class Capture.");
   const role = session?.user?.role;
@@ -65,9 +68,9 @@ export async function requireCaptureScope(): Promise<CaptureScope> {
 }
 
 /** Navigation uses the same current grant as the page; a stale cookie cannot expose the tool. */
-export async function canUseClassCapture(): Promise<boolean> {
+export async function canUseClassCapture(subject?: { email: string; role: string; adminAccessVersion?: number }): Promise<boolean> {
   if (!captureEnabled()) return false;
-  try { await requireCaptureScope(); return true; } catch { return false; }
+  try { await captureScope(subject ? { user: subject } : await auth()); return true; } catch { return false; }
 }
 
 const MAX_SNAPSHOT_AGE_MS = 2 * 60 * 60 * 1000;

@@ -353,6 +353,22 @@ export async function recordCall(
   });
 }
 
+export async function saveCallNotes(id: string, text: string, expected: string | null, actor: string, db: Database) {
+  return withDatabaseTransaction(db, async (tx) => {
+    const [row] = await tx.select({ review: c.callReview }).from(c).where(eq(c.id, id)).for("update");
+    if (!row) throw new HiringError(404, "Candidate not found.");
+    const review = row.review ?? { good: null, tries: [] };
+    if ((review.notes?.at ?? null) !== expected) {
+      throw new HiringError(409, "Someone else saved these notes. Copy your draft before you reload the page.");
+    }
+    const at = new Date(Math.max(Date.now(), expected ? Date.parse(expected) + 1 : 0)).toISOString();
+    const notes = { text, by: actor, at };
+    await tx.update(c).set({ callReview: { ...review, notes } }).where(eq(c.id, id));
+    await audit(tx, actor, "call-notes-saved", id, {});
+    return notes;
+  });
+}
+
 /**
  * Sends the call booking link to the people HR must call, in the Calls tab's order. One link per candidate, ever: any
  * earlier row, even a cancelled one, keeps a candidate out. The day's number is the pre-screen per-day limit, counted

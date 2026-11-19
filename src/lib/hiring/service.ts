@@ -733,6 +733,9 @@ export async function dashboard(db: Database = getDb()) {
   const calls = allBookings
     .filter((b) => b.kind === "call" && b.status === "confirmed")
     .map((b) => ({ candidateId: b.candidateId, start: b.startTime, end: b.endTime }));
+  const missedCalls = allBookings
+    .filter((b) => b.kind === "call" && b.status === "no_show")
+    .map((b) => ({ candidateId: b.candidateId, start: b.startTime }));
   if (!row) {
     const suggested: Record<string, Subject[]> = {
       Peat: ["Mathematics", "Physics"],
@@ -845,6 +848,7 @@ export async function dashboard(db: Database = getDb()) {
     }),
     bookings,
     calls,
+    missedCalls,
     headDecisions: headDecisionRows.map((row) => ({
       candidateId: row.candidateId,
       decision: row.detail.decision === "hire" ? ("hire" as const) : ("reject" as const),
@@ -2166,7 +2170,7 @@ export async function reviewCandidate(
           .update(s.hiringCandidates)
           .set({
             ...(skippedCall && {
-              callReview: { good: { at: now.toISOString(), by: actor, manual: true as const }, tries: c.callReview?.tries ?? [] },
+              callReview: { ...c.callReview, good: { at: now.toISOString(), by: actor, manual: true as const }, tries: c.callReview?.tries ?? [] },
             }),
             stage: "pre_screen",
             // The limits read the first subject as the queue subject.

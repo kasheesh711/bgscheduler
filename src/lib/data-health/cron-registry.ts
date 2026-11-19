@@ -84,7 +84,7 @@ export const CRON_JOBS = [
   { key: "hiring_delivery", label: "Hiring Booking Messages", feature: "Hiring",
     path: "/api/internal/hiring-delivery", schedule: "19,35,48,59 * * * *", cadenceLabel: "About every 15 min",
     cadenceMinutes: 15, lateAfterMinutes: 45, maxDurationSeconds: 120, manualOnly: false,
-    dangerous: true, confirmationLabel: "Retries queued booking emails, Calendar events and LINE notices. Sends nothing while Hiring messages are off.", routeMethod: "GET" },
+    dangerous: true, confirmationLabel: "Retries booking emails, Calendar events and LINE notices. It can send the morning HR call digest from 08:59 to 09:49 Bangkok. Sends nothing while Hiring messages are off.", routeMethod: "GET" },
   { key: "hiring_resume_retention", label: "Hiring Résumé Retention", feature: "Hiring",
     path: "/api/internal/hiring-resume-retention", schedule: "28 20 * * *", cadenceLabel: "Daily 03:28 Bangkok",
     cadenceMinutes: 1440, expectedBangkokMinute: 3 * 60 + 28, lateAfterMinutes: 90, maxDurationSeconds: 60, manualOnly: false,

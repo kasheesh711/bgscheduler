@@ -4,7 +4,7 @@ import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { configSchema } from "../model";
-import { deliverRecruitment, queueRecruitmentForm, queueRecruitmentMock, queueRecruitmentWeekly, receiveRecruitmentSetup } from "../recruitment";
+import { deliverRecruitment, queueRecruitmentDailyCalls, queueRecruitmentForm, queueRecruitmentMock, queueRecruitmentWeekly, receiveRecruitmentSetup } from "../recruitment";
 import { fetchLineGroupSummary, pushLineTextMessage, replyLineMessage } from "@/lib/line/client";
 import { deliverOutbox } from "../worker";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
@@ -96,6 +96,33 @@ it("reports only initial sent invitations in the prior week and confirmed mocks 
   const [row] = await db.select().from(s.hiringRecruitmentDeliveries);
   expect(row.message).toContain("Included — Mathematics"); expect(row.message).toContain("Mocks this week (1)");
   for (const excluded of ["Reminder", "Failed", "Uncertain", "Too late"]) expect(row.message).not.toContain(excluded);
+});
+it("queues one Bangkok morning digest with only confirmed calls that day", async () => {
+  expect(await queueRecruitmentDailyCalls(db, now)).toBe(false);
+  for (const [name, status, start] of [
+    ["First", "confirmed", "2026-11-16T02:00:00Z"],
+    ["Later", "confirmed", "2026-11-16T03:00:00Z"],
+    ["Cancelled", "cancelled", "2026-11-16T04:00:00Z"],
+    ["Tomorrow", "confirmed", "2026-11-17T02:00:00Z"],
+  ] as const) {
+    const c = await candidate(name);
+    await db.insert(s.hiringBookings).values({
+      candidateId: c.id, kind: "call", interviewerKey: "hr-call", status, subjects: ["Mathematics"],
+      calendarOwner: "owner@example.com", interviewerEmail: "hr@example.com", startTime: new Date(start),
+      endTime: new Date(Date.parse(start) + 15 * 60000), evidence: {},
+    });
+  }
+  expect(await queueRecruitmentDailyCalls(db, new Date("2026-11-16T01:58:59Z"))).toBe(false);
+  expect(await queueRecruitmentDailyCalls(db, now)).toBe(true);
+  expect(await queueRecruitmentDailyCalls(db, now)).toBe(false);
+  const [row] = await db.select().from(s.hiringRecruitmentDeliveries);
+  expect(row).toMatchObject({ groupId, message: expect.stringContaining("09:00 First\n10:00 Later") });
+  expect(row.message).toContain("/hiring?view=hr");
+  expect(row.message).not.toMatch(/Cancelled|Tomorrow|@example/);
+  await db.update(s.hiringRecruitmentDeliveries).set({ nextAttemptAt: now }).where(eq(s.hiringRecruitmentDeliveries.id, row.id));
+  expect(await deliverRecruitment(db, new Date("2026-11-17T00:00:00+07:00"))).toBe(0);
+  expect((await db.select().from(s.hiringRecruitmentDeliveries))[0].status).toBe("cancelled");
+  expect(pushLineTextMessage).not.toHaveBeenCalled();
 });
 it("shows None for empty sections and sends nothing when paused or the group changes", async () => {
   await queueRecruitmentWeekly(db, now);

@@ -41,6 +41,10 @@ An absent session returns `401`, a nonowner or owner target returns `403`, unkno
 
 An actual toggle updates the row and appends `admin_user_access_audit_log` in one transaction. The audit records `target_email`, `actor_email`, before/after `{disabled,accessVersion}`, the new version, and time. The actor comes from the validated session, never the submitted body. Do not edit or remove audit entries.
 
+### Preview staff access
+
+In **Manage Access**, select **View as** for an enabled staff account. For another staff account, enter its sign-in email. The preview lists the landing page and navigation based on current access. If the account has Hiring access, select **HR**, **Admin**, or **Department heads** to preview that screen. Hiring shares one access grant, so the links select a screen and the account sets access. The preview keeps the owner’s session. **Exit preview** returns to the account list.
+
 ### Owner recovery
 
 If Manage Access is unavailable, first sign out and back in as Kevin, then check the deployed `SUPER_ADMIN_EMAILS` value and the enabled owner row using an owner-controlled environment. Correcting a missing environment variable requires a new deployment. Do not run the general seed script to repair one account; it may reapply unrelated page restrictions.
