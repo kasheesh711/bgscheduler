@@ -326,12 +326,47 @@
 .facts div { display: flex; justify-content: space-between; gap: 12px; }
 .facts dt { color: var(--muted); }
 .facts dd { text-align: right; }
-.applicationReview { grid-column: 1 / -1; min-width: 0; }
-.applicationReview > summary { min-height: 44px; padding-block: 11px; color: var(--accent-text); font-weight: 600; cursor: pointer; }
+.surface .applicationReviewTrigger, .surface .reviewClose {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 44px; padding: 6px 10px; border: 1px solid var(--stone); border-radius: 8px;
+  background: var(--paper); color: var(--ink); font-weight: 600;
+}
+.surface .applicationReviewTrigger:hover, .surface .reviewClose:hover { background: var(--tint); }
+.inspectorBody > .applicationReviewTrigger { margin-top: 10px; }
+.reviewScore { padding-left: 8px; border-left: 1px solid var(--line); color: var(--support); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.surface.reviewDialog {
+  --serif: var(--font-instrument-serif, Georgia), serif;
+  position: fixed; z-index: 50; inset: 12px max(12px, calc((100vw - 1520px) / 2)); translate: none;
+  display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 0; width: auto; max-width: none;
+  margin: 0; padding: 0; overflow: hidden; border-radius: 16px;
+}
+.reviewHeader { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 10px 18px; border-bottom: 1px solid var(--line); }
+.reviewDialog .reviewTitle { font-family: var(--serif); font-size: clamp(27px, 3vw, 36px); font-weight: 400; line-height: 1; }
+.reviewDialog .reviewCandidate { margin-top: 3px; color: var(--support); overflow-wrap: anywhere; }
+.reviewLayout { display: grid; grid-template-columns: minmax(0, 11fr) minmax(0, 9fr); min-height: 0; }
+.reviewLayout > section { min-width: 0; min-height: 0; padding: 12px 18px; overflow: auto; overflow-wrap: anywhere; }
+.reviewLayout > section:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+.reviewLayout h3 { font-weight: 600; }
+.reviewResume { display: flex; flex-direction: column; background: var(--tint); }
+.reviewResume .pdfPages { flex: 1 1 auto; min-height: 0; height: auto; padding: 0; border: 0; border-radius: 0; }
+.reviewResume .sourceText pre { max-height: none; overflow: visible; }
+.reviewResume .sourceLink { align-self: flex-start; padding-block: 6px; }
+.reviewEvidence { border-left: 1px solid var(--line); scrollbar-gutter: stable; }
+.reviewEvidence > .inspectorSection:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.reviewEvidence > .inspectorSection:first-child > .inspectorHeading { font-size: 16px; }
+.reviewEvidence .facts { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+@media (max-width: 760px) {
+  .surface.reviewDialog { inset: 0; border-radius: 0; }
+  .reviewHeader, .reviewLayout > section { padding-inline: 16px; }
+  .reviewLayout { display: block; overflow-y: auto; }
+  .reviewLayout > section { overflow: visible; }
+  .reviewResume .pdfPages { flex: none; max-height: 58dvh; }
+  .reviewEvidence { border-left: 0; border-top: 1px solid var(--line); }
+}
 .applicationPanes { display: flex; flex-wrap: wrap; align-items: start; gap: 16px; overflow-wrap: anywhere; }
 .applicationPanes > * { flex: 4 1 min(100%, 310px); min-width: 0; }
 .applicationPanes > section { flex-grow: 5; }
-.applicationPanes .facts dt { flex-shrink: 0; }
+.reviewEvidence .facts dt { flex-shrink: 0; }
 .inspectorSection { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 .inspectorHeading { display: flex; justify-content: space-between; font-size: 14px; font-weight: 500; }
 .inspectorText { margin-top: 4px; color: var(--support); }
@@ -340,8 +375,8 @@
 .criterion summary i { width: 9px; height: 9px; border-radius: 999px; }
 .criterion summary .inspectorText { margin-top: 0; }
 .criterion summary .num { grid-column: 5; }
-.applicationPanes .criterion summary { grid-template-columns: 9px 80px minmax(0, 1fr) auto max-content; }
-.applicationPanes .criterion summary .num { white-space: nowrap; }
+:is(.applicationPanes, .reviewEvidence) .criterion summary { grid-template-columns: 9px 80px minmax(0, 1fr) auto max-content; }
+:is(.applicationPanes, .reviewEvidence) .criterion summary .num { white-space: nowrap; }
 .criterionResult { grid-column: 4; color: var(--muted); }
 .criterion blockquote { margin-top: 4px; padding-left: 10px; border-left: 2px solid var(--line); color: var(--muted); overflow-wrap: anywhere; }
 .sourceLink { margin-right: 12px; color: var(--accent-text); text-decoration: underline; }

@@ -25,7 +25,6 @@
   .callWorkspace { grid-template-columns: minmax(0, 1fr) minmax(260px, 21%); gap: 32px; }
   .callContext { border-left: 1px solid var(--line); padding-left: 20px; }
   .cards.queue { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
-  .queue .card:has(> details[open]) { grid-column: 1 / -1; }
   .queue .actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
 .callContext .card { grid-template-columns: minmax(0, 1fr); padding-inline: 12px; }

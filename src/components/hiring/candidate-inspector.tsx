@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ComponentProps } from "react";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { criterionValues, STAGE_LABELS } from "@/lib/hiring/insights";
 import { ANSWER_LABELS, DEFAULT_PRE_SCREEN_WEIGHTS, isDecided, RESUME_TYPES, SUBJECTS, type HiringConfig, type Subject } from "@/lib/hiring/model";
 import type { Assessment, PreScreenAssessment } from "@/lib/hiring/scoring";
@@ -79,6 +80,7 @@ export function AssessmentBlock({
   assessment,
   weights,
   points,
+  showEvidence,
 }: {
   title: string;
   score: number | null;
@@ -86,6 +88,7 @@ export function AssessmentBlock({
   weights: Record<string, number>;
   // Pre-screen points are calculated by the server. The profile score is weight times result.
   points?: Record<string, number>;
+  showEvidence?: boolean;
 }) {
   return (
     <section className={css.inspectorSection}>
@@ -96,7 +99,7 @@ export function AssessmentBlock({
       {/* Older assessments have no short summary, so they keep the long one. */}
       <p className={css.inspectorText}>{assessment.briefSummary ?? assessment.summary}</p>
       {assessment.criteria.map((c) => (
-        <details key={c.id} className={css.criterion}>
+        <details key={c.id} className={css.criterion} open={showEvidence || undefined}>
           <summary>
             <i className={RESULT_CLASS[c.result]} aria-hidden="true" />
             <span>{(CRITERION_LABELS as Record<string, string>)[c.id] ?? "Written answers"}</span>
@@ -114,12 +117,17 @@ export function AssessmentBlock({
   );
 }
 
-export function ProfileScoreBreakdown({ candidate, weights }: { candidate: HiringCandidate; weights: HiringConfig["profileWeights"] }) {
+export function ProfileScoreBreakdown({ candidate, weights, showEvidence }: {
+  candidate: HiringCandidate;
+  weights: HiringConfig["profileWeights"];
+  showEvidence?: boolean;
+}) {
   const university = candidate.universityAssessment;
   return (
     <>
       {candidate.profileAssessment && (
-        <AssessmentBlock title="Why this score" score={candidate.profileScore} assessment={candidate.profileAssessment} weights={weights} />
+        <AssessmentBlock title={showEvidence ? "SEEK intake score" : "Why this score"} score={candidate.profileScore}
+          assessment={candidate.profileAssessment} weights={weights} showEvidence={showEvidence} />
       )}
       {(candidate.profileAssessment || university) && (
         <section className={css.inspectorSection}>
@@ -138,18 +146,29 @@ export function ProfileScoreBreakdown({ candidate, weights }: { candidate: Hirin
 }
 
 export function SeekApplicationReview({ candidate, config }: { candidate: HiringCandidate; config: HiringConfig }) {
-  const [open, setOpen] = useState(false);
+  const score = candidate.profileScore === null ? "Not scored" : `${round(candidate.profileScore)}/100`;
   const goodCall = candidate.callReview?.good;
   return (
-    <details className={css.applicationReview} onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary>Résumé and SEEK intake score · {candidate.profileScore === null ? "Not scored" : `${round(candidate.profileScore)}/100`}</summary>
-      {open && (
-        <div className={css.applicationPanes}>
-          <section className={css.inspectorSection}>
-            <h3 className={css.inspectorHeading}>Résumé</h3>
+    <Dialog>
+      <DialogTrigger className={css.applicationReviewTrigger}>
+        Review application <span className={css.reviewScore}>SEEK {score}</span>
+      </DialogTrigger>
+      <DialogContent className={`${css.surface} ${css.reviewDialog}`} showCloseButton={false}>
+        <header className={css.reviewHeader}>
+          <div>
+            <DialogTitle className={css.reviewTitle}>Application <em>review</em></DialogTitle>
+            <DialogDescription className={css.reviewCandidate}>{candidate.name}</DialogDescription>
+          </div>
+          <DialogClose className={css.reviewClose}>Close</DialogClose>
+        </header>
+        <div className={css.reviewLayout}>
+          <section className={css.reviewResume} aria-label="Résumé" tabIndex={0}>
+            <h3>Résumé</h3>
             <ResumePeek candidate={candidate} months={config.resumeRetentionMonths} />
           </section>
-          <div>
+          <section className={css.reviewEvidence} aria-label="SEEK intake score" tabIndex={0}>
+            {!candidate.profileAssessment && <h3>SEEK intake score <span className={css.mutedCell}>Not scored</span></h3>}
+            <ProfileScoreBreakdown candidate={candidate} weights={config.profileWeights} showEvidence />
             <dl className={css.facts}>
               <div>
                 <dt>Current profile minimum</dt>
@@ -170,11 +189,10 @@ export function SeekApplicationReview({ candidate, config }: { candidate: Hiring
                 </div>
               )}
             </dl>
-            <ProfileScoreBreakdown candidate={candidate} weights={config.profileWeights} />
-          </div>
+          </section>
         </div>
-      )}
-    </details>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -112,6 +112,7 @@ export function TodayCalls({ data, command, busy, readOnly = false, children }: 
                 </div>
                 {candidate && (
                   <div className={r.actions}>
+                    <SeekApplicationReview candidate={candidate} config={data.config} />
                     <button type="button" className={r.ghost} aria-expanded={open === key}
                       onClick={() => setOpen(open === key ? null : key)}>Call notes</button>
                     {active && (["good", "no_answer", "bad"] as const).map((result, index) => (
@@ -125,7 +126,6 @@ export function TodayCalls({ data, command, busy, readOnly = false, children }: 
                 {candidate && open === key && (
                   <CallNotes candidate={candidate} command={command} busy={busy} readOnly={readOnly} />
                 )}
-                {candidate && <SeekApplicationReview candidate={candidate} config={data.config} />}
               </article>
             );
           })}
@@ -272,6 +272,7 @@ export function HrScreen({ data, command, busy, onOpenResults, readOnly = false 
                   {readOnly ? <p>{c.phone}</p> : <PhoneLink phone={c.phone} large />}
                 </div>
                 <div className={r.actions}>
+                  <SeekApplicationReview candidate={c} config={data.config} />
                   <button type="button" className={r.big} data-tone="hire" disabled={busy || readOnly} onClick={() => act(c, "good")}>
                     Good call
                   </button>
@@ -282,7 +283,6 @@ export function HrScreen({ data, command, busy, onOpenResults, readOnly = false 
                     Bad call
                   </button>
                 </div>
-                <SeekApplicationReview candidate={c} config={data.config} />
               </article>
             );
           })}
