@@ -9,7 +9,7 @@ import {
   deliveryRequestSchema,
   verifyDeliveryAuthorization,
 } from "@/lib/hiring/dispatch";
-import { deliverRecruitment } from "@/lib/hiring/recruitment";
+import { deliverRecruitment, queueRecruitmentDailyCalls } from "@/lib/hiring/recruitment";
 import { deliverOutbox } from "@/lib/hiring/worker";
 import { audit, settings, type Candidate } from "@/lib/hiring/service";
 import { deliverCalendar } from "@/lib/hiring/google";
@@ -19,8 +19,7 @@ import type { hiringBookings } from "@/lib/db/schema";
 
 export const maxDuration = 120;
 /**
- * The retry for booking messages, so they do not depend on the Mac. It only delivers, and only booking rows: an invitation
- * still waits for the worker's SEEK check. deliverOutbox does nothing unless messages and the write gate are on.
+ * Queues the morning HR call digest and retries booking messages. Invitations still wait for the Mac worker’s SEEK check.
  */
 export async function GET(request: NextRequest) {
   const rejected = rejectInvalidCronSecret(request);
@@ -31,7 +30,15 @@ export async function GET(request: NextRequest) {
       try {
         const db = getDb(),
           { config } = await settings(db);
-        return NextResponse.json({ sent: await deliverOutbox(db, config, 20, true), recruitmentSent: await deliverRecruitment(db) });
+        const sent = await deliverOutbox(db, config, 20, true);
+        let recruitmentSent: number;
+        let callsQueued: boolean;
+        try {
+          callsQueued = await queueRecruitmentDailyCalls(db);
+        } finally {
+          recruitmentSent = await deliverRecruitment(db);
+        }
+        return NextResponse.json({ sent, recruitmentSent, callsQueued });
       } catch (error) {
         return hiringError(error);
       }

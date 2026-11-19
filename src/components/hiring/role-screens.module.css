@@ -56,3 +56,12 @@
   .actions { grid-column: 1 / -1; justify-content: stretch; }
   .actions > * { flex: 1 1 auto; }
 }
+
+.date { display: flex; align-items: center; gap: 8px; }
+.date input, .notes textarea { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--paper); color: var(--ink); }
+.callDetail { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) minmax(220px, 1fr); gap: 16px; }
+.callDetail .resume { grid-column: auto; }
+.notes textarea { display: block; width: 100%; margin: 4px 0 10px; }
+@media (max-width: 719px) {
+  .callDetail { grid-template-columns: 1fr; }
+}

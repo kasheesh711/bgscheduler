@@ -17,12 +17,11 @@ import {
   canAccessHref,
   HOME_HREF,
   isActivePath,
-  visibleSections,
+  navigationAccess,
   type NavBadgeKey,
   type NavSectionId,
   type NavTool,
 } from "@/lib/navigation/tools";
-import { LEARNING_PLANS_ROUTE } from "@/lib/learning-plans/access-policy";
 import { cn } from "@/lib/utils";
 
 function navLinkClass(isActive: boolean) {
@@ -124,44 +123,11 @@ export function AppNav({
   const [openSection, setOpenSection] = useState<NavSectionId | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [summary, setSummary] = useState<HomeSummaryPayload | null>(null);
-  const postClassAllowedPages = useMemo(() => {
-    if (!allowedPages || !postClassFeedbackAccess || allowedPages.includes("/post-class-feedback")) {
-      return allowedPages;
-    }
-    return [...allowedPages, "/post-class-feedback"];
-  }, [allowedPages, postClassFeedbackAccess]);
-  const financeAllowedPages = useMemo(() => {
-    if (!postClassAllowedPages || !unearnedRevenueAccess || postClassAllowedPages.includes("/unearned-revenue")) {
-      return postClassAllowedPages;
-    }
-    return [...postClassAllowedPages, "/unearned-revenue"];
-  }, [postClassAllowedPages, unearnedRevenueAccess]);
-  const visibleAllowedPages = useMemo(() => {
-    if (!financeAllowedPages) return null;
-
-    const withoutLegacyLearningPlans = financeAllowedPages.filter(
-      (page) => page !== LEARNING_PLANS_ROUTE && page !== "/tutor-attendance" && page !== "/tutor-sit-ins" && page !== "/class-capture",
-    );
-    if (classCaptureAccess) withoutLegacyLearningPlans.push("/class-capture");
-    if (sitInAccess) withoutLegacyLearningPlans.push("/tutor-sit-ins");
-    if (attendanceAccess) withoutLegacyLearningPlans.push("/tutor-attendance");
-    if (!learningPlansAccess) {
-      return withoutLegacyLearningPlans;
-    }
-    return [...withoutLegacyLearningPlans, LEARNING_PLANS_ROUTE];
-  }, [financeAllowedPages, learningPlansAccess, attendanceAccess, sitInAccess, classCaptureAccess]);
-  const sections = useMemo(() => {
-    const visible = visibleSections(visibleAllowedPages).map(section => ({ ...section, tools: section.tools.filter(tool => (creditControlEnabled || tool.id !== "credit-control") && (attendanceAccess || tool.id !== "tutor-attendance") && (sitInAccess || tool.id !== "tutor-sit-ins") && (classCaptureAccess || tool.id !== "class-capture")) })).filter(section => section.tools.length > 0);
-    // Unearned Revenue is deliberately stricter than the legacy `allowedPages`
-    // model: even an unrestricted admin must hold a fresh feature-local grant.
-    if (unearnedRevenueAccess) return visible;
-    return visible
-      .map((section) => ({
-        ...section,
-        tools: section.tools.filter((tool) => tool.id !== "unearned-revenue"),
-      }))
-      .filter((section) => section.tools.length > 0);
-  }, [unearnedRevenueAccess, visibleAllowedPages, creditControlEnabled, attendanceAccess, sitInAccess, classCaptureAccess]);
+  const { financeAllowedPages, visibleAllowedPages, sections } = useMemo(
+    () => navigationAccess(allowedPages, { postClassFeedbackAccess, unearnedRevenueAccess, learningPlansAccess,
+      attendanceAccess, sitInAccess, classCaptureAccess, creditControlEnabled }),
+    [allowedPages, postClassFeedbackAccess, unearnedRevenueAccess, learningPlansAccess, attendanceAccess, sitInAccess, classCaptureAccess, creditControlEnabled],
+  );
   const activeSectionId = activeSection(pathname, visibleAllowedPages);
   // A fresh Learning Plans grant only changes tool visibility. Keep Home and
   // the brand destination tied to the existing raw/post-class page behavior.

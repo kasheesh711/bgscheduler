@@ -21,6 +21,7 @@ import { Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { baseConfigSchema } from "@/lib/hiring/model";
 import { HiringDashboard } from "@/components/hiring/dashboard";
+import { HiringStaffPreview } from "@/components/hiring/staff-preview";
 
 const assessment = (summary: string) => ({
   summary, briefSummary: summary, subjects: [{ subject: "Mathematics", relevant: true, evidence: "Taught IGCSE", reason: "Named in the resume" }],
@@ -116,6 +117,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/hiring" && init?.method === "POST") {
     const body = JSON.parse(String(init.body));
     (window as unknown as { posted: unknown[] }).posted.push(body);
+    if (body.action === "call_notes") {
+      const candidate = payload.candidates.find((c) => c.id === body.id)!;
+      const notes = { text: body.text, at: new Date().toISOString(), by: "fixture" };
+      Object.assign(candidate, { callReview: { ...candidate.callReview, notes } });
+      return new Response(JSON.stringify({ ok: true, notes }));
+    }
     if (body.action === "file_intent" && body.kind !== "mock_rubric") return new Response(JSON.stringify({ id: "f9", pathname: "hiring-assessment/f9.pdf" }));
     if (body.action === "file_intent" && body.kind === "mock_rubric") return new Response(JSON.stringify({ id: "f8", pathname: "hiring-assessment/f8.pdf" }));
     if (body.action === "file_ready" && body.id === "f8") {
@@ -161,7 +168,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/hiring") return new Response(JSON.stringify(payload));
   return realFetch(input, init);
 }) as typeof fetch;
-createRoot(document.getElementById("root")!).render(<Suspense fallback="Loading"><HiringDashboard /></Suspense>);
+createRoot(document.getElementById("root")!).render(<Suspense fallback="Loading">{location.search.includes("preview=1") ? <HiringStaffPreview role="hr" /> : <HiringDashboard />}</Suspense>);
 `;
 
 // Only the framework parts that need a Next.js server are replaced. The components stay real.
@@ -496,6 +503,33 @@ try {
     await page.getByLabel("Campaign 1 name").scrollIntoViewIfNeeded();
     await shot(page, "campaign-settings");
   });
+  await check("the daily call workspace saves notes and the staff preview is read-only", async () => {
+    await page.goto(`${origin}/?view=hr&roles=1`);
+    const card = page.locator("article").filter({ has: page.getByRole("button", { name: "Résumé and notes" }) });
+    await card.getByText("Sample Kim", { exact: true }).waitFor();
+    assert.equal(await card.count(), 1);
+    await card.getByRole("button", { name: "Résumé and notes" }).click();
+    await card.getByRole("textbox", { name: "Call notes" }).fill("Can teach on Saturdays.");
+    await card.getByRole("button", { name: "Save notes" }).click();
+    await card.getByText("Notes saved.", { exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.posted), [{ action: "call_notes", id: "k", text: "Can teach on Saturdays.", expected: null }]);
+    await card.getByRole("button", { name: "Résumé and notes" }).click();
+    await card.getByRole("button", { name: "Résumé and notes" }).click();
+    assert.equal(await card.getByRole("textbox", { name: "Call notes" }).inputValue(), "Can teach on Saturdays.");
+    const tomorrow = new Date(Date.now() + 86400000 + 7 * 3600000).toISOString().slice(0, 10);
+    await page.getByLabel("Date (Bangkok)").fill(tomorrow);
+    await card.getByText("Sample Ben", { exact: true }).waitFor();
+    assert.equal(await card.getByText("Sample Kim", { exact: true }).count(), 0);
+
+    await page.goto(`${origin}/?view=calls&roles=1`);
+    await card.getByText("Sample Kim", { exact: true }).waitFor();
+    await page.goto(`${origin}/?preview=1&roles=1`);
+    await card.getByRole("button", { name: "Résumé and notes" }).click();
+    assert.equal(await card.getByRole("textbox", { name: "Call notes" }).getAttribute("readonly"), "");
+    assert.equal(await card.getByRole("button", { name: "Save notes" }).count(), 0);
+    assert.ok(await card.getByRole("button", { name: "Good call" }).isDisabled());
+    assert.deepEqual(await page.evaluate(() => window.posted), []);
+  });
   await check("the HR screen shows the week, the call cards with the résumé, and the heads' decisions", async () => {
     await page.goto(`${origin}/?view=hr&roles=1`);
     await page.getByRole("heading", { name: "My week: booked calls" }).waitFor();
@@ -509,7 +543,8 @@ try {
     await page.getByRole("link", { name: "Download" }).waitFor();
     await shot(page, "role-hr");
     await page.getByRole("button", { name: "Hide the résumé of Sample Kim" }).click();
-    assert.equal(await page.getByRole("button", { name: "Good call" }).count(), 2);
+    const queue = page.locator("section").filter({ has: page.getByRole("heading", { name: /^To call/ }) });
+    assert.equal(await queue.getByRole("button", { name: "Good call" }).count(), 2);
     await shot(page, "role-hr-list");
   });
   await check("the Admin screen shows each visit with its paper to print and the upload", async () => {

@@ -9,7 +9,7 @@ import { RUBRIC_ITEMS, type RubricItem } from "@/lib/hiring/marking-sheet";
 import { configSchema, localDate, subjectSchema } from "@/lib/hiring/model";
 import { headWeek } from "@/lib/hiring/head-schedule";
 import { callCalendarState, candidateById, changePreScreenScore, dashboard, reviewCandidate, saveHeadDays, saveSettings, settings } from "@/lib/hiring/service";
-import { moveInQueue, recordCall, resetQueueOrder } from "@/lib/hiring/queue";
+import { moveInQueue, recordCall, resetQueueOrder, saveCallNotes } from "@/lib/hiring/queue";
 import { discardDecision, draftDecision, saveDraft, sendDecision } from "@/lib/hiring/decisions";
 import { deliverBookingMessages, deliverOutbox } from "@/lib/hiring/worker";
 import { getDb } from "@/lib/db";
@@ -47,6 +47,7 @@ const command = z.discriminatedUnion("action", [
     })
     .strict(),
   z.object({ action: z.literal("queue_reset") }).strict(),
+  z.object({ action: z.literal("call_notes"), id: z.uuid(), text: z.string().trim().max(4000), expected: z.iso.datetime().nullable() }).strict(),
   z.object({ action: z.literal("call_result"), id: z.uuid(), result: z.enum(["good", "no_answer"]) }).strict(),
   z
     .object({
@@ -193,6 +194,10 @@ export async function POST(request: Request) {
     if (input.action === "queue_reset") {
       await resetQueueOrder(actor, getDb());
       return NextResponse.json({ ok: true });
+    }
+    if (input.action === "call_notes") {
+      const notes = await saveCallNotes(input.id, input.text, input.expected, actor, getDb());
+      return NextResponse.json({ ok: true, notes });
     }
     if (input.action === "call_result") {
       await recordCall(input.id, input.result, actor, getDb());

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -72,6 +73,11 @@ export function ManageAccess({ initialRows }: { initialRows: AdminUserAccessRow[
       <p className="text-sm text-muted-foreground">GitHub publishing and protected preview sharing are managed separately in GitHub and Vercel.</p>
       {error && <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</div>}
       {message && <p role="status" className="text-sm text-primary">{message}</p>}
+      <form action="/admin/users" method="get" className="flex flex-wrap items-center gap-2 text-sm">
+        <label htmlFor="preview-email">Preview another staff account</label>
+        <input id="preview-email" name="preview" type="email" required maxLength={254} placeholder="Sign-in email" className="rounded-md border bg-background px-3 py-2" />
+        <Button type="submit" variant="outline">View as</Button>
+      </form>
       <Card>
         <CardHeader><CardTitle>Website accounts</CardTitle></CardHeader>
         <CardContent>
@@ -83,6 +89,8 @@ export function ManageAccess({ initialRows }: { initialRows: AdminUserAccessRow[
                   <TableCell><div className="font-medium">{row.name || row.email}</div>{row.name && <div className="text-xs text-muted-foreground">{row.email}</div>}</TableCell>
                   <TableCell><Badge variant={row.disabled ? "outline" : "secondary"}>{row.disabled ? "Disabled" : "Enabled"}</Badge></TableCell>
                   <TableCell className="text-right">
+                    {!row.isOwner && !row.disabled && <Link className="mr-3 text-sm underline underline-offset-4" href={`/admin/users?preview=${encodeURIComponent(row.email)}`}
+                      aria-label={`View as ${row.name || row.email}`}>View as</Link>}
                     {row.isOwner ? <span className="text-sm font-medium">Website owner</span> : (
                       <Button
                         variant="outline"

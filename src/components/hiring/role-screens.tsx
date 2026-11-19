@@ -57,7 +57,90 @@ function Section({ title, count, children }: { title: string; count?: number; ch
 
 // ─── HR ───
 
-export function HrScreen({ data, command, busy, onOpenResults }: { data: HiringData; command: Command; busy: boolean; onOpenResults: () => void }) {
+function CallNotes({ candidate, command, busy, readOnly }: { candidate: HiringCandidate; command: Command; busy: boolean; readOnly: boolean }) {
+  const notes = candidate.callReview?.notes;
+  const [draft, setDraft] = useState<{ text: string; expected: string | null } | null>(null);
+  const [status, setStatus] = useState<"saved" | "failed" | null>(null);
+  return (
+    <form className={r.notes} onSubmit={async (event) => {
+      event.preventDefault();
+      if (!draft || busy || readOnly) return;
+      if (await command({ action: "call_notes", id: candidate.id, ...draft })) {
+        setDraft(null);
+        setStatus("saved");
+      } else {
+        setStatus("failed");
+      }
+    }}>
+      <label>
+        Call notes
+        <textarea rows={7} maxLength={4000} value={draft?.text ?? notes?.text ?? ""} readOnly={readOnly || busy}
+          onChange={(event) => {
+            setStatus(null);
+            setDraft({ text: event.target.value, expected: draft ? draft.expected : notes?.at ?? null });
+          }} />
+      </label>
+      {!readOnly && <button type="submit" className={r.big} disabled={!draft || busy}>Save notes</button>}
+      {status === "saved" && <p role="status">Notes saved.</p>}
+      {status === "failed" && <p role="alert">Could not save notes. Your draft is still here.</p>}
+    </form>
+  );
+}
+
+export function TodayCalls({ data, command, busy, readOnly = false }: { data: HiringData; command: Command; busy: boolean; readOnly?: boolean }) {
+  const [date, setDate] = useState(() => localDate(new Date()));
+  const [open, setOpen] = useState<string | null>(null);
+  const byId = new Map(data.candidates.map((candidate) => [candidate.id, candidate]));
+  const rows = [
+    ...data.calls.map((call) => ({ ...call, missed: false })),
+    ...(data.missedCalls ?? []).map((call) => ({ ...call, missed: true })),
+  ].filter((call) => localDate(new Date(call.start)) === date)
+    .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+  return (
+    <Section title="Today’s calls" count={rows.length}>
+      <label className={r.date}>Date (Bangkok) <input type="date" value={date} onChange={(event) => {
+        if (event.target.value) setDate(event.target.value);
+      }} /></label>
+      {!rows.length && <p className={r.quiet}>No calls for this date.</p>}
+      <div className={r.cards}>
+        {rows.map((call) => {
+          const candidate = byId.get(call.candidateId);
+          const key = `${call.candidateId}:${call.start}`;
+          const active = candidate && !call.missed && data.callOrder.includes(candidate.id);
+          return (
+            <article className={r.card} key={key}>
+              <p className={r.time}>{formatInTimeZone(new Date(call.start), ZONE, "HH:mm")}</p>
+              <div className={r.cardMain}>
+                <p className={r.name}>{candidate?.name ?? "Candidate record unavailable"}</p>
+                {candidate && <p className={r.meta}>{callSubjects(candidate, data.config.subjectPriority).main}</p>}
+                {candidate && (readOnly ? <p>{candidate.phone}</p> : <PhoneLink phone={candidate.phone} large />)}
+                {call.missed && <p className={r.meta}>No answer</p>}
+              </div>
+              {candidate && (
+                <div className={r.actions}>
+                  <button type="button" className={r.ghost} aria-expanded={open === key}
+                    onClick={() => setOpen(open === key ? null : key)}>Résumé and notes</button>
+                  {active && (["good", "no_answer", "bad"] as const).map((result, index) => (
+                    <button key={result} type="button" className={r.big} disabled={busy || readOnly} onClick={() => {
+                      if (result === "bad" && !window.confirm(`Stop ${candidate.name}?`)) return;
+                      void command(callCommand(candidate, result));
+                    }}>{["Good call", "No answer", "Bad call"][index]}</button>
+                  ))}
+                </div>
+              )}
+              {candidate && open === key && <div className={r.callDetail}>
+                <ResumePeek candidate={candidate} months={data.config.resumeRetentionMonths} />
+                <CallNotes candidate={candidate} command={command} busy={busy} readOnly={readOnly} />
+              </div>}
+            </article>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
+export function HrScreen({ data, command, busy, onOpenResults, readOnly = false }: { data: HiringData; command: Command; busy: boolean; onOpenResults: () => void; readOnly?: boolean }) {
   const [resume, setResume] = useState<string | null>(null);
   // A new clock for each data load, so the week and the link states do not go stale.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -73,6 +156,7 @@ export function HrScreen({ data, command, busy, onOpenResults }: { data: HiringD
   };
   return (
     <div className={r.screen}>
+      <TodayCalls data={data} command={command} busy={busy} readOnly={readOnly} />
       <Section title="My week: booked calls">
         <div className={r.week}>
           {week.map((day) => (
@@ -108,7 +192,7 @@ export function HrScreen({ data, command, busy, onOpenResults }: { data: HiringD
                   {d.draftProblem && <p className={r.warn}>No email draft yet: {d.draftProblem}</p>}
                 </div>
                 <div className={r.actions}>
-                  <button type="button" className={r.big} onClick={onOpenResults}>
+                  <button type="button" className={r.big} disabled={readOnly} onClick={onOpenResults}>
                     Open the result email
                   </button>
                 </div>
@@ -142,17 +226,17 @@ export function HrScreen({ data, command, busy, onOpenResults }: { data: HiringD
                     </span>
                     {triesText(c.callReview)}
                   </p>
-                  <PhoneLink phone={c.phone} large />
+                  {readOnly ? <p>{c.phone}</p> : <PhoneLink phone={c.phone} large />}
                 </div>
                 <div className={r.actions}>
                   <ResumeButton open={resume === c.id} onToggle={() => setResume(resume === c.id ? null : c.id)} name={c.name} />
-                  <button type="button" className={r.big} data-tone="hire" disabled={busy} onClick={() => act(c, "good")}>
+                  <button type="button" className={r.big} data-tone="hire" disabled={busy || readOnly} onClick={() => act(c, "good")}>
                     Good call
                   </button>
-                  <button type="button" className={r.big} disabled={busy} onClick={() => act(c, "no_answer")}>
+                  <button type="button" className={r.big} disabled={busy || readOnly} onClick={() => act(c, "no_answer")}>
                     No answer
                   </button>
-                  <button type="button" className={r.big} data-tone="reject" disabled={busy} onClick={() => act(c, "bad")}>
+                  <button type="button" className={r.big} data-tone="reject" disabled={busy || readOnly} onClick={() => act(c, "bad")}>
                     Bad call
                   </button>
                 </div>
@@ -185,7 +269,7 @@ const byDay = (rows: RunSheetRow[]) => [...new Set(rows.map((row) => row.date))]
 
 // ─── Admin ───
 
-function AdminCard({ row, data, reload }: { row: RunSheetRow; data: HiringData; reload: () => Promise<void> }) {
+function AdminCard({ row, data, reload, readOnly }: { row: RunSheetRow; data: HiringData; reload: () => Promise<void>; readOnly: boolean }) {
   // A past result from the tracker is not this visit's paper.
   const paper = data.papers.find((p) => p.candidateId === row.candidateId && p.subject === row.subject && p.source !== "tracker");
   return (
@@ -209,7 +293,7 @@ function AdminCard({ row, data, reload }: { row: RunSheetRow; data: HiringData; 
             Print the paper
           </a>
         )}
-        {row.subject && row.paperStart && !paper && (
+        {row.subject && row.paperStart && !paper && !readOnly && (
           <ResultUpload kind="paper" candidateId={row.candidateId} subject={row.subject as Subject} reload={reload} label="Upload the completed paper" />
         )}
         {paper && (
@@ -222,7 +306,7 @@ function AdminCard({ row, data, reload }: { row: RunSheetRow; data: HiringData; 
   );
 }
 
-export function AdminScreen({ data, reload }: { data: HiringData; reload: () => Promise<void> }) {
+export function AdminScreen({ data, reload, readOnly = false }: { data: HiringData; reload: () => Promise<void>; readOnly?: boolean }) {
   const { today, coming, recent } = useVisits(data);
   const waiting = recent.filter(
     (row) => row.subject && row.paperStart && !data.papers.some((p) => p.candidateId === row.candidateId && p.subject === row.subject && p.source !== "tracker"),
@@ -233,7 +317,7 @@ export function AdminScreen({ data, reload }: { data: HiringData; reload: () => 
         <Section title="Completed papers to upload" count={waiting.length}>
           <div className={r.cards}>
             {waiting.map((row) => (
-              <AdminCard key={row.visitId} row={{ ...row, paper: null }} data={data} reload={reload} />
+              <AdminCard key={row.visitId} row={{ ...row, paper: null }} data={data} reload={reload} readOnly={readOnly} />
             ))}
           </div>
         </Section>
@@ -243,7 +327,7 @@ export function AdminScreen({ data, reload }: { data: HiringData; reload: () => 
         <Section key={day.date} title={dayTitle(day.date, today)} count={day.rows.length}>
           <div className={r.cards}>
             {day.rows.map((row) => (
-              <AdminCard key={row.visitId} row={row} data={data} reload={reload} />
+              <AdminCard key={row.visitId} row={row} data={data} reload={reload} readOnly={readOnly} />
             ))}
           </div>
         </Section>
@@ -256,7 +340,7 @@ export function AdminScreen({ data, reload }: { data: HiringData; reload: () => 
 
 const HEAD_KEY = "hiring-head";
 
-function HeadCard({ row, data, past }: { row: RunSheetRow; data: HiringData; past: boolean }) {
+function HeadCard({ row, data, past, readOnly }: { row: RunSheetRow; data: HiringData; past: boolean; readOnly: boolean }) {
   const [resume, setResume] = useState(false);
   const candidate = data.candidates.find((c) => c.id === row.candidateId);
   const mock = data.bookings.find((b) => b.kind === "mock" && b.status === "confirmed" && (b.visitId ?? b.id) === row.visitId);
@@ -289,7 +373,7 @@ function HeadCard({ row, data, past }: { row: RunSheetRow; data: HiringData; pas
       </div>
       <div className={r.actions}>
         {candidate && <ResumeButton open={resume} onToggle={() => setResume(!resume)} name={row.candidateName} />}
-        {path && (
+        {path && !readOnly && (
           <a className={r.big} data-tone={past ? "hire" : undefined} href={path} target="_blank" rel="noopener noreferrer">
             {past ? "Score and decide" : "Open the candidate page"}
           </a>
@@ -300,10 +384,11 @@ function HeadCard({ row, data, past }: { row: RunSheetRow; data: HiringData; pas
   );
 }
 
-export function HeadsScreen({ data }: { data: HiringData }) {
+export function HeadsScreen({ data, readOnly = false }: { data: HiringData; readOnly?: boolean }) {
   const heads = data.config.interviewers;
   // The browser remembers the head, so the next visit opens on their own list. This screen renders only in the browser, after the data loads.
   const [key, setKey] = useState<string | null>(() => {
+    if (readOnly) return null;
     try {
       return window.localStorage.getItem(HEAD_KEY);
     } catch {
@@ -313,6 +398,7 @@ export function HeadsScreen({ data }: { data: HiringData }) {
   });
   const choose = (value: string) => {
     setKey(value);
+    if (readOnly) return;
     try {
       window.localStorage.setItem(HEAD_KEY, value);
     } catch {
@@ -341,7 +427,7 @@ export function HeadsScreen({ data }: { data: HiringData }) {
             {!coming.length && <p className={r.quiet}>No candidate is booked with you.</p>}
             <div className={r.cards}>
               {coming.map((row) => (
-                <HeadCard key={row.visitId} row={row} data={data} past={started(row)} />
+                <HeadCard key={row.visitId} row={row} data={data} past={started(row)} readOnly={readOnly} />
               ))}
             </div>
           </Section>
@@ -349,7 +435,7 @@ export function HeadsScreen({ data }: { data: HiringData }) {
             <Section title="After the mock: score and decide" count={done.length}>
               <div className={r.cards}>
                 {done.map((row) => (
-                  <HeadCard key={row.visitId} row={row} data={data} past />
+                  <HeadCard key={row.visitId} row={row} data={data} past readOnly={readOnly} />
                 ))}
               </div>
             </Section>

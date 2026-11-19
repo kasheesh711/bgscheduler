@@ -354,6 +354,7 @@ export function CandidateInspector({
           {candidate.profileScore !== null && <span>/100 profile</span>}
         </p>
         {candidate.hasSourceText === false && <p className={css.inspectorNote}>No source text</p>}
+        {candidate.callReview?.notes?.text && <div className={css.inspectorNote}><strong>HR call notes</strong><p style={{ whiteSpace: "pre-wrap" }}>{candidate.callReview.notes.text}</p></div>}
         {candidate.reviewNote && <p className={css.inspectorNote}>{candidate.reviewNote}</p>}
         {candidate.preScreen && candidate.preScreenHash && !candidate.preScreenAssessment && (
           <p className={css.inspectorNote}>Pre-screen could not be scored. Its evidence could not be verified.</p>

@@ -27,6 +27,7 @@ import {
   releaseQueues,
   resetQueueOrder,
   runFollowUps,
+  saveCallNotes,
 } from "../queue";
 
 vi.mock("../availability", () => ({ availableSlots: vi.fn(), verifyLiveSlot: vi.fn(), readLiveBusy: vi.fn(async () => { throw new Error("no Wise in tests"); }) }));
@@ -495,6 +496,18 @@ describe("call queue", () => {
     expect(await callQueue(db, await settingsConfig())).toEqual([]);
     expect(await releaseQueues(db)).toEqual({ preScreen: 1, onsite: 0 });
     expect((await forms()).map((f) => f.candidateId).sort()).toEqual([strong.id, middle.id].sort());
+  });
+  it("keeps private notes after a good call and refuses to overwrite a newer save", async () => {
+    const row = await seed();
+    await saveCallNotes(row.id, "Can teach on Saturdays.", null, hr, db);
+    await recordCall(row.id, "good", hr, db);
+    await expect(saveCallNotes(row.id, "Stale draft", null, hr, db)).rejects.toMatchObject({ status: 409 });
+    const stored = await candidate(row.id);
+    expect(stored.callReview).toMatchObject({
+      good: { by: hr },
+      notes: { text: "Can teach on Saturdays.", by: hr },
+    });
+    expect((await db.select().from(s.hiringAudit)).find((entry) => entry.action === "call-notes-saved")?.detail).toEqual({});
   });
   it("orders the call queue by score, then the earlier application", async () => {
     const late = await seed({ createdAt: after(-1) });
