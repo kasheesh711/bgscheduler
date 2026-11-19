@@ -17,8 +17,6 @@ describe("navigation tool registry", () => {
       "Scheduling & Tutors",
       "Student Lifecycle",
       "Finance & Revenue",
-      "Market Intelligence",
-      "Research & Reference",
       "Data & Audit",
     ]);
     expect(sections[0].tools.map((tool) => tool.href)).toContain("/leave-requests");
@@ -36,7 +34,6 @@ describe("navigation tool registry", () => {
     const learningPlansTool = NAV_TOOLS.find((tool) => tool.id === "learning-plans");
     expect(learningPlansTool?.badgeKey).toBeUndefined();
     expect(learningPlansTool?.shortcut).toBeUndefined();
-    expect(sections[3].tools.map((tool) => tool.href)).toEqual(["/competitor-intelligence"]);
   });
 
   it("filters tools by restricted allowedPages", () => {
@@ -74,7 +71,6 @@ describe("navigation tool registry", () => {
 
   it("detects active sections and curated shortcuts", () => {
     expect(activeSection("/credit-control", null)).toBe("finance-revenue");
-    expect(activeSection("/competitor-intelligence", null)).toBe("market-intelligence");
     expect(activeSection("/learning-plans/report", null)).toBe("student-lifecycle");
     expect(isActivePath("/learning-plans/report", "/learning-plans")).toBe(true);
     expect(shortcutTools(null).map((tool) => tool.href)).toEqual([

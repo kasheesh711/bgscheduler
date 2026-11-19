@@ -29,7 +29,6 @@ const EXPECTED_SCHEDULES: Record<string, string> = {
   "/api/internal/sync-sales-dashboard": "10,40 * * * *",
   "/api/internal/sync-unearned-revenue": "30 18 * * *",
   "/api/internal/sync-onsite-foot-traffic": "18 18 * * *",
-  "/api/internal/sync-competitor-intelligence": "28 18 * * 0",
   "/api/internal/sync-credit-control": "20,50 * * * *",
   "/api/internal/sync-wise-activity": "2,17,32,47 * * * *",
   "/api/internal/sync-post-class-feedback": "13,43 * * * *",
@@ -110,10 +109,10 @@ function canCollide(left: FiringSet, right: FiringSet): boolean {
 }
 
 describe("vercel cron configuration", () => {
-  it("registers exactly the 30 known crons, each on its pinned schedule", () => {
+  it("registers exactly the 29 known crons, each on its pinned schedule", () => {
     const crons = loadVercelConfig().crons;
 
-    expect(crons).toHaveLength(30);
+    expect(crons).toHaveLength(29);
     expect(Object.fromEntries(crons.map((cron) => [cron.path, cron.schedule]))).toEqual(EXPECTED_SCHEDULES);
   });
 

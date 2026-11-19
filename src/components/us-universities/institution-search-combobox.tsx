@@ -13,7 +13,11 @@ import {
 } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
 import type { IpedsInstitutionSummary } from "@/lib/us-universities/types";
-import type { InstitutionSearchComboboxProps } from "./view-types";
+
+interface InstitutionSearchComboboxProps {
+  placeholder?: string;
+  onSelect: (unitId: number, name: string) => void;
+}
 
 // -----------------------------------------------------------------------------
 // Async institution combobox. Typing fans out a debounced, abortable request to

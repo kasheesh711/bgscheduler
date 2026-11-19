@@ -8,22 +8,14 @@
 // throughout: a missing numeric metric renders EM_DASH (never 0), and a section
 // whose every field is absent is suppressed (hasAnyValue). The URL helpers
 // (normalizeUrl/dossierExternalLinks) are pure + tested.
-//
-// Shortlist (compare set) is URL-driven: `?compare=` is the source of truth.
-// The component reads `useSearchParams()` for live client-side updates and falls
-// back to the SSR-seed `compareIds` prop for static rendering. Mutations call
-// `router.replace()` preserving all other params.
-// ----------------------------------------------------------------------------
 
-import { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeftIcon, ExternalLinkIcon, PlusIcon } from "lucide-react";
+import { ArrowLeftIcon, ExternalLinkIcon } from "lucide-react";
 import type { ChartConfiguration } from "chart.js";
 
 import { cn } from "@/lib/utils";
 import { AddToCaseMenu } from "@/components/admissions/add-to-case-menu";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ChartCanvas, chartColors } from "@/components/sales-dashboard/chart-canvas";
@@ -31,7 +23,6 @@ import {
   CONTROL_LABELS,
   INST_SIZE_LABELS,
   LOCALE_LABELS,
-  MAX_COMPARE,
   carnegieLabel,
 } from "@/lib/us-universities/constants";
 import {
@@ -46,9 +37,8 @@ import {
 } from "@/lib/us-universities/format";
 import { hasAnyValue } from "@/lib/us-universities/dossier-sections";
 import { buildAdmissionsTrendChartData } from "@/lib/us-universities/trend-charts";
-import { addCompareId, removeCompareId } from "@/lib/us-universities/compare-set";
 import { resolveSinglePlacement } from "@/lib/us-universities/dot-map";
-import type { InstitutionProfile, IpedsInstitutionSummary } from "@/lib/us-universities/types";
+import type { InstitutionProfile } from "@/lib/us-universities/types";
 import { PriceLadder } from "./price-ladder";
 import { UsDotMap } from "./us-dot-map";
 import { DemographicsStackedBar } from "./demographics-stacked-bar";
@@ -57,8 +47,6 @@ import {
   resolveActiveSection,
   type DossierSection,
 } from "./dossier-section-nav";
-import { ShortlistBar, resolveShortlistEntries } from "./shortlist-bar";
-import { CompareSheet } from "./compare-sheet";
 
 const MAX_COMPLETION_ROWS = 25;
 
@@ -152,85 +140,15 @@ function DossierSectionBlock({
 
 // ── Component ──────────────────────────────────────────────────────────
 
-export interface InstitutionDossierProps {
-  profile: InstitutionProfile;
-  backHref: string;
-  compareIds: number[];
-}
-
-/** Parse a comma-list of positive ints, capped at MAX_COMPARE (mirrors shell + page logic). */
-function parseIds(value: string | null): number[] {
-  return (value ?? "")
-    .split(",")
-    .map((s) => Number.parseInt(s.trim(), 10))
-    .filter((n) => Number.isFinite(n) && n > 0)
-    .slice(0, MAX_COMPARE);
-}
-
-export function InstitutionDossier({
-  profile,
-  backHref,
-  compareIds: compareIdsProp,
-}: InstitutionDossierProps): React.JSX.Element {
-  const router = useRouter();
-  // SSR-safe: useSearchParams() returns null under renderToStaticMarkup (no router provider).
-  const searchParams = useSearchParams();
+export function InstitutionDossier({ profile }: { profile: InstitutionProfile }): React.JSX.Element {
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [compareOpen, setCompareOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  // Live client-side compare set: read from the URL when a router provider exists,
-  // fall back to the SSR-seed prop. Side-effects (router.replace) are kept outside
-  // state updaters — only synchronous set operations happen inside setState callbacks.
-  const liveCompareIds: number[] = searchParams
-    ? parseIds(searchParams.get("compare"))
-    : compareIdsProp;
 
   const requirements = admissionRequirements(profile.admConsiderations);
   const completions = [...profile.completions]
     .sort((a, b) => (b.count ?? 0) - (a.count ?? 0))
     .slice(0, MAX_COMPLETION_ROWS);
   const links = dossierExternalLinks(profile);
-  const inCompare = liveCompareIds.includes(profile.unitId);
-  const compareFull = liveCompareIds.length >= MAX_COMPARE;
-
-  // ── URL-driven shortlist mutations ────────────────────────────────────
-
-  /** Write `nextIds` into the current URL, preserving all other params. */
-  const syncCompareUrl = useCallback(
-    (nextIds: number[]) => {
-      const params = new URLSearchParams(searchParams?.toString() ?? "");
-      if (nextIds.length > 0) params.set("compare", nextIds.join(","));
-      else params.delete("compare");
-      router.replace(`?${params.toString()}`, { scroll: false });
-    },
-    [searchParams, router],
-  );
-
-  const addCompare = useCallback(
-    (unitId: number) => {
-      const next = addCompareId(liveCompareIds, unitId);
-      if (next !== liveCompareIds) syncCompareUrl(next);
-    },
-    [liveCompareIds, syncCompareUrl],
-  );
-
-  const removeCompare = useCallback(
-    (unitId: number) => {
-      syncCompareUrl(removeCompareId(liveCompareIds, unitId));
-    },
-    [liveCompareIds, syncCompareUrl],
-  );
-
-  const clearCompare = useCallback(() => {
-    syncCompareUrl([]);
-  }, [syncCompareUrl]);
-
-  // Build a single-row source so the current school shows its real name in the
-  // dock; ids without a matching row fall back to `Institution #<id>` inside
-  // resolveShortlistEntries (mirrors Console behaviour).
-  const profileRow: IpedsInstitutionSummary = profile as IpedsInstitutionSummary;
-
   // Trend chart config — built client-side so chartColors() can read CSS vars.
   const admissionsTrend = profile.admissionsTrend;
   const trendChartConfig = useMemo<ChartConfiguration<"line">>(() => {
@@ -332,11 +250,11 @@ export function InstitutionDossier({
   return (
     <div ref={containerRef} className="mx-auto w-full max-w-5xl space-y-6 p-4 md:p-6">
       <Link
-        href={backHref}
+        href="/admissions"
         className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
       >
         <ArrowLeftIcon className="size-4" aria-hidden="true" />
-        Back to results
+        Back to Admissions
       </Link>
 
       {/* Cover band */}
@@ -396,14 +314,6 @@ export function InstitutionDossier({
               <ExternalLinkIcon className="size-3.5" aria-hidden="true" />
             </a>
           ))}
-          <Button
-            size="sm"
-            disabled={inCompare || compareFull}
-            onClick={() => addCompare(profile.unitId)}
-          >
-            <PlusIcon className="size-4" aria-hidden="true" />
-            {inCompare ? "In shortlist" : "Add to shortlist"}
-          </Button>
           <AddToCaseMenu unitId={profile.unitId} instName={profile.instName} />
         </div>
       </header>
@@ -650,20 +560,6 @@ export function InstitutionDossier({
         </div>
       </div>
 
-      <ShortlistBar
-        entries={resolveShortlistEntries(liveCompareIds, [profileRow])}
-        onRemove={removeCompare}
-        onClear={clearCompare}
-        onOpenCompare={() => setCompareOpen(true)}
-      />
-      <CompareSheet
-        open={compareOpen}
-        onOpenChange={setCompareOpen}
-        unitIds={liveCompareIds}
-        onRemove={removeCompare}
-        onAdd={addCompare}
-        onClear={clearCompare}
-      />
     </div>
   );
 }

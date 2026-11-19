@@ -364,6 +364,15 @@ describe("middleware — admissions page + API gating", () => {
     expect(res.headers.get("location")).toBeNull();
   });
 
+  it.each(["/api/us-universities/search", "/us-universities/166027"])(
+    "allows an Admissions-only user to open the IPEDS reference at %s",
+    async (path) => {
+      const response = await middleware(makeReq(path, true, "", ["/admissions"]) as never, {} as never) as Response;
+      expect(response.status).toBe(200);
+      expect(response.headers.get("location")).toBeNull();
+    },
+  );
+
   it("root / redirects single-page admissions users to /admissions", async () => {
     const res = await middleware(
       makeReq("/", true, "", ["/admissions"]) as never,

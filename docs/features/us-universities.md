@@ -1,5 +1,9 @@
 # US Universities (IPEDS)
 
+Admissions uses the institution search and dossier. The standalone console, shortlist, comparison, overview API, and CSV export are retired. The sections below document the earlier console and its IPEDS data model.
+
+## Earlier implementation
+
 **Status: stable**
 
 ## Purpose
