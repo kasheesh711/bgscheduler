@@ -20,16 +20,11 @@ const EXPECTED_SCHEDULES: Record<string, string> = {
   "/api/internal/hiring-resume-retention": "28 20 * * *",
   "/api/internal/progress-line-reminders": "*/10 * * * *",
   "/api/internal/post-class-feedback/reminder-nightly": "0,30 * * * *",
-  "/api/internal/tutor-sit-ins": "4,14,24,34,44,54 * * * *",
-  "/api/internal/tutor-sit-ins/digest": "0 1 * * *",
-  "/api/internal/room-booking": "1,5,9,13,17,21,25,29,33,37,41,45,49,53,57 * * * *",
   "/api/internal/class-assignments/weekend-check": "0,16,31 2 * * 3-5",
   "/api/internal/class-assignments/publish-recovery": "1-56/5 * * * *",
   "/api/internal/sync-wise": "*/30 * * * *",
-  "/api/internal/sync-sales-dashboard": "10,40 * * * *",
   "/api/internal/sync-unearned-revenue": "30 18 * * *",
   "/api/internal/sync-onsite-foot-traffic": "18 18 * * *",
-  "/api/internal/sync-credit-control": "20,50 * * * *",
   "/api/internal/sync-wise-activity": "2,17,32,47 * * * *",
   "/api/internal/sync-post-class-feedback": "13,43 * * * *",
   "/api/internal/post-class-feedback-backfill": "23,53 * * * *",
@@ -109,10 +104,10 @@ function canCollide(left: FiringSet, right: FiringSet): boolean {
 }
 
 describe("vercel cron configuration", () => {
-  it("registers exactly the 29 known crons, each on its pinned schedule", () => {
+  it("registers exactly the 24 known crons, each on its pinned schedule", () => {
     const crons = loadVercelConfig().crons;
 
-    expect(crons).toHaveLength(29);
+    expect(crons).toHaveLength(24);
     expect(Object.fromEntries(crons.map((cron) => [cron.path, cron.schedule]))).toEqual(EXPECTED_SCHEDULES);
   });
 
@@ -145,59 +140,33 @@ describe("vercel cron configuration", () => {
         // the single-flight Wise sync; delivery only reads Postgres and emails.
         const nextDayClassroomOverlap = pair.has("/api/internal/sync-wise")
           && (pair.has("/api/internal/class-assignments/morning") || pair.has("/api/internal/class-assignments/admin-email"));
-        // Room evidence expires after five minutes. The approved four-minute
-        // collector cannot fit exclusively into the remaining cron minutes.
-        // It shares one Wise listing across dates, uses refresh/day leases,
-        // and is offset from the heavy half-hour snapshot and classroom writers.
-        const roomAvailabilityOverlap = pair.has("/api/internal/room-booking");
         // Publish recovery makes no Wise calls when idle and owns a global
         // publisher lease, day lease and paced client during an attempt.
         const publishRecoveryOverlap = pair.has("/api/internal/class-assignments/publish-recovery")
           && (pair.has("/api/internal/class-assignments/weekend-check") || pair.has("/api/internal/class-assignments/admin-email"));
-        // Durable document jobs are idle without queued work; Wise publishing is bounded and paced.
-        // Exact 08:00 digest reads the outbox; it does not start a source sync.
-        const sitInDigestOverlap = pair.has("/api/internal/tutor-sit-ins/digest") && pair.has("/api/internal/sync-wise");
         // The approved 22:00 nightly checkpoint is clock-aligned. Its bounded,
         // read-only detail refresh has its own lease; recovery ticks are idle
         // without work and never start the general Wise snapshot sync.
         const nightlyOverlap = pair.has("/api/internal/post-class-feedback/reminder-nightly") &&
           [...pair].some(path => ["/api/internal/sync-wise", "/api/internal/sync-unearned-revenue",
             "/api/internal/class-assignments/weekend-check", "/api/internal/class-assignments/morning",
-            "/api/internal/class-assignments/admin-email", "/api/internal/tutor-sit-ins/digest"].includes(path));
+            "/api/internal/class-assignments/admin-email"].includes(path));
         // The approved Monday 09:00 recruitment summary only reads Postgres and pushes LINE.
         const recruitmentOverlap = pair.has("/api/internal/hiring-recruitment") &&
           (pair.has("/api/internal/sync-wise") || pair.has("/api/internal/post-class-feedback/reminder-nightly"));
         const progressProcessingOverlap = pair.has("/api/internal/progress-tests/process");
         // The 15-minute Atom reader shares only the paced, usually idle publish recovery
-        // (and the separately allowed room reader). It never calls a Wise mutation.
+        // job. It never calls a Wise mutation.
         const atomReadOverlap = pair.has("/api/internal/feedback-autowriter/atom") && pair.has("/api/internal/class-assignments/publish-recovery");
         // The deduction report reads stored evidence and sends email; it never calls Wise.
         const deductionReportOverlap = pair.has("/api/internal/post-class-feedback/deduction-report");
-        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap && !roomAvailabilityOverlap && !publishRecoveryOverlap && !progressProcessingOverlap && !sitInDigestOverlap && !nightlyOverlap && !atomReadOverlap && !deductionReportOverlap && !recruitmentOverlap) {
+        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck && !nextDayClassroomOverlap && !publishRecoveryOverlap && !progressProcessingOverlap && !nightlyOverlap && !atomReadOverlap && !deductionReportOverlap && !recruitmentOverlap) {
           collisions.push(`${crons[i].path} vs ${crons[j].path}`);
         }
       }
     }
 
     expect(collisions).toEqual([]);
-  });
-
-  it("refreshes room evidence every four minutes without coinciding with the heavy Wise snapshot", () => {
-    const cron = loadVercelConfig().crons.find((row) => row.path === "/api/internal/room-booking")!;
-    const minutes = [...firingSet(cron.schedule).minutes].sort((a, b) => a - b);
-    expect(minutes).toHaveLength(15);
-    expect(minutes.map((minute, index) => ((minutes[(index + 1) % minutes.length] - minute + 60) % 60))).toEqual(Array(15).fill(4));
-    expect(minutes).not.toContain(0);
-    expect(minutes).not.toContain(30);
-    expect(cron.schedule.split(" ").slice(1)).toEqual(["*", "*", "*", "*"]);
-  });
-
-  it("runs Wise, Sales Dashboard, and Credit Control on staggered 30-minute schedules", () => {
-    const crons = new Map(loadVercelConfig().crons.map((cron) => [cron.path, cron.schedule]));
-
-    expect(crons.get("/api/internal/sync-wise")).toBe("*/30 * * * *");
-    expect(crons.get("/api/internal/sync-sales-dashboard")).toBe("10,40 * * * *");
-    expect(crons.get("/api/internal/sync-credit-control")).toBe("20,50 * * * *");
   });
 
   // The activity mirror is the only source of feedback-submission timestamps,
@@ -211,9 +180,9 @@ describe("vercel cron configuration", () => {
     expect(crons.get("/api/internal/sync-wise-activity")).toBe("2,17,32,47 * * * *");
   });
 
-  it("keeps the Wise Activity mirror clear of other crons except the room collector", () => {
+  it("keeps the Wise Activity mirror clear of other crons", () => {
     const otherMinuteFields = loadVercelConfig()
-      .crons.filter((cron) => !["/api/internal/sync-wise-activity", "/api/internal/room-booking"].includes(cron.path))
+      .crons.filter((cron) => cron.path !== "/api/internal/sync-wise-activity")
       .map((cron) => cron.schedule.split(" ")[0]);
     const usedMinutes = new Set(
       otherMinuteFields.flatMap((field) =>

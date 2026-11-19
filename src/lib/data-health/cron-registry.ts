@@ -108,12 +108,12 @@ export const CRON_JOBS = [
     maxDurationSeconds: 800, manualOnly: false, dangerous: true,
     confirmationLabel: "Refreshes the current nightly batch and sends due reminders when reminders are live.", routeMethod: "GET" },
   { key: "tutor_sit_ins", label: "Tutor Sit-ins", feature: "Tutor Sit-ins",
-    path: "/api/internal/tutor-sit-ins", schedule: "4,14,24,34,44,54 * * * *", cadenceLabel: "Every 10 min",
-    cadenceMinutes: 10, lateAfterMinutes: 25, maxDurationSeconds: 300, manualOnly: false,
+    path: "/api/internal/tutor-sit-ins", schedule: null, cadenceLabel: "Manual only",
+    cadenceMinutes: null, lateAfterMinutes: 0, maxDurationSeconds: 300, manualOnly: true,
     dangerous: true, confirmationLabel: "Rechecks observations and retries enabled Calendar and email delivery.", routeMethod: "GET" },
   { key: "tutor_sit_ins_digest", label: "Tutor Sit-in Digest", feature: "Tutor Sit-ins",
-    path: "/api/internal/tutor-sit-ins/digest", schedule: "0 1 * * *", cadenceLabel: "Daily 08:00 Bangkok",
-    cadenceMinutes: 1440, expectedBangkokMinute: 480, lateAfterMinutes: 60, maxDurationSeconds: 300, manualOnly: false,
+    path: "/api/internal/tutor-sit-ins/digest", schedule: null, cadenceLabel: "Manual only",
+    cadenceMinutes: null, lateAfterMinutes: 0, maxDurationSeconds: 300, manualOnly: true,
     dangerous: true, confirmationLabel: "Queues heads' daily observations digest and retries enabled delivery.", routeMethod: "GET" },
   { key: "progress_tests_processing", label: "Progress Test Processing", feature: "Progress Tests",
     path: "/api/internal/progress-tests/process", schedule: "* * * * *", cadenceLabel: transferText.moved,
@@ -124,8 +124,8 @@ export const CRON_JOBS = [
     cadenceMinutes: 5, lateAfterMinutes: 15, maxDurationSeconds: 800, manualOnly: false,
     dangerous: true, confirmationLabel: "Retries previously requested Wise room publishing with live verification.", routeMethod: "GET" },
   { key: "room_booking", label: "Tutor Room Availability", feature: "Class Assignments",
-    path: "/api/internal/room-booking", schedule: "1,5,9,13,17,21,25,29,33,37,41,45,49,53,57 * * * *", cadenceLabel: "Every 4 min; today and tomorrow, 24 hours",
-    cadenceMinutes: 4, lateAfterMinutes: 10, maxDurationSeconds: 300, manualOnly: false,
+    path: "/api/internal/room-booking", schedule: null, cadenceLabel: "Manual only",
+    cadenceMinutes: null, lateAfterMinutes: 0, maxDurationSeconds: 300, manualOnly: true,
     dangerous: true, confirmationLabel: "Refreshes rooms, releases reservations superseded by Wise classes, and retries tutor notifications.", routeMethod: "GET" },
   {
     key: "classroom_weekend_check",
@@ -181,12 +181,12 @@ export const CRON_JOBS = [
     label: "Sales Dashboard",
     feature: "Sales Dashboard",
     path: "/api/internal/sync-sales-dashboard",
-    schedule: "10,40 * * * *",
-    cadenceLabel: "Every 30 min",
-    cadenceMinutes: 30,
-    lateAfterMinutes: 45,
+    schedule: null,
+    cadenceLabel: "Manual only",
+    cadenceMinutes: null,
+    lateAfterMinutes: 0,
     maxDurationSeconds: 800,
-    manualOnly: false,
+    manualOnly: true,
     dangerous: false,
     confirmationLabel: null,
     routeMethod: "GET",
@@ -228,15 +228,12 @@ export const CRON_JOBS = [
     label: "Credit Control",
     feature: "Credit Control",
     path: "/api/internal/sync-credit-control",
-    schedule: "20,50 * * * *",
-    cadenceLabel: "Every 30 min",
-    cadenceMinutes: 30,
-    lateAfterMinutes: 45,
-    // Mirrors `export const maxDuration = 800` on the route. Health derivation
-    // uses this value for stuck detection, so a lower number here reports a
-    // legitimate long run as `failing`.
+    schedule: null,
+    cadenceLabel: "Manual only",
+    cadenceMinutes: null,
+    lateAfterMinutes: 0,
     maxDurationSeconds: 800,
-    manualOnly: false,
+    manualOnly: true,
     dangerous: false,
     confirmationLabel: null,
     routeMethod: "GET",
@@ -543,9 +540,9 @@ export function effectiveCronJob(job: CronJobDefinition): CronJobDefinition {
   if (isWiseClassroomJob(job.key) && !wiseClassroomAutomationEnabled()) return { ...job, paused: true, cadenceLabel: "Paused by owner" };
   if (job.key.startsWith("feedback_autowriter") && process.env.FEEDBACK_AUTOWRITER_ENABLED !== "true") return { ...job, paused: true, cadenceLabel: "Feedback autowriter disabled" };
   if (job.key.startsWith("tutor_sit_ins") && process.env.TUTOR_SIT_INS_ENABLED !== "true") return { ...job, paused: true, cadenceLabel: "Tutor Sit-ins disabled" };
-  if (job.key === "credit_control" && process.env.TUTOR_SIT_INS_ENABLED === "true") return { ...job, label: "Shared Student Data", requiresSuccessfulRun: true, cadenceMinutes: 30, lateAfterMinutes: 90, cadenceLabel: "Every 30 min — observation source" };
+  if (job.key === "credit_control" && process.env.TUTOR_SIT_INS_ENABLED === "true") return { ...job, label: "Shared Student Data", requiresSuccessfulRun: true };
   if (job.key === "line_credit_digest" && !creditControlActive()) return { ...job, paused: true, cadenceLabel: "Paused while Credit Control is retired" };
-  if (job.key === "credit_control" && !creditControlActive()) return { ...job, label: "Shared Student Data", feature: "Student Data", requiresSuccessfulRun: true, cadenceMinutes: 1440, expectedBangkokMinute: 380, lateAfterMinutes: 90, cadenceLabel: "Daily 06:20 Bangkok; recovery 06:50 / 07:20" };
+  if (job.key === "credit_control" && !creditControlActive()) return { ...job, label: "Shared Student Data", feature: "Student Data", requiresSuccessfulRun: true };
   return job;
 }
 
