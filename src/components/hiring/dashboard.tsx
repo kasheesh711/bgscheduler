@@ -267,7 +267,7 @@ export function HiringDashboard() {
 
   return (
     <div className={`${css.surface} ${serif.variable}`}>
-      <header className={css.topbar}>
+      <header className={css.topbar} data-compact={view === "hr" ? "" : undefined}>
         <div>
           <h1 className={css.title}>
             Tutor <em>hiring</em>
@@ -312,7 +312,7 @@ export function HiringDashboard() {
           </div>
         )}
       </header>
-      <p className={css.purpose}>{PURPOSE[view]}</p>
+      {view !== "hr" && <p className={css.purpose}>{PURPOSE[view]}</p>}
       {error && view !== "setup" && (
         <p role="alert" className={css.alert}>
           {error}
