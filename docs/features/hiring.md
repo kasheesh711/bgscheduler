@@ -61,7 +61,7 @@ HR phones the strongest applicants before the pre-screen form goes. A candidate 
 - **Where it runs.** The Mac worker sends the link (it has no booking). Vercel serves the page, reads the calendar, saves the booking and delivers the confirmation and the calendar event (`hiring_delivery` cron).
 - **Not included.** A reminder for an unbooked link, a "send new call link" button, HR-side moves, candidate cancel, same-day times, a cap on booked calls per day.
 
-**Today’s calls** appears on the Calls tab and the HR screen. It starts on the current Bangkok date. Change the date to see confirmed calls and calls marked No answer for that day. Open **Résumé and notes** to read the résumé and save a note. The note is stored in the candidate’s call record. Staff with Hiring access can read it in the full candidate record after the candidate leaves the call queue. Saving a note does not record a call result or send a message.
+**Today’s calls** appears on the Calls tab and the HR screen. It starts on the current Bangkok date. Change the date to see confirmed calls and calls marked No answer for that day. Open **Résumé and SEEK intake score** to read the résumé and the score breakdown together. Open **Call notes** to read or save a note. The note is stored in the candidate’s call record. Staff with Hiring access can read it in the full candidate record after the candidate leaves the call queue. Saving a note does not record a call result or send a message.
 
 The list is sorted by booked call time first, then by profile score, highest first, then the earlier application. A candidate who fails another part of the gate (for example, a subject that is not hiring) is not on the list, because the form could not go after the call.
 
@@ -84,7 +84,7 @@ Each row shows the subject, the university and a **View on SEEK** button. The su
 
 ## Pre-screen screen
 
-The list holds everyone sent a form, including people with no reply. The Visit email column reads `hiring_outbox`, not the stage, because the stage changes when the email is queued. It shows Queued, Sent with Bangkok time, Failed, May have sent, or the reason it was not sent. The panel shows the full answers, the score, and the AI's reasons with quotes.
+The list holds everyone sent a form, including people with no reply. The Visit email column reads `hiring_outbox`, not the stage, because the stage changes when the email is queued. It shows Queued, Sent with Bangkok time, Failed, May have sent, or the reason it was not sent. The panel shows the full answers, the form score, and the AI's reasons with quotes. Open **Résumé and SEEK intake score** to review the application and intake evidence together.
 
 | Action | Rule |
 |---|---|

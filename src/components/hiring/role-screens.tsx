@@ -2,39 +2,21 @@
 
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import { formatInTimeZone } from "date-fns-tz";
-import { localDate, RESUME_TYPES, ZONE, type Subject } from "@/lib/hiring/model";
+import { localDate, ZONE, type Subject } from "@/lib/hiring/model";
 import { buildRunSheet, headName, headVisits, pastVisits, upcoming, type RunSheetRow } from "@/lib/hiring/run-sheet";
 import { dayTitle, openHeadDecisions, weekCalls } from "@/lib/hiring/role-views";
 import { universityName } from "@/lib/hiring/seek-view";
 import { FinalReview } from "./final-review";
 import { resultEmailState, ResultUpload } from "./assessment-screen";
 import { callCommand, callState, callSubjects, triesText } from "./calls-screen";
-import { PhoneLink, ResumeBody, SeekIntakeScore, SourceTextBody, useResumeCheck, useSourceText } from "./candidate-inspector";
+import { PhoneLink, ResumePeek, SeekApplicationReview } from "./candidate-inspector";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
-import css from "./dashboard.module.css";
 import r from "./role-screens.module.css";
 
 // ─── The simple screens: one job each, big targets, no tables. They read the same payload as the full dashboard. ───
 
 const shortDay = (date: string) =>
   new Date(`${date}T12:00:00Z`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
-
-/** The résumé inside the card: the PDF, else the text read from the application. It loads only when opened. */
-function ResumePeek({ candidate, months }: { candidate: HiringCandidate; months: number }) {
-  const pdf = candidate.resumeState === "available" && candidate.resumeType === RESUME_TYPES.pdf;
-  const check = useResumeCheck(candidate.id, true, candidate.resumeState === "available");
-  const source = useSourceText(candidate.id, !pdf || check.status === "failed");
-  return (
-    <div className={r.resume}>
-      <ResumeBody id={candidate.id} name={candidate.name} state={candidate.resumeState} type={candidate.resumeType} months={months} check={check} />
-      {(!pdf || check.status === "failed") && (
-        <div className={css.sourceText}>
-          <SourceTextBody id={candidate.id} {...source} />
-        </div>
-      )}
-    </div>
-  );
-}
 
 function ResumeButton({ open, onToggle, name }: { open: boolean; onToggle: () => void; name: string }) {
   return (
@@ -131,7 +113,7 @@ export function TodayCalls({ data, command, busy, readOnly = false, children }: 
                 {candidate && (
                   <div className={r.actions}>
                     <button type="button" className={r.ghost} aria-expanded={open === key}
-                      onClick={() => setOpen(open === key ? null : key)}>Résumé and notes</button>
+                      onClick={() => setOpen(open === key ? null : key)}>Call notes</button>
                     {active && (["good", "no_answer", "bad"] as const).map((result, index) => (
                       <button key={result} type="button" className={r.big} data-tone={result === "good" ? "hire" : undefined} disabled={busy || readOnly} onClick={() => {
                         if (result === "bad" && !window.confirm(`Stop ${candidate.name}?`)) return;
@@ -140,11 +122,10 @@ export function TodayCalls({ data, command, busy, readOnly = false, children }: 
                     ))}
                   </div>
                 )}
-                {candidate && <SeekIntakeScore candidate={candidate} config={data.config} />}
-                {candidate && open === key && <div className={r.callDetail}>
-                  <ResumePeek candidate={candidate} months={data.config.resumeRetentionMonths} />
+                {candidate && open === key && (
                   <CallNotes candidate={candidate} command={command} busy={busy} readOnly={readOnly} />
-                </div>}
+                )}
+                {candidate && <SeekApplicationReview candidate={candidate} config={data.config} />}
               </article>
             );
           })}
@@ -250,7 +231,6 @@ export function HiringReviewScreen({ data, offers, onOpenResults, reload }: {
 }
 
 export function HrScreen({ data, command, busy, onOpenResults, readOnly = false }: { data: HiringData; command: Command; busy: boolean; onOpenResults: () => void; readOnly?: boolean }) {
-  const [resume, setResume] = useState<string | null>(null);
   // A new clock for each data load keeps the booking link states current.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const now = useMemo(() => new Date(), [data]);
@@ -292,7 +272,6 @@ export function HrScreen({ data, command, busy, onOpenResults, readOnly = false 
                   {readOnly ? <p>{c.phone}</p> : <PhoneLink phone={c.phone} large />}
                 </div>
                 <div className={r.actions}>
-                  <ResumeButton open={resume === c.id} onToggle={() => setResume(resume === c.id ? null : c.id)} name={c.name} />
                   <button type="button" className={r.big} data-tone="hire" disabled={busy || readOnly} onClick={() => act(c, "good")}>
                     Good call
                   </button>
@@ -303,8 +282,7 @@ export function HrScreen({ data, command, busy, onOpenResults, readOnly = false 
                     Bad call
                   </button>
                 </div>
-                <SeekIntakeScore candidate={c} config={data.config} />
-                {resume === c.id && <ResumePeek candidate={c} months={data.config.resumeRetentionMonths} />}
+                <SeekApplicationReview candidate={c} config={data.config} />
               </article>
             );
           })}
@@ -441,7 +419,9 @@ function HeadCard({ row, data, past, readOnly }: { row: RunSheetRow; data: Hirin
           </a>
         )}
       </div>
-      {resume && candidate && <ResumePeek candidate={candidate} months={data.config.resumeRetentionMonths} />}
+      {resume && candidate && (
+        <div className={r.resume}><ResumePeek candidate={candidate} months={data.config.resumeRetentionMonths} /></div>
+      )}
     </article>
   );
 }

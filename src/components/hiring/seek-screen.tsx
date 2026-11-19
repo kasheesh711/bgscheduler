@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { formatInTimeZone } from "date-fns-tz";
-import { RESUME_TYPES, SUBJECTS, ZONE, type Subject } from "@/lib/hiring/model";
+import { SUBJECTS, ZONE, type Subject } from "@/lib/hiring/model";
 import {
   NO_SEEK_FILTER,
   aheadAfterMove,
@@ -18,7 +18,7 @@ import {
   type SeekFilter,
 } from "@/lib/hiring/seek-view";
 import { preScreenNote, type CandidateExtras } from "@/lib/hiring/status";
-import { PhoneLink, ProfileScoreBreakdown, ResumeBody, SeekLinks, SourceTextBody, useResumeCheck, useSourceText } from "./candidate-inspector";
+import { PhoneLink, ProfileScoreBreakdown, ResumePeek, SeekLinks } from "./candidate-inspector";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
 import { PILL_CLASS } from "./pipeline-charts";
 import css from "./dashboard.module.css";
@@ -141,12 +141,6 @@ export function SeekPanel({
   onClose: () => void;
   onOpenRecord: () => void;
 }) {
-  const hasFile = candidate.resumeState === "available";
-  const pdf = hasFile && candidate.resumeType === RESUME_TYPES.pdf;
-  const check = useResumeCheck(candidate.id, true, hasFile);
-  // A PDF shows itself. Any other file, no file, or a file that will not open shows the extracted text in its place.
-  const showText = !pdf || check.status === "failed";
-  const text = useSourceText(candidate.id, showText);
   return (
     <aside className={`${css.inspector} ${css.seekPanel}`} aria-label={`Résumé and score of ${candidate.name}`}>
       <header className={css.inspectorHead}>
@@ -205,23 +199,15 @@ export function SeekPanel({
             </ul>
           </section>
         )}
-        <section className={css.inspectorSection}>
-          <h3 className={css.inspectorHeading}>Résumé</h3>
-          <ResumeBody
-            id={candidate.id}
-            name={candidate.name}
-            state={candidate.resumeState}
-            type={candidate.resumeType}
-            months={data.config.resumeRetentionMonths}
-            check={check}
-          />
-          {showText && (
-            <div className={css.sourceText}>
-              <SourceTextBody id={candidate.id} {...text} />
-            </div>
-          )}
-        </section>
-        <ProfileScoreBreakdown candidate={candidate} weights={data.config.profileWeights} />
+        <div className={css.applicationPanes}>
+          <section className={css.inspectorSection}>
+            <h3 className={css.inspectorHeading}>Résumé</h3>
+            <ResumePeek candidate={candidate} months={data.config.resumeRetentionMonths} />
+          </section>
+          <div>
+            <ProfileScoreBreakdown candidate={candidate} weights={data.config.profileWeights} />
+          </div>
+        </div>
       </div>
     </aside>
   );
