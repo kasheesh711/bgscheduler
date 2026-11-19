@@ -29,7 +29,6 @@ const EXPECTED_SCHEDULES: Record<string, string> = {
   "/api/internal/sync-sales-dashboard": "10,40 * * * *",
   "/api/internal/sync-unearned-revenue": "30 18 * * *",
   "/api/internal/sync-onsite-foot-traffic": "18 18 * * *",
-  "/api/internal/sync-competitor-intelligence": "28 18 * * 0",
   "/api/internal/sync-credit-control": "20,50 * * * *",
   "/api/internal/sync-wise-activity": "2,17,32,47 * * * *",
   "/api/internal/sync-post-class-feedback": "13,43 * * * *",

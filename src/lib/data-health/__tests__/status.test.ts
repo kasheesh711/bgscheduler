@@ -75,14 +75,14 @@ describe("cron status evaluation", () => {
     expect(result.lastExpectedAt?.toISOString()).toBe("2026-05-31T10:00:00.000Z");
   });
 
-  it("evaluates the weekly competitor intelligence Monday Bangkok window", () => {
+  it("evaluates the weekly hiring recruitment Monday Bangkok window", () => {
     const latest = run({
-      startedAt: new Date("2026-06-14T18:28:00.000Z"),
-      finishedAt: new Date("2026-06-14T18:36:00.000Z"),
+      startedAt: new Date("2026-06-15T02:00:00.000Z"),
+      finishedAt: new Date("2026-06-15T02:08:00.000Z"),
     });
     const result = evaluateCronJobStatus({
-      job: job("competitor_intelligence"),
-      now: new Date("2026-06-14T19:00:00.000Z"),
+      job: job("hiring_recruitment"),
+      now: new Date("2026-06-15T02:30:00.000Z"),
       latestInvocation: null,
       latestCronInvocation: null,
       latestRun: latest,
@@ -92,18 +92,18 @@ describe("cron status evaluation", () => {
     });
 
     expect(result.status).toBe("healthy");
-    expect(result.lastExpectedAt?.toISOString()).toBe("2026-06-14T18:28:00.000Z");
-    expect(result.nextExpectedAt?.toISOString()).toBe("2026-06-21T18:28:00.000Z");
+    expect(result.lastExpectedAt?.toISOString()).toBe("2026-06-15T02:00:00.000Z");
+    expect(result.nextExpectedAt?.toISOString()).toBe("2026-06-22T02:00:00.000Z");
   });
 
-  it("marks the weekly competitor intelligence cron late after the Monday window is missed", () => {
+  it("marks the weekly hiring recruitment cron late after the Monday window is missed", () => {
     const latest = run({
-      startedAt: new Date("2026-06-07T18:28:00.000Z"),
-      finishedAt: new Date("2026-06-07T18:36:00.000Z"),
+      startedAt: new Date("2026-06-08T02:00:00.000Z"),
+      finishedAt: new Date("2026-06-08T02:08:00.000Z"),
     });
     const result = evaluateCronJobStatus({
-      job: job("competitor_intelligence"),
-      now: new Date("2026-06-14T21:00:00.000Z"),
+      job: job("hiring_recruitment"),
+      now: new Date("2026-06-15T04:00:00.000Z"),
       latestInvocation: null,
       latestCronInvocation: null,
       latestRun: latest,
@@ -113,8 +113,8 @@ describe("cron status evaluation", () => {
     });
 
     expect(result.status).toBe("late");
-    expect(result.lastExpectedAt?.toISOString()).toBe("2026-06-14T18:28:00.000Z");
-    expect(result.lateAfterAt?.toISOString()).toBe("2026-06-14T20:28:00.000Z");
+    expect(result.lastExpectedAt?.toISOString()).toBe("2026-06-15T02:00:00.000Z");
+    expect(result.lateAfterAt?.toISOString()).toBe("2026-06-15T03:00:00.000Z");
   });
 
   // credit_control declares maxDuration 800 (mirroring its route), so a run

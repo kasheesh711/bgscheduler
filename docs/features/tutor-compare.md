@@ -1,6 +1,6 @@
 # Tutor Compare
 
-**Status: legacy-redirect** — the standalone `/compare` page no longer renders anything of its own. It is a `"use client"` component whose only effect is `router.replace("/search?tutors=…")` (or plain `/search` when no `?tutors=` is present), wrapped in `<Suspense>` for `cacheComponents` compatibility (`src/app/(app)/compare/page.tsx:1`, `:10-17`, `:22-28`). It has no entry in the nav registry — none of the `href:` values in `src/lib/navigation/tools.ts:96-252` is `/compare`, and `src/components/layout/app-nav.tsx` never mentions it. The compare *capability*, however, is fully live: the engine (`src/lib/search/compare.ts`), both API endpoints (`src/app/api/compare/`), the client hook (`src/hooks/use-compare.ts`), and the calendar UI (`src/components/compare/`) all run inside the right-hand half of `/search`. The only other place the old path survives is the stale-snapshot banner's workspace allowlist, which still matches `/compare` and `/compare/*` (`src/components/layout/stale-snapshot-banner.tsx:18-28`).
+Next.js redirects `/compare` to `/search` with HTTP 308 and preserves the query string. The Search workspace provides the comparison controls.
 
 ## Purpose
 

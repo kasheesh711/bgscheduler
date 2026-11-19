@@ -24,10 +24,6 @@
       "schedule": "18 18 * * *"
     },
     {
-      "path": "/api/internal/sync-competitor-intelligence",
-      "schedule": "28 18 * * 0"
-    },
-    {
       "path": "/api/internal/sync-credit-control",
       "schedule": "20,50 * * * *"
     },

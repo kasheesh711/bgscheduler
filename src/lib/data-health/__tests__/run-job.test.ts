@@ -24,7 +24,6 @@ vi.mock("@/lib/wise-activity/sync", () => ({
   WiseActivitySyncAlreadyRunningError: class WiseActivitySyncAlreadyRunningError extends Error {},
 }));
 vi.mock("@/lib/sales-dashboard/data", () => ({ importActiveSalesDashboardProjectionSource: vi.fn(), importRefreshableSalesSources: vi.fn() }));
-vi.mock("@/lib/competitor-intelligence/sync", () => ({ runCompetitorIntelligenceSync: vi.fn() }));
 vi.mock("@/lib/credit-control/run-sync-request", () => ({ runCreditControlSyncRequest: vi.fn() }));
 vi.mock("@/lib/post-class-feedback/sync", () => ({ runPostClassFeedbackSync: vi.fn() }));
 vi.mock("@/lib/post-class-feedback/notifications", () => ({ processDuePostClassNotificationRetries: vi.fn(), sendPostClassAdminDigest: vi.fn() }));
@@ -57,7 +56,6 @@ import { deliverNextDayClassroomSchedules, prepareNextDayClassrooms } from "@/li
 import { CLASSROOM_OPERATIONS_OWNER } from "@/lib/classrooms/operations-policy";
 import { runClassroomPublishRecovery } from "@/lib/classrooms/publish-worker";
 import { runWeekendClassroomCheck } from "@/lib/classrooms/weekend-check";
-import { runCompetitorIntelligenceSync } from "@/lib/competitor-intelligence/sync";
 import { runCreditControlSyncRequest } from "@/lib/credit-control/run-sync-request";
 import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import { CRON_JOBS, getCronJobDefinition, manuallyRunnableCronJobs, type CronJobDefinition } from "@/lib/data-health/cron-registry";
@@ -114,7 +112,6 @@ const DISPATCH_TARGETS = {
   sales_dashboard: importRefreshableSalesSources,
   unearned_revenue: runUnearnedRevenueSync,
   onsite_foot_traffic: runOnsiteFootTrafficSync,
-  competitor_intelligence: runCompetitorIntelligenceSync,
   credit_control: runCreditControlSyncRequest,
   post_class_feedback: runPostClassFeedbackSync,
   post_class_feedback_backfill: runPostClassBackfillJob,
@@ -178,7 +175,6 @@ function applyDefaults(): void {
   vi.mocked(syncWiseActivityEvents).mockResolvedValue({} as never);
   vi.mocked(importRefreshableSalesSources).mockResolvedValue([] as never);
   vi.mocked(importActiveSalesDashboardProjectionSource).mockResolvedValue(null as never);
-  vi.mocked(runCompetitorIntelligenceSync).mockResolvedValue({ status: "success" } as never);
   vi.mocked(runPostClassFeedbackSync).mockResolvedValue(PC_SYNC as never);
   vi.mocked(processDuePostClassNotificationRetries).mockResolvedValue(PC_RETRIES);
   vi.mocked(processPostClassAiReviews).mockResolvedValue(PC_AI);
