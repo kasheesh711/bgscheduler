@@ -1,9 +1,12 @@
-import { and, desc, eq, gt, inArray, isNotNull, isNull, like, ne } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull, isNull, like, ne, sql } from "drizzle-orm";
 import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
 import { hireBlockers } from "./assessment-view";
 import { HiringError, runtimeWritesAllowed, type HiringConfig } from "./model";
+import { checkRubric, rubricNeedsCheck } from "./marking-sheet";
+import { hiringEmailHtmlFromText } from "./email";
+import { bookingToken } from "./tokens";
 import { queueRecruitmentHeadDecision } from "./recruitment";
 import { audit, briefMock, candidateById, endVisit, enqueue, settings } from "./service";
 
@@ -68,6 +71,10 @@ export async function draftDecision(candidateId: string, input: { decision: Deci
   return withDatabaseTransaction(db, async (tx) => {
     await tx.select({ id: s.hiringCandidates.id }).from(s.hiringCandidates).where(eq(s.hiringCandidates.id, candidateId)).for("update");
     const candidate = await candidateById(tx, candidateId);
+    if (input.decision === "hire" || (await headRecommendation(tx, candidate.id))?.detail.decision === "hire")
+      throw new HiringError(409, "Send the review packet to Gift for sign-off.");
+    if (candidate.stage === "hired" || candidate.stage === "rejected")
+      throw new HiringError(409, "This application is closed.");
     await assertAllowed(tx, candidate, input.decision, input.reason);
     await tx.update(d).set({ status: "replaced" }).where(and(eq(d.candidateId, candidateId), eq(d.status, "draft")));
     const email = resultEmail(input.decision, candidate.name, candidate.visitSubject ?? candidate.subjects[0] ?? null);
@@ -81,45 +88,79 @@ export async function draftDecision(candidateId: string, input: { decision: Deci
 }
 
 export const HEAD_DECISION = "head-decision";
-/**
- * A head's decision after a mock (Kevin's decision, 18 Nov 2026): it is recorded and HR is told in the recruitment
- * group. No email leaves here: HR reads and sends the result email. A draft is made when the rules allow one. When they
- * do not (a paper is not marked yet, for example), the decision is still recorded and the notice gives the cause.
- */
-export async function recordHeadDecision(candidateId: string, input: { decision: Decision; reason: string; head: string }, actor: string, db: Database) {
-  if (!runtimeWritesAllowed()) throw new HiringError(503, "A decision can be saved only on the live site.");
+export async function headRecommendation(db: Database, candidateId: string) {
+  const [row] = await db.select().from(s.hiringAudit)
+    .where(and(eq(s.hiringAudit.candidateId, candidateId), eq(s.hiringAudit.action, HEAD_DECISION)))
+    .orderBy(desc(s.hiringAudit.createdAt)).limit(1);
+  return row;
+}
+
+/** The caller holds the candidate row lock. */
+export async function queueFinalResult(tx: Database, candidate: Awaited<ReturnType<typeof candidateById>>,
+  decision: Decision, reason: string, actor: string, offer: string | null, now: Date) {
+  if (["stopped", "hired", "rejected"].includes(candidate.stage))
+    throw new HiringError(409, "This application is closed.");
+  await assertAllowed(tx, candidate, decision, reason);
+  const [future] = await tx.select({ id: s.hiringBookings.id }).from(s.hiringBookings).where(and(
+    eq(s.hiringBookings.candidateId, candidate.id), eq(s.hiringBookings.status, "confirmed"), gt(s.hiringBookings.endTime, now),
+  )).limit(1);
+  if (future) throw new HiringError(409, "Cancel the future appointment first.");
+  const message = resultEmail(decision, candidate.name, candidate.visitSubject ?? candidate.subjects[0] ?? null);
+  const [row] = await tx.insert(d).values({
+    candidateId: candidate.id, decision, reason, decidedBy: actor, status: "sent",
+    emailSubject: message.subject, emailBody: message.body, sentAt: now,
+  }).returning({ id: d.id });
+  const outboxKey = `${candidate.id}:result:${row.id}`;
+  let html: string | undefined;
+  if (decision === "hire") {
+    if (!offer) throw new HiringError(409, "Add the offer letter first.");
+    const link = new URL(`/hiring/book/${bookingToken(row.id, "contract", new Date(now.getTime() + 14 * 86400000))}`,
+      process.env.APP_BASE_URL || "https://bgscheduler.vercel.app").toString();
+    message.subject = "Your BeGifted offer letter";
+    const invitation = `${offer}\n\nBook a 30-minute onsite appointment with HR to sign your contract.`;
+    message.body = `${invitation}\n${link}`;
+    html = hiringEmailHtmlFromText(message.subject, invitation, { label: "Book contract signing", url: link });
+  }
+  const stage = STAGE[decision];
+  await tx.update(d).set({ status: "replaced" }).where(and(eq(d.candidateId, candidate.id), eq(d.status, "draft")));
+  await enqueue(tx, { key: outboxKey, candidateId: candidate.id, kind: "email", createdAt: now,
+    payload: { to: candidate.email!, subject: message.subject, text: message.body, html, closeLoop: true, workflowStage: stage } });
+  await tx.update(d).set({ outboxKey, emailSubject: message.subject, emailBody: message.body }).where(eq(d.id, row.id));
+  await tx.update(s.hiringCandidates).set({ stage, inviteExpiresAt: null, revision: candidate.revision + 1, updatedAt: now })
+    .where(eq(s.hiringCandidates.id, candidate.id));
+  await audit(tx, actor, "decision-send", candidate.id, { decision, stage, outboxKey });
+  return outboxKey;
+}
+
+export async function saveBriefDecision(token: string, input: { decision: Decision; reason: string }, db: Database, now = new Date()) {
+  if (!runtimeWritesAllowed()) throw new HiringError(503, "A recommendation can be saved only on the live site.");
+  const booking = await briefMock(token, db, now);
   const reason = input.reason.trim();
   if (input.decision === "reject" && reason.length < 5) throw new HiringError(400, "Write a reason of at least 5 characters.");
-  const candidate = await candidateById(db, candidateId);
-  const { mocks } = await resultsOf(db, candidateId);
-  // A decision rests on scores a person can read, as the draft rule does.
-  if (!mocks.some((m) => m.source !== "tracker" && (m.status === "done" || m.status === "needs_check"))) throw new HiringError(409, "Send the mock scores first.");
-  const [last] = await db.select({ detail: s.hiringAudit.detail }).from(s.hiringAudit).where(and(eq(s.hiringAudit.candidateId, candidateId), eq(s.hiringAudit.action, HEAD_DECISION))).orderBy(desc(s.hiringAudit.createdAt)).limit(1);
-  const [standing] = await db.select({ id: d.id }).from(d).where(and(eq(d.candidateId, candidateId), eq(d.status, "draft"), eq(d.decision, input.decision))).limit(1);
-  // The same decision again (a second tap, a reload) changes nothing and tells HR nothing.
-  if (last?.detail.decision === input.decision && last.detail.reason === reason) return { draft: !!standing };
-  let draftProblem: string | null = null;
-  // A draft of this decision may hold HR's edits, so it stays. Only a new or changed decision makes a draft.
-  if (!standing)
-    try {
-      await draftDecision(candidateId, { decision: input.decision, reason: `Head ${input.head}: ${reason || "No reason given."}` }, actor, db);
-    } catch (error) {
-      if (!(error instanceof HiringError)) throw error;
-      draftProblem = error.message;
+  return withDatabaseTransaction(db, async (tx) => {
+    await tx.execute(sql`select id from hiring_candidates where id=${booking.candidateId} for update`);
+    const mock = await briefMock(token, tx, now);
+    if (now < mock.endTime) throw new HiringError(409, "Send your recommendation after the mock lesson ends.");
+    const candidate = await candidateById(tx, mock.candidateId);
+    const [result] = await tx.select().from(s.hiringMockResults).where(and(eq(s.hiringMockResults.candidateId, candidate.id),
+      eq(s.hiringMockResults.bookingId, mock.id), eq(s.hiringMockResults.status, "done")));
+    if (!result?.rubric || checkRubric(result.rubric).length || rubricNeedsCheck(result.rubric))
+      throw new HiringError(409, "Send the completed rubric for this mock first.");
+    const last = await headRecommendation(tx, candidate.id);
+    if (last?.detail.bookingId === mock.id) {
+      if (last.detail.decision === input.decision && last.detail.reason === reason) return { queued: null };
+      throw new HiringError(409, "Your recommendation is already recorded. Contact HR if it needs a correction.");
     }
-  // One transaction: a recorded decision always has its notice. The notice key is the audit row, so each change tells HR.
-  await withDatabaseTransaction(db, async (tx) => {
-    const [row] = await tx.insert(s.hiringAudit).values({ actor, action: HEAD_DECISION, candidateId, detail: { decision: input.decision, reason, head: input.head, draftProblem } }).returning({ id: s.hiringAudit.id });
-    await queueRecruitmentHeadDecision(tx, candidate, { decision: input.decision, reason, head: input.head, subject: candidate.visitSubject ?? candidate.subjects[0] ?? null, key: row.id, draftProblem });
+    const head = mock.interviewerKey ?? "Interviewer";
+    const actor = `interviewer:${head}`;
+    const [row] = await tx.insert(s.hiringAudit).values({ actor, action: HEAD_DECISION, candidateId: candidate.id,
+      detail: { decision: input.decision, reason, head, bookingId: mock.id, mockResultId: result.id },
+    }).returning({ id: s.hiringAudit.id });
+    const queued = input.decision === "reject" ? await queueFinalResult(tx, candidate, "reject", reason, actor, null, now) : null;
+    await queueRecruitmentHeadDecision(tx, candidate, { decision: input.decision, reason, head,
+      subject: mock.subjects[0] ?? null, key: row.id });
+    return { queued };
   });
-  return { draft: !draftProblem };
-}
-/** The same decision from the interviewer link. The link is the only access check, as for the score form. */
-export async function saveBriefDecision(token: string, input: { decision: Decision; reason: string }, db: Database, now = new Date()) {
-  const mock = await briefMock(token, db, now);
-  if (now < mock.startTime) throw new HiringError(409, "You can send a decision after the mock lesson starts.");
-  const head = mock.interviewerKey ?? "Interviewer";
-  return recordHeadDecision(mock.candidateId, { ...input, head }, `interviewer:${mock.interviewerKey ?? "unknown"}`, db);
 }
 
 /** Keeps a person's edits while the switches are off or they stop for now. Nothing leaves until Send. */
@@ -158,6 +199,10 @@ export async function sendDecision(id: string, input: { emailSubject: string; em
     const [draft] = await tx.select().from(d).where(eq(d.id, id)).for("update");
     if (!draft || draft.status !== "draft") throw new HiringError(409, "This draft was already sent or replaced. Refresh the page.");
     const candidate = await candidateById(tx, draft.candidateId);
+    if (draft.decision === "hire" || (await headRecommendation(tx, candidate.id))?.detail.decision === "hire")
+      throw new HiringError(409, "Send the review packet to Gift for sign-off.");
+    if (candidate.stage === "hired" || candidate.stage === "rejected")
+      throw new HiringError(409, "This application is closed.");
     await assertAllowed(tx, candidate, draft.decision, draft.reason);
     const stage = STAGE[draft.decision];
     const outboxKey = `${candidate.id}:result:${draft.id}`;

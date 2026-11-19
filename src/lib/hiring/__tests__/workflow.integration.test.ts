@@ -17,6 +17,8 @@ import { bookingToken } from "../tokens";
 import { saveBriefDecision } from "../decisions";
 import {
   bookInterview,
+  bookContract,
+  contractView,
   bookingView,
   bookVisit,
   briefCandidateId,
@@ -37,7 +39,8 @@ import { importApplication, observeSeekState } from "../sources";
 import { assessCandidates, deliverBookingMessages, deliverOutbox, rewriteBriefs, scorePreScreens, type Rewrite } from "../worker";
 import { readLimitUsage, releaseQueues, runFollowUps } from "../queue";
 import { availableSlots, verifyLiveSlot } from "../availability";
-import { deliverCalendar } from "../google";
+import { latestReviewPacket, signOffReview, submitReview } from "../final-review";
+import { deliverCalendar, googleConnectionStatus, readHrBusy } from "../google";
 import { ensureIndex } from "@/lib/search/index";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { pushLineTextMessage } from "@/lib/line/client";
@@ -781,6 +784,8 @@ describe("hiring workflow persistence", () => {
       return text.match(/\/hiring\/book\/([\w.-]+)/)![1];
     };
     beforeEach(async () => {
+      const real = await vi.importActual<typeof import("../availability")>("../availability");
+      vi.mocked(availableSlots).mockImplementation((...args) => args[2] === "paper" ? real.availableSlots(...args) : Promise.resolve([slot]));
       await setVisit();
       await db.insert(s.tutorContacts).values({ canonicalKey: "Ek", displayName: "Ek" }).onConflictDoNothing();
       await db.insert(s.progressLineGroups).values({ canonicalKey: "Ek", groupId: "ek-group", groupName: "Ek", enabled: true, registeredBy: "owner" });
@@ -868,7 +873,7 @@ describe("hiring workflow persistence", () => {
       // The head's notice carries the candidate's contact line.
       expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\nCandidate: .+\nEmail: \S+@example\.com\nPhone: not recorded\nSubject: /);
     });
-    it("saves the head's scores from the link after the mock starts, and keeps what a resend replaced", async () => {
+    it("saves the head's scores from the link after the mock ends, and keeps what a resend replaced", async () => {
       const row = await invited();
       await bookVisit(link(row), choice(), db);
       await deliverOutbox(db, base);
@@ -879,7 +884,7 @@ describe("hiring workflow persistence", () => {
       const before = new Date(mock.startTime.getTime() - 1);
       expect(await briefView(token, db, before)).toMatchObject({ form: "wait", rubric: null });
       await expect(saveBriefRubric(token, rubric(7), db, before)).rejects.toMatchObject({ status: 409 });
-      const during = mock.startTime;
+      const during = mock.endTime;
       for (const bad of [rubric(null), rubric(11), rubric(7.5), { ...rubric(7), items: { ...rubric(7).items, accuracy: 0 } }])
         await expect(saveBriefRubric(token, bad, db, during)).rejects.toMatchObject({ status: 400 });
       expect(await db.select().from(s.hiringMockResults)).toHaveLength(0);
@@ -923,46 +928,112 @@ describe("hiring workflow persistence", () => {
       await db.update(s.hiringCandidates).set({ stage: "rejected" }).where(eq(s.hiringCandidates.id, row.id));
       await expect(saveBriefRubric(token, rubric(7), db, during)).rejects.toMatchObject({ status: 404 });
     });
-    it("records the head's decision from the link, tells HR, and sends nothing to the candidate", async () => {
+    it("records one recommendation after the mock with the rubric from that booking", async () => {
       const row = await invited();
       await bookVisit(link(row), choice(), db);
-      await deliverOutbox(db, base);
-      const token = vi.mocked(pushLineTextMessage).mock.calls[0][0].text.match(/\/hiring\/brief\/([\w.-]+)/)![1];
       const [, mock] = await rowsOf(row.id);
-      const { config } = await settings(db);
-      await db.update(s.hiringSettings).set({ config: { ...config, recruitmentLineGroupId: "C" + "1".repeat(32) } });
-      const during = mock.startTime;
-      const hire = { decision: "hire" as const, reason: "" };
-      await expect(saveBriefDecision(token, hire, db, new Date(during.getTime() - 1))).rejects.toMatchObject({ status: 409 });
-      // A decision rests on scores.
-      await expect(saveBriefDecision(token, hire, db, during)).rejects.toMatchObject({ status: 409, message: "Send the mock scores first." });
-      await saveBriefRubric(token, { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 7])), comments: "" } as MockRubric, db, during);
-      await expect(saveBriefDecision(token, { decision: "reject", reason: "no" }, db, during)).rejects.toMatchObject({ status: 400 });
-      const queued = (await db.select().from(s.hiringOutbox)).length;
-      // No paper result yet, so no email draft: the decision is recorded and the notice gives the cause.
-      expect(await saveBriefDecision(token, hire, db, during)).toEqual({ draft: false });
-      expect(await saveBriefDecision(token, hire, db, during)).toEqual({ draft: false });
-      expect(await db.select().from(s.hiringDecisions)).toHaveLength(0);
-      const notices = (await db.select().from(s.hiringRecruitmentDeliveries)).filter((d) => d.notice === "head_decision");
-      // The same decision again is not recorded and adds no second notice.
-      expect(notices).toHaveLength(1);
-      expect(notices[0].message).toMatch(/^Head decision: HIRE\nCandidate: .+ — Mathematics\nHead: Peat\n/);
-      expect(notices[0].message).toContain("No email draft yet: No paper result yet.");
-      expect((await briefView(token, db, during)).decision).toBe("hire");
-      expect((await dashboard(db)).headDecisions[0]).toMatchObject({ candidateId: row.id, decision: "hire", head: "Peat", draftProblem: expect.stringContaining("No paper result yet.") });
-      // A change of mind is a new notice. The reason goes with it.
-      await saveBriefDecision(token, { decision: "reject", reason: "Weak subject knowledge." }, db, during);
-      expect((await db.select().from(s.hiringRecruitmentDeliveries)).filter((d) => d.notice === "head_decision")).toHaveLength(2);
-      expect((await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "head-decision"))).map((a) => a.actor)).toEqual(Array(2).fill("interviewer:Peat"));
-      // HR's edits to a draft of the same decision stay when the head changes only the reason.
-      // (The visit is still ahead of the real clock here, so the head's send made no draft. HR's own draft stands in.)
-      const [draft] = await db.insert(s.hiringDecisions).values({ candidateId: row.id, decision: "reject", status: "draft", reason: "r", emailSubject: "s", emailBody: "HR's own words.", decidedBy: "owner" }).returning();
-      expect(await saveBriefDecision(token, { decision: "reject", reason: "Weak subject knowledge, slow pace." }, db, during)).toEqual({ draft: true });
-      expect(await db.select().from(s.hiringDecisions).where(eq(s.hiringDecisions.status, "draft"))).toMatchObject([{ id: draft.id, emailBody: "HR's own words." }]);
-      expect((await db.select().from(s.hiringRecruitmentDeliveries)).filter((d) => d.notice === "head_decision")).toHaveLength(3);
-      // Nothing went to the candidate, and the stage did not move.
-      expect(await db.select().from(s.hiringOutbox)).toHaveLength(queued);
-      expect((await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id)))[0].stage).toBe("onsite_booked");
+      const token = bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + 86400000));
+      const yes = { decision: "hire" as const, reason: "" };
+      const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 7])), comments: "" } as MockRubric;
+      await expect(saveBriefDecision(token, yes, db, mock.startTime)).rejects.toMatchObject({ status: 409 });
+      await expect(saveBriefDecision(token, yes, db, mock.endTime)).rejects.toThrow(/completed rubric/);
+      await saveBriefRubric(token, rubric, db, mock.endTime);
+      const queued = (await jobsOf(row.id)).length;
+      expect(await saveBriefDecision(token, yes, db, mock.endTime)).toEqual({ queued: null });
+      expect(await saveBriefDecision(token, yes, db, mock.endTime)).toEqual({ queued: null });
+      await expect(saveBriefDecision(token, { decision: "reject", reason: "Second choice" }, db, mock.endTime)).rejects.toThrow(/already recorded/);
+      expect((await dashboard(db)).headDecisions.filter((rec) => rec.candidateId === row.id)).toMatchObject([{ decision: "hire", head: "Peat" }]);
+      expect((await jobsOf(row.id)).length).toBe(queued);
+      expect(await briefView(token, db, mock.endTime)).toMatchObject({ form: "closed", decision: "hire" });
+    });
+    it("queues one candidate rejection after No", async () => {
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      const [, mock] = await rowsOf(row.id);
+      const token = bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + 86400000));
+      vi.setSystemTime(mock.endTime);
+      await saveBriefRubric(token, { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 4])), comments: "" } as MockRubric, db);
+      const no = { decision: "reject" as const, reason: "Weak subject knowledge." };
+      const { queued } = await saveBriefDecision(token, no, db);
+      await expect(saveBriefDecision(token, no, db)).rejects.toMatchObject({ status: 404 });
+      expect((await jobsOf(row.id)).filter((job) => job.payload.workflowStage === "rejected")).toMatchObject([{ key: queued }]);
+      expect(await deliverOutbox(db, (await settings(db)).config, 20, true)).toBe(1);
+      expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: row.email }));
+      expect((await read(row.id)).stage).toBe("rejected");
+    });
+    it("separates paper and mock, requires Gift’s latest review, and books half an hour with HR", async () => {
+      vi.stubEnv("HIRING_FINAL_REVIEWER_EMAIL", "gift@example.com");
+      vi.stubEnv("HIRING_HR_EMAIL", "hr@example.com");
+      await setVisit({ paperPassRules: [{ subject: "Mathematics", level: "IGCSE / GCSE", percent: 70 }] });
+      const row = await invited({ profileAssessment: { ...six, criteria: six.criteria.slice(0, 5) } as never });
+      const path = `hiring-resumes/${row.id}/${"a".repeat(64)}.pdf`;
+      await db.update(s.hiringCandidates).set({ resumePath: path, resumeType: "application/pdf", resumeSha256: "a".repeat(64) }).where(eq(s.hiringCandidates.id, row.id));
+      const paperToken = bookingToken(row.id, "paper-visit", LINK);
+      expect((await visitView(paperToken, db)).slots[0].mockStart).toBeNull();
+      const paper = await bookVisit(paperToken, choice(), db);
+      expect((await rowsOf(row.id)).map((booking) => booking.kind)).toEqual(["paper"]);
+      vi.setSystemTime(paper.endTime);
+      await expect(click(row.id, "paper_pass")).rejects.toThrow(/passing paper/);
+      const [file] = await db.insert(s.hiringAssessmentFiles).values({ candidateId: row.id, subject: "Mathematics",
+        kind: "paper_scan", name: "exam.pdf", path: "sample-exam.pdf", size: 100, status: "ready", uploadedBy: "staff" }).returning();
+      await db.insert(s.hiringPaperResults).values({ candidateId: row.id, subject: "Mathematics", fileId: file.id, bookingId: paper.id,
+        source: "person", status: "done", marks: { comment: "", missingPages: null, questions: [
+          { id: "1", level: "IGCSE / GCSE", attempted: true, readable: true, marks: 9, max: 10, reason: "Correct working." },
+        ] } });
+      await click(row.id, "paper_pass");
+      const invite = (await jobsOf(row.id)).find((job) => job.payload.workflowStage === "paper_passed")!;
+      const mockToken = String(invite.payload.text).match(/\/hiring\/book\/([\w.-]+)/)![1];
+      const start = new Date(paper.endTime.getTime() + 86400000);
+      vi.mocked(availableSlots).mockResolvedValue([{
+        ...slot, start: start.toISOString(), end: new Date(start.getTime() + 3600000).toISOString(),
+      }]);
+      const mock = await bookInterview(mockToken, { start: start.toISOString(), subjects: ["Mathematics"], interviewerKey: "Peat",
+        onsiteConfirmed: true, teachingCommitmentConfirmed: true }, db);
+      expect((await jobsOf(row.id)).find((job) => job.key.endsWith(":tutor-email"))?.payload).toMatchObject({
+        to: "peat@example.com", cc: [], text: expect.stringMatching(/Graded paper:[\s\S]+\/paper[\s\S]+Résumé:[\s\S]+\/resume/),
+      });
+      vi.setSystemTime(mock.endTime);
+      const brief = bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + 86400000));
+      await saveBriefRubric(brief, { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 8])), comments: "Clear examples." } as MockRubric, db);
+      await saveBriefDecision(brief, { decision: "hire", reason: "Clear examples." }, db);
+      const offer = "We offer you the Mathematics tutor position on the agreed terms.";
+      await expect(submitReview(db, row.id, "other@example.com", { behavioral: "Uses specific examples.", offer })).rejects.toMatchObject({ status: 403 });
+      await submitReview(db, row.id, "hr@example.com", { behavioral: "Uses specific examples.", offer });
+      const packet = (await latestReviewPacket(db, row.id))!;
+      expect(packet).toMatchObject({ behavioral: "Uses specific examples.", evidence: { paper: { total: 9 }, mock: { total: 80 } } });
+      vi.mocked(googleConnectionStatus).mockResolvedValue({ connected: true, freeBusy: true, email: "", lastError: null });
+      vi.mocked(readHrBusy).mockResolvedValue([]);
+      await expect(signOffReview(db, row.id, packet.id, "hr@example.com", "hire", "")).rejects.toMatchObject({ status: 403 });
+      await db.update(s.hiringMockResults).set({ rubric: { ...packet.evidence.mock.rubric, comments: "A reviewed correction." } }).where(eq(s.hiringMockResults.candidateId, row.id));
+      await expect(signOffReview(db, row.id, packet.id, "gift@example.com", "hire", "")).rejects.toThrow(/evidence changed/);
+      await submitReview(db, row.id, "hr@example.com", { behavioral: "Uses specific examples.", offer });
+      const latest = (await latestReviewPacket(db, row.id))!;
+      vi.setSystemTime(new Date(mock.endTime.getTime() + 1000));
+      const { config: active } = await settings(db);
+      await db.update(s.hiringSettings).set({ config: { ...active, enabled: false, deliveryEnabled: false, bookingTestCandidateId: row.id } });
+      const result = await signOffReview(db, row.id, latest.id, "gift@example.com", "hire", "");
+      const mail = (await jobsOf(row.id)).find((job) => job.key === result)!;
+      expect(mail.payload.text).toEqual(expect.stringContaining(offer));
+      const contract = String(mail.payload.text).match(/\/hiring\/book\/([\w.-]+)/)![1];
+      const choices = (await contractView(contract, db)).slots;
+      expect(choices.length).toBeGreaterThan(1);
+      const [first, second] = choices;
+      const other = await invited();
+      await db.insert(s.hiringBookings).values({ candidateId: other.id, kind: "call", subjects: ["Mathematics"],
+        interviewerKey: "hr-call", interviewerEmail: "people@begiftededucation.com", calendarOwner: "people@begiftededucation.com",
+        startTime: new Date(first.start), endTime: new Date(Date.parse(first.start) + 900000), evidence: {} });
+      await expect(bookContract(contract, { start: first.start }, db)).rejects.toThrow(/no longer available/);
+      const booking = await bookContract(contract, { start: second.start }, db);
+      expect(booking.kind).toBe("contract");
+      expect(booking.endTime.getTime() - booking.startTime.getTime()).toBe(1800000);
+      expect((await bookContract(contract, { start: second.start }, db)).id).toBe(booking.id);
+      await db.insert(s.hiringOutbox).values({ candidateId: other.id, key: "unrelated-offer", kind: "email",
+        payload: { to: other.email, subject: "Unrelated offer", text: "Must stay queued", closeLoop: true, workflowStage: "hired" } });
+      await deliverBookingMessages(db);
+      expect((await jobsOf(other.id)).find((job) => job.key === "unrelated-offer")?.status).toBe("pending");
+      expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: row.email, cc: [], subject: "Your BeGifted offer letter" }));
+      expect(vi.mocked(deliverCalendar).mock.calls.some(([event]) => event.id === booking.id)).toBe(true);
+      expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: row.email, subject: "BeGifted contract signing confirmed" }));
     });
     it("links the head to the candidate page, and ends the link with the visit", async () => {
       const row = await invited({ phone: "+66812345678" });

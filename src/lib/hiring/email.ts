@@ -10,7 +10,6 @@ import { teacherEmailPublicBaseUrl } from "@/lib/teacher-emails/config";
 import type { Subject } from "./model";
 
 export const HIRING_LINE_URL = "https://lin.ee/OjMHF41";
-export const VISIT_LENGTH = "3 hours: a 2-hour exam, then a 1-hour mock teaching session";
 
 const CAMBRIDGE = "https://www.cambridgeinternational.org/programmes-and-qualifications/";
 const syllabus = (title: string, slug: string): EmailResource => ({
@@ -172,12 +171,12 @@ export function hiringEmail(email: HiringEmail): { subject: string; text: string
  * The same shell around plain text: a person's edited Hire or Reject email, and rows queued before the styled
  * builders. Paragraphs split on blank lines, and a closing "BeGifted Education" moves to the footer.
  */
-export function hiringEmailHtmlFromText(subject: string, text: string): string {
+export function hiringEmailHtmlFromText(subject: string, text: string, action?: EmailAction): string {
   const paragraphs = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
   if (paragraphs.at(-1) === SIGN_OFF) paragraphs.pop();
   const preheader = (paragraphs.find((p) => !/^Dear\b/.test(p)) ?? subject).replace(/\s+/g, " ").slice(0, 140);
   return render(
     { subject, preheader, title: subject, name: "", paragraphs: [] },
-    [{ kind: "copy", paragraphs: paragraphs.flatMap((p) => p.split("\n")) }],
+    [{ kind: "copy", paragraphs: paragraphs.flatMap((p) => p.split("\n")) }, ...(action ? [{ kind: "action" as const, action }] : [])],
   );
 }

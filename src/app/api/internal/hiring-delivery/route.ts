@@ -19,7 +19,7 @@ import type { hiringBookings } from "@/lib/db/schema";
 
 export const maxDuration = 120;
 /**
- * Queues the morning HR call digest and retries booking messages. Invitations still wait for the Mac worker’s SEEK check.
+ * Queues the morning HR call digest and retries booking and final review messages. Invitations still wait for the Mac worker’s SEEK check.
  */
 export async function GET(request: NextRequest) {
   const rejected = rejectInvalidCronSecret(request);

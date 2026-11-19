@@ -13,7 +13,7 @@ export function BriefRubric({ saved, form, url }: { saved: MockRubric | null; fo
   const [state, setState] = useState<"idle" | "sending">("idle");
   const [sentTotal, setSentTotal] = useState<number | null>(saved ? rubricTotals(saved).total : null);
   const [error, setError] = useState("");
-  if (form === "wait") return <p className={c.note}>The score form is here after the mock lesson starts. Refresh this page then.</p>;
+  if (form === "wait") return <p className={c.note}>The score form is here after the mock lesson ends. Refresh this page then.</p>;
   if (form === "closed") return <p className={c.note}>Scores for this mock are already recorded. Ask BeGifted admin to change them.</p>;
   const complete = RUBRIC_ITEMS.every((id) => items[id]);
   async function send() {

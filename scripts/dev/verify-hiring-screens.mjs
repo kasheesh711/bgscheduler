@@ -86,6 +86,7 @@ Object.assign(payload, { calls: [], headDecisions: [], briefPaths: {}, funnelEve
 if (location.search.includes("roles=1")) {
   const at = (days: number, hour: number) => { const d = new Date(Date.now() + days * 86400000); d.setUTCHours(hour - 7, 0, 0, 0); return d.toISOString(); };
   Object.assign(payload, {
+    reviewAccess: { hr: true, gift: false },
     calls: [{ candidateId: "k", start: at(0, 10), end: at(0, 10) }, { candidateId: "b", start: at(1, 14), end: at(1, 14) }],
     headDecisions: [{ candidateId: "r1", decision: "hire", reason: "Clear and warm lesson.", head: "Kru Peat", draftProblem: null, at: at(0, 9) }],
     briefPaths: { v2m: "/hiring/brief/sample-token" },
@@ -105,6 +106,7 @@ payload.config.interviewers = [{ canonicalKey: "Peat", email: "p@example.test", 
 payload.config.paperPassRules = [{ subject: "Mathematics", level: "Key Stage 3", percent: 50 }, { subject: "Mathematics", level: "AS / A-Level", percent: 50 }, { subject: "Mathematics", level: "IB SL / HL", percent: 60 }];
 payload.papers = [{ id: "p1", candidateId: "r1", bookingId: "v1e", subject: "Mathematics", source: "ai", status: "done", fileId: "f1", updatedAt: "2026-11-02T00:00:00.000Z", markSchemeUsed: false, history: null, error: null, changedBy: null, marks: { missingPages: null, comment: "Strong algebra. Weak on IB vectors.", questions: [...markQuestions("Key Stage 3", [9, 9]), ...markQuestions("AS / A-Level", [6, 5]), ...markQuestions("IB SL / HL", [3, 4])] } }];
 payload.mocks = [{ id: "m1", candidateId: "r1", bookingId: "v1m", subject: "Mathematics", source: "ai", status: "done", fileId: "f2", updatedAt: "2026-11-02T00:00:00.000Z", history: null, error: null, changedBy: null, rubric: { comments: "Clear explanations.", items: { accuracy: 10, concepts: 10, clarity: 7, presentation: 7, interaction: 10, pace: 7, organization: 10, materials: 7, formative: 7, feedback: 9 } } }];
+let reviewPacket: { id: string; behavioral: string; offer: string } | null = null;
 const realFetch = window.fetch;
 (window as unknown as { posted: unknown[] }).posted = [];
 (window as unknown as { uploaded: unknown[] }).uploaded = [];
@@ -112,6 +114,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   // The Capacity tab reads its own payload, which this fixture does not hold.
   if (String(input).includes("capacity=1")) return new Response(JSON.stringify({ error: "Not in this fixture." }), { status: 503 });
   const url = new URL(String(input), location.origin);
+  if (url.pathname === "/api/hiring/review/r1") {
+    if (init?.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      (window as unknown as { posted: unknown[] }).posted.push(body);
+      reviewPacket = { id: "packet", behavioral: body.behavioral, offer: body.offer };
+      return new Response(JSON.stringify({ ok: true }));
+    }
+    return new Response(JSON.stringify({ access: { hr: true, gift: false }, stage: "mock_booked",
+      callNotes: "Gave a specific example of adapting a lesson.", packet: reviewPacket, appointment: null }));
+  }
   if (url.pathname === "/api/hiring/marking") {
     (window as unknown as { posted: unknown[] }).posted.push({ marking: JSON.parse(String(init?.body)) });
     if (JSON.parse(String(init?.body)).kind === "mock") {
@@ -472,15 +484,16 @@ try {
     assert.deepEqual((await page.evaluate(() => window.posted)).at(-2).items, { feedback: 9 });
     await page.getByRole("complementary", { name: "Assessment of Reply Low" }).getByRole("button", { name: "Close" }).click();
   });
-  await check("a decision saves a draft and previews the email, and Send refuses while the switches are off", async () => {
+  await check("an early rejection saves a draft and previews the email, and Send refuses while the switches are off", async () => {
     const list = page.getByRole("region", { name: "Mock and paper" });
     await list.getByRole("button", { name: "Reply Passed" }).click();
     const panel = page.getByRole("complementary", { name: "Assessment of Reply Passed" });
     const box = panel.getByRole("region", { name: "Decision" });
     assert.ok(await box.getByRole("button", { name: "Reject: preview email" }).isDisabled());
-    await box.getByRole("button", { name: "Hire: preview email" }).click();
+    await box.getByLabel("Reason").fill("Not a fit for this level");
+    await box.getByRole("button", { name: "Reject: preview email" }).click();
     await box.getByLabel("Email message").waitFor();
-    await list.getByText("Draft: Hire").waitFor();
+    await list.getByText("Draft: Reject").waitFor();
     await box.getByText("Automation and Messages are off").waitFor();
     await box.getByText("r1@example.test").waitFor();
     await box.getByLabel("Email message").fill("Edited by a person.");
@@ -490,7 +503,7 @@ try {
     await shot(page, "decision-draft");
     assert.ok(!(await page.evaluate(() => window.posted)).some((p) => p.action === "decision_send"));
     await box.getByRole("button", { name: "Discard" }).click();
-    await box.getByRole("button", { name: "Hire: preview email" }).waitFor();
+    await box.getByRole("button", { name: "Reject: preview email" }).waitFor();
     await box.getByLabel("Reason").fill("Not a fit for this level");
     assert.ok(await box.getByRole("button", { name: "Reject: preview email" }).isEnabled());
     await panel.getByRole("button", { name: "Close" }).click();
@@ -536,6 +549,7 @@ try {
     assert.equal(await card.getByRole("textbox", { name: "Call notes" }).getAttribute("readonly"), "");
     assert.equal(await card.getByRole("button", { name: "Save notes" }).count(), 0);
     assert.ok(await card.getByRole("button", { name: "Good call" }).isDisabled());
+    assert.equal(await page.getByRole("button", { name: "Open final review" }).count(), 0);
     assert.deepEqual(await page.evaluate(() => window.posted), []);
   });
   await check("the Hiring pages scroll to the last call card", async () => {
@@ -562,13 +576,27 @@ try {
     }
     await page.setViewportSize({ width: 1440, height: 900 });
   });
-  await check("the HR screen shows the week, the call cards with the résumé, and the heads' decisions", async () => {
+  await check("HR can start the final review from call notes and send it to Gift", async () => {
+    await page.goto(`${origin}/?view=hr&roles=1`);
+    await page.getByRole("button", { name: "Open final review" }).click();
+    const behavioral = page.getByLabel("Behavioral assessment from the pre-screen call");
+    await behavioral.waitFor();
+    assert.equal(await behavioral.inputValue(), "Gave a specific example of adapting a lesson.");
+    assert.ok(await page.getByRole("button", { name: "Send to Gift" }).isDisabled());
+    await page.getByLabel("Offer letter").fill("We offer you the Mathematics tutor position.");
+    await page.getByRole("button", { name: "Send to Gift" }).click();
+    await page.getByRole("link", { name: "Read review packet" }).waitFor();
+    assert.deepEqual((await page.evaluate(() => window.posted)).at(-1), {
+      action: "submit", behavioral: "Gave a specific example of adapting a lesson.", offer: "We offer you the Mathematics tutor position.",
+    });
+  });
+  await check("the HR screen shows calls and recommendations", async () => {
     await page.goto(`${origin}/?view=hr&roles=1`);
     await page.getByRole("heading", { name: "My week: booked calls" }).waitFor();
     // A role screen hides the tabs. One button leads back.
     assert.equal(await page.getByRole("group", { name: "Hiring views" }).count(), 0);
     assert.ok(await page.getByRole("button", { name: "Full dashboard" }).isVisible());
-    assert.ok(await page.getByRole("heading", { name: /Head decisions: send the result/ }).isVisible());
+    assert.ok(await page.getByRole("heading", { name: "Tutor recommendations" }).isVisible());
     assert.ok(await page.getByText("Kru Peat · Clear and warm lesson.").isVisible());
     await page.getByRole("button", { name: "Show the résumé of Sample Kim" }).click();
     // The PDF pages need the app's PDF runtime route, which this fixture does not serve. The panel and its Download link prove the file is asked for.

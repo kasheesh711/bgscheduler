@@ -80,12 +80,12 @@ export async function queueRecruitmentMock(db: Database, booking: typeof booking
   await enqueue(db, `mock:${booking.id}:${notice}`, config.recruitmentLineGroupId, text, booking.id, notice);
 }
 
-/** A head's decision after a mock. HR reads it here, then sends the result email from the Hiring page. One notice for each recorded decision. */
-export async function queueRecruitmentHeadDecision(db: Database, candidate: { id: string; name: string }, input: { decision: "hire" | "reject"; reason: string; head: string; subject: string | null; key: string; draftProblem: string | null }) {
+/** A head's decision after a mock. HR prepares the review for a Yes recommendation. One notice for each recorded decision. */
+export async function queueRecruitmentHeadDecision(db: Database, candidate: { id: string; name: string }, input: { decision: "hire" | "reject"; reason: string; head: string; subject: string | null; key: string }) {
   const { config } = await settings(db);
   if (!config.recruitmentLineGroupId) return;
   await enqueue(db, `head-decision:${input.key}`, config.recruitmentLineGroupId,
-    `Head decision: ${input.decision === "hire" ? "HIRE" : "DO NOT HIRE"}\nCandidate: ${candidate.name} — ${input.subject ?? "Subject not recorded"}\nHead: ${input.head}\nReason: ${input.reason || "None given"}\nHR: open Hiring, read the result email, then send it.${input.draftProblem ? `\nNo email draft yet: ${input.draftProblem}` : ""}`,
+    `Head decision: ${input.decision === "hire" ? "HIRE" : "DO NOT HIRE"}\nCandidate: ${candidate.name} — ${input.subject ?? "Subject not recorded"}\nHead: ${input.head}\nReason: ${input.reason || "None given"}\n${input.decision === "hire" ? "HR: add the pre-screen call assessment and send the packet to Gift." : "The rejection email is queued."}`,
     null, "head_decision");
 }
 
@@ -107,7 +107,7 @@ export async function queueRecruitmentInvitation(db: Database, job: Pick<typeof 
   const subject = job.payload.workflowStage === "paper_passed" ? candidate.paperPassedSubjects.join(", ")
     : candidate.visitSubject ?? candidate.subjects.join(", ");
   await enqueue(db, `invite-sent:${job.id}`, config.recruitmentLineGroupId,
-    `Mock trial invite sent\n${candidate.name} — ${subject || "Subject not recorded"}\n${contactLines(candidate)}\n${when(sentAt)} (Bangkok)`, null, "invite_sent");
+    `${job.payload.workflowStage === "paper_passed" ? "Mock teaching invite sent" : "Paper assessment invite sent"}\n${candidate.name} — ${subject || "Subject not recorded"}\n${contactLines(candidate)}\n${when(sentAt)} (Bangkok)`, null, "invite_sent");
 }
 
 export function recruitmentWeek(now: Date) {

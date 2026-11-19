@@ -152,7 +152,7 @@ it("announces an invitation only after Gmail accepts it, once across delivery re
   await deliverOutbox(db, config);
   const notices = await db.select().from(s.hiringRecruitmentDeliveries);
   expect(notices).toHaveLength(1);
-  expect(notices[0]).toMatchObject({ notice: "invite_sent", message: expect.stringContaining("Mock trial invite sent") });
+  expect(notices[0]).toMatchObject({ notice: "invite_sent", message: expect.stringContaining("Paper assessment invite sent") });
   expect(notices[0].message).toContain("Email: candidate@example.com");
   expect((await db.select().from(s.hiringOutbox))[0].status).toBe("sent");
   expect(send).toHaveBeenCalledTimes(2);

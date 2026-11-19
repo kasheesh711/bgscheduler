@@ -159,6 +159,7 @@ export async function deliverCalendar(
   ].map((email) => ({ email }));
   // The HR call: the guests are HR (`interviewerEmail`) and the candidate, by the same rule as a visit.
   const call = booking.kind === "call";
+  const contract = booking.kind === "contract";
   const result = await calendarRequest(
     booking.calendarOwner,
     path + "?sendUpdates=all",
@@ -166,16 +167,16 @@ export async function deliverCalendar(
       method: "POST",
       body: JSON.stringify({
         id,
-        summary: call
+        summary: contract ? `BeGifted contract signing: ${candidate.name}` : call
           ? `BeGifted pre-screen call: ${candidate.name}`
           : booking.visitId
           ? booking.kind === "mock"
             ? "BeGifted mock teaching"
             : "BeGifted exam"
           : `BeGifted ${booking.kind === "mock" ? "mock teaching" : "paper assessment"}: ${candidate.name}`,
-        description: call
+        description: contract ? "Onsite contract signing with BeGifted HR." : call
           ? `Candidate: ${candidate.name}\nSubject: ${booking.subjects.join(", ")}\nPhone: ${candidate.phone ?? "not recorded"}\nEmail: ${candidate.email ?? "not recorded"}\nBeGifted calls the candidate at this time.`
-          : `${booking.visitId ? `Candidate: ${candidate.name}\n` : ""}Subjects: ${booking.subjects.join(", ")}\n${booking.kind === "mock" ? "The candidate prepares one lesson from an international school syllabus (IGCSE, A Level or IB). The interviewer also selects a topic." : booking.visitId ? "The 2-hour exam. The mock teaching session follows it." : "Two hours are allocated per subject."}`,
+          : `${booking.visitId ? `Candidate: ${candidate.name}\n` : ""}Subjects: ${booking.subjects.join(", ")}\n${booking.kind === "mock" ? "The candidate prepares one lesson from an international school syllabus (IGCSE, A Level or IB). The interviewer also selects a topic." : booking.visitId ? "The 2-hour paper assessment." : "Two hours are allocated per subject."}`,
         location: call ? "Phone call" : location,
         start: { dateTime: booking.startTime.toISOString(), timeZone: ZONE },
         end: { dateTime: booking.endTime.toISOString(), timeZone: ZONE },

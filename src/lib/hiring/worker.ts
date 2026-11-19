@@ -17,7 +17,7 @@ import { ScheduleEmailRejection } from "@/lib/classrooms/schedule-email";
 import { pushLineTextMessage, LinePushError } from "@/lib/line/client";
 import { progressUsesTutorBot } from "@/lib/line/progress-reminders";
 import {
-  HR_CALENDAR, isDecided, runtimeWritesAllowed, type HiringConfig } from "./model";
+  contractTestAllowed, HR_CALENDAR, isDecided, runtimeWritesAllowed, type HiringConfig } from "./model";
 import {
   askForBriefs,
   assessWithEvidence,
@@ -510,12 +510,18 @@ export async function deliverOutbox(
   db: Database,
   config: HiringConfig,
   max = 50,
-  bookingsOnly = false,
+  scheduledDeliveryOnly = false,
   // A result email leaves at Send. Without this it would wait for the Mac worker, as a row with no booking does.
   onlyKey?: string,
 ) {
-  if (!config.enabled || !config.deliveryEnabled || !runtimeWritesAllowed())
-    return 0;
+  if (!runtimeWritesAllowed()) return 0;
+  const testId = config.bookingTestCandidateId;
+  const testOnly = testId !== null && contractTestAllowed(config, testId);
+  if (!testOnly && (!config.enabled || !config.deliveryEnabled)) return 0;
+  const testScope = testOnly ? and(
+    eq(s.hiringOutbox.candidateId, testId),
+    sql`${s.hiringOutbox.payload}->'closeLoop' = 'true'::jsonb and ${s.hiringOutbox.payload}->>'workflowStage' = 'hired'`,
+  ) : undefined;
   const now = new Date();
   // A process may have died after provider acceptance. Preserve the original retry key.
   await db
@@ -526,6 +532,7 @@ export async function deliverOutbox(
     })
     .where(
       and(
+        testScope,
         eq(s.hiringOutbox.status, "processing"),
         lte(s.hiringOutbox.leaseUntil, now),
       ),
@@ -535,8 +542,9 @@ export async function deliverOutbox(
     .from(s.hiringOutbox)
     .where(
       and(
+        testScope,
         inArray(s.hiringOutbox.status, ["pending", "failed", "uncertain"]),
-        bookingsOnly ? isNotNull(s.hiringOutbox.bookingId) : undefined,
+        scheduledDeliveryOnly ? or(isNotNull(s.hiringOutbox.bookingId), sql`${s.hiringOutbox.payload}->'closeLoop' = 'true'::jsonb`) : undefined,
         onlyKey ? eq(s.hiringOutbox.key, onlyKey) : undefined,
         or(
           isNull(s.hiringOutbox.nextAttemptAt),
@@ -550,9 +558,8 @@ export async function deliverOutbox(
   for (const job of jobs) {
     const current = await settings(db);
     if (
-      !current.config.enabled ||
-      !current.config.deliveryEnabled ||
-      !runtimeWritesAllowed()
+      !runtimeWritesAllowed() ||
+      (testOnly ? !contractTestAllowed(current.config, job.candidateId) : !current.config.enabled || !current.config.deliveryEnabled)
     )
       break;
     if (
@@ -639,7 +646,7 @@ export async function deliverOutbox(
           audience: "candidate",
         }).sendEmail({
           to: payload.to,
-          cc: payload.cc ?? ["people@begiftededucation.com"],
+          cc: testOnly ? [] : payload.cc ?? ["people@begiftededucation.com"],
           subject: payload.subject,
           text: fileNote(payload.text),
           html: fileNote(html),
@@ -734,7 +741,7 @@ export async function deliverOutbox(
   return sent;
 }
 
-/** For `after()`: booking messages leave without the Mac. A failure stays out of the response, and the cron retries. */
+/** Booking and final review messages can leave without the Mac. The cron retries failures. */
 export async function deliverBookingMessages(db: Database = getDb()) {
   try {
     const { config } = await settings(db);

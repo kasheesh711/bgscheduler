@@ -11,6 +11,7 @@ const LINE = "https://lin.ee/OjMHF41";
 const slot = {
   date: "2026-11-03",
   examStart: "2026-11-03T03:00:00.000Z",
+  examEnd: "2026-11-03T05:00:00.000Z",
   mockStart: "2026-11-03T05:00:00.000Z",
   mockEnd: "2026-11-03T06:00:00.000Z",
   interviewerKey: "Peat",
@@ -18,6 +19,7 @@ const slot = {
 };
 const view = (patch = {}) => ({
   kind: "visit" as const,
+  paired: true,
   subject: "Mathematics" as const,
   location: "Gaysorn",
   enabled: true,
@@ -73,6 +75,7 @@ describe("VisitBooking", () => {
   });
   const booked = {
     examStart: slot.examStart,
+    examEnd: slot.examEnd,
     mockStart: slot.mockStart,
     mockEnd: slot.mockEnd,
     head: "Peat",
