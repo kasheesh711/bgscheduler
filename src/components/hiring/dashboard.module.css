@@ -32,6 +32,7 @@
 @media (min-width: 1024px) {
   .surface { margin: -12px -24px; }
 }
+.surface.previewSurface { flex: none; margin: 0; overflow: visible; }
 .surface button { cursor: pointer; font: inherit; color: inherit; background: none; border: 0; padding: 0; }
 .surface button:disabled { cursor: not-allowed; opacity: 0.45; }
 .surface :is(button, a, input, select, textarea, summary):focus-visible {
@@ -71,7 +72,7 @@
 /* Page grid */
 .layout { display: flex; flex-direction: column; }
 .layout[hidden] { display: none; }
-.viewPane { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.viewPane { display: flex; flex: 1 0 auto; flex-direction: column; }
 .viewPane[hidden] { display: none; }
 .main { display: flex; flex-direction: column; min-width: 0; }
 
@@ -447,17 +448,14 @@
   .inspector { left: auto; width: 420px; border-left: 1px solid var(--line); box-shadow: 0 12px 32px rgb(0 0 0 / 0.08); }
 }
 
-/* Full dashboard: fits one screen, panels scroll inside themselves. */
+/* Wide dashboard columns follow the page scroll. */
 @media (min-width: 1180px) and (min-height: 720px) {
-  .surface { overflow: hidden; }
-  .layout { flex: 1; flex-direction: row; min-height: 0; }
-  .main { flex: 1; min-height: 0; overflow-y: auto; }
-  .setup { flex: 1; min-height: 0; overflow-y: auto; }
+  .layout { flex: 1 0 auto; flex-direction: row; }
+  .main { flex: 1; }
   .rail, .inspector {
     position: static;
     flex: 0 0 340px;
     width: 340px;
-    overflow-y: auto;
     border-top: 0;
     border-left: 1px solid var(--line);
     box-shadow: none;
@@ -474,7 +472,7 @@
   .charts .panel.pentagonPanel { grid-column: span 1; flex-direction: column; align-items: flex-start; gap: 4px; border-left: 1px solid var(--line); }
   .subjectRows { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; align-content: start; max-height: none; overflow: visible; }
   .kpis { padding: 10px 24px; }
-  /* The table always gets 480px; the column scrolls when the charts leave less. */
+  /* Keep space for the table below the charts. */
   .tableSection { flex: 1 0 480px; min-height: 0; }
   .tableScroll { flex: 1; min-height: 0; max-height: none; }
   .setupGrid { grid-template-columns: minmax(0, 340px) minmax(0, 340px) minmax(0, 1fr); }
