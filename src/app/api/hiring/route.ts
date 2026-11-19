@@ -13,6 +13,7 @@ import { moveInQueue, recordCall, resetQueueOrder, saveCallNotes } from "@/lib/h
 import { discardDecision, draftDecision, saveDraft, sendDecision } from "@/lib/hiring/decisions";
 import { deliverBookingMessages, deliverOutbox } from "@/lib/hiring/worker";
 import { getDb } from "@/lib/db";
+import { finalReviewAccess } from "@/lib/hiring/final-review";
 import { googleConnectionStatus } from "@/lib/hiring/google";
 
 // A dashboard or head-schedule load can trigger a cold Wise index build.
@@ -126,7 +127,7 @@ const command = z.discriminatedUnion("action", [
 ]);
 export async function GET(request: Request) {
   try {
-    await requireHiringAdmin();
+    const actor = await requireHiringAdmin();
     const params = new URL(request.url).searchParams;
     if (params.has("head")) {
       const query = headQuery.parse({
@@ -166,6 +167,7 @@ export async function GET(request: Request) {
     return NextResponse.json(
       {
         ...data,
+        reviewAccess: finalReviewAccess(actor),
         google: { ...(await googleConnectionStatus(data.config.connectedEmail)), callCalendar },
       },
       { headers: { "Cache-Control": "no-store" } },

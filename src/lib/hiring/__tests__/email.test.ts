@@ -62,10 +62,10 @@ describe("candidate emails keep their facts", () => {
     expect(reminder.subject).toBe("Reminder: book your BeGifted onsite visit");
     expect(reminder.text).not.toContain("Link closes");
     for (const e of [invite, reminder]) {
-      expect(e.text).toContain("Visit: 3 hours: a 2-hour exam, then a 1-hour mock teaching session");
+      expect(e.text).toContain("Paper assessment: 2 hours");
       expect(e.text).toContain("Location: Gaysorn Amarin Tower");
       expect(e.text).toContain("Book your visit:\nhttps://bgscheduler.vercel.app/hiring/book/t");
-      expect(e.text).toContain("prepare one lesson in Physics");
+      expect(e.text).toContain("We will contact you after we grade your paper.");
     }
   });
 
@@ -74,11 +74,11 @@ describe("candidate emails keep their facts", () => {
     for (const text of ["Mathematics, Physics", "constructor", "__proto__"]) expect(mockPrep(text).links).toEqual(general);
   });
 
-  it.each(SUBJECTS)("the visit invitation for %s names the subject and links its syllabus", (subject) => {
+  it.each(SUBJECTS)("the mock preparation for %s names the subject and links its syllabus", (subject) => {
     const general = mockPrep("your subject").links;
-    const { links } = mockPrep(subject);
+    const { links, paragraphs } = mockPrep(subject);
     expect(links.length).toBeGreaterThan(general.length);
-    const email = visitInviteEmail({ name: "Ann", subject, url: "https://bgscheduler.vercel.app/hiring/book/t", location: "L", expireDays: 7 });
+    const email = hiringEmail({ name: "Ann", subject, title: "Mock teaching", preheader: "Prepare for your mock", paragraphs, links });
     expect(email.text).toContain(`prepare one lesson in ${subject}`);
     for (const link of links) {
       expect(link.url).toMatch(/^https:\/\//);

@@ -35,10 +35,11 @@ const NEW_FLOW_STAGES: Stage[] = ["onsite_invited", "onsite_booked", "no_reply",
 const OLD_FLOW_STAGES: Stage[] = ["paper_invited", "paper_booked", "paper_passed", "mock_booked"];
 /**
  * A new-flow candidate is one whom the app invited (see `appInvited`), or who is at a visit stage. The tracker changes nothing for
- * them. An old stage stays old-flow even if the earlier worker sent that candidate the form.
+ * them. A separate mock can use an older stage name after an app-booked onsite paper.
  */
-export const isNewFlow = (candidate: { stage: Stage }, appFormSent: boolean) =>
+export const isNewFlow = (candidate: { stage: Stage; visitSubject?: string | null }, appFormSent: boolean) =>
   NEW_FLOW_STAGES.includes(candidate.stage) ||
+  (!!candidate.visitSubject && OLD_FLOW_STAGES.includes(candidate.stage)) ||
   (appFormSent && !OLD_FLOW_STAGES.includes(candidate.stage));
 
 const cell = (row: unknown[], index: number) => String(row[index] ?? "").trim();
