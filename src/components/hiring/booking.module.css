@@ -316,7 +316,7 @@
   display: grid;
   gap: 2px;
 }
-/* The HR call has up to 36 times a day: three time-only tiles in a row. */
+/* The HR call uses three time-only tiles in a row. */
 .tilesCompact {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
