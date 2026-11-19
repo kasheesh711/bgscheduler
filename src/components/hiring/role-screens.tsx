@@ -6,6 +6,7 @@ import { localDate, RESUME_TYPES, ZONE, type Subject } from "@/lib/hiring/model"
 import { buildRunSheet, headName, headVisits, pastVisits, upcoming, type RunSheetRow } from "@/lib/hiring/run-sheet";
 import { dayTitle, openHeadDecisions, weekCalls } from "@/lib/hiring/role-views";
 import { universityName } from "@/lib/hiring/seek-view";
+import { FinalReview } from "./final-review";
 import { ResultUpload } from "./assessment-screen";
 import { callCommand, callState, callSubjects, triesText } from "./calls-screen";
 import { PhoneLink, ResumeBody, SourceTextBody, useResumeCheck, useSourceText } from "./candidate-inspector";
@@ -177,7 +178,7 @@ export function HrScreen({ data, command, busy, onOpenResults, readOnly = false 
       </Section>
 
       {decisions.length > 0 && (
-        <Section title="Head decisions: send the result" count={decisions.length}>
+        <Section title="Tutor recommendations" count={decisions.length}>
           <div className={r.cards}>
             {decisions.map((d) => (
               <article key={d.candidateId} className={r.card} data-tone={d.decision}>
@@ -185,16 +186,16 @@ export function HrScreen({ data, command, busy, onOpenResults, readOnly = false 
                   <p className={r.name}>{byId.get(d.candidateId!)?.name ?? "Candidate"}</p>
                   <p className={r.meta}>
                     <span className={r.tag} data-tone={d.decision}>
-                      {d.decision === "hire" ? "Hire" : "Do not hire"}
+                      {d.decision === "hire" ? "Yes" : "No"}
                     </span>
                     {d.head} · {d.reason || "No reason given"}
                   </p>
                   {d.draftProblem && <p className={r.warn}>No email draft yet: {d.draftProblem}</p>}
                 </div>
                 <div className={r.actions}>
-                  <button type="button" className={r.big} disabled={readOnly} onClick={onOpenResults}>
-                    Open the result email
-                  </button>
+                  {!readOnly && d.decision === "hire" && d.candidateId && (data.reviewAccess?.hr || data.reviewAccess?.gift)
+                    ? <FinalReview id={d.candidateId} />
+                    : <button type="button" className={r.big} disabled={readOnly} onClick={onOpenResults}>Open assessment</button>}
                 </div>
               </article>
             ))}
@@ -269,7 +270,7 @@ const byDay = (rows: RunSheetRow[]) => [...new Set(rows.map((row) => row.date))]
 
 // ─── Admin ───
 
-function AdminCard({ row, data, reload, readOnly }: { row: RunSheetRow; data: HiringData; reload: () => Promise<void>; readOnly: boolean }) {
+function AdminCard({ row, data, reload, readOnly, onOpenResults }: { row: RunSheetRow; data: HiringData; reload: () => Promise<void>; readOnly: boolean; onOpenResults?: (visitId: string) => void }) {
   // A past result from the tracker is not this visit's paper.
   const paper = data.papers.find((p) => p.candidateId === row.candidateId && p.subject === row.subject && p.source !== "tracker");
   return (
@@ -296,28 +297,26 @@ function AdminCard({ row, data, reload, readOnly }: { row: RunSheetRow; data: Hi
         {row.subject && row.paperStart && !paper && !readOnly && (
           <ResultUpload kind="paper" candidateId={row.candidateId} subject={row.subject as Subject} reload={reload} label="Upload the completed paper" />
         )}
-        {paper && (
-          <span className={r.tag} data-tone="hire">
-            Completed paper uploaded
-          </span>
+        {paper && !readOnly && onOpenResults && (
+          <button type="button" className={r.big} onClick={() => onOpenResults(row.visitId)}>Review paper grade</button>
         )}
       </div>
     </article>
   );
 }
 
-export function AdminScreen({ data, reload, readOnly = false }: { data: HiringData; reload: () => Promise<void>; readOnly?: boolean }) {
+export function AdminScreen({ data, reload, readOnly = false, onOpenResults }: { data: HiringData; reload: () => Promise<void>; readOnly?: boolean; onOpenResults?: (visitId: string) => void }) {
   const { today, coming, recent } = useVisits(data);
   const waiting = recent.filter(
-    (row) => row.subject && row.paperStart && !data.papers.some((p) => p.candidateId === row.candidateId && p.subject === row.subject && p.source !== "tracker"),
+    (row) => row.subject && row.paperStart && data.candidates.some((candidate) => candidate.id === row.candidateId && candidate.stage === "onsite_booked"),
   );
   return (
     <div className={`${r.screen} ${r.uploads}`}>
       {waiting.length > 0 && (
-        <Section title="Completed papers to upload" count={waiting.length}>
+        <Section title="Papers to upload or review" count={waiting.length}>
           <div className={r.cards}>
             {waiting.map((row) => (
-              <AdminCard key={row.visitId} row={{ ...row, paper: null }} data={data} reload={reload} readOnly={readOnly} />
+              <AdminCard key={row.visitId} row={{ ...row, paper: null }} data={data} reload={reload} readOnly={readOnly} onOpenResults={onOpenResults} />
             ))}
           </div>
         </Section>
@@ -327,7 +326,7 @@ export function AdminScreen({ data, reload, readOnly = false }: { data: HiringDa
         <Section key={day.date} title={dayTitle(day.date, today)} count={day.rows.length}>
           <div className={r.cards}>
             {day.rows.map((row) => (
-              <AdminCard key={row.visitId} row={row} data={data} reload={reload} readOnly={readOnly} />
+              <AdminCard key={row.visitId} row={row} data={data} reload={reload} readOnly={readOnly} onOpenResults={onOpenResults} />
             ))}
           </div>
         </Section>

@@ -42,7 +42,7 @@ function isPublicRoute(pathname: string) {
     // The interviewer's candidate page and its résumé file: the token in the path is the access check
     // (briefView in src/lib/hiring/service.ts).
     /^\/hiring\/brief\/[^/]+$/.test(pathname) ||
-    /^\/api\/hiring\/brief\/[^/]+\/resume$/.test(pathname) ||
+    /^\/api\/hiring\/brief\/[^/]+\/(?:resume|paper)$/.test(pathname) ||
     // The interviewer's score form posts here; the same token is the access check (saveBriefRubric).
     /^\/api\/hiring\/brief\/[^/]+\/rubric$/.test(pathname) ||
     // The head's decision from the same link. It records the decision and tells HR. No email leaves.

@@ -1,8 +1,9 @@
+import { z } from "zod";
 import { queueRecruitmentMock } from "./recruitment";
 import { PRESTIGE_RULES } from "./prestige";
 import { createHash, randomUUID } from "node:crypto";
 import { fromZonedTime } from "date-fns-tz";
-import { and, asc, desc, eq, getTableColumns, gte, inArray, isNotNull, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gte, inArray, isNotNull, like, ne, or, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -15,6 +16,7 @@ import {
   CALL_DAY_START,
   CALL_LINK_DAYS,
   CALL_MINUTES,
+  CONTRACT_MINUTES,
   callBookingSchema,
   configRuleErrors,
   configSchema,
@@ -72,9 +74,9 @@ import { attendanceAccessForEmail } from "@/lib/tutor-attendance/access";
 import { attendanceConfig } from "@/lib/tutor-attendance/data";
 import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
 import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
-import { checkRubric, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
+import { checkRubric, computeSheet, passRulesFor, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
-import { HIRING_LINE_URL, VISIT_LENGTH, hiringEmail, mockPrep } from "./email";
+import { HIRING_LINE_URL, hiringEmail, mockPrep } from "./email";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -316,7 +318,7 @@ export async function enqueue(
     .returning({ id: s.hiringOutbox.id });
   return rows.length > 0;
 }
-/** Old flow only: a recorded paper pass. A paper invitation can no longer be sent. */
+/** A recorded paper pass opens the mock booking link. */
 export async function inviteToMock(
   db: Database,
   candidate: Candidate,
@@ -357,6 +359,7 @@ export async function inviteToMock(
         links: prep.links,
       }),
       workflowStage: "paper_passed",
+      ...(candidate.visitSubject ? { closeLoop: true } : {}),
     },
   });
   await db
@@ -380,9 +383,9 @@ export async function inviteToPreScreen(db: Database, candidate: Candidate, now 
     },
   });
 }
-export const visitLink = (id: string, expires: Date) =>
+export const visitLink = (id: string, expires: Date, kind: "visit" | "paper-visit" = "paper-visit") =>
   new URL(
-    `/hiring/book/${bookingToken(id, "visit", expires)}`,
+    `/hiring/book/${bookingToken(id, kind, expires)}`,
     process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
   ).toString();
 export const callLink = (id: string, expires: Date) =>
@@ -463,13 +466,12 @@ export const visitInviteEmail = (input: { name: string; subject: string; url: st
     ],
     details: [
       { label: "Subject", value: input.subject },
-      { label: "Visit", value: VISIT_LENGTH },
+      { label: "Paper assessment", value: "2 hours" },
       { label: "Location", value: input.location },
       ...(input.expireDays === undefined ? [] : [{ label: "Link closes", value: `${input.expireDays} days after this email` }]),
     ],
     action: { label: "Book your visit", url: input.url },
-    after: mockPrep(input.subject).paragraphs,
-    links: mockPrep(input.subject).links,
+    after: ["We will contact you after we grade your paper. Candidates who pass can then book mock teaching."],
   });
 const onLine = (text: string) => `${text} Contact BeGifted on LINE: ${HIRING_LINE_URL}`;
 const DAY = 86400000;
@@ -685,6 +687,7 @@ export async function dashboard(db: Database = getDb()) {
     db
       .select()
       .from(s.hiringAudit)
+      .where(ne(s.hiringAudit.action, "final-review-packet"))
       .orderBy(desc(s.hiringAudit.createdAt))
       .limit(50),
     // The meters and the queue notes read the same counts and the same release function the worker uses. Postgres only.
@@ -905,6 +908,15 @@ async function liveForList(db: Database, config: HiringConfig, subjects: Subject
     return null;
   }
 }
+async function assertPassingPaper(db: Database, candidateId: string, subject: Subject, config: HiringConfig) {
+  const [result] = await db.select().from(s.hiringPaperResults).where(and(
+    eq(s.hiringPaperResults.candidateId, candidateId), eq(s.hiringPaperResults.subject, subject),
+  ));
+  if (result?.status !== "done" || !result.fileId || !result.marks ||
+    computeSheet(result.marks, passRulesFor(config, subject)).result !== "passed")
+    throw new HiringError(409, "Finish grading and confirm a passing paper before booking mock teaching.");
+}
+
 export async function bookingView(
   token: string,
   subjects?: Subject[],
@@ -916,11 +928,11 @@ export async function bookingView(
   const { config } = await settings(db);
   const permitted =
     cap.kind === "paper" ? candidate.subjects : candidate.paperPassedSubjects;
-  // A candidate on the visit flow books through the visit link only.
+  // The onsite link covers the paper. A separate mock link requires a recorded pass.
   if (
     candidate.stage === "stopped" ||
     isDecided(candidate.stage) ||
-    candidate.visitSubject ||
+    (candidate.visitSubject && (cap.kind !== "mock" || !candidate.paperPassedAt || !["paper_passed", "mock_booked"].includes(candidate.stage))) ||
     !candidate.inviteExpiresAt ||
     candidate.inviteExpiresAt.getTime() < cap.exp * 1000
   )
@@ -932,6 +944,10 @@ export async function bookingView(
     !["paper_invited", "paper_booked"].includes(candidate.stage)
   )
     throw new HiringError(409, "This assessment is not ready to book.");
+  if (cap.kind === "mock" && candidate.visitSubject) {
+    if (!config.deliveryEnabled) throw new HiringError(503, "Mock booking is temporarily unavailable.");
+    await assertPassingPaper(db, candidate.id, candidate.visitSubject, config);
+  }
   const chosen = subjects ?? permitted.slice(0, 1);
   if (chosen.some((v) => !permitted.includes(v)) || !chosen.length)
     throw new HiringError(400, "Select a permitted subject.");
@@ -1037,7 +1053,7 @@ export async function bookInterview(
     if (
       candidate.stage === "stopped" ||
       isDecided(candidate.stage) ||
-      candidate.visitSubject ||
+      (candidate.visitSubject && (cap.kind !== "mock" || !candidate.paperPassedAt || !["paper_passed", "mock_booked"].includes(candidate.stage))) ||
       !candidate.inviteExpiresAt ||
       candidate.inviteExpiresAt.getTime() < cap.exp * 1000
     )
@@ -1081,6 +1097,10 @@ export async function bookInterview(
       !runtimeWritesAllowed()
     )
       throw new HiringError(503, "Booking has been paused.");
+    if (cap.kind === "mock" && candidate.visitSubject) {
+      if (!latest.config.deliveryEnabled) throw new HiringError(503, "Mock booking is temporarily unavailable.");
+      await assertPassingPaper(tx, candidate.id, candidate.visitSubject, latest.config);
+    }
     const fresh = (
       await availableSlots(
         tx,
@@ -1181,6 +1201,24 @@ export async function bookInterview(
     if (cap.kind === "mock") {
       const [booked] = await tx.select().from(s.hiringBookings).where(eq(s.hiringBookings.id, id));
       await queueRecruitmentMock(tx, booked, "booked");
+      if (candidate.visitSubject && interviewer) {
+        const brief = briefLink(booked);
+        const files = new URL(`/api${new URL(brief).pathname}`, brief).toString();
+        await enqueue(tx, {
+          key: `booking:${id}:tutor-email`, candidateId: candidate.id, bookingId: id, kind: "email",
+          payload: { to: interviewer.email, cc: [], ...hiringEmail({
+            subject: `Mock teaching materials for ${candidate.name}`, preheader: bangkok(booking.startTime),
+            title: "Prepare for mock teaching", name: interviewer.canonicalKey,
+            paragraphs: [`Review the graded paper and résumé before the mock teaching session with ${candidate.name}.`],
+            details: [{ label: "Time", value: `${bangkok(booking.startTime)} (Bangkok)` }],
+            action: { label: "Open candidate page", url: brief },
+            links: [
+              { title: "Graded paper", description: "Marked exam PDF", url: `${files}/paper` },
+              { title: "Résumé", description: "Original file", url: `${files}/resume` },
+            ],
+          }) },
+        });
+      }
     }
     if (group)
       await enqueue(tx, {
@@ -1273,9 +1311,10 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     .limit(1);
   return {
     // The last head decision for this candidate, so the page shows what was sent.
-    decision: decided?.detail.decision === "hire" ? ("hire" as const) : decided?.detail.decision === "reject" ? ("reject" as const) : null,
+    decision: (!decided?.detail.bookingId || decided.detail.bookingId === mock.id) && decided?.detail.decision === "hire" ? ("hire" as const) : decided?.detail.decision === "reject" ? ("reject" as const) : null,
     name: candidate.name,
     subject: mock.subjects.join(", "),
+    gradedPaper: !!(await db.select({ id: s.hiringPaperResults.id }).from(s.hiringPaperResults).where(and(eq(s.hiringPaperResults.candidateId, mock.candidateId), eq(s.hiringPaperResults.subject, mock.subjects[0]), eq(s.hiringPaperResults.status, "done"), isNotNull(s.hiringPaperResults.fileId))).limit(1)).length,
     exam: exam ? `${bangkok(exam.startTime)}–${bangkokTime(exam.endTime)}` : null,
     mock: `${bangkok(mock.startTime)}–${bangkokTime(mock.endTime)}`,
     interviewer: mock.interviewerKey,
@@ -1297,7 +1336,7 @@ const ownBriefRubric = (row: MockResult | undefined, mockId: string) =>
  * scores is recorded, or a decision is drafted, so only a person with Hiring access can change it. The page shows a
  * rubric only when it is the head's own.
  */
-async function briefRubric(mock: { id: string; candidateId: string; subjects: Subject[]; startTime: Date }, db: Database, now: Date) {
+async function briefRubric(mock: { id: string; candidateId: string; subjects: Subject[]; endTime: Date }, db: Database, now: Date) {
   const m = s.hiringMockResults;
   const subject = briefSubject(mock);
   const [row] = subject ? await db.select().from(m).where(and(eq(m.candidateId, mock.candidateId), eq(m.subject, subject))) : [];
@@ -1307,8 +1346,12 @@ async function briefRubric(mock: { id: string; candidateId: string; subjects: Su
     .where(and(eq(s.hiringDecisions.candidateId, mock.candidateId), eq(s.hiringDecisions.status, "draft")))
     .limit(1);
   const rubric = ownBriefRubric(row, mock.id);
-  const closed = !subject || !!draft || (!!row && row.source !== "tracker" && !rubric);
-  return { rubric, form: now < mock.startTime ? ("wait" as const) : closed ? ("closed" as const) : ("open" as const), replaced: row };
+  const [recommended] = await db.select({ id: s.hiringAudit.id }).from(s.hiringAudit).where(and(
+    eq(s.hiringAudit.candidateId, mock.candidateId), eq(s.hiringAudit.action, "head-decision"),
+    sql`${s.hiringAudit.detail}->>'bookingId' = ${mock.id}`,
+  )).limit(1);
+  const closed = !subject || !!draft || !!recommended || (!!row && row.source !== "tracker" && !rubric);
+  return { rubric, form: now < mock.endTime ? ("wait" as const) : closed ? ("closed" as const) : ("open" as const), replaced: row };
 }
 /**
  * The interviewer's scores for one mock, sent from the interviewer link (Kevin's decision, 13 Nov 2026: a score form,
@@ -1320,56 +1363,60 @@ async function briefRubric(mock: { id: string; candidateId: string; subjects: Su
 export const BRIEF_CLOSED = "Scores for this mock are already recorded. Ask BeGifted admin to change them.";
 export async function saveBriefRubric(token: string, rubric: MockRubric, db: Database = getDb(), now = new Date()) {
   if (!runtimeWritesAllowed()) throw new HiringError(503, "Scores can be saved only on the live site.");
-  const mock = await briefMock(token, db, now);
-  const subject = briefSubject(mock);
-  const { form, replaced: before } = await briefRubric(mock, db, now);
-  if (form === "wait") throw new HiringError(409, "You can send scores after the mock lesson starts.");
-  if (form === "closed" || !subject) throw new HiringError(409, BRIEF_CLOSED);
-  const problems = checkRubric(rubric);
-  if (problems.length || rubricNeedsCheck(rubric)) throw new HiringError(400, "Give every item a whole score from 1 to 10.");
-  const m = s.hiringMockResults;
-  const fresh = {
-    bookingId: mock.id,
-    source: "person" as const,
-    status: "done" as const,
-    fileId: null,
-    aiRubric: null,
-    rubric,
-    history: null,
-    model: null,
-    promptVersion: null,
-    costUsd: null,
-    costKnown: true,
-    error: null,
-    checkedBy: null,
-    checkedAt: null,
-    changedBy: null,
-    changedAt: null,
-    updatedAt: now,
-  };
-  // The same rule again inside the write, so an upload or a change that lands between the read and here is not replaced.
-  const saved = await db
-    .insert(m)
-    .values({ candidateId: mock.candidateId, subject, ...fresh })
-    .onConflictDoUpdate({
-      target: [m.candidateId, m.subject],
-      set: fresh,
-      setWhere: sql`${m.source} = 'tracker' or (${m.source} = 'person' and ${m.bookingId} = ${mock.id} and ${m.changedBy} is null and ${m.checkedBy} is null)`,
-    })
-    .returning({ id: m.id });
-  if (!saved.length) throw new HiringError(409, BRIEF_CLOSED);
-  await audit(db, `interviewer:${mock.interviewerKey ?? "unknown"}`, "mock-rubric-submitted", mock.candidateId, {
-    subject,
-    bookingId: mock.id,
-    replaced: before ? { source: before.source, status: before.status, rubric: before.rubric, history: before.history } : null,
+  const booking = await briefMock(token, db, now);
+  return withDatabaseTransaction(db, async (tx) => {
+    await tx.execute(sql`select id from hiring_candidates where id=${booking.candidateId} for update`);
+    const mock = await briefMock(token, tx, now);
+    const subject = briefSubject(mock);
+    const { form, replaced: before } = await briefRubric(mock, tx, now);
+    if (form === "wait") throw new HiringError(409, "You can send scores after the mock lesson ends.");
+    if (form === "closed" || !subject) throw new HiringError(409, BRIEF_CLOSED);
+    const problems = checkRubric(rubric);
+    if (problems.length || rubricNeedsCheck(rubric)) throw new HiringError(400, "Give every item a whole score from 1 to 10.");
+    const m = s.hiringMockResults;
+    const fresh = {
+      bookingId: mock.id,
+      source: "person" as const,
+      status: "done" as const,
+      fileId: null,
+      aiRubric: null,
+      rubric,
+      history: null,
+      model: null,
+      promptVersion: null,
+      costUsd: null,
+      costKnown: true,
+      error: null,
+      checkedBy: null,
+      checkedAt: null,
+      changedBy: null,
+      changedAt: null,
+      updatedAt: now,
+    };
+    // The same rule again inside the write, so an upload or a change that lands between the read and here is not replaced.
+    const saved = await tx
+      .insert(m)
+      .values({ candidateId: mock.candidateId, subject, ...fresh })
+      .onConflictDoUpdate({
+        target: [m.candidateId, m.subject],
+        set: fresh,
+        setWhere: sql`${m.source} = 'tracker' or (${m.source} = 'person' and ${m.bookingId} = ${mock.id} and ${m.changedBy} is null and ${m.checkedBy} is null)`,
+      })
+      .returning({ id: m.id });
+    if (!saved.length) throw new HiringError(409, BRIEF_CLOSED);
+    await audit(tx, `interviewer:${mock.interviewerKey ?? "unknown"}`, "mock-rubric-submitted", mock.candidateId, {
+      subject,
+      bookingId: mock.id,
+      replaced: before ? { source: before.source, status: before.status, rubric: before.rubric, history: before.history } : null,
+    });
+    return rubricTotals(rubric).total;
   });
-  return rubricTotals(rubric).total;
 }
-type VisitLink = { id: string; exp: number };
+type VisitLink = { id: string; exp: number; kind: "visit" | "paper-visit" };
 function visitToken(token: string, now: Date): VisitLink {
   const cap = readBookingToken(token, now);
-  if (cap.kind !== "visit") throw new HiringError(404, onLine("This booking link is no longer active."));
-  return cap;
+  if (cap.kind !== "visit" && cap.kind !== "paper-visit") throw new HiringError(404, onLine("This booking link is no longer active."));
+  return { ...cap, kind: cap.kind };
 }
 const bookable = (config: HiringConfig, candidateId: string) =>
   (config.enabled || config.bookingTestCandidateId === candidateId) && config.rubricApproved && runtimeWritesAllowed();
@@ -1415,6 +1462,11 @@ function moveRefusal(rows: VisitRow[], now: Date) {
 }
 
 /** The current time is not a choice, and every time starts inside the link's life, so the link outlasts the wait for any booked visit. */
+const paperVisitSlots = async (db: Database, config: HiringConfig, subject: Subject, cap: VisitLink, rows: VisitRow[], now: Date) =>
+  (await availableSlots(db, config, "paper", [subject], now, db, undefined, cap.id))
+    .filter((slot) => Date.parse(slot.start) < cap.exp * 1000 && slot.start !== examOf(rows)?.startTime.toISOString())
+    .map((slot) => ({ date: slot.date, examStart: slot.start, examEnd: slot.end, mockStart: null, mockEnd: null }));
+
 const offeredSlots = async (db: Database, config: HiringConfig, subject: Subject, cap: VisitLink, rows: VisitRow[], now: Date, indexDb = db, live?: LiveBusy) =>
   (await availableVisitSlots(db, config, subject, now, cap.id, indexDb, live)).filter((slot) => {
     const start = new Date(slot.examStart).getTime();
@@ -1429,15 +1481,18 @@ export async function visitView(token: string, db: Database = getDb(), now = new
   const exam = examOf(rows);
   const mock = rows.find((b) => b.kind === "mock");
   const refusal = exam ? moveRefusal(rows, now) : null;
-  let slots: Awaited<ReturnType<typeof offeredSlots>> = [];
+  const paired = cap.kind === "visit" || !!mock;
+  let slots: (Awaited<ReturnType<typeof paperVisitSlots>>[number] | (Awaited<ReturnType<typeof offeredSlots>>[number] & { examEnd: string }))[] = [];
   let notice: string | null = null;
   let live: LiveBusy | null = null;
   if (!enabled) notice = onLine("Booking is temporarily paused.");
   else if (refusal) notice = refusal;
   else {
     try {
-      live = await liveForList(db, config, [subject], now);
-      slots = await offeredSlots(db, config, subject, cap, rows, now, db, live ?? undefined);
+      if (paired) {
+        live = await liveForList(db, config, [subject], now);
+        slots = (await offeredSlots(db, config, subject, cap, rows, now, db, live ?? undefined)).map((slot) => ({ ...slot, examEnd: slot.mockStart }));
+      } else slots = await paperVisitSlots(db, config, subject, cap, rows, now);
       if (!slots.length) notice = onLine("There are no open visit times at the moment. Please try again later.");
     } catch (error) {
       // A stale Wise snapshot. Anything else is not a state the candidate can act on.
@@ -1447,17 +1502,19 @@ export async function visitView(token: string, db: Database = getDb(), now = new
   }
   return {
     kind: "visit" as const,
+    paired,
     subject,
     location: config.location,
     enabled,
     slots,
     visit:
-      exam && mock
+      exam
         ? {
             examStart: exam.startTime.toISOString(),
-            mockStart: mock.startTime.toISOString(),
-            mockEnd: mock.endTime.toISOString(),
-            head: mock.interviewerKey,
+            examEnd: exam.endTime.toISOString(),
+            mockStart: mock?.startTime.toISOString() ?? null,
+            mockEnd: mock?.endTime.toISOString() ?? null,
+            head: mock?.interviewerKey ?? null,
           }
         : null,
     canMove: enabled && !!exam && !refusal,
@@ -1602,7 +1659,7 @@ const otherCalls = async (db: Database, candidateId: string, now: Date) =>
     await db
       .select({ candidateId: s.hiringBookings.candidateId, start: s.hiringBookings.startTime, end: s.hiringBookings.endTime })
       .from(s.hiringBookings)
-      .where(and(eq(s.hiringBookings.kind, "call"), eq(s.hiringBookings.status, "confirmed"), gte(s.hiringBookings.endTime, now)))
+      .where(and(inArray(s.hiringBookings.kind, ["call", "contract"]), eq(s.hiringBookings.status, "confirmed"), gte(s.hiringBookings.endTime, now)))
   ).filter((b) => b.candidateId !== candidateId);
 
 export async function callView(token: string, db: Database = getDb(), now = new Date()) {
@@ -1793,6 +1850,47 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
   const prior = examOf(await visitRows(db, cap.id));
   if (prior?.startTime.getTime() === start) return prior;
   const open = await openVisit(db, cap, config, now);
+  if (cap.kind === "paper-visit" && !open.rows.some((row) => row.kind === "mock")) {
+    return withDatabaseTransaction(db, async (tx) => {
+      await tx.execute(sql`select id from hiring_candidates where id=${cap.id} for update`);
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"hiring-candidate:" + cap.id},0))`);
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('hiring:paper',0))`);
+      const { config: current } = await settings(tx);
+      if (!bookable(current, cap.id)) throw new HiringError(503, "Booking has been paused.");
+      const { candidate, subject, rows } = await openVisit(tx, cap, current, now);
+      const previous = examOf(rows);
+      if (previous?.startTime.getTime() === start) return previous;
+      if (previous && (!input.move || moveRefusal(rows, now)))
+        throw new HiringError(409, moveRefusal(rows, now) ?? "Use Move this visit to choose another time.");
+      if (input.subject !== subject) throw new HiringError(409, "This assessment is for another subject.");
+      const slot = (await paperVisitSlots(tx, current, subject, cap, rows, new Date())).find((v) => Date.parse(v.examStart) === start);
+      if (!slot) throw new HiringError(409, "That paper assessment time is no longer available. Choose another time.");
+      if (previous) await endVisit(tx, rows, "cancelled", now, false);
+      const [paper] = await tx.insert(s.hiringBookings).values({
+        candidateId: cap.id, kind: "paper", subjects: [subject], visitId: randomUUID(),
+        calendarOwner: current.connectedEmail, startTime: new Date(slot.examStart), endTime: new Date(slot.examEnd),
+        rescheduleOf: previous?.id, evidence: { checkedAt: now.toISOString(), source: "office-capacity" },
+      }).returning();
+      await tx.update(s.hiringCandidates).set({ stage: "onsite_booked", revision: candidate.revision + 1, updatedAt: now }).where(eq(s.hiringCandidates.id, cap.id));
+      if (candidate.email) await enqueue(tx, {
+        key: `booking:${paper.id}:email`, candidateId: cap.id, bookingId: paper.id, kind: "email",
+        payload: { to: candidate.email, ...hiringEmail({
+          subject: "BeGifted paper assessment confirmed", preheader: bangkok(paper.startTime),
+          title: "Your paper assessment is confirmed", name: candidate.name,
+          paragraphs: ["We will contact you after we grade your paper."],
+          details: [
+            { label: "Subject", value: subject },
+            { label: "Time", value: `${bangkok(paper.startTime)}–${bangkokTime(paper.endTime)} (Bangkok)` },
+            { label: "Location", value: current.location },
+          ],
+          ...(previous ? {} : { action: { label: "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!) } }),
+        }) },
+      });
+      await enqueue(tx, { key: `booking:${paper.id}:calendar`, candidateId: cap.id, bookingId: paper.id, kind: "calendar", payload: {} });
+      await audit(tx, "candidate-link", previous ? "visit-move" : "visit-booking", cap.id, { visitId: paper.visitId, subject, examStart: slot.examStart });
+      return paper;
+    });
+  }
   const refuseChange = (rows: VisitRow[]) => {
     if (!rows.length) return;
     if (!input.move) throw new HiringError(409, "You already have a booked visit. Use Move this visit to change it.");
@@ -1899,7 +1997,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
             ],
             ...(rows.length
               ? {}
-              : { action: { label: "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!) } }),
+              : { action: { label: "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!, "visit") } }),
             after: [
               rows.length
                 ? "This visit cannot move again through the link."
@@ -2100,12 +2198,13 @@ export async function reviewCandidate(
       if (input.action === "paper_pass") {
         if (
           ![
+            "onsite_booked",
             "paper_booked",
             "paper_invited",
             "paper_passed",
             "mock_booked",
           ].includes(c.stage) ||
-          input.subjects.some((subject) => !c.subjects.includes(subject))
+          input.subjects.some((subject) => !(c.visitSubject ? [c.visitSubject] : c.subjects).includes(subject))
         )
           throw new HiringError(
             409,
@@ -2126,6 +2225,16 @@ export async function reviewCandidate(
             409,
             "The booked paper assessment has not finished.",
           );
+        if (c.visitSubject) {
+          if (!papers.some((paper) => paper.subjects.includes(c.visitSubject!)))
+            throw new HiringError(409, "A completed paper assessment is required.");
+          await assertPassingPaper(tx, id, c.visitSubject, config);
+          if (!storedResume(c.id, c.resumePath, c.resumeType))
+            throw new HiringError(409, "Import the original résumé before inviting the candidate to mock teaching.");
+          const [existing] = await tx.select({ id: s.hiringBookings.id }).from(s.hiringBookings)
+            .where(and(eq(s.hiringBookings.candidateId, id), eq(s.hiringBookings.kind, "mock"), eq(s.hiringBookings.status, "confirmed")));
+          if (existing) throw new HiringError(409, "This candidate already has a mock appointment.");
+        }
         const [updated] = await tx
           .update(s.hiringCandidates)
           .set({
@@ -2205,3 +2314,99 @@ export const sourceHash = (value: unknown) =>
       ),
     )
     .digest("hex");
+
+const contractBookingSchema = z.object({ start: z.iso.datetime({ offset: true }) }).strict();
+
+async function openContract(db: Database, decisionId: string) {
+  const [row] = await db.select({ candidate: s.hiringCandidates }).from(s.hiringDecisions)
+    .innerJoin(s.hiringCandidates, eq(s.hiringCandidates.id, s.hiringDecisions.candidateId))
+    .where(and(eq(s.hiringDecisions.id, decisionId), eq(s.hiringDecisions.status, "sent"),
+      eq(s.hiringDecisions.decision, "hire"), eq(s.hiringCandidates.stage, "hired")));
+  if (!row?.candidate.email) throw new HiringError(404, "This contract signing link is no longer active.");
+  return row.candidate;
+}
+
+const contractBooking = async (db: Database, id: string) =>
+  (await db.select().from(s.hiringBookings).where(and(eq(s.hiringBookings.candidateId, id),
+    eq(s.hiringBookings.kind, "contract"), eq(s.hiringBookings.status, "confirmed"))))[0];
+
+async function contractSlots(db: Database, id: string, calendar: Awaited<ReturnType<typeof hrBusy>>, now: Date, exp: number) {
+  return callSlots(calendar.dates, [...calendar.busy, ...await otherCalls(db, id, now)], now, CONTRACT_MINUTES)
+    .filter((slot) => Date.parse(slot.end) <= exp * 1000);
+}
+
+export async function contractView(token: string, db: Database = getDb(), now = new Date()) {
+  const cap = readBookingToken(token, now);
+  if (cap.kind !== "contract") throw new HiringError(404, "This contract signing link is no longer active.");
+  const candidate = await openContract(db, cap.id);
+  const { config } = await settings(db);
+  const booking = await contractBooking(db, candidate.id);
+  const enabled = config.enabled && config.deliveryEnabled && runtimeWritesAllowed();
+  let slots: Awaited<ReturnType<typeof contractSlots>> = [];
+  if (enabled && !booking) {
+    try {
+      slots = await contractSlots(db, candidate.id, await hrBusy(db, config, now), now, cap.exp);
+    } catch (error) {
+      if (!(error instanceof HiringError)) throw error;
+    }
+  }
+  return {
+    kind: "contract" as const, location: config.location, minutes: CONTRACT_MINUTES, enabled, slots,
+    call: booking ? { start: booking.startTime.toISOString(), end: booking.endTime.toISOString() } : null,
+    canMove: false,
+    notice: booking || slots.length ? null : onLine("No contract signing times are available now. Please try again later."),
+  };
+}
+
+export async function bookContract(token: string, value: unknown, db: Database = getDb(), now = new Date()) {
+  const { start } = contractBookingSchema.parse(value);
+  const cap = readBookingToken(token, now);
+  if (cap.kind !== "contract") throw new HiringError(404, "This contract signing link is no longer active.");
+  const candidate = await openContract(db, cap.id);
+  const { config } = await settings(db);
+  if (!config.enabled || !config.deliveryEnabled || !runtimeWritesAllowed())
+    throw new HiringError(503, "Booking is temporarily unavailable.");
+  const prior = await contractBooking(db, candidate.id);
+  if (prior) {
+    if (prior.startTime.getTime() === Date.parse(start)) return prior;
+    throw new HiringError(409, "Your contract signing is already booked.");
+  }
+  const calendar = await hrBusy(db, config, now, true);
+  return withDatabaseTransaction(db, async (tx) => {
+    await tx.execute(sql`select id from hiring_candidates where id=${candidate.id} for update`);
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"hiring-candidate:" + candidate.id},0))`);
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"sit-in:" + HR_CALL_KEY},0))`);
+    const latest = await settings(tx);
+    if (!latest.config.enabled || !latest.config.deliveryEnabled || latest.config.connectedEmail !== config.connectedEmail)
+      throw new HiringError(503, "Booking has been paused or the calendar changed. Refresh the page.");
+    const current = await openContract(tx, cap.id);
+    const existing = await contractBooking(tx, candidate.id);
+    if (existing) {
+      if (existing.startTime.getTime() === Date.parse(start)) return existing;
+      throw new HiringError(409, "Your contract signing is already booked.");
+    }
+    const slot = (await contractSlots(tx, candidate.id, calendar, new Date(), cap.exp)).find((item) => Date.parse(item.start) === Date.parse(start));
+    if (!slot || !businessDates(now, latest.config.holidays).includes(slot.date))
+      throw new HiringError(409, "That time is no longer available. Choose another time.");
+    const [booking] = await tx.insert(s.hiringBookings).values({
+      candidateId: candidate.id, kind: "contract", subjects: current.visitSubject ? [current.visitSubject] : current.subjects,
+      interviewerKey: HR_CALL_KEY, interviewerEmail: HR_CALENDAR, calendarOwner: latest.config.connectedEmail,
+      startTime: new Date(slot.start), endTime: new Date(slot.end), evidence: { checkedAt: now.toISOString(), source: "google-freebusy" },
+    }).returning();
+    const mail = hiringEmail({
+      subject: "BeGifted contract signing confirmed", preheader: bangkok(booking.startTime),
+      title: "Your contract signing is confirmed", name: current.name,
+      paragraphs: ["Please meet our HR team at the location below."],
+      details: [
+        { label: "Time", value: `${bangkok(booking.startTime)}–${bangkokTime(booking.endTime)} (Bangkok)` },
+        { label: "Location", value: latest.config.location },
+      ],
+    });
+    await enqueue(tx, { key: `booking:${booking.id}:email`, candidateId: candidate.id, bookingId: booking.id,
+      kind: "email", payload: { to: current.email, ...mail, workflowStage: "hired" } });
+    await enqueue(tx, { key: `booking:${booking.id}:calendar`, candidateId: candidate.id, bookingId: booking.id,
+      kind: "calendar", payload: { workflowStage: "hired" } });
+    await audit(tx, "candidate-link", "contract-booked", candidate.id, { bookingId: booking.id, start: slot.start });
+    return booking;
+  });
+}

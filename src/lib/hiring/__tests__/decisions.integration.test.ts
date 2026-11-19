@@ -52,9 +52,8 @@ beforeEach(async () => {
 describe("drafting", () => {
   it("saves a draft with the email text, and sends nothing and changes no stage", async () => {
     const c = await candidate();
-    await results(c.id);
-    const draft = await draftDecision(c.id, { decision: "hire", reason: "" }, "person", db);
-    expect(draft).toMatchObject({ status: "draft", decision: "hire", decidedBy: "person" });
+    const draft = await draftDecision(c.id, { decision: "reject", reason: "Left early" }, "person", db);
+    expect(draft).toMatchObject({ status: "draft", decision: "reject", decidedBy: "person" });
     expect(draft.emailBody).toMatch(/Dear Sample/);
     expect(draft.emailBody).toMatch(/Mathematics/);
     expect(await outbox()).toEqual([]);
@@ -62,23 +61,16 @@ describe("drafting", () => {
   });
   it("keeps one draft, the latest", async () => {
     const c = await candidate();
-    await results(c.id);
-    await draftDecision(c.id, { decision: "hire", reason: "" }, "a", db);
+    await draftDecision(c.id, { decision: "reject", reason: "First reason" }, "a", db);
     await draftDecision(c.id, { decision: "reject", reason: "Changed my mind" }, "a", db);
     const rows = await db.select().from(s.hiringDecisions);
     expect(rows.filter((r) => r.status === "draft").map((r) => r.decision)).toEqual(["reject"]);
   });
-  it("blocks Hire until both results are in, and a check is cleared", async () => {
-    const none = await candidate();
-    await expect(draftDecision(none.id, { decision: "hire", reason: "" }, "a", db)).rejects.toThrow(/No paper result/);
-    const flagged = await candidate({ email: "b@example.com" });
-    await results(flagged.id, "needs_check");
-    await expect(draftDecision(flagged.id, { decision: "hire", reason: "" }, "a", db)).rejects.toThrow(/check/);
-  });
-  it("hires with low scores, because the person decides", async () => {
+  it("routes Hire to Gift even when both results are marked", async () => {
     const c = await candidate();
     await results(c.id);
-    await expect(draftDecision(c.id, { decision: "hire", reason: "" }, "a", db)).resolves.toMatchObject({ decision: "hire" });
+    await expect(draftDecision(c.id, { decision: "hire", reason: "" }, "a", db)).rejects.toThrow(/Gift/);
+    expect(await outbox()).toEqual([]);
   });
   it("lets Reject go with results missing, but needs a reason and an email", async () => {
     const c = await candidate();
@@ -158,71 +150,28 @@ describe("sending", () => {
     await setConfig(on);
     expect(await deliverOutbox(db, on)).toBe(0);
   });
-  it("checks the Hire rule again at Send", async () => {
+  it("refuses to send an old Hire draft without Gift’s sign-off", async () => {
     const c = await candidate();
-    await results(c.id);
-    const draft = await draftDecision(c.id, { decision: "hire", reason: "" }, "a", db);
-    await db.update(s.hiringPaperResults).set({ status: "needs_check" }).where(eq(s.hiringPaperResults.candidateId, c.id));
-    await expect(sendDecision(draft.id, email, "a", db)).rejects.toThrow(/check/);
+    const [draft] = await db.insert(s.hiringDecisions).values({
+      candidateId: c.id, decision: "hire", status: "draft", reason: "", emailSubject: "Offer", emailBody: "Offer", decidedBy: "a",
+    }).returning();
+    await expect(sendDecision(draft.id, email, "a", db)).rejects.toThrow(/Gift/);
     expect(await outbox()).toEqual([]);
   });
   it("refuses an empty email", async () => {
     const { draft } = await drafted();
     await expect(sendDecision(draft.id, { emailSubject: " ", emailBody: "x" }, "a", db)).rejects.toMatchObject({ status: 400 });
   });
-  it("a changed decision needs its own Send, and cancels the old email if it has not left", async () => {
-    const c = await candidate();
-    await results(c.id);
-    const first = await draftDecision(c.id, { decision: "reject", reason: "Left early" }, "a", db);
-    await sendDecision(first.id, email, "a", db);
-    const second = await draftDecision(c.id, { decision: "hire", reason: "" }, "a", db);
-    const key = await sendDecision(second.id, { emailSubject: "Good news", emailBody: "Hired." }, "a", db);
-    await deliverOutbox(db, on);
-    expect(sendEmail).toHaveBeenCalledTimes(1);
-    expect(sendEmail.mock.calls[0][0].subject).toBe("Good news");
-    expect((await outbox()).find((r) => r.key === key)!.status).toBe("sent");
-    expect((await read(c.id)).stage).toBe("hired");
-    const rows = await db.select().from(s.hiringDecisions);
-    expect(rows.filter((r) => r.status === "sent").map((r) => r.decision)).toEqual(["hire"]);
-  });
 });
 
 describe("no duplicate result email", () => {
-  it.each(["failed", "pending", "uncertain"] as const)("cancels an earlier %s result email at the next Send, so only the new one leaves", async (status) => {
+  it.each(["failed", "pending", "uncertain", "sent"] as const)("keeps a closed application and its %s email", async (status) => {
     const c = await candidate();
-    await results(c.id);
-    const first = await draftDecision(c.id, { decision: "hire", reason: "" }, "a", db);
-    const firstKey = await sendDecision(first.id, { emailSubject: "First", emailBody: "First." }, "a", db);
-    await db.update(s.hiringOutbox).set({ status }).where(eq(s.hiringOutbox.key, firstKey));
-    if (status === "pending") await expect(draftDecision(c.id, { decision: "hire", reason: "" }, "a", db)).rejects.toThrow(/on its way/);
-    else {
-      const second = await draftDecision(c.id, { decision: "hire", reason: "" }, "a", db);
-      await sendDecision(second.id, { emailSubject: "Second", emailBody: "Second." }, "a", db);
-      await deliverOutbox(db, on);
-      expect(sendEmail.mock.calls.map((call) => call[0].subject)).toEqual(["Second"]);
-      expect((await outbox()).find((r) => r.key === firstKey)!.status).toBe("cancelled");
-    }
-  });
-  it("cancels an unsent email when the decision changes", async () => {
-    const c = await candidate();
-    await results(c.id);
-    const first = await draftDecision(c.id, { decision: "hire", reason: "" }, "a", db);
-    await sendDecision(first.id, { emailSubject: "First", emailBody: "First." }, "a", db);
-    const second = await draftDecision(c.id, { decision: "reject", reason: "Changed my mind" }, "a", db);
-    await sendDecision(second.id, { emailSubject: "Second", emailBody: "Second." }, "a", db);
-    await deliverOutbox(db, on);
-    expect(sendEmail.mock.calls.map((call) => call[0].subject)).toEqual(["Second"]);
-  });
-  it("refuses the same result again after it left, and a Send while one is leaving", async () => {
-    const c = await candidate();
-    await results(c.id);
-    const first = await draftDecision(c.id, { decision: "hire", reason: "" }, "a", db);
-    const key = await sendDecision(first.id, email, "a", db);
-    await deliverOutbox(db, on);
-    await expect(draftDecision(c.id, { decision: "hire", reason: "" }, "a", db)).rejects.toThrow(/already sent/);
-    const other = await draftDecision(c.id, { decision: "reject", reason: "Changed my mind" }, "a", db);
-    await db.update(s.hiringOutbox).set({ status: "processing" }).where(eq(s.hiringOutbox.key, key));
-    await expect(sendDecision(other.id, email, "a", db)).rejects.toThrow(/right now/);
+    const draft = await draftDecision(c.id, { decision: "reject", reason: "Left early" }, "a", db);
+    const key = await sendDecision(draft.id, email, "a", db);
+    await db.update(s.hiringOutbox).set({ status }).where(eq(s.hiringOutbox.key, key));
+    await expect(draftDecision(c.id, { decision: "reject", reason: "Second email" }, "a", db)).rejects.toThrow(/closed/);
+    expect(await outbox()).toMatchObject([{ key, status }]);
   });
   it("does not send a retried booking email to someone decided", async () => {
     const c = await candidate();
@@ -253,6 +202,7 @@ describe("a sent decision stands", () => {
   });
   it("counts as new flow for the tracker", () => {
     expect(isNewFlow({ stage: "hired" }, false)).toBe(true);
+    expect(isNewFlow({ stage: "mock_booked", visitSubject: "Mathematics" }, false)).toBe(true);
     expect(isNewFlow({ stage: "rejected" }, false)).toBe(true);
   });
   it("refuses Stop, and cannot be invited", async () => {

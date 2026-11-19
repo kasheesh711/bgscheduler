@@ -44,8 +44,8 @@ describe("InterviewerBrief", () => {
     expect(html({ answers: null })).toContain("no pre-screen reply");
   });
 
-  it("shows the score form only after the mock starts, with one choice for each of the 10 items", () => {
-    expect(html({ form: "wait" })).toContain("after the mock lesson starts");
+  it("shows the score form only after the mock ends, with one choice for each of the 10 items", () => {
+    expect(html({ form: "wait" })).toContain("after the mock lesson ends");
     expect(html({ form: "wait" })).not.toContain("<select");
     expect(html({ form: "closed" })).toContain("already recorded");
     expect(html({ form: "closed" })).not.toContain("<select");

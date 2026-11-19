@@ -1,7 +1,7 @@
 import { after, NextResponse } from "next/server";
 import { subjectSchema } from "@/lib/hiring/model";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
-import { bookCall, bookInterview, bookingView, bookVisit, callView, visitView } from "@/lib/hiring/service";
+import { bookCall, bookContract, contractView, bookInterview, bookingView, bookVisit, callView, visitView } from "@/lib/hiring/service";
 import { readBookingToken } from "@/lib/hiring/tokens";
 import { deliverBookingMessages } from "@/lib/hiring/worker";
 export const maxDuration = 120;
@@ -17,8 +17,10 @@ export async function GET(
   try {
     const { token } = await params;
     const kind = readBookingToken(token).kind;
-    if (kind === "visit")
+    if ((kind === "visit" || kind === "paper-visit"))
       return NextResponse.json(await visitView(token), { headers });
+    if (kind === "contract")
+      return NextResponse.json(await contractView(token), { headers });
     if (kind === "call")
       return NextResponse.json(await callView(token), { headers });
     const names = new URL(request.url).searchParams.getAll("subject");
@@ -38,7 +40,7 @@ export async function POST(
     requireSameOrigin(request);
     const { token } = await params;
     const kind = readBookingToken(token).kind;
-    const book = kind === "visit" ? bookVisit : kind === "call" ? bookCall : bookInterview;
+    const book = (kind === "visit" || kind === "paper-visit") ? bookVisit : kind === "call" ? bookCall : kind === "contract" ? bookContract : bookInterview;
     const booking = await book(token, await request.json());
     after(() => deliverBookingMessages());
     return NextResponse.json(

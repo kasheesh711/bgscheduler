@@ -118,7 +118,7 @@ export const hiringBookings = pgTable(
       .notNull()
       .references(() => hiringCandidates.id),
     // `call` is the HR pre-screen call a candidate books (migration 0129): interviewer key `hr-call`, no visit id.
-    kind: text("kind").$type<"paper" | "mock" | "call">().notNull(),
+    kind: text("kind").$type<"paper" | "mock" | "call" | "contract">().notNull(),
     subjects: jsonb("subjects").$type<Subject[]>().notNull(),
     interviewerKey: text("interviewer_key"),
     interviewerEmail: text("interviewer_email"),
@@ -142,6 +142,7 @@ export const hiringBookings = pgTable(
   (t) => [
     index("hiring_booking_time").on(t.interviewerKey, t.startTime),
     index("hiring_booking_visit").on(t.visitId),
+    uniqueIndex("hiring_one_contract_booking").on(t.candidateId).where(sql`${t.kind} = 'contract' AND ${t.status} = 'confirmed'`),
     check("hiring_booking_time_order", sql`${t.endTime}>${t.startTime}`),
   ],
 );

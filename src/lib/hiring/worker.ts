@@ -510,7 +510,7 @@ export async function deliverOutbox(
   db: Database,
   config: HiringConfig,
   max = 50,
-  bookingsOnly = false,
+  scheduledDeliveryOnly = false,
   // A result email leaves at Send. Without this it would wait for the Mac worker, as a row with no booking does.
   onlyKey?: string,
 ) {
@@ -536,7 +536,7 @@ export async function deliverOutbox(
     .where(
       and(
         inArray(s.hiringOutbox.status, ["pending", "failed", "uncertain"]),
-        bookingsOnly ? isNotNull(s.hiringOutbox.bookingId) : undefined,
+        scheduledDeliveryOnly ? or(isNotNull(s.hiringOutbox.bookingId), sql`${s.hiringOutbox.payload}->'closeLoop' = 'true'::jsonb`) : undefined,
         onlyKey ? eq(s.hiringOutbox.key, onlyKey) : undefined,
         or(
           isNull(s.hiringOutbox.nextAttemptAt),
@@ -734,7 +734,7 @@ export async function deliverOutbox(
   return sent;
 }
 
-/** For `after()`: booking messages leave without the Mac. A failure stays out of the response, and the cron retries. */
+/** Booking and final review messages can leave without the Mac. The cron retries failures. */
 export async function deliverBookingMessages(db: Database = getDb()) {
   try {
     const { config } = await settings(db);

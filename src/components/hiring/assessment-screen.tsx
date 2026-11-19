@@ -6,13 +6,13 @@ import {
   ASSESSMENT_CHIPS,
   ASSESSMENT_RANGES,
   assessmentRows,
-  hireBlockers,
   matchesChip,
   matchesRange,
   type AssessmentChip,
   type AssessmentRange,
   type AssessmentRow,
 } from "@/lib/hiring/assessment-view";
+import { FinalReview } from "./final-review";
 import { RUBRIC, computeSheet, passRulesFor, rubricTotals, type LevelResult, type RubricItem } from "@/lib/hiring/marking-sheet";
 import { SUBJECTS, ZONE, type Subject } from "@/lib/hiring/model";
 import { markAgain, runMarking, type ResultKind } from "./assessment-setup";
@@ -570,23 +570,23 @@ function resultEmailState(key: string | null, outbox: HiringData["inviteOutbox"]
   return { label: "Queued", tone: css.warnWord, error: null };
 }
 
-function DecisionBox({ candidate, papers, mocks, data, command, busy }: { candidate: HiringCandidate; papers: Paper[]; mocks: Mock[]; data: HiringData; command: Command; busy: boolean }) {
+function DecisionBox({ candidate, data, command, busy }: { candidate: HiringCandidate; data: HiringData; command: Command; busy: boolean }) {
   const mine = data.decisions.filter((row) => row.candidateId === candidate.id);
   const draft = mine.find((row) => row.status === "draft");
   const sent = mine.find((row) => row.status === "sent");
-  const blockers = hireBlockers(papers, mocks);
+  const recommendation = data.headDecisions.find((row) => row.candidateId === candidate.id);
+  const hasReview = recommendation?.decision === "hire";
   const [reason, setReason] = useState("");
   const blocked = !candidate.email;
   const email = sent ? resultEmailState(sent.outboxKey, data.inviteOutbox) : null;
   // A result that left or is on its way cannot be sent again. A failed one can.
-  const going = sent ? data.inviteOutbox.some((job) => job.key === sent.outboxKey && ["sent", "pending", "processing"].includes(job.status)) : false;
   return (
     <section className={css.inspectorSection} aria-label="Decision">
       <h3 className={css.inspectorHeading}>Decision</h3>
       {sent && email && (
         <dl className={css.facts}>
           <div>
-            <dt>{sent.decision === "hire" ? "Hired" : "Rejected"}</dt>
+            <dt>{sent.decision === "hire" ? "Offer approved" : "Rejected"}</dt>
             <dd>{sent.decidedBy}</dd>
           </div>
           <div>
@@ -596,28 +596,17 @@ function DecisionBox({ candidate, papers, mocks, data, command, busy }: { candid
         </dl>
       )}
       {email?.error && <p className={css.errorText}>{email.error}</p>}
-      {draft ? (
+      {hasReview ? (data.reviewAccess?.hr || data.reviewAccess?.gift ? <FinalReview id={candidate.id} /> : !sent && <p>Waiting for HR and Gift’s final review.</p>) : draft?.decision === "reject" && !sent ? (
         <DraftEditor key={draft.id} draft={draft} to={candidate.email} data={data} command={command} busy={busy} />
-      ) : (
+      ) : !sent && (
         <>
-          {sent && <p className={css.inspectorMeta}>A new decision needs its own email. The email already sent is not recalled.</p>}
           {blocked && <p className={css.warnWord}>This candidate has no email address, so a result email cannot go. Use Stop in the full record.</p>}
-          {blockers.length > 0 && (
-            <ul className={css.holdList}>
-              {blockers.map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
-          )}
           <label className={css.fieldLabel}>
             Reason
             <textarea className={css.textarea} rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Needed to reject. The candidate does not see it." />
           </label>
           <div className={css.decisionActions}>
-            <button type="button" className={css.primary} disabled={busy || blocked || blockers.length > 0 || (going && sent?.decision === "hire")} onClick={() => void command({ action: "decision_draft", id: candidate.id, decision: "hire", reason })}>
-              Hire: preview email
-            </button>
-            <button type="button" className={css.secondary} disabled={busy || blocked || reason.trim().length < 5 || (going && sent?.decision === "reject")} onClick={() => void command({ action: "decision_draft", id: candidate.id, decision: "reject", reason })}>
+            <button type="button" className={css.secondary} disabled={busy || blocked || reason.trim().length < 5} onClick={() => void command({ action: "decision_draft", id: candidate.id, decision: "reject", reason })}>
               Reject: preview email
             </button>
           </div>
@@ -751,6 +740,15 @@ function AssessmentPanel({
         {papers.map((paper) => (
           <PaperSheetView key={paper.id} paper={paper} taken={papers.filter((other) => other.id !== paper.id && other.source !== "tracker").map((other) => other.subject)} config={data.config} command={command} reload={reload} busy={busy} />
         ))}
+        {candidate.stage === "onsite_booked" && papers.some((paper) =>
+          paper.subject === row.subject && paper.status === "done" && paper.fileId && paper.marks &&
+          computeSheet(paper.marks, passRulesFor(data.config, paper.subject)).result === "passed"
+        ) && !data.bookings.some((booking) => booking.candidateId === candidate.id && booking.kind === "mock" && booking.status === "confirmed") && (
+          <button type="button" className={css.primary} disabled={busy} onClick={() => {
+            if (window.confirm("Confirm the paper pass and invite this candidate to mock teaching?"))
+              void command({ action: "paper_pass", id: candidate.id, revision: candidate.revision, subjects: [row.subject as Subject], reason: "Confirmed graded paper pass." });
+          }}>Confirm pass and invite to mock teaching</button>
+        )}
         {!row.history && <AddPaper candidateId={candidate.id} first={row.subject} taken={papers.filter((paper) => paper.source !== "tracker").map((paper) => paper.subject)} reload={reload} />}
         {!mocks.some((mock) => mock.subject === row.subject && mock.source !== "tracker") && !row.history && (
           <section className={css.inspectorSection}>
@@ -762,7 +760,7 @@ function AssessmentPanel({
         {mocks.map((mock) => (
           <MockView key={mock.id} mock={mock} command={command} reload={reload} busy={busy} />
         ))}
-        {!row.history && <DecisionBox candidate={candidate} papers={papers} mocks={mocks} data={data} command={command} busy={busy} />}
+        {!row.history && <DecisionBox candidate={candidate} data={data} command={command} busy={busy} />}
       </div>
     </aside>
   );
@@ -770,6 +768,8 @@ function AssessmentPanel({
 
 export function AssessmentScreen({
   data,
+  selectedVisit,
+  onSelectVisit,
   onOpenRecord,
   command,
   reload,
@@ -777,6 +777,8 @@ export function AssessmentScreen({
   now,
 }: {
   data: HiringData;
+  selectedVisit: string | null;
+  onSelectVisit: (id: string | null) => void;
   onOpenRecord: (id: string) => void;
   command: Command;
   reload: Reload;
@@ -787,7 +789,6 @@ export function AssessmentScreen({
   const [head, setHead] = useState("");
   const [range, setRange] = useState<AssessmentRange>("All dates");
   const [chip, setChip] = useState<AssessmentChip | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
 
   const rows = useMemo(() => assessmentRows(data.bookings, data.papers, data.mocks, now), [data.bookings, data.papers, data.mocks, now]);
   const papers = useMemo(() => byCandidate(data.papers), [data.papers]);
@@ -799,7 +800,7 @@ export function AssessmentScreen({
     matchesChip(row, value, papers.get(row.candidateId) ?? [], mocks.get(row.candidateId) ?? [], decided.has(row.candidateId));
   const counts = ASSESSMENT_CHIPS.map((value) => rows.filter((row) => chipMatch(row, value)).length);
   const shown = rows.filter((row) => matchesRange(row, range, now) && (!head || row.headKey === head) && chipMatch(row, chip));
-  const open = rows.find((row) => row.key === selected);
+  const open = rows.find((row) => row.key === selectedVisit);
   const candidate = open && names.get(open.candidateId);
 
   return (
@@ -874,7 +875,7 @@ export function AssessmentScreen({
                     // A person can hold a mock in another subject. A history row has no subject of its own to match.
                     const rowMocks = (mocks.get(row.candidateId) ?? []).filter((mock) => row.history || (mock.subject === row.subject && mock.source !== "tracker"));
                     return (
-                      <tr key={row.key} data-selected={selected === row.key ? "" : undefined} onClick={() => setSelected(row.key)}>
+                      <tr key={row.key} data-selected={selectedVisit === row.key ? "" : undefined} onClick={() => onSelectVisit(row.key)}>
                         <td>
                           {row.at ? when(row.at) : row.dateText || "–"}
                           {row.mockAt && <span className={css.pillNote}>Mock {clock(row.mockAt)}</span>}
@@ -887,7 +888,7 @@ export function AssessmentScreen({
                             className={css.nameButton}
                             onClick={(e) => {
                               e.stopPropagation();
-                              setSelected(row.key);
+                              onSelectVisit(row.key);
                             }}
                           >
                             {c?.name ?? "Unknown candidate"}
@@ -938,7 +939,7 @@ export function AssessmentScreen({
           command={command}
           reload={reload}
           busy={busy}
-          onClose={() => setSelected(null)}
+          onClose={() => onSelectVisit(null)}
         />
       )}
     </div>

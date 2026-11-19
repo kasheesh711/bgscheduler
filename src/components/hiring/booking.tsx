@@ -3,11 +3,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { BookOpen, Check, CircleCheck, Info, MapPin, Phone } from "lucide-react";
 import { phoneSchema, type Subject, type Slot } from "@/lib/hiring/model";
-import type { bookingView, callView, visitView } from "@/lib/hiring/service";
+import type { bookingView, callView, contractView, visitView } from "@/lib/hiring/service";
 import c from "./booking.module.css";
 type View = Awaited<ReturnType<typeof bookingView>>;
 type VisitView = Awaited<ReturnType<typeof visitView>>;
-type CallView = Awaited<ReturnType<typeof callView>>;
+type CallView = Awaited<ReturnType<typeof callView> | ReturnType<typeof contractView>>;
 const LINE_URL = "https://lin.ee/OjMHF41";
 const ZONE = { timeZone: "Asia/Bangkok" } as const;
 const time = (value: string) =>
@@ -283,11 +283,9 @@ export function VisitBooking({
           <span>
             Exam<small>2 hours</small>
           </span>
-          <span>
-            Mock teaching<small>1 hour</small>
-          </span>
+          {view.paired && <span>Mock teaching<small>1 hour</small></span>}
         </div>
-        <p className={c.note}>One visit: a 2-hour exam, then a 1-hour mock teaching session. All times are Bangkok time.</p>
+        <p className={c.note}>{view.paired ? "Your visit includes the exam and mock teaching." : "We will contact you after we grade your paper."} All times are Bangkok time.</p>
       </div>
       {view.visit && (
         <section>
@@ -308,15 +306,15 @@ export function VisitBooking({
               <div className={c.ticketRow}>
                 <span>Exam</span>
                 <strong>
-                  {time(view.visit.examStart)}–{time(view.visit.mockStart)}
+                  {time(view.visit.examStart)}–{time(view.visit.examEnd)}
                 </strong>
               </div>
-              <div className={c.ticketRow}>
+              {view.visit.mockStart && view.visit.mockEnd && <div className={c.ticketRow}>
                 <span>Mock teaching with {view.visit.head}</span>
                 <strong>
                   {time(view.visit.mockStart)}–{time(view.visit.mockEnd)}
                 </strong>
-              </div>
+              </div>}
             </div>
           </div>
           {view.canMove && !moving && (
@@ -355,15 +353,15 @@ export function VisitBooking({
                   <span className={c.tileLine}>
                     <span>Exam</span>
                     <span>
-                      {time(s.examStart)}–{time(s.mockStart)}
+                      {time(s.examStart)}–{time(s.examEnd)}
                     </span>
                   </span>
-                  <span className={c.tileLine}>
+                  {s.mockStart && s.mockEnd && <span className={c.tileLine}>
                     <span>Mock teaching</span>
                     <span>
                       {time(s.mockStart)}–{time(s.mockEnd)}
                     </span>
-                  </span>
+                  </span>}
                 </span>
               </>
             )}
@@ -380,7 +378,7 @@ export function VisitBooking({
                 <p className={c.summary}>
                   <span>{day(slot.examStart)}</span>
                   <b>
-                    {time(slot.examStart)}–{time(slot.mockEnd)}
+                    {time(slot.examStart)}–{time(slot.mockEnd ?? slot.examEnd)}
                   </b>
                 </p>
               )
@@ -401,11 +399,13 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [saved, setSaved] = useState("");
+  const contract = view.kind === "contract";
+  const appointment = contract ? "contract signing" : "call";
   // The list reloads on its own, so a chosen time that has gone is no longer chosen.
   const slot = view.slots.find((s) => s.start === chosen);
   const start = slot?.start ?? "";
   // The server checks the number again; this only keeps the button off until it can pass.
-  const phoneOk = phoneSchema.safeParse(phone).success;
+  const phoneOk = contract || phoneSchema.safeParse(phone).success;
   async function book() {
     setBusy(true);
     setError("");
@@ -414,7 +414,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
       const r = await fetch(`/api/hiring/book/${token}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start, phone, ...(view.call ? { move: true } : {}) }),
+        body: JSON.stringify(contract ? { start } : { start, phone, ...(view.call ? { move: true } : {}) }),
       });
       const body = await r.json();
       if (!r.ok) throw new Error(body.error);
@@ -422,7 +422,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
       setSaved(
         view.call
           ? "Your call has moved. The new time is below. A confirmation email and a calendar invitation will follow."
-          : "Your call is confirmed. The time is below. A confirmation email and a calendar invitation will follow.",
+          : `Your ${appointment} is confirmed. A confirmation email and a calendar invitation will follow.`,
       );
       setMoving(false);
       setStart("");
@@ -437,7 +437,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
   }
   // The server sends a notice for an empty list. The fallback keeps the page from ever showing nothing.
   const notice =
-    view.notice ?? (view.slots.length ? null : `There are no open call times at the moment. Contact BeGifted on LINE: ${LINE_URL}`);
+    view.notice ?? (view.call || view.slots.length ? null : `There are no open ${appointment} times at the moment. Contact BeGifted on LINE: ${LINE_URL}`);
   const showForm = (!view.call || moving) && !notice;
   const keep = moving && (
     <button
@@ -457,15 +457,15 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
     <>
       {saved && <Saved>{saved}</Saved>}
       <div className={c.facts}>
-        <Fact icon={<Phone aria-hidden />} label="Phone call">
+        <Fact icon={<Phone aria-hidden />} label={contract ? "Contract signing" : "Phone call"}>
           {view.minutes} minutes with our HR team
         </Fact>
-        <p className={c.note}>We call the phone number that you give on this page. All times are Bangkok time.</p>
+        {view.kind === "contract" ? <Fact icon={<MapPin aria-hidden />} label="Where">{view.location}</Fact> : <p className={c.note}>We call the phone number that you give on this page. All times are Bangkok time.</p>}
       </div>
       {view.call && (
         <section>
           <div className={c.stepHead}>
-            <h2 className={c.stepTitle}>Your booked call</h2>
+            <h2 className={c.stepTitle}>Your booked {appointment}</h2>
             <span className={c.badge}>
               <Check aria-hidden size={14} /> Confirmed
             </span>
@@ -479,7 +479,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
             <div className={c.ticketBody}>
               <span>{day(view.call.start)}</span>
               <div className={c.ticketRow}>
-                <span>Phone call</span>
+                <span>{contract ? "Onsite" : "Phone call"}</span>
                 <strong>
                   {time(view.call.start)}–{time(view.call.end)}
                 </strong>
@@ -518,7 +518,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
             onSelect={(s) => setStart(s.start)}
             tile={(s) => <span className={c.tileTime}>{time(s.start)}</span>}
           />
-          <label className={c.field}>
+          {!contract && <label className={c.field}>
             <span className={c.stepTitle}>Your phone number</span>
             <input
               className={c.input}
@@ -532,12 +532,12 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
               onChange={(e) => setPhone(e.target.value)}
             />
             <span className={c.note}>We call this number at the time that you choose. Include the country code if it is not a Thai number.</span>
-          </label>
+          </label>}
           {keep}
           <VisitConfirm
             error={error}
             disabled={busy || !start || !phoneOk}
-            label={busy ? "Confirming…" : view.call ? "Confirm new time" : "Confirm call"}
+            label={busy ? "Confirming…" : view.call ? "Confirm new time" : `Confirm ${appointment}`}
             onConfirm={book}
             summary={
               slot && (
@@ -571,7 +571,7 @@ export const BookingLoading = () => (
   </div>
 );
 
-export function BookingShell({ kind, children }: { kind?: "visit" | "mock" | "paper" | "brief" | "call"; children: ReactNode }) {
+export function BookingShell({ kind, children }: { kind?: "visit" | "mock" | "paper" | "brief" | "call" | "contract"; children: ReactNode }) {
   return (
     <main className={c.page}>
       <header className={c.hero}>
@@ -579,7 +579,7 @@ export function BookingShell({ kind, children }: { kind?: "visit" | "mock" | "pa
           <p className={c.brand}>BeGifted Education</p>
           <h1 className={c.title}>
             {kind === "brief" ? "Your " : "Book your "}
-            <em>{kind === "brief" ? "interview candidate" : kind === "call" ? "call with BeGifted" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "assessment"}</em>
+            <em>{kind === "brief" ? "interview candidate" : kind === "contract" ? "contract signing" : kind === "call" ? "call with BeGifted" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "assessment"}</em>
           </h1>
         </div>
       </header>
@@ -617,7 +617,7 @@ export function HiringBooking({ token }: { token: string }) {
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
   // A page left open shows old times, so the list reloads when the candidate comes back to the tab.
   // One list with no subject choice: the visit and the HR call.
-  const visit = view?.kind === "visit" || view?.kind === "call";
+  const visit = view?.kind === "visit" || view?.kind === "call" || view?.kind === "contract";
   useEffect(() => {
     const refresh = () => {
       if (document.visibilityState !== "visible" || !view || (!visit && !subjects.length)) return;
@@ -665,7 +665,7 @@ export function HiringBooking({ token }: { token: string }) {
       setBusy(false);
     }
   }
-  const old = view && view.kind !== "visit" && view.kind !== "call" ? view : null;
+  const old = view && view.kind !== "visit" && view.kind !== "call" && view.kind !== "contract" ? view : null;
   const selectionBooked =
     !!old && subjects.some((subject) => old.bookings.some((booking) => booking.kind === old.kind && booking.subjects.includes(subject)));
   const form = !!old && old.enabled && !selectionBooked;
@@ -686,7 +686,7 @@ export function HiringBooking({ token }: { token: string }) {
         )
       ) : view.kind === "visit" ? (
         <VisitBooking token={token} view={view} reload={() => load()} />
-      ) : view.kind === "call" ? (
+      ) : (view.kind === "call" || view.kind === "contract") ? (
         <CallBooking token={token} view={view} reload={() => load()} />
       ) : (
         <>

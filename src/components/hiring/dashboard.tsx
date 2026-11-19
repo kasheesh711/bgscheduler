@@ -36,6 +36,7 @@ const serif = Instrument_Serif({
 });
 
 export type HiringData = Awaited<ReturnType<typeof dashboard>> & {
+  reviewAccess?: { hr: boolean; gift: boolean };
   google: { connected: boolean; email: string; lastError: string | null; callCalendar: "readable" | "reconnect" | "unreadable" };
 };
 export type HiringCandidate = HiringData["candidates"][number];
@@ -118,6 +119,7 @@ export function HiringDashboard() {
     }
   }, [param]);
   const [selected, setSelected] = useState<string | null>(null);
+  const [assessmentVisit, setAssessmentVisit] = useState<string | null>(null);
   // The candidate whose résumé viewer is open. It loads the file only on request.
   const [resumeFor, setResumeFor] = useState<string | null>(null);
   const [filter, setFilter] = useState<CandidateFilter>(NO_FILTER);
@@ -383,13 +385,16 @@ export function HiringDashboard() {
           <PreScreenScreen data={data} extras={extras} holds={holds} command={command} busy={busy} error={error} notice={notice} />
         </div>
         {view === "hr" && <HrScreen data={data} command={command} busy={busy} onOpenResults={() => setView("assessment", true)} />}
-        {view === "admin" && <AdminScreen data={data} reload={() => load(true)} />}
+        {view === "admin" && <AdminScreen data={data} reload={() => load(true)} onOpenResults={(id) => {
+          setAssessmentVisit(id);
+          setView("assessment", true);
+        }} />}
         {view === "heads" && <HeadsScreen data={data} />}
         <div hidden={view !== "visitday"} className={css.viewPane}>
           <RunSheetScreen data={data} />
         </div>
         <div hidden={view !== "assessment"} className={css.viewPane}>
-          <AssessmentScreen data={data} onOpenRecord={openRecord} command={command} reload={() => load(true)} busy={busy} />
+          <AssessmentScreen data={data} selectedVisit={assessmentVisit} onSelectVisit={setAssessmentVisit} onOpenRecord={openRecord} command={command} reload={() => load(true)} busy={busy} />
         </div>
         <div className={css.layout} hidden={view !== "overview"}>
           <div className={css.main}>

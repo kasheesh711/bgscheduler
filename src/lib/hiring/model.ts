@@ -17,6 +17,7 @@ export const HR_CALENDAR = "people@begiftededucation.com";
 /** The `interviewer_key` of every call row, so the booking overlap trigger gives HR one call at a time. */
 export const HR_CALL_KEY = "hr-call";
 export const CALL_MINUTES = 15;
+export const CONTRACT_MINUTES = 30;
 export const CALL_DAY_START = 9 * 60;
 export const CALL_DAY_END = 18 * 60;
 export const CALL_LINK_DAYS = 14;
@@ -92,10 +93,10 @@ export type Subject = z.infer<typeof subjectSchema>;
 export type InterviewKind = "paper" | "mock";
 // `brief` is the interviewer's page for one mock booking: its id is a booking id, not a candidate id.
 // `call` is the candidate's link to book the HR pre-screen call.
-export const tokenKindSchema = z.enum(["paper", "mock", "visit", "brief", "call"]);
+export const tokenKindSchema = z.enum(["paper", "mock", "visit", "paper-visit", "brief", "call", "contract"]);
 /** A booking of the visit flows. A row of kind `call` belongs to the HR call list only. */
 export const isVisitBooking = <T extends { kind: string }>(row: T): row is T & { kind: InterviewKind } =>
-  row.kind !== "call";
+  row.kind === "paper" || row.kind === "mock";
 export const stageSchema = z.enum([
   "new",
   "review",

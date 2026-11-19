@@ -31,6 +31,8 @@ import {
   type VisitSlot,
 } from "./model";
 
+import { headWeekMocks } from "./limits";
+
 const MAX_SOURCE_AGE = 90 * 60 * 1000;
 // Real data_issue_type values are alias, modality, tag, completeness, conflict_model and sync.
 // Block on alias (identity) and on every completeness issue except the sync's availability message
@@ -219,6 +221,7 @@ export async function availableSlots(
   // ensureIndex reads in parallel, so a caller inside a transaction passes its outer connection here.
   indexDb: Database = db,
   live?: LiveBusy,
+  movingCandidate?: string,
 ): Promise<Slot[]> {
   if (!subjects.length || (kind === "mock" && subjects.length !== 1)) return [];
   const dates = businessDates(now, config.holidays);
@@ -230,6 +233,7 @@ export async function availableSlots(
   if (index) assertFreshIndex(index, now);
   for (const date of dates) {
     const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+    const headCounts = kind === "mock" ? headWeekMocks(bookings, instant(date, 0)) : {};
     const office = config.paperOfficeHours.find((w) => w.weekday === weekday);
     const begin = kind === "mock" ? 600 : office?.startMinute;
     const finish = kind === "mock" ? 960 : office?.endMinute;
@@ -243,7 +247,7 @@ export async function availableSlots(
         if (
           bookings.filter(
             (b) =>
-              b.kind === "paper" &&
+              b.kind === "paper" && b.candidateId !== movingCandidate &&
               overlap(range, { start: b.startTime, end: b.endTime }),
           ).length < config.paperCapacity
         )
@@ -259,6 +263,7 @@ export async function availableSlots(
       for (const interviewer of config.interviewers.filter((t) =>
         subjects.every((subject) => t.subjects.includes(subject)),
       )) {
+        if ((headCounts[interviewer.canonicalKey] ?? 0) >= config.onsiteLimits.perHeadPerWeek) continue;
         const group = index!.tutorGroups.find(
           (g) => g.canonicalKey === interviewer.canonicalKey,
         );
@@ -530,11 +535,11 @@ export async function verifyLiveSlot(db: Database, slot: Slot) {
  * without any time that touches `busy` (HR's calendar and the calls already booked). `dates` are business dates, so a
  * weekend or a closed date never appears. It proves nothing itself: the caller must pass a complete busy list or none.
  */
-export function callSlots(dates: string[], busy: { start: Date; end: Date }[], now: Date) {
+export function callSlots(dates: string[], busy: { start: Date; end: Date }[], now: Date, duration = CALL_MINUTES) {
   const slots: { date: string; start: string; end: string }[] = [];
   for (const date of dates)
-    for (let minute = CALL_DAY_START; minute + CALL_MINUTES <= CALL_DAY_END; minute += CALL_MINUTES) {
-      const range = { start: instant(date, minute), end: instant(date, minute + CALL_MINUTES) };
+    for (let minute = CALL_DAY_START; minute + duration <= CALL_DAY_END; minute += CALL_MINUTES) {
+      const range = { start: instant(date, minute), end: instant(date, minute + duration) };
       if (range.start > now && !busy.some((other) => overlap(range, other)))
         slots.push({ date, start: range.start.toISOString(), end: range.end.toISOString() });
     }

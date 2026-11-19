@@ -42,7 +42,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
         </dl>
       </section>
       <section className={c.facts}>
-        <h2 className={c.stepTitle}>Résumé</h2>
+        <h2 className={c.stepTitle}>Candidate files</h2>
+        {brief.gradedPaper && <p><a href={resumeUrl.replace(/resume$/, "paper")} target="_blank" rel="noreferrer">Open the graded paper</a></p>}
         {brief.resume ? (
           <>
             <a className={c.button} href={resumeUrl} target="_blank" rel="noreferrer">
@@ -75,7 +76,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
       </section>
       {brief.form !== "wait" && (
         <section className={c.facts}>
-          <h2 className={c.stepTitle}>Your decision</h2>
+          <h2 className={c.stepTitle}>Your recommendation</h2>
           <BriefDecision sent={brief.decision} url={decisionUrl} />
         </section>
       )}

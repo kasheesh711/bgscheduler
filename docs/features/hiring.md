@@ -12,7 +12,7 @@ The Hiring page has seven tabs. Each opens by address (`/hiring?view=seek`).
 - **4 Mock and paper** (`view=assessment`): see [Mock and paper](#mock-and-paper), including the calendar of heads.
 - **Rules and setup** (`view=setup`): the rules, plus pass marks and the paper library.
 
-The Hiring workspace follows a candidate from a SEEK application to one onsite visit: a 2-hour exam, then a 1-hour mock teaching session. The system scores the candidate, sends the invitations inside editable limits and books the visit. It does not record the visit result. It does not make a final hiring decision. It does not send rejection messages.
+The Hiring workspace follows a candidate from a SEEK application through paper grading, mock teaching, final review and contract booking. See [Paper, tutor recommendation and final review](#paper-tutor-recommendation-and-final-review). The one-visit rules below describe the earlier combined visit.
 
 Open a candidate to read the full extracted profile and résumé text. The text is loaded separately from the candidate list and keeps the extraction's personal-detail redactions. Text unavailable in the source is shown as unavailable. The same panel opens the original résumé file (see [Résumé files](#résumé-files)).
 
@@ -535,15 +535,9 @@ Kevin's decision, 18 November 2026: the full dashboard stays for the owner. HR, 
 - The screens add no access rule. A person needs a sign-in with Hiring access, as for the full dashboard.
 - Each button sends the same command as the full dashboard (`call_result`, `stop`, the paper upload).
 
-### Head decision
+### Tutor recommendation
 
-The head sends `Hire` or `Do not hire` from the candidate page (`POST /api/hiring/brief/{token}/decision`, `saveBriefDecision` in `src/lib/hiring/decisions.ts`). The link is the only access check.
-
-- Refused before the mock starts, and until mock scores are recorded. `Do not hire` needs a reason of 5 characters or more.
-- The decision is stored as a `head-decision` row in `hiring_audit`. No migration.
-- HR gets one notice in the recruitment LINE group (`head_decision`) for each recorded decision. The same decision with the same reason again is not recorded and sends no notice.
-- When the result-email rules allow it, a decision draft is made for HR. A draft of the same decision stays as it is, so HR's edits are kept. When they do not (for example, the paper is not marked), the notice gives the cause.
-- No email goes to the candidate, and the stage does not change. HR reads and sends the result email in `4 Mock and paper`.
+After the mock ends, the tutor submits the completed rubric and chooses **Yes** or **No**. No requires a reason and queues a rejection. Yes goes to HR for a final review packet. See [Paper, tutor recommendation and final review](#paper-tutor-recommendation-and-final-review).
 
 ## Interviewer candidate page
 
@@ -751,3 +745,15 @@ The `hiring_recruitment_deliveries` ledger stores each part, its retry key, stat
 Thea also posts a short notice when a completed pre-screen response is imported after a confirmed form send, and when a mock/onsite invitation email is accepted by Gmail. Each completed form is announced once per candidate; each invitation is announced once per sent email. Changed answers, unchanged imports, reminders and failed or uncertain sends do not create another notice. Booking notices remain separate. These notices use the same recruitment delivery ledger and retry cron.
 
 **Contact lines.** Each notice about one candidate prints `Email: …` and `Phone: …` on their own lines, or `not recorded`. The phone number exists only after the candidate books the HR call: the head's group notice, and the recruitment group's call, mock, form and invitation notices (`contactLines` in `src/lib/hiring/recruitment.ts`). The Monday summary does not. Notices already queued keep their old text. Form notices wait for the response sync; they do not wait for scoring.
+
+## Paper, tutor recommendation and final review
+
+New onsite invitations book the two-hour paper only. Existing combined booking links retain their original terms. In **Admin**, upload the candidate’s scan after the assessment. In **Mock and paper**, check the marks and select **Confirm pass and invite to mock teaching**. The grade must meet a saved pass mark and the candidate must have an original résumé on file. The candidate waits for the mock invitation.
+
+After the mock booking, the assigned tutor receives an email with links to the résumé and marked exam. The links are valid for that booking. After the session ends, the tutor submits the rubric on the candidate page. **No** queues a rejection email. **Yes** goes to the HR review list.
+
+HR opens **Hiring → HR → Tutor recommendations**, reviews the saved call notes, records the behavioral assessment, and enters the proposed offer letter. **Send to Gift** saves the evidence and sends Gift a review link. The Private Office packet includes the original résumé, marked exam, rubric, call assessment and application-stage ATS assessment. The ATS score uses the saved rubric settings at the time HR submits the packet. The ZIP contains the HTML report and both source files. Gift reads the packet before choosing **Approve and send offer** or **Reject and inform candidate**. If the evidence changes, HR submits the new packet before Gift signs off.
+
+Approval queues the approved offer letter with a 14-day link. The candidate selects a 30-minute onsite slot on the HR calendar. The page offers weekdays from 09:00 to 18:00 Bangkok, subject to HR availability. Booking checks Google again and prevents overlap with other contract signings and HR calls. HR and the candidate receive a calendar invitation. The candidate also receives an email confirmation. A booking records the appointment. HR completes the actual signing onsite.
+
+Set `HIRING_FINAL_REVIEWER_EMAIL` to Gift’s Hiring sign-in. Set `HIRING_HR_EMAIL` if HR signs in with an account other than `people@begiftededucation.com`. Use distinct accounts. Apply migration `0130_hiring_contract_booking`, update the Hiring worker and verify that the existing HR calendar is readable. Automation, Messages and the production write gate control delivery.
