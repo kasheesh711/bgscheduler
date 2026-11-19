@@ -17,6 +17,7 @@ import {
   CALL_LINK_DAYS,
   CALL_MINUTES,
   CONTRACT_MINUTES,
+  contractTestAllowed,
   callBookingSchema,
   configRuleErrors,
   configSchema,
@@ -2341,7 +2342,7 @@ export async function contractView(token: string, db: Database = getDb(), now = 
   const candidate = await openContract(db, cap.id);
   const { config } = await settings(db);
   const booking = await contractBooking(db, candidate.id);
-  const enabled = config.enabled && config.deliveryEnabled && runtimeWritesAllowed();
+  const enabled = (config.enabled && config.deliveryEnabled || contractTestAllowed(config, candidate.id)) && runtimeWritesAllowed();
   let slots: Awaited<ReturnType<typeof contractSlots>> = [];
   if (enabled && !booking) {
     try {
@@ -2364,7 +2365,7 @@ export async function bookContract(token: string, value: unknown, db: Database =
   if (cap.kind !== "contract") throw new HiringError(404, "This contract signing link is no longer active.");
   const candidate = await openContract(db, cap.id);
   const { config } = await settings(db);
-  if (!config.enabled || !config.deliveryEnabled || !runtimeWritesAllowed())
+  if ((!config.enabled || !config.deliveryEnabled) && !contractTestAllowed(config, candidate.id) || !runtimeWritesAllowed())
     throw new HiringError(503, "Booking is temporarily unavailable.");
   const prior = await contractBooking(db, candidate.id);
   if (prior) {
@@ -2377,7 +2378,7 @@ export async function bookContract(token: string, value: unknown, db: Database =
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"hiring-candidate:" + candidate.id},0))`);
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"sit-in:" + HR_CALL_KEY},0))`);
     const latest = await settings(tx);
-    if (!latest.config.enabled || !latest.config.deliveryEnabled || latest.config.connectedEmail !== config.connectedEmail)
+    if ((!latest.config.enabled || !latest.config.deliveryEnabled) && !contractTestAllowed(latest.config, candidate.id) || latest.config.connectedEmail !== config.connectedEmail)
       throw new HiringError(503, "Booking has been paused or the calendar changed. Refresh the page.");
     const current = await openContract(tx, cap.id);
     const existing = await contractBooking(tx, candidate.id);
@@ -2403,9 +2404,9 @@ export async function bookContract(token: string, value: unknown, db: Database =
       ],
     });
     await enqueue(tx, { key: `booking:${booking.id}:email`, candidateId: candidate.id, bookingId: booking.id,
-      kind: "email", payload: { to: current.email, ...mail, workflowStage: "hired" } });
+      kind: "email", payload: { to: current.email, ...mail, workflowStage: "hired", closeLoop: true } });
     await enqueue(tx, { key: `booking:${booking.id}:calendar`, candidateId: candidate.id, bookingId: booking.id,
-      kind: "calendar", payload: { workflowStage: "hired" } });
+      kind: "calendar", payload: { workflowStage: "hired", closeLoop: true } });
     await audit(tx, "candidate-link", "contract-booked", candidate.id, { bookingId: booking.id, start: slot.start });
     return booking;
   });

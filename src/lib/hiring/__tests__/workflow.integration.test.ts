@@ -1009,6 +1009,8 @@ describe("hiring workflow persistence", () => {
       await submitReview(db, row.id, "hr@example.com", { behavioral: "Uses specific examples.", offer });
       const latest = (await latestReviewPacket(db, row.id))!;
       vi.setSystemTime(new Date(mock.endTime.getTime() + 1000));
+      const { config: active } = await settings(db);
+      await db.update(s.hiringSettings).set({ config: { ...active, enabled: false, deliveryEnabled: false, bookingTestCandidateId: row.id } });
       const result = await signOffReview(db, row.id, latest.id, "gift@example.com", "hire", "");
       const mail = (await jobsOf(row.id)).find((job) => job.key === result)!;
       expect(mail.payload.text).toEqual(expect.stringContaining(offer));
@@ -1025,7 +1027,11 @@ describe("hiring workflow persistence", () => {
       expect(booking.kind).toBe("contract");
       expect(booking.endTime.getTime() - booking.startTime.getTime()).toBe(1800000);
       expect((await bookContract(contract, { start: second.start }, db)).id).toBe(booking.id);
+      await db.insert(s.hiringOutbox).values({ candidateId: other.id, key: "unrelated-offer", kind: "email",
+        payload: { to: other.email, subject: "Unrelated offer", text: "Must stay queued", closeLoop: true, workflowStage: "hired" } });
       await deliverBookingMessages(db);
+      expect((await jobsOf(other.id)).find((job) => job.key === "unrelated-offer")?.status).toBe("pending");
+      expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: row.email, cc: [], subject: "Your BeGifted offer letter" }));
       expect(vi.mocked(deliverCalendar).mock.calls.some(([event]) => event.id === booking.id)).toBe(true);
       expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: row.email, subject: "BeGifted contract signing confirmed" }));
     });

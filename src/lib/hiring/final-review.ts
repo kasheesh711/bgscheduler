@@ -5,7 +5,7 @@ import * as s from "@/lib/db/schema";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { headRecommendation, queueFinalResult, sendRefusal, type Decision } from "./decisions";
 import { computeSheet, passRulesFor, rubricTotals } from "./marking-sheet";
-import { HiringError, HR_CALENDAR, normalizeEmail, runtimeWritesAllowed } from "./model";
+import { contractTestAllowed, HiringError, HR_CALENDAR, normalizeEmail, runtimeWritesAllowed } from "./model";
 import { profileScore, workRightsPenalty } from "./scoring";
 import { callCalendarState, candidateById, enqueue, settings } from "./service";
 
@@ -92,9 +92,10 @@ export async function signOffReview(db: Database, id: string, packetId: string, 
     const packet = await latestReviewPacket(tx, id);
     if (!packet || packet.id !== packetId || packet.fingerprint !== fingerprint(await evidence(tx, id)))
       throw new HiringError(409, "The evidence changed. Ask HR to submit a new review packet.");
-    if (decision === "hire" && (await settings(tx)).config.connectedEmail !== config.connectedEmail)
+    const latest = (await settings(tx)).config;
+    if (decision === "hire" && latest.connectedEmail !== config.connectedEmail)
       throw new HiringError(409, "The HR calendar changed. Refresh and review again.");
-    const refusal = sendRefusal((await settings(tx)).config);
+    const refusal = decision === "hire" && contractTestAllowed(latest, id) ? null : sendRefusal(latest);
     if (refusal) throw new HiringError(409, refusal);
     const key = await queueFinalResult(tx, candidate, decision, reason, actor, packet.offer, now);
     await tx.insert(s.hiringAudit).values({ actor, action: "final-review-signed", candidateId: id, detail: { packetId, decision, reason, key } });

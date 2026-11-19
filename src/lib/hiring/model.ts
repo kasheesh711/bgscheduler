@@ -553,6 +553,11 @@ export const callBookingSchema = z
   .object({ start: z.iso.datetime(), phone: phoneSchema, move: z.boolean().optional() })
   .strict();
 
+/** An isolated offer and contract test while regular hiring and delivery are paused. */
+export function contractTestAllowed(config: Pick<HiringConfig, "enabled" | "deliveryEnabled" | "bookingTestCandidateId">, id: string) {
+  return !config.enabled && !config.deliveryEnabled && config.bookingTestCandidateId === id;
+}
+
 export function runtimeWritesAllowed() {
   return (
     process.env.HIRING_WRITES_ENABLED === "true" &&
