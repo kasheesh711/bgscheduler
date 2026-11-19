@@ -137,36 +137,42 @@ export function ProfileScoreBreakdown({ candidate, weights }: { candidate: Hirin
   );
 }
 
-export function SeekIntakeScore({ candidate, config }: { candidate: HiringCandidate; config: HiringConfig }) {
+export function SeekApplicationReview({ candidate, config }: { candidate: HiringCandidate; config: HiringConfig }) {
   const [open, setOpen] = useState(false);
   const goodCall = candidate.callReview?.good;
   return (
-    <details className={css.intakeScore} onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary>SEEK intake score · {candidate.profileScore === null ? "Not scored" : `${round(candidate.profileScore)}/100`}</summary>
+    <details className={css.applicationReview} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>Résumé and SEEK intake score · {candidate.profileScore === null ? "Not scored" : `${round(candidate.profileScore)}/100`}</summary>
       {open && (
-        <>
-          <dl className={css.facts}>
-            <div>
-              <dt>Current profile minimum</dt>
-              <dd>{config.profileThreshold}/100</dd>
-            </div>
-            <div>
-              <dt>Current HR call minimum</dt>
-              <dd>{config.callThreshold === null ? "Calls off" : `${config.callThreshold}/100`}</dd>
-            </div>
-            <div>
-              <dt>Work rights</dt>
-              <dd>{workRightsText(candidate)}{candidate.workRightsAnswer && (candidate.workRightsAccepted ? " · Accepted" : " · Not accepted")}</dd>
-            </div>
-            {goodCall && (
+        <div className={css.applicationPanes}>
+          <section className={css.inspectorSection}>
+            <h3 className={css.inspectorHeading}>Résumé</h3>
+            <ResumePeek candidate={candidate} months={config.resumeRetentionMonths} />
+          </section>
+          <div>
+            <dl className={css.facts}>
               <div>
-                <dt>HR call</dt>
-                <dd>{goodCall.manual ? "Manual pre-screen invitation" : "Good call recorded"}</dd>
+                <dt>Current profile minimum</dt>
+                <dd>{config.profileThreshold}/100</dd>
               </div>
-            )}
-          </dl>
-          <ProfileScoreBreakdown candidate={candidate} weights={config.profileWeights} />
-        </>
+              <div>
+                <dt>Current HR call minimum</dt>
+                <dd>{config.callThreshold === null ? "Calls off" : `${config.callThreshold}/100`}</dd>
+              </div>
+              <div>
+                <dt>Work rights</dt>
+                <dd>{workRightsText(candidate)}{candidate.workRightsAnswer && (candidate.workRightsAccepted ? " · Accepted" : " · Not accepted")}</dd>
+              </div>
+              {goodCall && (
+                <div>
+                  <dt>HR call</dt>
+                  <dd>{goodCall.manual ? "Manual pre-screen invitation" : "Good call recorded"}</dd>
+                </div>
+              )}
+            </dl>
+            <ProfileScoreBreakdown candidate={candidate} weights={config.profileWeights} />
+          </div>
+        </div>
       )}
     </details>
   );
@@ -305,6 +311,23 @@ export function ResumeBody({
       <a className={css.sourceLink} href={src} download>
         Download
       </a>
+    </>
+  );
+}
+
+export function ResumePeek({ candidate, months }: { candidate: HiringCandidate; months: number }) {
+  const pdf = candidate.resumeState === "available" && candidate.resumeType === RESUME_TYPES.pdf;
+  const check = useResumeCheck(candidate.id, true, candidate.resumeState === "available");
+  const showText = !pdf || check.status === "failed";
+  const source = useSourceText(candidate.id, showText);
+  return (
+    <>
+      <ResumeBody id={candidate.id} name={candidate.name} state={candidate.resumeState} type={candidate.resumeType} months={months} check={check} />
+      {showText && (
+        <div className={css.sourceText}>
+          <SourceTextBody id={candidate.id} {...source} />
+        </div>
+      )}
     </>
   );
 }

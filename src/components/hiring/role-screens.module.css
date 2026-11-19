@@ -25,6 +25,7 @@
   .callWorkspace { grid-template-columns: minmax(0, 1fr) minmax(260px, 21%); gap: 32px; }
   .callContext { border-left: 1px solid var(--line); padding-left: 20px; }
   .cards.queue { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .queue .card:has(> details[open]) { grid-column: 1 / -1; }
   .queue .actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
 .callContext .card { grid-template-columns: minmax(0, 1fr); padding-inline: 12px; }
@@ -69,10 +70,6 @@
 .date { font-size: 14px; }
 .date input { min-height: 44px; max-width: 100%; }
 .date input, .notes textarea { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--paper); color: var(--ink); }
-.callDetail { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 3fr) minmax(220px, 2fr); gap: 20px; }
-.callDetail .resume { grid-column: auto; }
+.notes { grid-column: 1 / -1; max-width: 44rem; }
 .notes textarea { display: block; width: 100%; margin: 4px 0 10px; resize: vertical; }
 .notes textarea:read-only { background: var(--tint); }
-@media (max-width: 719px) {
-  .callDetail { grid-template-columns: 1fr; }
-}
