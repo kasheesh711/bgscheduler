@@ -67,6 +67,8 @@ function isPublicRoute(pathname: string) {
  */
 function isPathAllowed(pathname: string, allowedPages: string[] | null): boolean {
   if (!allowedPages) return true;
+  if (allowedPages.includes("/admissions") &&
+    (pathname === "/api/us-universities/search" || /^\/us-universities\/\d+$/.test(pathname))) return true;
   // The owner guard checks current designation and admin status independently.
   if (pathname === "/admin/users" || pathname === "/api/admin/users") return true;
   if (pathname === "/api/home/summary") return true;

@@ -10,7 +10,6 @@ import { NextResponse } from "next/server";
 import { runWeekendClassroomCheck } from "@/lib/classrooms/weekend-check";
 import { getDb } from "@/lib/db";
 import { prepareNextDayClassrooms, deliverNextDayClassroomSchedules } from "@/lib/classrooms/daily-automation";
-import { runCompetitorIntelligenceSync } from "@/lib/competitor-intelligence/sync";
 import { runCreditControlSyncRequest } from "@/lib/credit-control/run-sync-request";
 import { syncLeaveRequests } from "@/lib/leave-requests/sync";
 import { syncRoomUtilizationSessions } from "@/lib/room-capacity/utilization";
@@ -164,24 +163,6 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
         } catch (error) {
           const message = error instanceof Error ? error.message : "Sales dashboard sync failed";
           return NextResponse.json({ error: message }, { status: 500 });
-        }
-      }
-
-      if (jobKey === "competitor_intelligence") {
-        try {
-          const result = await runCompetitorIntelligenceSync({
-            triggerType: "manual",
-            actorEmail: actorEmail ?? "data-health@begifted.local",
-          });
-          return NextResponse.json({ ok: result.status === "success", result }, {
-            status: result.status === "success" ? 200 : 500,
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Competitor intelligence sync failed";
-          return NextResponse.json(
-            { error: message },
-            { status: message.includes("already running") ? 409 : 500 },
-          );
         }
       }
 

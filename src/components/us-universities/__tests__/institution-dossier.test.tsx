@@ -143,7 +143,7 @@ describe("dossierExternalLinks", () => {
 describe("InstitutionDossier", () => {
   it("renders the cover band with name, alias, location, and badges", () => {
     const html = renderToStaticMarkup(
-      <InstitutionDossier profile={makeProfile()} backHref="/us-universities?page=1" compareIds={[]} />,
+      <InstitutionDossier profile={makeProfile()} />,
     );
     expect(html).toContain("Test University");
     expect(html).toContain("TU");
@@ -155,9 +155,9 @@ describe("InstitutionDossier", () => {
 
   it("renders the back link and an oversized acceptance-rate headline stat", () => {
     const html = renderToStaticMarkup(
-      <InstitutionDossier profile={makeProfile()} backHref="/us-universities?page=1" compareIds={[]} />,
+      <InstitutionDossier profile={makeProfile()} />,
     );
-    expect(html).toContain("href=\"/us-universities?page=1\"");
+    expect(html).toContain("href=\"/admissions\"");
     expect(html).toContain("12.5%");
   });
 
@@ -169,8 +169,6 @@ describe("InstitutionDossier", () => {
           pctAsianPacIsl: null, pctAmInd: null, pctTwoOrMore: null, pctUnknown: null,
           pctNonresident: null, pctInState: null, pctOutOfState: null,
         })}
-        backHref="/us-universities"
-        compareIds={[]}
       />,
     );
     // No "Student body" heading rendered when every demographic field is null.
@@ -179,7 +177,7 @@ describe("InstitutionDossier", () => {
 
   it("renders external action links via normalizeUrl", () => {
     const html = renderToStaticMarkup(
-      <InstitutionDossier profile={makeProfile()} backHref="/us-universities" compareIds={[]} />,
+      <InstitutionDossier profile={makeProfile()} />,
     );
     expect(html).toContain("href=\"https://www.example.edu\"");
     expect(html).toContain("href=\"https://admit.example.edu\"");
@@ -187,7 +185,7 @@ describe("InstitutionDossier", () => {
 
   it("renders the admissions trend section when admissionsTrend has data", () => {
     const html = renderToStaticMarkup(
-      <InstitutionDossier profile={makeProfile()} backHref="/us-universities" compareIds={[]} />,
+      <InstitutionDossier profile={makeProfile()} />,
     );
     expect(html).toContain("Admissions over time");
     expect(html).toContain("2022-23");
@@ -198,63 +196,9 @@ describe("InstitutionDossier", () => {
     const html = renderToStaticMarkup(
       <InstitutionDossier
         profile={makeProfile({ admissionsTrend: [] })}
-        backHref="/us-universities"
-        compareIds={[]}
       />,
     );
     expect(html).not.toContain("Admissions over time");
-  });
-
-  // ── Shortlist dock + Add-to-shortlist SSR assertions ───────────────────
-
-  it("shows 'Add to shortlist' when the profile is not in compareIds", () => {
-    const html = renderToStaticMarkup(
-      <InstitutionDossier
-        profile={makeProfile()}
-        backHref="/us-universities"
-        compareIds={[999]}
-      />,
-    );
-    expect(html).toContain("Add to shortlist");
-    expect(html).not.toContain("In shortlist");
-  });
-
-  it("shows 'In shortlist' and disables the button when profile.unitId is in compareIds", () => {
-    const profile = makeProfile({ unitId: 166027 });
-    const html = renderToStaticMarkup(
-      <InstitutionDossier
-        profile={profile}
-        backHref="/us-universities"
-        compareIds={[166027]}
-      />,
-    );
-    expect(html).toContain("In shortlist");
-    // button carries disabled attribute when the id is already in the set
-    expect(html).toContain("disabled");
-  });
-
-  it("renders the ShortlistBar dock when compareIds is non-empty", () => {
-    const html = renderToStaticMarkup(
-      <InstitutionDossier
-        profile={makeProfile({ unitId: 166027, instName: "Test University" })}
-        backHref="/us-universities"
-        compareIds={[166027]}
-      />,
-    );
-    expect(html).toContain("Shortlist");
-    expect(html).toContain("Test University");
-    expect(html).toContain("Compare");
-  });
-
-  it("does not render the ShortlistBar dock when compareIds is empty", () => {
-    const html = renderToStaticMarkup(
-      <InstitutionDossier
-        profile={makeProfile()}
-        backHref="/us-universities"
-        compareIds={[]}
-      />,
-    );
-    expect(html).not.toContain("Shortlist");
   });
 
   // ── Location section — locator map (pin / chip / omit) ─────────────────
@@ -264,8 +208,6 @@ describe("InstitutionDossier", () => {
     const html = renderToStaticMarkup(
       <InstitutionDossier
         profile={makeProfile({ latitude: 42.3, longitude: -71.1 })}
-        backHref="/us-universities"
-        compareIds={[]}
       />,
     );
     // UsDotMap renders an <svg> with role="img" for pin placements
@@ -281,8 +223,6 @@ describe("InstitutionDossier", () => {
     const html = renderToStaticMarkup(
       <InstitutionDossier
         profile={makeProfile({ latitude: 21.3, longitude: -157.8, stateAbbr: "HI" })}
-        backHref="/us-universities"
-        compareIds={[]}
       />,
     );
     // UsDotMap renders a chip with role="img" (a div, not svg) for out-of-bounds
@@ -297,8 +237,6 @@ describe("InstitutionDossier", () => {
     const html = renderToStaticMarkup(
       <InstitutionDossier
         profile={makeProfile({ latitude: null, longitude: null })}
-        backHref="/us-universities"
-        compareIds={[]}
       />,
     );
     // Location section still shows city/state metrics

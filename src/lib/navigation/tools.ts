@@ -4,8 +4,6 @@ export type NavSectionId =
   | "scheduling-tutors"
   | "student-lifecycle"
   | "finance-revenue"
-  | "market-intelligence"
-  | "research-reference"
   | "data-audit";
 
 export type NavToolId =
@@ -35,8 +33,6 @@ export type NavToolId =
   | "unearned-revenue"
   | "credit-control"
   | "payroll"
-  | "competitor-intelligence"
-  | "us-universities"
   | "wise-activity"
   | "data-health";
 
@@ -82,16 +78,6 @@ export const NAV_SECTIONS: NavSection[] = [
     id: "finance-revenue",
     label: "Finance & Revenue",
     description: "Sales, deferred revenue, prepaid credit follow-up, and payroll reconciliation.",
-  },
-  {
-    id: "market-intelligence",
-    label: "Market Intelligence",
-    description: "Competitor activity, SEO visibility, offers, and response workflow.",
-  },
-  {
-    id: "research-reference",
-    label: "Research & Reference",
-    description: "External datasets for advising — US university research and statistics.",
   },
   {
     id: "data-audit",
@@ -275,20 +261,6 @@ export const NAV_TOOLS: NavTool[] = [
     description: "Reconcile tutor payouts, rates, and monthly review issues.",
     section: "finance-revenue",
     badgeKey: "payroll",
-  },
-  {
-    id: "competitor-intelligence",
-    href: "/competitor-intelligence",
-    label: "Competitor BI",
-    description: "Track competitor activity, search visibility, offers, and response tasks.",
-    section: "market-intelligence",
-  },
-  {
-    id: "us-universities",
-    href: "/us-universities",
-    label: "US Universities",
-    description: "Research & compare US 4-year universities (IPEDS): admissions, cost, outcomes.",
-    section: "research-reference",
   },
   {
     id: "wise-activity",

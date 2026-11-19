@@ -36,7 +36,6 @@ export type CronJobKey =
   | "onsite_foot_traffic"
   | "line_backlog_recovery"
   | "line_credit_digest"
-  | "competitor_intelligence"
   | "feedback_autowriter"
   | "feedback_autowriter_review"
   | "feedback_atom"
@@ -222,23 +221,6 @@ export const CRON_JOBS = [
     dangerous: false,
     confirmationLabel: null,
     expectedBangkokMinute: 1 * 60 + 18,
-    routeMethod: "GET",
-  },
-  {
-    key: "competitor_intelligence",
-    label: "Competitor Intelligence",
-    feature: "Market Intelligence",
-    path: "/api/internal/sync-competitor-intelligence",
-    schedule: "28 18 * * 0",
-    cadenceLabel: "Weekly Monday 01:28 Bangkok",
-    cadenceMinutes: 7 * 24 * 60,
-    lateAfterMinutes: 120,
-    maxDurationSeconds: 800,
-    manualOnly: false,
-    dangerous: false,
-    confirmationLabel: null,
-    expectedBangkokWeekday: 1,
-    expectedBangkokMinute: 1 * 60 + 28,
     routeMethod: "GET",
   },
   {

@@ -1,5 +1,9 @@
 # Competitor Intelligence
 
+The dashboard, weekly collector, and manual sync routes are retired. Postgres retains the briefs, source evidence, and run history. The sections below describe the former workflow.
+
+## Earlier implementation
+
 **Status: stable**
 
 What the badge rests on (there is no status marker anywhere in code): the whole pipeline is committed and unchanged since its 2026-06-15 build-out (`git log -- src/lib/competitor-intelligence` → `758724a` dashboard, `1534b3c` DataForSEO location fix, `6ede20d` War Room, `0abb5db` stale-run recovery); it is nav-registered as **Competitor BI**, the only tool in the *Market Intelligence* section ([`src/lib/navigation/tools.ts:76`-`80`, `228`-`234`](../../src/lib/navigation/tools.ts)); eight test files cover it; and **its cron is registered in `vercel.json`** — `/api/internal/sync-competitor-intelligence` on `28 18 * * 0` ([`vercel.json`](../../vercel.json)), which is Sunday 18:28 UTC = **Monday 01:28 Asia/Bangkok**. It is the only weekly entry among the file's 19 crons — every other schedule leaves the day-of-week field `*`. The Data Health registry agrees on path, expression and label ([`cron-registry.ts`](../../src/lib/data-health/cron-registry.ts)) and a regression test pins the expression ([`src/__tests__/vercel-crons.test.ts`](../../src/__tests__/vercel-crons.test.ts)). The schedule has moved twice: it began daily (`25 18 * * *`), became weekly in `6604377` ("Run competitor intelligence weekly"), and shifted from `:25` to `:28` in `da88794` on 2026-09-02. [`crons.md`](../reference/crons.md) carries the current expression; see [Open questions](#open-questions).
