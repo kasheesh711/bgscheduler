@@ -2,6 +2,7 @@
 
 import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatInTimeZone } from "date-fns-tz";
+import { rubricTotals } from "@/lib/hiring/marking-sheet";
 import { isDecided, localDate, ZONE, type Subject } from "@/lib/hiring/model";
 import { buildRunSheet, headName, headVisits, pastVisits, upcoming, type RunSheetRow } from "@/lib/hiring/run-sheet";
 import { dayTitle, openHeadDecisions, weekCalls } from "@/lib/hiring/role-views";
@@ -400,8 +401,9 @@ function headVisit(row: RunSheetRow, data: HiringData, now: Date) {
   const decision = mock && data.headDecisions.find((d) => d.bookingId === mock.id);
   const uncertain = data.headDecisions.some((d) => d.candidateId === row.candidateId && d.bookingId === null);
   const subject = mock?.subjects[0];
-  const result = subject && data.mocks.find((m) => m.candidateId === row.candidateId && m.subject === subject);
-  const scored = !!result && result.bookingId === mock?.id && result.source !== "tracker" && result.status === "done";
+  const result = subject && data.mocks.find((m) => m.candidateId === row.candidateId && m.subject === subject && m.source !== "tracker");
+  const scored = !!result && result.bookingId === mock?.id && (result.status === "done" || result.status === "needs_check") &&
+    !!result.rubric && rubricTotals(result.rubric).complete;
   const draft = data.decisions.some((d) => d.candidateId === row.candidateId && d.status === "draft");
   const due = ended && !!path && active && !decision && !uncertain && !!subject && (scored || (!result && !draft));
   return { row, mock, candidate, active, path, ended, decision, subject, scored, due };

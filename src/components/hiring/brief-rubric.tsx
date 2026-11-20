@@ -98,7 +98,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
     >
       <p className={`${c.note} ${c.scoreHint}`}>Tap a score. Use Other for more scores.</p>
       {RUBRIC.map(({ part, items: partItems }) => (
-        <fieldset key={part} className={c.rubricPart} disabled={pending === "scores"}>
+        <fieldset key={part} className={c.rubricPart} disabled={!!pending}>
           <legend className={c.factLabel}>{part}</legend>
           {partItems.map(([id, label]) => {
             const labelId = `${rubricId}-${id}`;
@@ -149,7 +149,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
           className={c.input}
           rows={3}
           maxLength={4000}
-          disabled={pending === "scores"}
+          disabled={!!pending}
           value={comments}
           onChange={(event) => {
             setComments(event.target.value);
@@ -162,13 +162,27 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       {saveError}
       {lastSent && sentTotal === null && <p className={c.note} role="status">Unsaved changes. Send again to update your scores.</p>}
       <div className={c.field} data-sticky="">
-        <div className={c.field}>
-          <p className={c.note}>{scored} of {RUBRIC_ITEMS.length} scored</p>
-          <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
-        </div>
-        <button type="submit" className={c.button} disabled={disabled}>
-          {pending === "scores" ? "Sending…" : "Send scores"}
-        </button>
+        {sentTotal !== null ? (
+          <>
+            <p className={c.note}>Scores are up to date.</p>
+            <button type="button" className={c.ghost} onClick={() => {
+              setEditing(false);
+              setState("sent");
+            }}>
+              Back to sent scores
+            </button>
+          </>
+        ) : (
+          <>
+            <div className={c.field}>
+              <p className={c.note}>{scored} of {RUBRIC_ITEMS.length} scored</p>
+              <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
+            </div>
+            <button type="submit" className={c.button} disabled={disabled}>
+              {pending === "scores" ? "Sending…" : "Send scores"}
+            </button>
+          </>
+        )}
       </div>
     </form>
   );

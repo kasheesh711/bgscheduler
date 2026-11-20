@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { RUBRIC, RUBRIC_ITEMS } from "@/lib/hiring/marking-sheet";
 import { ANSWER_LABELS } from "@/lib/hiring/model";
 import { BriefGone, InterviewerBrief } from "../brief";
+import { BriefDecision } from "../brief-decision";
 
 const answers = Object.fromEntries(ANSWER_LABELS.map(([key]) => [key, `answer for ${key}`]));
 const brief = {
@@ -89,6 +90,15 @@ describe("InterviewerBrief", () => {
     expect(page).toContain("Scores and recommendation are recorded. Ask BeGifted admin to change them.");
     expect(page).not.toContain("Edit scores");
     expect(page).toMatch(/<p role="status"[^>]*tabindex="-1">Recommendation recorded: <strong>Yes<\/strong>/i);
+  });
+
+  it("shows the sending status and locks the reason while the recommendation is sent", () => {
+    const page = renderToStaticMarkup(
+      <BriefDecision sent={null} onSent={() => {}} url="/api/hiring/brief/t/decision" scores="own"
+        unsent={false} pending="recommendation" setPending={() => {}} />,
+    );
+    expect(page).toMatch(/<p role="status"[^>]*>Sending recommendation…<\/p>/);
+    expect(page).toMatch(/<textarea[^>]*\bdisabled=""/);
   });
 
   it("gives one message for a dead link", () => {

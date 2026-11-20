@@ -64,7 +64,7 @@ export function BriefDecision({ sent, onSent, url, scores, unsent, pending, setP
           <p className={c.note}>Yes sends the application to HR. No queues a rejection email.</p>
           <label className={c.field}>
             Reason (required for No)
-            <textarea className={c.input} rows={2} maxLength={1000} value={reason} aria-describedby={reasonTooShort ? reasonHintId : undefined} onChange={(event) => setReason(event.target.value)} />
+            <textarea className={c.input} rows={2} maxLength={1000} value={reason} disabled={pending === "recommendation"} aria-describedby={reasonTooShort ? reasonHintId : undefined} onChange={(event) => setReason(event.target.value)} />
           </label>
           {reasonTooShort && <p id={reasonHintId} className={c.note}>Write at least 5 characters to choose No.</p>}
           <div className={c.decisionActions}>
@@ -75,6 +75,7 @@ export function BriefDecision({ sent, onSent, url, scores, unsent, pending, setP
               No, reject
             </button>
           </div>
+          {pending === "recommendation" && <p role="status" className={c.note}>Sending recommendation…</p>}
         </>
       )}
       {error && (

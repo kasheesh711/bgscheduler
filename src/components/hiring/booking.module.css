@@ -365,7 +365,7 @@
 .field[data-sticky] > .field {
   gap: 4px;
 }
-.field[data-sticky] .button {
+.field[data-sticky] :is(.button, .ghost) {
   min-height: 44px;
   padding-inline: 12px;
 }

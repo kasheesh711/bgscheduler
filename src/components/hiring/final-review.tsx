@@ -40,6 +40,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   const [reason, setReason] = useState("");
   const [packetPage, setPacketPage] = useState<{ id: string; html: string; title: string }>();
   const [viewedId, setViewedId] = useState<string>();
+  const [stalePacket, setStalePacket] = useState<{ id: string; text: string }>();
   const [busy, setBusy] = useState<"review" | "packet" | null>(null);
   const [saved, setSaved] = useState(false);
   const [signedStage, setSignedStage] = useState<"hired" | "rejected">();
@@ -82,18 +83,24 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
         setSaved(false);
         const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         if (!response.ok) {
+          const data = await response.json().catch(() => null);
+          const text = data?.error ?? "Could not save the review.";
           if (body.action === "sign") {
-            const current = await load(false, body.packetId);
-            if (!current) return;
-            if (current.packet?.id !== body.packetId) {
+            const stale = response.status === 409 && /evidence changed|source file changed/i.test(text);
+            if (stale) {
+              setStalePacket({ id: body.packetId, text });
               setViewedId(undefined);
               closePacket();
-              setError({ text: "HR sent a new packet. Read it before you sign off." });
-              return;
             }
+            const current = await load(false, body.packetId);
+            if (!stale && current && current.packet?.id !== body.packetId) {
+              setViewedId(undefined);
+              closePacket();
+            }
+            setError({ text, retry: !current });
+            return;
           }
-          const data = await response.json().catch(() => null);
-          throw new Error(data?.error ?? "Could not save the review.");
+          throw new Error(text);
         }
         setSaved(true);
         if (body.action === "sign") setSignedStage(body.decision === "hire" ? "hired" : "rejected");
@@ -114,8 +121,19 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
     setError(undefined);
     setViewedId(undefined);
     try {
+      if (stalePacket?.id === packetId) {
+        const current = await load(false, packetId);
+        if (!current) return;
+        if (!current.packet || current.packet.id === packetId) throw new Error(stalePacket.text);
+        packetId = current.packet.id;
+      }
       const response = await fetch(`${url}?file=html`, { cache: "no-store" });
-      if (!response.ok) throw new Error();
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        const text = data?.error ?? "Could not open the packet. Try again.";
+        if (response.status === 409) setStalePacket({ id: packetId, text });
+        throw new Error(text);
+      }
       const html = await response.text();
       const head = /<head\b[^>]*>/i;
       const base = '<base target="_blank">';
@@ -124,8 +142,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
       const titleTag = html.match(/<title>[^<]*<\/title>/i)?.[0] ?? "";
       const name = new DOMParser().parseFromString(titleTag, "text/html").title.replace(/^Hiring review \| /, "");
       setPacketPage({ id: packetId, html: source, title: `Review packet for ${name || "candidate"}` });
-    } catch {
-      setError({ text: "Could not open the packet. Try again.", packetLoad: true });
+    } catch (error) {
+      setError({ text: (error instanceof Error && error.message) || "Could not open the packet. Try again.", packetLoad: true });
     } finally {
       setBusy(null);
     }

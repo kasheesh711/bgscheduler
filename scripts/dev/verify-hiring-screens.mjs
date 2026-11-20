@@ -94,6 +94,23 @@ if (/roles=1|pipeline=1/.test(location.search)) {
     briefPaths: { v2m: "/hiring/brief/sample-token" },
     library: [{ id: "qp-phys", kind: "question_paper", subject: "Physics", name: "Physics paper.pdf", status: "ready" }],
   });
+  if (location.search.includes("roles=1")) {
+    const [paper, mock] = payload.bookings as { startTime: string; endTime: string }[];
+    Object.assign(paper, { startTime: at(-4, 9), endTime: at(-4, 11) });
+    Object.assign(mock, { startTime: at(-4, 11), endTime: at(-4, 12) });
+    Object.assign(payload.briefPaths, { v1m: "/hiring/brief/sample-token" });
+    const endedMocks = [
+      ["peat-no-score", "Sample Mali", -3],
+      ["peat-tracker", "Sample Noi", -2],
+      ["peat-sent", "Sample Pim", -1],
+    ] as const;
+    for (const [id, name, day] of endedMocks) {
+      candidates.push(person(id, name, { seekApplicationId: null, stage: "mock_booked" }));
+      const bookings = payload.bookings as unknown[];
+      bookings.push({ id, candidateId: id, kind: "mock", status: "confirmed", startTime: at(day, 11), endTime: at(day, 12), visitId: null, interviewerKey: "Peat", subjects: ["Mathematics"] });
+      Object.assign(payload.briefPaths, { [id]: "/hiring/brief/sample-token" });
+    }
+  }
 }
 if (location.search.includes("pipeline=1")) {
   candidates.push(person("offer", "Sample Offer", { stage: "hired" }));
@@ -115,6 +132,13 @@ payload.config.interviewers = [{ canonicalKey: "Peat", email: "p@example.test", 
 payload.config.paperPassRules = [{ subject: "Mathematics", level: "Key Stage 3", percent: 50 }, { subject: "Mathematics", level: "AS / A-Level", percent: 50 }, { subject: "Mathematics", level: "IB SL / HL", percent: 60 }];
 payload.papers = [{ id: "p1", candidateId: "r1", bookingId: "v1e", subject: "Mathematics", source: "ai", status: "done", fileId: "f1", updatedAt: "2026-11-02T00:00:00.000Z", markSchemeUsed: false, history: null, error: null, changedBy: null, marks: { missingPages: null, comment: "Strong algebra. Weak on IB vectors.", questions: [...markQuestions("Key Stage 3", [9, 9]), ...markQuestions("AS / A-Level", [6, 5]), ...markQuestions("IB SL / HL", [3, 4])] } }];
 payload.mocks = [{ id: "m1", candidateId: "r1", bookingId: "v1m", subject: "Mathematics", source: "ai", status: "done", fileId: "f2", updatedAt: "2026-11-02T00:00:00.000Z", history: null, error: null, changedBy: null, rubric: { comments: "Clear explanations.", items: { accuracy: 10, concepts: 10, clarity: 7, presentation: 7, interaction: 10, pace: 7, organization: 10, materials: 7, formative: 7, feedback: 9 } } }];
+if (location.search.includes("roles=1")) {
+  const scored = payload.mocks[0] as Record<string, unknown>;
+  payload.mocks.push(
+    { ...scored, id: "tracker", candidateId: "peat-tracker", bookingId: null, source: "tracker", fileId: null, rubric: null },
+    { ...scored, id: "sent", candidateId: "peat-sent", bookingId: "peat-sent", source: "person", status: "needs_check", fileId: null },
+  );
+}
 let reviewPacket: { id: string; behavioral: string; offer: string } | null = null;
 // ?gift=1: the final review as Gift sees it, with a packet from HR.
 const GIFT = location.search.includes("gift=1");
@@ -808,6 +832,14 @@ try {
     await page.goto(`${origin}/?view=heads&roles=1`);
     await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
     await shot(page, "heads-phone");
+    // Kru Peat's ended mocks: each card names its next step.
+    for (const [width, height, size] of [[1440, 900, "desktop"], [390, 844, "phone"]]) {
+      await page.setViewportSize({ width, height });
+      await page.goto(`${origin}/?view=heads&roles=1`);
+      await page.getByRole("button", { name: "Kru Peat" }).click();
+      await page.getByRole("link", { name: /Record recommendation/ }).first().waitFor();
+      await shot(page, `heads-peat-${size}`, size === "phone");
+    }
     for (const [width, height, size] of [[1440, 900, "desktop"], [390, 844, "phone"]]) {
       await page.setViewportSize({ width, height });
       await page.goto(`${origin}/?view=review&roles=1&gift=1`);
