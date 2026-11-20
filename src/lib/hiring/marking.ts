@@ -5,11 +5,11 @@ import * as s from "@/lib/db/schema";
 import { callOpenRouter, isCreditExhausted, type OpenRouterCallResult } from "@/lib/feedback-autowriter/openrouter";
 import { readAssessmentBytes } from "./assessment-files";
 import { callClaude } from "./claude";
-import { checkPaperMarks, checkRubric, paperNeedsCheck, RUBRIC, RUBRIC_ITEMS, rubricNeedsCheck, type MockRubric, type PaperMarks } from "./marking-sheet";
+import { checkPaperMarks, checkRubric, LEGACY_RUBRIC_ITEMS, paperNeedsCheck, RUBRIC, RUBRIC_ITEMS, rubricNeedsCheck, type MockRubric, type PaperMarks, type StressTicks } from "./marking-sheet";
 import { HiringError, PAPER_LEVELS, runtimeWritesAllowed, type Subject } from "./model";
 import { audit, MARKING_STUCK_AFTER_MS } from "./service";
 
-export const MARKING_PROMPT_VERSION = "hiring-marking-2026-11-13.1";
+export const MARKING_PROMPT_VERSION = "hiring-marking-2026-11-20.1";
 // One deadline for the whole run, below the route's 300 seconds, so a slow run can still save its result.
 const RUN_BUDGET_MS = 285_000;
 // Send only to hosts that keep nothing and do not train on it: a scan holds a candidate's name and handwriting.
@@ -273,15 +273,28 @@ const rubricAnswer = z
   .object({
     items: z.object(Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, z.number().nullable()]))).strict(),
     comments: z.string().max(4000),
+    stressTest: z.object({ listens: z.boolean(), explains: z.boolean(), plan: z.boolean() }).strict(),
+    checksDone: z.boolean().nullable(),
+    oldForm: z.boolean(),
   })
   .strict();
+const CONDUCT_ITEMS = RUBRIC_ITEMS.filter((id) => !LEGACY_RUBRIC_ITEMS.includes(id));
 
 export const MOCK_INSTRUCTIONS = `You read a completed form: a head teacher's scores for a candidate tutor's mock lesson at BeGifted. ${TRUST_BOUNDARY}
 Copy what the head wrote. Do not judge the lesson. Each item is scored from 1 to 10, usually 10, 7, 4 or 1:
 ${RUBRIC.flatMap(({ part, items }) => items.map(([id, label]) => `- ${id}: ${label} (${part})`)).join("\n")}
 Give null for an item with no score you can read. Do not guess it, and do not work it out from a total on the form.
+stressTest: the Stress Test sub-rubric ticks. listens = "A. Listens & acknowledges", explains = "B. Explains without blaming", plan = "C. Concrete plan & follow-up". true only for a clear tick; false for no tick or no sub-rubric on the form.
+checksDone: "School's required checks completed". true for Yes, false for No, null if neither is clearly marked or the line is not on the form.
+oldForm: true only if the form has no "Professional Conduct" part at all (the older 10-item form). Give null for those 4 items then.
 comments: the head's other comments, word for word, translated to English if they are in another language. Use an empty string if there are none.
 Do not add up a total. The system does that.`;
+
+// A head can write 7.5 or 0. Losing the good scores for that would strand the mock, so a person sets that one score.
+const normalizeScores = (rubric: MockRubric): MockRubric => {
+  const problems = checkRubric(rubric);
+  return { ...rubric, items: Object.fromEntries(Object.entries(rubric.items).map(([item, score]) => [item, problems.some((problem) => problem.startsWith(`${item} `)) ? null : score])) as MockRubric["items"] };
+};
 
 /** Reads an uploaded mock rubric. Same rules as a paper: it changes no stage and queues no message. */
 export const readMockRubric = (id: string, actor: string, db: Database, callModel?: CallModel, now = new Date()) =>
@@ -292,13 +305,17 @@ export const readMockRubric = (id: string, actor: string, db: Database, callMode
       name: "mock_rubric",
       schema: rubricAnswer as unknown as z.ZodType<MockRubric>,
       instructions: MOCK_INSTRUCTIONS,
-      // A head can write 7.5 or 0. Losing nine good scores for that would strand the mock, so a person sets that one score.
-      normalize: (rubric) => ({
-        ...rubric,
-        items: Object.fromEntries(RUBRIC_ITEMS.map((item) => [item, checkRubric({ ...rubric, items: { ...rubric.items } }).some((problem) => problem.startsWith(`${item} `)) ? null : rubric.items[item]])) as MockRubric["items"],
-      }),
-      // Ten blanks means the wrong file, not ten unreadable scores.
-      check: (rubric) => (RUBRIC_ITEMS.every((item) => rubric.items[item] === null) ? ["No score could be read. Check that this is the right form."] : checkRubric(rubric)),
+      normalize: ({ oldForm, ...rubric }: MockRubric & { oldForm?: boolean }) => {
+        // A scan of the older 10-item form is stored in that shape, so nobody invents 4 scores. Both signs are needed, so
+        // a new form the AI misreads still needs a check and cannot skip the required-checks rule.
+        if (oldForm && rubric.checksDone === null && CONDUCT_ITEMS.every((item) => rubric.items[item] === null)) {
+          const items = Object.fromEntries(LEGACY_RUBRIC_ITEMS.map((item) => [item, rubric.items[item]]));
+          return normalizeScores({ items: items as MockRubric["items"], comments: rubric.comments });
+        }
+        return normalizeScores(rubric);
+      },
+      // All blanks means the wrong file, not that many unreadable scores.
+      check: (rubric) => (Object.values(rubric.items).every((score) => score === null) ? ["No score could be read. Check that this is the right form."] : checkRubric(rubric)),
       needsCheck: rubricNeedsCheck,
       doneAudit: "mock-read",
       sources: async (_claimed, scan) => [{ label: "The completed rubric:", name: "rubric.pdf", file: scan }],
@@ -336,10 +353,23 @@ export async function changePaperMarks(id: string, input: { updatedAt: string; m
 }
 
 /** A person's change to a rubric. Same rule as marks: the AI's first read stays, and the total is calculated. */
-export async function changeRubric(id: string, input: { updatedAt: string; items: Partial<MockRubric["items"]>; comments: string }, actor: string, db: Database, now = new Date()) {
+export async function changeRubric(
+  id: string,
+  input: { updatedAt: string; items: Partial<MockRubric["items"]>; comments: string; stressTest?: StressTicks; checksDone?: boolean },
+  actor: string,
+  db: Database,
+  now = new Date(),
+) {
   const [row] = await db.select().from(m).where(eq(m.id, id));
   if (!row?.rubric || !["done", "needs_check"].includes(row.status)) throw new HiringError(409, "This rubric has no scores to change yet.");
-  const rubric: MockRubric = { items: { ...row.rubric.items, ...input.items }, comments: input.comments };
+  // HR sets the required checks to Yes here when they finish after the visit.
+  const rubric: MockRubric = {
+    ...row.rubric,
+    items: { ...row.rubric.items, ...input.items },
+    comments: input.comments,
+    ...(input.stressTest ? { stressTest: input.stressTest } : {}),
+    ...(input.checksDone !== undefined ? { checksDone: input.checksDone } : {}),
+  };
   const problems = checkRubric(rubric);
   if (problems.length) throw new HiringError(400, problems.join(" "));
   const saved = await db
@@ -348,7 +378,14 @@ export async function changeRubric(id: string, input: { updatedAt: string; items
     .where(and(eq(m.id, id), eq(m.updatedAt, new Date(input.updatedAt)), inArray(m.status, ["done", "needs_check"])))
     .returning({ id: m.id });
   if (!saved.length) throw new HiringError(409, "These scores changed while you were editing. Refresh the page.");
-  await audit(db, actor, "mock-rubric-changed", row.candidateId, { subject: row.subject, before: row.rubric.items, after: rubric.items });
+  await audit(db, actor, "mock-rubric-changed", row.candidateId, {
+    subject: row.subject,
+    before: row.rubric.items,
+    after: rubric.items,
+    ...(input.checksDone !== undefined || input.stressTest
+      ? { checksBefore: row.rubric.checksDone ?? null, checksAfter: rubric.checksDone ?? null, stressBefore: row.rubric.stressTest ?? null, stressAfter: rubric.stressTest ?? null }
+      : {}),
+  });
 }
 
 /**

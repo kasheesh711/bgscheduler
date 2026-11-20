@@ -75,7 +75,7 @@ import { attendanceAccessForEmail } from "@/lib/tutor-attendance/access";
 import { attendanceConfig } from "@/lib/tutor-attendance/data";
 import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
 import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
-import { checkRubric, computeSheet, passRulesFor, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
+import { checkRubric, computeSheet, passRulesFor, RUBRIC_ITEMS, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
 import { HIRING_LINE_URL, hiringEmail, mockPrep } from "./email";
 
@@ -1374,7 +1374,9 @@ export async function saveBriefRubric(token: string, rubric: MockRubric, db: Dat
     if (form === "wait") throw new HiringError(409, "You can send scores after the mock lesson ends.");
     if (form === "closed" || !subject) throw new HiringError(409, BRIEF_CLOSED);
     const problems = checkRubric(rubric);
-    if (problems.length || rubricNeedsCheck(rubric)) throw new HiringError(400, "Give every item a whole score from 1 to 10.");
+    // The head's form is always the current one, so a send without an item or the checks answer is refused.
+    if (problems.length || rubricNeedsCheck(rubric) || RUBRIC_ITEMS.some((id) => !(id in rubric.items)) || typeof rubric.checksDone !== "boolean")
+      throw new HiringError(400, "Give every item a whole score from 1 to 10, and answer the required checks.");
     const m = s.hiringMockResults;
     const fresh = {
       bookingId: mock.id,

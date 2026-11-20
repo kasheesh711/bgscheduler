@@ -62,7 +62,15 @@ describe("InterviewerBrief", () => {
         expect(page).toContain(`Other score for ${label}`);
       }
     }
-    expect(page.match(/type="radio"/g)).toHaveLength(4 * RUBRIC_ITEMS.length);
+    // Four score tiles per item, plus Yes and No for the required checks.
+    expect(page.match(/type="radio"/g)).toHaveLength(4 * RUBRIC_ITEMS.length + 2);
+    expect(page.match(/type="checkbox"/g)).toHaveLength(3);
+    expect(page).toContain("Suggested score: 1");
+    expect(page).toContain("School&#x27;s required checks completed");
+    expect(page).toContain("required checks not answered");
+    expect(page).toContain("Interviewer guide");
+    expect(page).toContain("19% on their most recent physics test");
+    expect(page).toContain("What each score means");
     expect(page).toContain("Send scores");
     expect(page).not.toContain("Scores sent");
     expect(page).toContain("Send your scores first.");
@@ -71,10 +79,10 @@ describe("InterviewerBrief", () => {
   });
 
   it("shows a summary of the interviewer's sent scores", () => {
-    const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 9])), comments: "Clear lesson." };
+    const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 9])), comments: "Clear lesson.", checksDone: true };
     const page = html({ rubric });
-    expect(page).toContain('aria-label="Scores sent. 90/100."');
-    expect(page).toContain("Scores sent · <strong>90 / 100</strong>");
+    expect(page).toContain('aria-label="Scores sent. 126/140 (90%)."');
+    expect(page).toContain("Scores sent · <strong>126 / 140</strong> · 90%");
     expect(page).toContain("Edit scores");
     expect(page).toContain('href="#recommendation"');
     expect(page).toContain('id="recommendation"');
@@ -84,9 +92,9 @@ describe("InterviewerBrief", () => {
   });
 
   it("shows the saved total and locks the scores when the recommendation is recorded", () => {
-    const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 9])), comments: "Clear lesson." };
+    const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 9])), comments: "Clear lesson.", checksDone: true };
     const page = html({ form: "closed", decision: "hire", rubric });
-    expect(page).toContain("Scores sent · <strong>90 / 100</strong>");
+    expect(page).toContain("Scores sent · <strong>126 / 140</strong> · 90%");
     expect(page).toContain("Scores and recommendation are recorded. Ask BeGifted admin to change them.");
     expect(page).not.toContain("Edit scores");
     expect(page).toMatch(/<p role="status"[^>]*tabindex="-1">Recommendation recorded: <strong>Yes<\/strong>/i);

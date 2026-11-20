@@ -1,4 +1,5 @@
 import { bangkokWeekStart } from "./limits";
+import { hireChecksMissing, type MockRubric } from "./marking-sheet";
 
 type Booking = {
   candidateId: string;
@@ -10,7 +11,7 @@ type Booking = {
   interviewerKey?: string | null;
   subjects: string[];
 };
-type Result = { candidateId: string; status: string; source: string };
+type Result = { candidateId: string; status: string; source: string; rubric?: MockRubric | null };
 type TrackerRow = Result & { subject: string; history?: { date: string | null } | null };
 
 export type AssessmentRow = {
@@ -97,6 +98,8 @@ export function hireBlockers(papers: Result[], mocks: Result[]) {
   if ([...papers, ...mocks].some((r) => r.status === "needs_check")) blockers.push("A result needs a person to check it.");
   if (papers.some((p) => p.status !== "done" && p.status !== "needs_check")) blockers.push("A paper is not finished.");
   if (mocks.length && !mocks.some((m) => m.status === "done" || m.status === "needs_check")) blockers.push("The mock is not finished.");
+  // Required before hire, not scored (Kevin, 20 Nov 2026). A No does not reject; HR changes it on the mock result when the checks finish.
+  if (mocks.some((m) => m.source !== "tracker" && m.rubric && hireChecksMissing(m.rubric))) blockers.push("The school's required checks are not Yes on the mock result.");
   return blockers;
 }
 

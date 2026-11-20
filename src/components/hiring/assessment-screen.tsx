@@ -13,7 +13,8 @@ import {
   type AssessmentRow,
 } from "@/lib/hiring/assessment-view";
 import { FinalReview, reviewBlocks } from "./final-review";
-import { RUBRIC, computeSheet, passRulesFor, rubricTotals, type LevelResult, type RubricItem } from "@/lib/hiring/marking-sheet";
+import { RUBRIC, computeSheet, passRulesFor, rubricItems, rubricTotals, type LevelResult, type MockRubric, type RubricItem, type StressTicks } from "@/lib/hiring/marking-sheet";
+import { STRESS_ELEMENTS } from "@/lib/hiring/rubric-guide";
 import { SUBJECTS, ZONE, type Subject } from "@/lib/hiring/model";
 import { markAgain, runMarking, type ResultKind } from "./assessment-setup";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
@@ -56,8 +57,12 @@ export function paperCell(paper: Paper, config: HiringData["config"]) {
 export function mockCell(mock: Mock) {
   if (mock.history) return mock.history.score === null ? mock.history.outcome || "Recorded" : `${mock.history.score} / 100`;
   if (mock.status !== "done" || !mock.rubric) return STATUS[mock.status].label;
-  return `${rubricTotals(mock.rubric).total} / 100`;
+  const totals = rubricTotals(mock.rubric);
+  return `${totals.total} / ${totals.max} · ${totals.percent}%`;
 }
+const LABELS = new Map<string, string>(RUBRIC.flatMap(({ items }) => items.map(([id, label]) => [id, label] as const)));
+const isNewForm = (rubric: MockRubric) => rubricItems(rubric).length === LABELS.size;
+const checksText = (rubric: MockRubric) => (rubric.checksDone === true ? "Yes" : rubric.checksDone === false ? "No" : "Not read");
 
 type Reload = () => Promise<void>;
 
@@ -405,6 +410,9 @@ export function PaperSheetView({ paper, taken = [], config, command, reload, bus
 function RubricEditor({ mock, command, busy, onDone }: { mock: Mock; command: Command; busy: boolean; onDone: () => void }) {
   const [items, setItems] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(mock.rubric!.items).map(([id, value]) => [id, value === null ? "" : String(value)])));
   const [comments, setComments] = useState(mock.rubric!.comments);
+  const newForm = isNewForm(mock.rubric!);
+  const [ticks, setTicks] = useState<StressTicks>(mock.rubric!.stressTest ?? { listens: false, explains: false, plan: false });
+  const [checks, setChecks] = useState(mock.rubric!.checksDone ?? null);
   const values = Object.fromEntries(Object.entries(items).map(([id, text]) => [id, text.trim() === "" ? null : Number(text)]));
   const valid = Object.values(values).every((value) => value === null || (Number.isInteger(value) && value >= 1 && value <= 10));
   return (
@@ -412,12 +420,15 @@ function RubricEditor({ mock, command, busy, onDone }: { mock: Mock; command: Co
       onSubmit={async (e) => {
         e.preventDefault();
         const changed = Object.fromEntries(Object.entries(values).filter(([id, value]) => value !== mock.rubric!.items[id as RubricItem]));
-        if (await command({ action: "mock_edit", id: mock.id, updatedAt: new Date(mock.updatedAt).toISOString(), items: changed, comments })) onDone();
+        const saved = mock.rubric!;
+        const ticksChanged = (Object.keys(ticks) as (keyof StressTicks)[]).some((key) => ticks[key] !== !!saved.stressTest?.[key]);
+        const extra = newForm ? { ...(ticksChanged ? { stressTest: ticks } : {}), ...(checks === null || checks === saved.checksDone ? {} : { checksDone: checks }) } : {};
+        if (await command({ action: "mock_edit", id: mock.id, updatedAt: new Date(mock.updatedAt).toISOString(), items: changed, comments, ...extra })) onDone();
       }}
     >
       <table className={css.sheetTable}>
         <tbody>
-          {RUBRIC.flatMap(({ items: rows }) => [...rows] as (readonly [string, string])[]).map(([id, label]) => (
+          {rubricItems(mock.rubric!).map((id) => [id, LABELS.get(id)!] as const).map(([id, label]) => (
             <tr key={id}>
               <td>{label}</td>
               <td>
@@ -435,6 +446,26 @@ function RubricEditor({ mock, command, busy, onDone }: { mock: Mock; command: Co
           ))}
         </tbody>
       </table>
+      {newForm && (
+        <fieldset className={css.fieldLabel}>
+          <legend>Stress Test ticks</legend>
+          {STRESS_ELEMENTS.map(({ key, label }) => (
+            <label key={key}>
+              <input type="checkbox" checked={ticks[key]} onChange={(e) => setTicks({ ...ticks, [key]: e.target.checked })} /> {label}
+            </label>
+          ))}
+        </fieldset>
+      )}
+      {newForm && (
+        <label className={css.fieldLabel}>
+          School&apos;s required checks completed
+          <select className={css.textarea} value={checks === null ? "" : String(checks)} onChange={(e) => setChecks(e.target.value === "" ? null : e.target.value === "true")}>
+            <option value="" disabled>Not read</option>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </label>
+      )}
       <label className={css.fieldLabel}>
         Other comments
         <textarea className={css.textarea} rows={3} value={comments} onChange={(e) => setComments(e.target.value)} />
@@ -514,25 +545,36 @@ export function MockView({ mock, command, reload, busy }: { mock: Mock; command:
               </tr>
             </thead>
             <tbody>
-              {RUBRIC.map(({ part, items }, index) => (
+              {totals.parts.map(({ part, scored, max }) => (
                 <tr key={part}>
                   <td>
                     {part}
-                    {items.map(([id, label]) => (
+                    {RUBRIC.find((row) => row.part === part)!.items.map(([id, label]) => (
                       <span key={id} className={css.pillNote}>
                         {label}: {mock.rubric!.items[id] ?? <span className={css.warnWord}>Unreadable</span>}
                       </span>
                     ))}
                   </td>
                   <td className={css.num}>
-                    {totals.parts[index].scored} / {totals.parts[index].max}
+                    {scored} / {max}
                   </td>
                 </tr>
               ))}
               <tr>
                 <td>Total</td>
-                <td className={css.num}>{totals.total} / 100</td>
+                <td className={css.num}>{totals.total} / {totals.max} · {totals.percent}%</td>
               </tr>
+              {isNewForm(mock.rubric) && (
+                <tr>
+                  <td>
+                    School&apos;s required checks (not scored, needed to hire)
+                    <span className={css.pillNote}>
+                      Stress Test ticks: {STRESS_ELEMENTS.filter(({ key }) => mock.rubric!.stressTest?.[key]).map(({ label }) => label.slice(0, 1)).join(", ") || "none"}
+                    </span>
+                  </td>
+                  <td className={mock.rubric.checksDone === true ? css.num : css.warnWord}>{checksText(mock.rubric)}</td>
+                </tr>
+              )}
             </tbody>
           </table>
           {mock.rubric.comments && <p className={css.inspectorText}>{mock.rubric.comments}</p>}
