@@ -66,6 +66,10 @@ const comparableEvidence = (value: Evidence) => ({ ...value, ats: { score: value
 const fingerprint = (value: Evidence) => createHash("sha256")
   .update(JSON.stringify(comparableEvidence(value))).digest("hex");
 
+/** The packet still shows the current evidence. A charted packet must also match its chart inputs (Kevin, 20 Nov 2026). */
+const packetMatches = (packet: Pick<Packet, "evidence" | "fingerprint">, current: Evidence) =>
+  packet.fingerprint === fingerprint(current) && (!packet.evidence.ats.weights || isDeepStrictEqual(packet.evidence, current));
+
 export async function latestReviewPacket(db: Database, id: string) {
   const [row] = await db.select().from(s.hiringAudit).where(and(eq(s.hiringAudit.candidateId, id), eq(s.hiringAudit.action, PACKET)))
     .orderBy(desc(s.hiringAudit.createdAt)).limit(1);
@@ -83,8 +87,7 @@ export async function reviewPacketValid(db: Database, id: string, packet: Review
     console.error(`[hiring] packet check failed: ${error instanceof Error ? error.name : "unknown"}`);
     return null;
   }
-  return packet.fingerprint === fingerprint(currentEvidence) &&
-    (!packet.evidence.ats.weights || isDeepStrictEqual(packet.evidence, currentEvidence));
+  return packetMatches(packet, currentEvidence);
 }
 
 export async function submitReview(db: Database, id: string, actor: string, input: { behavioral: string; offer: string }) {
@@ -123,7 +126,7 @@ export async function signOffReview(db: Database, id: string, packetId: string, 
     await tx.execute(sql`select id from hiring_candidates where id=${id} for no key update`);
     const candidate = await candidateById(tx, id);
     const packet = await latestReviewPacket(tx, id);
-    if (!packet || packet.id !== packetId || packet.fingerprint !== fingerprint(await evidence(tx, id)))
+    if (!packet || packet.id !== packetId || !packetMatches(packet, await evidence(tx, id)))
       throw new HiringError(409, "The evidence changed. Ask HR to submit a new review packet.");
     const latest = (await settings(tx)).config;
     if (decision === "hire" && latest.connectedEmail !== config.connectedEmail)
