@@ -21,6 +21,7 @@ export function BriefRubric({ saved, form, url, onSent }: { saved: MockRubric | 
   const sentTotal = lastSent?.editCount === editCount ? lastSent.total : null;
   const disabled = !complete || state === "sending" || sentTotal !== null;
   function selectScore(id: RubricItem, score: number) {
+    if (items[id] === score) return; // a second tap on the chosen score is not an edit
     setItems({ ...items, [id]: score });
     setEditCount((count) => count + 1);
   }

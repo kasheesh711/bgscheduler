@@ -861,3 +861,8 @@ textarea.input {
   margin: 0;
   font: inherit;
 }
+
+/* Keyboard focus never lands under the sticky Send block. */
+.page :is(input, select, textarea, button):focus-visible {
+  scroll-margin-bottom: 200px;
+}
