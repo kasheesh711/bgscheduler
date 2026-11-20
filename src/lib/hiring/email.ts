@@ -171,12 +171,12 @@ export function hiringEmail(email: HiringEmail): { subject: string; text: string
  * The same shell around plain text: a person's edited Hire or Reject email, and rows queued before the styled
  * builders. Paragraphs split on blank lines, and a closing "BeGifted Education" moves to the footer.
  */
-export function hiringEmailHtmlFromText(subject: string, text: string, action?: EmailAction): string {
+export function hiringEmailHtmlFromText(subject: string, text: string, ...actions: EmailAction[]): string {
   const paragraphs = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
   if (paragraphs.at(-1) === SIGN_OFF) paragraphs.pop();
   const preheader = (paragraphs.find((p) => !/^Dear\b/.test(p)) ?? subject).replace(/\s+/g, " ").slice(0, 140);
   return render(
     { subject, preheader, title: subject, name: "", paragraphs: [] },
-    [{ kind: "copy", paragraphs: paragraphs.flatMap((p) => p.split("\n")) }, ...(action ? [{ kind: "action" as const, action }] : [])],
+    [{ kind: "copy", paragraphs: paragraphs.flatMap((p) => p.split("\n")) }, ...actions.map((action) => ({ kind: "action" as const, action }))],
   );
 }

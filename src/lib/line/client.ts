@@ -221,3 +221,44 @@ export async function fetchLineGroupSummary(groupId:string,tutorBot=false):Promi
  if(!response.ok||payload.groupId!==groupId||typeof payload.groupName!=="string")throw new Error("The LINE group could not be verified.");
  return {groupId,groupName:payload.groupName};
 }
+
+export async function fetchLineGroupMember(groupId: string, userId: string, tutorBot: boolean) {
+  const response = await fetch(`${LINE_API_BASE}/v2/bot/group/${encodeURIComponent(groupId)}/member/${encodeURIComponent(userId)}`, {
+    headers: { Authorization: `Bearer ${lineAccessToken(tutorBot)}` },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (response.status === 404) return null;
+  const payload = asRecord(await response.json().catch(() => ({})));
+  if (!response.ok || payload.userId !== userId) throw new Error("The LINE group member could not be checked.");
+  return { userId, displayName: typeof payload.displayName === "string" ? payload.displayName : null };
+}
+
+export async function fetchLineGroupRoster(groupId: string, tutorBot: boolean) {
+  const base = `${LINE_API_BASE}/v2/bot/group/${encodeURIComponent(groupId)}`;
+  const options = () => ({
+    headers: { Authorization: `Bearer ${lineAccessToken(tutorBot)}` },
+    signal: AbortSignal.timeout(10000),
+  });
+  const countResponse = await fetch(`${base}/members/count`, options());
+  const { count } = asRecord(await countResponse.json().catch(() => ({})));
+  if (!countResponse.ok || typeof count !== "number" || !Number.isInteger(count) || count < 0 || count > 500) {
+    throw new Error("The LINE group member count could not be verified.");
+  }
+  const ids = new Set<string>();
+  let next: string | undefined;
+  for (let page = 0; page < 6; page++) {
+    const url = new URL(`${base}/members/ids`);
+    if (next) url.searchParams.set("start", next);
+    const response = await fetch(url, options());
+    if (page === 0 && response.status === 403) return { count, ids: [], idsAvailable: false };
+    const data = asRecord(await response.json().catch(() => ({})));
+    if (!response.ok || !Array.isArray(data.memberIds) || data.memberIds.some((id) => typeof id !== "string" || !/^U[0-9a-f]{32}$/.test(id))) {
+      throw new Error("The LINE group member IDs could not be verified.");
+    }
+    for (const id of data.memberIds as string[]) ids.add(id);
+    if (data.next === undefined) return { count, ids: [...ids].sort(), idsAvailable: true };
+    if (typeof data.next !== "string" || !data.next || data.next === next) break;
+    next = data.next;
+  }
+  throw new Error("LINE returned an incomplete group roster.");
+}

@@ -2,6 +2,7 @@ import { after, type NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { lineChannelSecret, lineSchedulerEnabled } from "@/lib/line/client";
 import { handleLineWebhookPost } from "@/lib/line/webhook";
+import { expertsGroup } from "@/lib/hiring/onboarding-config";
 
 export const maxDuration = 800;
 
@@ -17,12 +18,19 @@ export async function POST(request: NextRequest) {
 
   const db = getDb();
   const rawBody = await request.text();
+  const experts = process.env.EXPERTS_LINE_ENABLED === "true" ? expertsGroup() : null;
+  let alertQueued = false;
   const result = await handleLineWebhookPost({
     db,
     rawBody,
     signature: request.headers.get("x-line-signature"),
     channelSecret: lineChannelSecret(tutorBot),
     progressOnly: tutorBot,
+    observeGroupEvent: experts?.tutorBot === tutorBot ? async (event) => {
+      if ((event as { source?: { groupId?: unknown } } | null)?.source?.groupId !== experts.id) return;
+      const { recordExpertsEvent } = await import("@/lib/hiring/experts");
+      if (await recordExpertsEvent(db, tutorBot, event)) alertQueued = true;
+    } : undefined,
     handleWeekendCommand: tutorBot ? async event => {
       const text = (event as { message?: { text?: unknown } } | null)?.message?.text;
       if (typeof text !== "string" || !["/จัดตะราง", "/จัดตาราง"].includes(text.trim())) return false;
@@ -79,5 +87,9 @@ export async function POST(request: NextRequest) {
     },
   });
 
+  if (alertQueued) after(async () => {
+    const { deliverExpertsAlerts } = await import("@/lib/hiring/experts");
+    await deliverExpertsAlerts(db);
+  });
   return NextResponse.json(result.body, { status: result.status });
 }

@@ -273,6 +273,52 @@ export const hiringDecisions = pgTable("hiring_decisions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   sentAt: timestamp("sent_at", { withTimezone: true }),
 });
+export const hiringOnboarding = pgTable("hiring_onboarding", {
+  candidateId: uuid("candidate_id").primaryKey().references(() => hiringCandidates.id, { onDelete: "cascade" }),
+  decisionId: uuid("decision_id").notNull().references(() => hiringDecisions.id, { onDelete: "cascade" }),
+  intake: jsonb("intake").notNull().$type<import("@/lib/hiring/onboarding").OnboardingIntake>(),
+  submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
+  lineUserId: text("line_user_id").unique(),
+  lineName: text("line_name"),
+  signedAt: timestamp("signed_at", { withTimezone: true }),
+  invitedAt: timestamp("invited_at", { withTimezone: true }),
+  joinedAt: timestamp("joined_at", { withTimezone: true }),
+  tutorKey: text("tutor_key").unique().references(() => tutorContacts.canonicalKey),
+  tutorGroupReadyAt: timestamp("tutor_group_ready_at", { withTimezone: true }),
+});
+export const expertsBaselines = pgTable("experts_baselines", {
+  groupId: text("group_id").primaryKey(),
+  tutorBot: boolean("tutor_bot").notNull(),
+  appCount: integer("app_count").notNull(),
+  capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  capturedBy: text("captured_by").notNull(),
+});
+export const expertsMembers = pgTable("experts_members", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  groupId: text("group_id").notNull().references(() => expertsBaselines.groupId),
+  lineUserId: text("line_user_id"),
+  label: text("label"),
+  source: text("source").notNull().$type<"baseline" | "hire">(),
+  approvedAt: timestamp("approved_at", { withTimezone: true }).notNull(),
+  approvedBy: text("approved_by").notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+}, (t) => [unique("experts_members_group_user_unique").on(t.groupId, t.lineUserId)]);
+export const expertsCases = pgTable("experts_cases", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  groupId: text("group_id").notNull().references(() => expertsBaselines.groupId),
+  eventKey: text("event_key").notNull().unique(),
+  lineUserId: text("line_user_id"),
+  reason: text("reason").notNull().$type<"join" | "message" | "identity-missing" | "bot-left" | "revoked">(),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  resolvedBy: text("resolved_by"),
+  resolution: text("resolution"),
+  alertStatus: text("alert_status").notNull().default("pending").$type<"pending" | "sending" | "sent" | "review">(),
+  alertAttemptAt: timestamp("alert_attempt_at", { withTimezone: true }),
+}, (t) => [
+  uniqueIndex("experts_cases_one_open_user").on(t.groupId, t.lineUserId).where(sql`${t.resolvedAt} IS NULL`),
+  index("experts_cases_pending_alert").on(t.groupId, t.occurredAt).where(sql`${t.resolvedAt} IS NULL AND ${t.alertStatus} = 'pending'`),
+]);
 export const hiringAudit = pgTable("hiring_audit", {
   id: uuid("id").primaryKey().defaultRandom(),
   candidateId: uuid("candidate_id").references(() => hiringCandidates.id),
@@ -7212,6 +7258,7 @@ export const workforceCourseLifecycleEvents = pgTable("workforce_course_lifecycl
 export const progressLineGroups = pgTable("progress_line_groups", {
  canonicalKey: text("canonical_key").primaryKey().references(()=>tutorContacts.canonicalKey),
  groupId: text("group_id").notNull().unique(), groupName: text("group_name").notNull(),
+ tutorBot: boolean("tutor_bot"),
  enabled: boolean("enabled").notNull().default(false), registeredBy: text("registered_by").notNull(),
  updatedAt: timestamp("updated_at", {withTimezone:true}).notNull().defaultNow(),
 });

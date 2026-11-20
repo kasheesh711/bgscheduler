@@ -13,3 +13,10 @@ export async function requireHiringAdmin() {
     throw new HiringError(403, "Hiring access is required.");
   return session.user.email.trim().toLowerCase();
 }
+
+export async function requireHiringHr() {
+  const actor = await requireHiringAdmin();
+  const { finalReviewAccess } = await import("./final-review");
+  if (!finalReviewAccess(actor).hr) throw new HiringError(403, "Hiring HR access is required.");
+  return actor;
+}

@@ -7,6 +7,7 @@ import { HiringError, runtimeWritesAllowed, type HiringConfig } from "./model";
 import { checkRubric, rubricNeedsCheck } from "./marking-sheet";
 import { hiringEmailHtmlFromText } from "./email";
 import { bookingToken } from "./tokens";
+import { hiringOrigin, onboardingEnabled } from "./onboarding-config";
 import { queueRecruitmentHeadDecision } from "./recruitment";
 import { audit, briefMock, candidateById, endVisit, enqueue, settings } from "./service";
 
@@ -112,20 +113,30 @@ export async function queueFinalResult(tx: Database, candidate: Awaited<ReturnTy
   }).returning({ id: d.id });
   const outboxKey = `${candidate.id}:result:${row.id}`;
   let html: string | undefined;
+  let archivedBody: string | undefined;
   if (decision === "hire") {
     if (!offer) throw new HiringError(409, "Add the offer letter first.");
-    const link = new URL(`/hiring/book/${bookingToken(row.id, "contract", new Date(now.getTime() + 14 * 86400000))}`,
-      process.env.APP_BASE_URL || "https://bgscheduler.vercel.app").toString();
+    const expires = new Date(now.getTime() + 14 * 86400000);
+    const link = new URL(`/hiring/book/${bookingToken(row.id, "contract", expires)}`, hiringOrigin()).toString();
+    const onboarding = onboardingEnabled()
+      ? new URL(`/hiring/onboarding/${bookingToken(row.id, "onboarding", expires)}`, hiringOrigin()).toString()
+      : null;
     message.subject = "Your BeGifted offer letter";
     const invitation = `${offer}\n\nBook a 30-minute onsite appointment with HR to sign your contract.`;
-    message.body = `${invitation}\n${link}`;
-    html = hiringEmailHtmlFromText(message.subject, invitation, { label: "Book contract signing", url: link });
+    const setup = "Complete the tutor onboarding form before your appointment.";
+    archivedBody = `${invitation}\n${link}`;
+    // The dashboard reads the archived body. Keep the intake link in the outbox only.
+    message.body = onboarding ? `${archivedBody}\n\n${setup}\n${onboarding}` : archivedBody;
+    const bookingAction = { label: "Book contract signing", url: link };
+    html = onboarding
+      ? hiringEmailHtmlFromText(message.subject, `${invitation}\n\n${setup}`, bookingAction, { label: "Complete onboarding", url: onboarding })
+      : hiringEmailHtmlFromText(message.subject, invitation, bookingAction);
   }
   const stage = STAGE[decision];
   await tx.update(d).set({ status: "replaced" }).where(and(eq(d.candidateId, candidate.id), eq(d.status, "draft")));
   await enqueue(tx, { key: outboxKey, candidateId: candidate.id, kind: "email", createdAt: now,
     payload: { to: candidate.email!, subject: message.subject, text: message.body, html, closeLoop: true, workflowStage: stage } });
-  await tx.update(d).set({ outboxKey, emailSubject: message.subject, emailBody: message.body }).where(eq(d.id, row.id));
+  await tx.update(d).set({ outboxKey, emailSubject: message.subject, emailBody: archivedBody ?? message.body }).where(eq(d.id, row.id));
   await tx.update(s.hiringCandidates).set({ stage, inviteExpiresAt: null, revision: candidate.revision + 1, updatedAt: now })
     .where(eq(s.hiringCandidates.id, candidate.id));
   await audit(tx, actor, "decision-send", candidate.id, { decision, stage, outboxKey });
