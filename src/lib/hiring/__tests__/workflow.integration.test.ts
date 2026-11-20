@@ -1023,6 +1023,14 @@ describe("hiring workflow persistence", () => {
       vi.setSystemTime(new Date(mock.endTime.getTime() + 1000));
       const { config: active } = await settings(db);
       await db.update(s.hiringSettings).set({ config: { ...active, enabled: false, deliveryEnabled: false, bookingTestCandidateId: row.id } });
+      // A charted packet must also match its chart inputs: the checksum alone no longer passes sign-off.
+      const [stored] = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.id, latest.id));
+      const detail = stored.detail as { evidence: { ats: { prestige: number } } };
+      expect(detail.evidence.ats).toHaveProperty("weights");
+      await db.update(s.hiringAudit).set({ detail: { ...detail, evidence: { ...detail.evidence, ats: { ...detail.evidence.ats, prestige: detail.evidence.ats.prestige + 0.5 } } } })
+        .where(eq(s.hiringAudit.id, latest.id));
+      await expect(signOffReview(db, row.id, latest.id, "gift@example.com", "hire", "")).rejects.toThrow(/evidence changed/);
+      await db.update(s.hiringAudit).set({ detail: stored.detail }).where(eq(s.hiringAudit.id, latest.id));
       const result = await signOffReview(db, row.id, latest.id, "gift@example.com", "hire", "");
       const mail = (await jobsOf(row.id)).find((job) => job.key === result)!;
       expect(mail.payload.text).toEqual(expect.stringContaining(offer));
