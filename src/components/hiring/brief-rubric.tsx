@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ITEM_MAX, RUBRIC, RUBRIC_ITEMS, rubricTotals, type MockRubric, type RubricItem } from "@/lib/hiring/marking-sheet";
 import c from "./booking.module.css";
 
@@ -10,10 +10,18 @@ export function BriefRubric({ saved, form, url, onSent }: { saved: MockRubric | 
   const rubricId = useId();
   const [items, setItems] = useState<Partial<Record<RubricItem, number>>>(() => Object.fromEntries(RUBRIC_ITEMS.flatMap((id) => (saved?.items[id] ? [[id, saved.items[id]]] : []))));
   const [comments, setComments] = useState(saved?.comments ?? "");
-  const [state, setState] = useState<"idle" | "sending">("idle");
+  const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
   const [editCount, setEditCount] = useState(0);
   const [lastSent, setLastSent] = useState(() => saved ? { total: rubricTotals(saved).total, editCount: 0 } : null);
   const [error, setError] = useState("");
+  const feedback = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (state !== "sent" && !error) return;
+    const message = feedback.current;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    message?.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
+    message?.focus({ preventScroll: true });
+  }, [state, error]);
   if (form === "wait") return <p className={c.note}>The score form is here after the mock lesson ends. Refresh this page then.</p>;
   if (form === "closed") return <p className={c.note}>Scores for this mock are already recorded. Ask BeGifted admin to change them.</p>;
   const scored = RUBRIC_ITEMS.filter((id) => items[id]).length;
@@ -24,6 +32,7 @@ export function BriefRubric({ saved, form, url, onSent }: { saved: MockRubric | 
     if (items[id] === score) return; // a second tap on the chosen score is not an edit
     setItems({ ...items, [id]: score });
     setEditCount((count) => count + 1);
+    if (state === "sent") setState("idle");
   }
   async function send() {
     setState("sending");
@@ -34,7 +43,9 @@ export function BriefRubric({ saved, form, url, onSent }: { saved: MockRubric | 
       if (!response.ok || typeof body.total !== "number") setError(body.error ?? "The scores were not saved. Try again.");
       else {
         setLastSent({ total: body.total, editCount });
+        setState("sent");
         onSent();
+        return;
       }
     } catch {
       setError("The scores were not saved. Check your connection, then try again.");
@@ -97,22 +108,26 @@ export function BriefRubric({ saved, form, url, onSent }: { saved: MockRubric | 
         Comments
         <textarea
           className={c.input}
-          rows={5}
+          rows={3}
           maxLength={4000}
           value={comments}
           onChange={(event) => {
             setComments(event.target.value);
             setEditCount((count) => count + 1);
+            if (state === "sent") setState("idle");
           }}
         />
       </label>
-      {sentTotal !== null && (
-        <p role="status" className={c.success}>
-          Scores sent. Total {sentTotal} / {RUBRIC_ITEMS.length * ITEM_MAX}. You can change a score and send again while this link works.
-        </p>
+      {lastSent && (sentTotal !== null || state === "sent") && (
+        <>
+          <p ref={state === "sent" ? feedback : undefined} role="status" className={c.success} tabIndex={-1}>
+            Scores sent. Total {lastSent.total} / {RUBRIC_ITEMS.length * ITEM_MAX}. You can change a score and send again while this link works.
+          </p>
+          <a className={`${c.ghost} ${c.jumpLink}`} href="#recommendation">Go to recommendation</a>
+        </>
       )}
+      {error && <p ref={feedback} role="alert" className={c.alert} tabIndex={-1}>{error}</p>}
       <div className={c.field} data-sticky={sentTotal === null ? "" : undefined}>
-        {error && <p role="alert" className={c.alert}>{error}</p>}
         <p className={c.note}>{scored} of {RUBRIC_ITEMS.length} scored</p>
         <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
         {lastSent && sentTotal === null && (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import css from "./dashboard.module.css";
 
 type Review = {
@@ -11,7 +11,13 @@ type Review = {
   packet: { id: string; behavioral: string; offer: string } | null;
 };
 
-export function FinalReview({ id, signing = false, onChanged }: { id: string; signing?: boolean; onChanged?: () => Promise<void> }) {
+export function FinalReview({ id, signing = false, autoLoad = false, sendingPaused = false, onChanged }: {
+  id: string;
+  signing?: boolean;
+  autoLoad?: boolean;
+  sendingPaused?: boolean;
+  onChanged?: () => Promise<void>;
+}) {
   const url = `/api/hiring/review/${id}`;
   const [review, setReview] = useState<Review>();
   const [behavioral, setBehavioral] = useState("");
@@ -21,14 +27,21 @@ export function FinalReview({ id, signing = false, onChanged }: { id: string; si
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
-  async function load() {
+  const load = useCallback(async () => {
     const response = await fetch(url, { cache: "no-store" });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error ?? "Could not open the review.");
     setReview(data);
     setBehavioral(data.packet?.behavioral ?? data.callNotes ?? "");
     setOffer(data.packet?.offer ?? "");
-  }
+  }, [url]);
+
+  const loadStarted = useRef(false);
+  useEffect(() => {
+    if (!autoLoad || loadStarted.current) return;
+    loadStarted.current = true;
+    void load().catch((error) => setMessage(error instanceof Error ? error.message : "Could not open the review."));
+  }, [autoLoad, load]);
 
   async function act(body?: object) {
     setBusy(true);
@@ -55,7 +68,9 @@ export function FinalReview({ id, signing = false, onChanged }: { id: string; si
   return (
     <section className={signing ? css.finalReview : `${css.inspectorSection} ${css.finalReview}`} id={`review-${id}`} aria-label={signing ? "Contract signing" : "Final hiring review"}>
       {!signing && <h3 className={css.inspectorHeading}>Final hiring review</h3>}
-      {!review && <button type="button" className={css.secondary} disabled={busy} onClick={() => void act()}>{signing ? "Check contract signing" : "Open final review"}</button>}
+      {!review && (autoLoad && !message
+        ? <p className={css.inspectorMeta} role="status">Loading the review…</p>
+        : <button type="button" className={css.secondary} disabled={busy} onClick={() => void act()}>{signing ? "Check contract signing" : "Open final review"}</button>)}
       {!signing && review?.packet && (
         <div className={review.access.gift ? `${css.decisionActions} ${css.packetActions}` : css.decisionActions}>
           <a className={review.access.gift ? css.primary : css.inlineLink} href={`${url}?file=html`} target="_blank" rel="noreferrer" onClick={() => setViewed(true)}>Read review packet</a>
@@ -81,6 +96,7 @@ export function FinalReview({ id, signing = false, onChanged }: { id: string; si
             <textarea className={css.textarea} rows={2} maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} />
           </label>
           {!viewed && <p className={css.inspectorMeta}>Open the review packet first.</p>}
+          {sendingPaused && <p className={css.warnWord}>Sending is paused. Ask Kevin to turn on Automation and Messages before you sign off.</p>}
           <div className={css.signOffActions}>
             <button type="button" className={css.primary} disabled={busy || !viewed} onClick={() => {
               if (window.confirm("Approve this offer letter and send it to the candidate?"))
@@ -91,11 +107,11 @@ export function FinalReview({ id, signing = false, onChanged }: { id: string; si
                 if (window.confirm("Reject this application and inform the candidate?"))
                   void act({ action: "sign", packetId: review.packet!.id, decision: "reject", reason });
               }}>Reject and inform candidate</button>
-              {viewed && reason.trim().length < 5 && <p className={css.inspectorMeta}>Write a note to reject.</p>}
+              {viewed && reason.trim().length < 5 && <p className={css.inspectorMeta}>Write at least 5 characters to reject.</p>}
             </div>
           </div>
         </>
-      ) : <p>Waiting for HR to submit the packet.</p>)}
+      ) : <p>Waiting for HR to send the packet.</p>)}
       {closed && <p>{review.stage === "hired" ? (review.appointment
         ? `Contract signing booked for ${new Date(review.appointment).toLocaleString("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium", timeStyle: "short" })} (Bangkok).`
         : review.packet ? "Offer approved. Waiting for the contract booking." : "There is no contract booking on record.") : `Application ${review.stage}.`}</p>}

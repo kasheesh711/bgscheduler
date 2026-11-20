@@ -181,7 +181,8 @@ function ReviewRecommendations({ data, onOpenResults, readOnly, reload }: {
             </div>
             <div className={reload && d.decision === "hire" ? r.reviewActions : r.actions}>
               {!readOnly && d.decision === "hire" && d.candidateId && (data.reviewAccess?.hr || data.reviewAccess?.gift)
-                ? <FinalReview id={d.candidateId} onChanged={reload} />
+                ? <FinalReview id={d.candidateId} autoLoad={data.reviewAccess?.gift && !data.reviewAccess.hr}
+                    sendingPaused={!data.writeGate || !data.config.enabled || !data.config.deliveryEnabled} onChanged={reload} />
                 : <button type="button" className={r.big} disabled={readOnly} onClick={() => onOpenResults(d.candidateId)}>Open assessment</button>}
             </div>
           </article>
