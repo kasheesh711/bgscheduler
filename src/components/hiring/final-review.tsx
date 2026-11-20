@@ -22,8 +22,6 @@ export function reviewBlocks(writeGate: boolean, config: Parameters<typeof contr
 type ReviewAction = { action: "submit"; behavioral: string; offer: string }
   | { action: "sign"; packetId: string; decision: "hire" | "reject"; reason: string };
 
-const RETURN_KEY = "hiring-review-return";
-
 export function FinalReview({ id, signing = false, autoLoad = false, approveBlock, rejectBlock, onChanged }: {
   id: string;
   signing?: boolean;
@@ -33,6 +31,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   onChanged?: (signed: boolean) => Promise<void>;
 }) {
   const url = `/api/hiring/review/${id}`;
+  const returnKey = `review-return:${id}`;
   const controlId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   const [review, setReview] = useState<Review>();
@@ -44,28 +43,23 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   const [saved, setSaved] = useState(false);
   const [signedStage, setSignedStage] = useState<"hired" | "rejected">();
   const [error, setError] = useState<{ text: string; retry?: boolean }>();
-  const [returning] = useState(() => {
-    try {
-      return !signing && window.sessionStorage.getItem(RETURN_KEY) === id;
-    } catch {
-      return false;
-    }
-  });
   const packet = review?.packet;
   const viewed = !!packet && packet.id === viewedId;
 
   const restoreFocus = useCallback(() => {
+    const title = heading.current;
+    if (!autoLoad || !title) return false;
     try {
-      if (window.sessionStorage.getItem(RETURN_KEY) === id && heading.current && !heading.current.closest("[hidden]")) {
-        window.sessionStorage.removeItem(RETURN_KEY);
-        heading.current.focus();
-        return true;
-      }
+      if (!window.sessionStorage.getItem(returnKey)) return false;
+      title.closest("article")?.scrollIntoView({ block: "start" });
+      title.focus();
+      window.sessionStorage.removeItem(returnKey);
+      return true;
     } catch {
       // Back still works when storage is blocked.
     }
     return false;
-  }, [id]);
+  }, [autoLoad, returnKey]);
 
   const load = useCallback(async (afterSave = false, previousPacket?: string) => {
     try {
@@ -89,13 +83,13 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
 
   const loadStarted = useRef(false);
   useEffect(() => {
-    if ((!autoLoad && !returning) || signing || loadStarted.current) return;
+    if (!autoLoad || signing || loadStarted.current) return;
     loadStarted.current = true;
     void load();
-  }, [autoLoad, load, returning, signing]);
+  }, [autoLoad, load, signing]);
 
   useEffect(() => {
-    if (!review) return;
+    if (!autoLoad) return;
     restoreFocus();
     function onPageShow(event: PageTransitionEvent) {
       if (!event.persisted || !restoreFocus()) return;
@@ -105,7 +99,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
     }
     window.addEventListener("pageshow", onPageShow);
     return () => window.removeEventListener("pageshow", onPageShow);
-  }, [load, packet?.id, review, restoreFocus]);
+  }, [autoLoad, load, packet?.id, restoreFocus]);
 
   async function act(body?: ReviewAction) {
     setBusy(true);
@@ -132,15 +126,16 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   const stage = signedStage ?? review?.stage;
   const closed = stage === "hired" || stage === "rejected" || stage === "stopped";
   const instruction = `${controlId}-instruction`;
-  const approveReason = approveBlock && `${controlId}-approve`;
-  const rejectReason = rejectBlock && `${controlId}-reject`;
+  const sharedReason = approveBlock && approveBlock === rejectBlock ? `${controlId}-block` : undefined;
+  const approveReason = sharedReason ?? (approveBlock && `${controlId}-approve`);
+  const rejectReason = sharedReason ?? (rejectBlock && `${controlId}-reject`);
   const rejectHint = viewed && reason.trim().length < 5 ? `${controlId}-note` : undefined;
   const signOffDisabled = busy || !viewed || !!error?.retry;
   const awaitingSignOff = !signing && review?.access.gift && !closed;
   return (
     <section className={signing ? css.finalReview : `${css.inspectorSection} ${css.finalReview}`} id={`review-${id}`} aria-label={signing ? "Contract signing" : "Final hiring review"}>
       {!signing && <h3 className={css.inspectorHeading} ref={heading} tabIndex={-1}>Final hiring review</h3>}
-      {!review && !error && (autoLoad || returning || busy
+      {!review && !error && (autoLoad || busy
         ? <p className={css.inspectorMeta} role="status">Loading the review…</p>
         : <button type="button" className={css.secondary} onClick={() => void act()}>{signing ? "Check contract signing" : "Open final review"}</button>)}
       {awaitingSignOff && packet && <>
@@ -149,11 +144,11 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
       </>}
       {!signing && review && packet && (
         <div className={`${css.decisionActions} ${css.packetActions}`}>
-          <a className={review.access.gift ? css.primary : css.secondary} href={`${url}?file=html`} rel="noreferrer" onClick={(event) => {
+          <a className={review.access.gift ? css.primary : css.secondary} href={`${url}?file=html`} target={autoLoad ? undefined : "_blank"} rel="noreferrer" onClick={(event) => {
             setViewedId(packet.id);
             try {
               window.sessionStorage.setItem(`review-viewed:${packet.id}`, "1");
-              if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) window.sessionStorage.setItem(RETURN_KEY, id);
+              if (autoLoad && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) window.sessionStorage.setItem(returnKey, "1");
             } catch {
               // The link still works when storage is blocked.
             }
@@ -179,29 +174,30 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
           <label className={css.fieldLabel}>Sign-off note (optional for approval)
             <textarea className={css.textarea} aria-describedby={rejectHint} rows={2} maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} />
           </label>
+          {sharedReason && <p id={sharedReason} className={css.inspectorMeta}>{approveBlock}</p>}
           <div className={css.signOffActions}>
             <div>
               <button type="button" className={css.primary} disabled={signOffDisabled || !!approveBlock} aria-describedby={[instruction, approveReason].filter(Boolean).join(" ")} onClick={() => {
                 if (window.confirm("Approve this offer letter and send it to the candidate?"))
                   void act({ action: "sign", packetId: packet.id, decision: "hire", reason });
               }}>Approve and send offer</button>
-              {approveReason && <p id={approveReason} className={css.inspectorMeta}>{approveBlock}</p>}
+              {!sharedReason && approveReason && <p id={approveReason} className={css.inspectorMeta}>{approveBlock}</p>}
             </div>
             <div>
               <button type="button" className={css.secondary} disabled={signOffDisabled || reason.trim().length < 5 || !!rejectBlock} aria-describedby={[instruction, rejectReason, rejectHint].filter(Boolean).join(" ")} onClick={() => {
                 if (window.confirm("Reject this application and inform the candidate?"))
                   void act({ action: "sign", packetId: packet.id, decision: "reject", reason });
               }}>Reject and inform candidate</button>
-              {rejectReason && <p id={rejectReason} className={css.inspectorMeta}>{rejectBlock}</p>}
+              {!sharedReason && rejectReason && <p id={rejectReason} className={css.inspectorMeta}>{rejectBlock}</p>}
               {rejectHint && <p id={rejectHint} className={css.inspectorMeta}>Write at least 5 characters to reject.</p>}
             </div>
           </div>
         </>
       ) : <p>Waiting for HR to send the packet. <button type="button" className={css.secondary} disabled={busy} onClick={() => void act()}>Check again</button></p>)}
-      {closed && <p>{stage === "hired" ? (review?.appointment
+      <p role="status">{closed && (stage === "hired" ? (review?.appointment
         ? `Contract signing booked for ${new Date(review.appointment).toLocaleString("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium", timeStyle: "short" })} (Bangkok).`
-        : packet ? "Offer queued." : "There is no contract booking on record.") : `Application ${stage}.`}</p>}
-      {saved && <p role="status">Saved.</p>}
+        : packet ? "Offer queued." : "There is no contract booking on record.") : `Application ${stage}.`)}</p>
+      {saved && !signedStage && <p role="status">Saved.</p>}
       {error && <div role="alert" className={css.errorText}>
         <p>{error.text}</p>
         {error.retry && <button type="button" className={css.secondary} disabled={busy} onClick={() => void act()}>Retry</button>}

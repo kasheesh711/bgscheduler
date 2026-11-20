@@ -65,13 +65,12 @@
 .purpose { margin: 0; padding: 8px 24px 0; color: var(--support); }
 .notice { margin-left: auto; color: var(--good); }
 .viewSwitch { display: flex; flex-wrap: wrap; max-width: 100%; gap: 2px; padding: 2px; border-radius: 18px; background: var(--tint); }
-.surface .viewSwitch button { padding: 5px 14px; white-space: nowrap; border-radius: 999px; font-weight: 500; color: var(--support); transition: color 150ms, background-color 150ms; }
+.surface .viewSwitch button { min-height: 44px; padding: 5px 14px; white-space: nowrap; border-radius: 999px; font-weight: 500; color: var(--support); transition: color 150ms, background-color 150ms; }
 .surface .viewSwitch button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
 .mobileStatus { display: none; color: var(--muted); white-space: nowrap; }
 @media (width < 720px) {
   .statusSubtitle { display: none; }
   .mobileStatus { display: block; }
-  .surface .viewSwitch button { min-height: 44px; }
 }
 .alert { margin: 8px 24px 0; padding: 8px 12px; border-radius: 8px; background: #fdecec; color: var(--danger); }
 .loading { padding: 32px 24px; color: var(--muted); }
@@ -448,7 +447,9 @@
 
 .surface .finalReview :is(.primary, .secondary) { min-width: 44px; min-height: 44px; max-width: 100%; text-align: center; overflow-wrap: anywhere; }
 .surface .finalReview :is(.primary, .secondary):disabled { opacity: 1; border: 1px solid #887f74; background: #f6f1e9; color: #5c554c; }
-.finalReview .inspectorHeading:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.finalReview .inspectorHeading:focus-visible,
+.surface :is(.packetActions, .signOffActions) :is(a, button):focus-visible,
+.surface .viewSwitch button:focus-visible { outline: 2px solid #c65e50; outline-offset: 2px; }
 .finalReview .fieldLabel { margin-top: 8px; }
 .finalReview .textarea { min-height: 44px; }
 .reviewStatus { display: flex; align-items: center; gap: 8px; margin-top: 4px; color: var(--support); }
@@ -778,7 +779,6 @@
 .skeletonLine { height: 44px; border-radius: 6px; }
 /* The title block has a fixed basis, so whether the view switch wraps does not depend on the subtitle that loads later. */
 .topbar > div:first-child { flex: 1 1 60ch; min-width: 0; }
-.topbar[data-heads] .viewSwitch button { min-height: 44px; }
 @media (width < 720px) {
   .topbar[data-heads] { gap: 8px; padding-inline: 16px; }
   .topbar[data-heads] > div:first-child { flex: 1 1 0; }

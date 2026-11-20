@@ -246,7 +246,8 @@ const script = bundled.outputFiles.find((f) => f.path.endsWith(".js")).text;
 const moduleCss = bundled.outputFiles.find((f) => f.path.endsWith(".css"))?.text ?? "";
 const from = path.join(ROOT, "src/app/globals.css");
 const globalCss = (await postcss([tailwind({ base: ROOT })]).process(readFileSync(from, "utf8"), { from })).css;
-const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${globalCss}${moduleCss}#root{--font-inter:system-ui;--font-instrument-serif:Georgia;display:flex;flex-direction:column;height:100vh;padding:12px 24px;overflow:hidden}</style></head><body><div id="root"></div><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`;
+const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hiring screens (synthetic)</title><style>${globalCss}${moduleCss}#root{--font-inter:system-ui;--font-instrument-serif:Georgia;display:flex;flex-direction:column;height:100vh;padding:12px 24px;overflow:hidden}</style></head><body><div id="root"></div><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`;
+const AXE = readFileSync(path.join(ROOT, "node_modules/axe-core/axe.min.js"), "utf8");
 const PDF = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF";
 
 const resumeRequests = [];
@@ -269,6 +270,14 @@ const shot = async (page, name, fullPage = false) => {
   if (!OUT) return;
   mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: path.join(OUT, `${name}.png`), fullPage, animations: "disabled" });
+};
+// Serious and critical WCAG A/AA problems on the visible page, as "rule: target" lines.
+const axeProblems = async (page) => {
+  await page.addScriptTag({ content: AXE });
+  return page.evaluate(async () => {
+    const result = await window.axe.run(document, { runOnly: ["wcag2a", "wcag2aa", "wcag21aa"] });
+    return result.violations.filter((v) => v.impact === "serious" || v.impact === "critical").flatMap((v) => v.nodes.map((n) => `${v.id}: ${n.target.join(" ")}`));
+  });
 };
 // ONLY=<words> runs the checks whose name holds those words, such as ONLY="screen shows" for the role screens.
 const check = async (name, action) => {
@@ -745,6 +754,7 @@ try {
     };
     await briefPage("open", 390, 844);
     await shot(page, "brief-open-phone", true);
+    assert.deepEqual(await axeProblems(page), [], "axe on brief");
     await shot(page, "brief-open-phone-fold");
     for (const select of await page.locator("form select").all()) await select.selectOption({ index: 1 });
     await page.getByRole("button", { name: /Send scores/ }).click();
@@ -759,6 +769,7 @@ try {
     await page.getByRole("button", { name: "Kru Ek" }).click();
     await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
     await shot(page, "heads-desktop");
+    assert.deepEqual(await axeProblems(page), [], "axe on heads");
     // Reload at phone size: a resize alone can leave a stale paint in the screenshot.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${origin}/?view=heads&roles=1`);
@@ -769,6 +780,7 @@ try {
       await page.goto(`${origin}/?view=review&roles=1&gift=1`);
       await page.getByRole("link", { name: "Read review packet" }).first().waitFor();
       await shot(page, `gift-review-${size}`);
+    assert.deepEqual(await axeProblems(page), [], "axe on gift");
     }
     await page.setViewportSize({ width: 1440, height: 900 });
   });

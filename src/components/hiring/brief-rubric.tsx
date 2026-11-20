@@ -90,7 +90,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, onEdit, onS
         if (!disabled) void send();
       }}
     >
-      <p className={`${c.note} ${c.scoreHint}`}>Tap a score. Use Other for 9, 8, 6, 5, 3 or 2.</p>
+      <p className={`${c.note} ${c.scoreHint}`}>Tap a score. Use Other for more scores.</p>
       {RUBRIC.map(({ part, items: partItems }) => (
         <fieldset key={part} className={c.rubricPart}>
           <legend className={c.factLabel}>{part}</legend>

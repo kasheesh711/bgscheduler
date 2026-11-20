@@ -169,9 +169,10 @@ function ReviewRecommendations({ data, onOpenResults, readOnly, reload }: {
       signed.includes(candidateId) || !["hired", "rejected", "stopped"].includes(byId.get(candidateId)?.stage ?? "")
     )));
   if (!decisions.length && !reload) return null;
+  const waiting = decisions.filter(({ candidateId }) => candidateId && !signed.includes(candidateId)).length;
   return (
-    <Section title="Tutor recommendations" count={decisions.length}>
-      {!decisions.length && <p className={r.quiet}>No candidates are waiting for final review.</p>}
+    <Section title="Tutor recommendations" count={waiting}>
+      {!waiting && <p className={r.quiet}>No candidates are waiting for final review.</p>}
       <div className={r.cards}>
         {decisions.map((d) => (
           <article key={d.candidateId} className={reload ? `${r.card} ${r.reviewCard}` : r.card}>
@@ -312,10 +313,7 @@ function useVisits(data: HiringData) {
     const now = new Date();
     const rows = buildRunSheet({ ...data, now });
     const today = localDate(now);
-    const time = formatInTimeZone(now, ZONE, "HH:mm");
-    /** True when the mock has started, so the head can score it. */
-    const started = (row: RunSheetRow) => !!row.mockStart && (row.date < today || (row.date === today && row.mockStart <= time));
-    return { rows, now, today, started, coming: upcoming(rows, today), recent: pastVisits(rows, today) };
+    return { rows, now, today, coming: upcoming(rows, today), recent: pastVisits(rows, today) };
   }, [data]);
 }
 const clock = (row: RunSheetRow) => row.paperStart ?? row.mockStart ?? "";
@@ -393,18 +391,22 @@ export function AdminScreen({ data, reload, readOnly = false, onOpenResults }: {
 
 const HEAD_KEY = "hiring-head";
 
-function HeadCard({ row, data, past, now, readOnly }: { row: RunSheetRow; data: HiringData; past: boolean; now: Date; readOnly: boolean }) {
+function headVisit(row: RunSheetRow, data: HiringData, now: Date) {
+  const mock = data.bookings.find((b) => b.kind === "mock" && b.status === "confirmed" && (b.visitId ?? b.id) === row.visitId);
+  const ended = !!mock && new Date(mock.endTime) <= now;
+  const decision = mock && data.headDecisions.find((d) => d.candidateId === row.candidateId && new Date(d.at) >= new Date(mock.startTime));
+  return { row, mock, ended, decision, due: ended && !decision };
+}
+
+function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisit>; data: HiringData; readOnly: boolean }) {
+  const { row, mock, ended, decision, due } = visit;
   const [resume, setResume] = useState(false);
   const resumeId = useId();
   const candidate = data.candidates.find((c) => c.id === row.candidateId);
-  const mock = data.bookings.find((b) => b.kind === "mock" && b.status === "confirmed" && (b.visitId ?? b.id) === row.visitId);
   const path = mock ? data.briefPaths[mock.id] : undefined;
   const subject = mock?.subjects[0];
-  const scored = subject && data.mocks.some((m) => m.candidateId === row.candidateId && m.subject === subject && m.source !== "tracker" && (m.status === "done" || m.status === "needs_check"));
-  const decision = data.headDecisions.find((d) => d.candidateId === row.candidateId);
-  const due = !decision && mock && new Date(mock.endTime) <= now;
-  // The brief decides what is open (end time, subject), so the card only tells "done" from "not done".
-  const briefLabel = !past ? "Open interview brief" : decision ? "View brief" : "Score and recommend";
+  const scored = mock && data.mocks.some((m) => m.bookingId === mock.id && m.source !== "tracker" && (m.status === "done" || m.status === "needs_check"));
+  const briefLabel = !ended ? "Open interview brief" : decision ? "View brief" : "Score and recommend";
   return (
     <article className={`${r.card} ${r.headCard}`}>
       <p className={r.time}>
@@ -470,12 +472,15 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
       // As above.
     }
   };
-  const { rows, now, today, started, recent } = useVisits(data);
+  const { rows, now, today, recent } = useVisits(data);
   const head = heads.find((h) => h.canonicalKey === key);
-  const recommended = new Set(data.headDecisions.map((decision) => decision.candidateId));
-  const done = head ? recent.filter((row) => row.hod?.key === head.canonicalKey && row.mockStart)
-    .sort((a, b) => Number(recommended.has(a.candidateId)) - Number(recommended.has(b.candidateId))).slice(0, 6) : [];
-  const coming = head ? headVisits(rows, head.canonicalKey, today) : [];
+  const visits = head ? [
+    ...recent.filter((row) => row.hod?.key === head.canonicalKey && row.mockStart).reverse(),
+    ...headVisits(rows, head.canonicalKey, today),
+  ].map((row) => headVisit(row, data, now)) : [];
+  const coming = visits.filter(({ row, mock, ended }) => !ended && (row.date >= today || mock));
+  const done = visits.filter(({ ended }) => ended).reverse()
+    .sort((a, b) => Number(b.due) - Number(a.due)).slice(0, 6);
   return (
     <div className={r.screen}>
       <div className={r.section}>
@@ -500,16 +505,16 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
               </div>
             )}
             <div className={r.cards}>
-              {coming.map((row) => (
-                <HeadCard key={row.visitId} row={row} data={data} past={started(row)} now={now} readOnly={readOnly} />
+              {coming.map((visit) => (
+                <HeadCard key={visit.row.visitId} visit={visit} data={data} readOnly={readOnly} />
               ))}
             </div>
           </Section>
           {done.length > 0 && (
             <Section title="After the mock: score and recommend" count={done.length}>
               <div className={r.cards}>
-                {done.map((row) => (
-                  <HeadCard key={row.visitId} row={row} data={data} past now={now} readOnly={readOnly} />
+                {done.map((visit) => (
+                  <HeadCard key={visit.row.visitId} visit={visit} data={data} readOnly={readOnly} />
                 ))}
               </div>
             </Section>
