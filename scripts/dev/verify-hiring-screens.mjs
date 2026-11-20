@@ -234,7 +234,8 @@ export const useSearchParams = () => new URLSearchParams(useSyncExternalStore(su
 const packetModule = await build({ entryPoints: [path.join(ROOT, "src/lib/hiring/review-document.ts")], bundle: true, write: false, platform: "node", format: "esm", tsconfig: path.join(ROOT, "tsconfig.json"), logLevel: "error" });
 const { reviewDocument } = await import(`data:text/javascript;base64,${Buffer.from(packetModule.outputFiles[0].text).toString("base64")}`);
 const rubricItems = { accuracy: 10, concepts: 10, clarity: 7, presentation: 7, interaction: 10, pace: 7, organization: 10, materials: 7, formative: 7, feedback: 9 };
-const realPacket = await (async () => { const cwd = process.cwd(); process.chdir(ROOT); try { return await reviewDocument({
+// PACKET_HTML=<file> shows a packet rendered elsewhere (for a local preview); it is never fetched from a server here.
+const realPacket = process.env.PACKET_HTML ? readFileSync(process.env.PACKET_HTML, "utf8") : await (async () => { const cwd = process.cwd(); process.chdir(ROOT); try { return await reviewDocument({
   at: "2026-11-19T03:00:00Z", author: "hr@example.test", behavioral: "Gave a specific example of adapting a lesson for a student who struggled with fractions.", offer: "Hourly rate 600 THB. About 10 hours a week, weekend mornings. Start date 1 December 2026.",
   evidence: { name: "Reply Passed", subject: "Mathematics", call: "2026-11-03T02:00:00Z", recommendation: { head: "Kru Peat", reason: "Clear and warm lesson." },
     ats: { score: 86, criteria: ["degree", "subject", "curriculum", "teaching", "english"].map((id) => ({ id, result: "met", evidence: "Taught IGCSE for 2 years" })) },
