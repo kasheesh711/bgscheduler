@@ -767,14 +767,8 @@ try {
     for (const [width, height, size] of [[1440, 900, "desktop"], [390, 844, "phone"]]) {
       await page.setViewportSize({ width, height });
       await page.goto(`${origin}/?view=review&roles=1&gift=1`);
-      await page.waitForLoadState("networkidle");
+      await page.getByRole("link", { name: "Read review packet" }).first().waitFor();
       await shot(page, `gift-review-${size}`);
-      const open = page.getByRole("button", { name: "Open final review" }).first();
-      if (await open.count()) {
-        await open.click();
-        await page.getByRole("link", { name: "Read review packet" }).first().waitFor();
-        await shot(page, `gift-review-open-${size}`);
-      }
     }
     await page.setViewportSize({ width: 1440, height: 900 });
   });

@@ -299,6 +299,11 @@ export function HiringDashboard() {
     </>
   );
 
+  const paused = data && [
+    !data.config.enabled && "Automation paused",
+    !data.config.deliveryEnabled && "Messages paused",
+  ].filter(Boolean).join(" · ");
+
   return (
     <div className={`${css.surface} ${serif.variable}`}>
       <header className={css.topbar} data-compact={view === "hr" ? "" : undefined}>
@@ -320,6 +325,7 @@ export function HiringDashboard() {
               "\u00a0"
             )}
           </p>
+          {!role && paused && <p className={css.mobileStatus}>{paused}</p>}
         </div>
         <div role="status" className={css.notice}>
           {/* Rules and setup shows these beside its Save button, where they are in view. */}
@@ -336,6 +342,12 @@ export function HiringDashboard() {
             <div className={nav.desktop}>{navigation}</div>
             <details
               className={nav.mobile}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape" || !event.currentTarget.open) return;
+                event.preventDefault();
+                event.currentTarget.open = false;
+                event.currentTarget.querySelector("summary")?.focus();
+              }}
               onClick={(event) => {
                 if (!(event.target instanceof Element) || !event.target.closest("button")) return;
                 event.currentTarget.open = false;

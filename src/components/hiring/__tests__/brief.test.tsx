@@ -47,8 +47,11 @@ describe("InterviewerBrief", () => {
   it("shows the score form only after the mock ends, with one choice for each of the 10 items", () => {
     expect(html({ form: "wait" })).toContain("after the mock lesson ends");
     expect(html({ form: "wait" })).not.toContain("<select");
-    expect(html({ form: "closed" })).toContain("already recorded");
-    expect(html({ form: "closed" })).not.toContain("<select");
+    const closed = html({ form: "closed" });
+    expect(closed).toContain("already recorded");
+    expect(closed).not.toContain("<select");
+    expect(closed).toContain("Your recommendation uses the scores on record.");
+    expect(closed).not.toContain("Your recommendation uses your last sent scores.");
     const page = html();
     expect(page.match(/<select/g)).toHaveLength(RUBRIC_ITEMS.length);
     for (const { part, items } of RUBRIC) for (const text of [part, ...items.map(([, label]) => label)]) expect(page).toContain(text);
@@ -60,6 +63,9 @@ describe("InterviewerBrief", () => {
     const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 7])), comments: "Clear lesson." };
     const page = html({ rubric });
     expect(page).toContain("Scores sent. Total 70 / 100");
+    expect(page).toContain('href="#recommendation"');
+    expect(page).toContain('id="recommendation"');
+    expect(page).toContain("Your recommendation uses your last sent scores.");
     expect(page).toContain("Clear lesson.");
     expect(page.match(/aria-checked="true"[^>]*checked=""\/>7</g)).toHaveLength(RUBRIC_ITEMS.length);
   });

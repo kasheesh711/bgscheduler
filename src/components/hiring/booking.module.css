@@ -197,7 +197,7 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.page a.scoreLink {
+.page a.jumpLink {
   min-height: 44px;
   text-decoration: none;
 }

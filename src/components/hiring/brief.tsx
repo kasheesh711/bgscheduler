@@ -44,7 +44,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
             </div>
           ))}
         </dl>
-        {brief.form === "open" && <a className={`${c.ghost} ${c.scoreLink}`} href="#scores">Go to mock scores</a>}
+        {brief.form === "open" && <a className={`${c.ghost} ${c.jumpLink}`} href="#scores">Go to mock scores</a>}
       </section>
       <section className={c.facts}>
         <h2 className={c.stepTitle}>Candidate files</h2>
@@ -80,9 +80,9 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
         <BriefRubric saved={brief.rubric} form={brief.form} url={rubricUrl} onSent={() => setSentScores(true)} />
       </section>
       {brief.form !== "wait" && (
-        <section className={c.facts}>
+        <section id="recommendation" className={c.facts} tabIndex={-1}>
           <h2 className={c.stepTitle}>Your recommendation</h2>
-          <BriefDecision sent={brief.decision} url={decisionUrl} scored={brief.form === "closed" || !!brief.rubric || sentScores} />
+          <BriefDecision sent={brief.decision} url={decisionUrl} scores={brief.rubric || sentScores ? "own" : brief.form === "closed" ? "recorded" : null} />
         </section>
       )}
     </>

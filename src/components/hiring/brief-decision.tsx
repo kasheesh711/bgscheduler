@@ -7,12 +7,13 @@ type Decision = "hire" | "reject";
 const LABEL: Record<Decision, string> = { hire: "Yes", reject: "No" };
 
 /** The tutor recommends Yes for HR review or No to queue a rejection. */
-export function BriefDecision({ sent, url, scored }: { sent: Decision | null; url: string; scored: boolean }) {
+export function BriefDecision({ sent, url, scores }: { sent: Decision | null; url: string; scores: "own" | "recorded" | null }) {
   const [done, setDone] = useState<Decision | null>(sent);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const reasonHintId = useId();
+  const scored = !!scores;
   const reasonTooShort = reason.trim().length < 5;
   async function send(decision: Decision) {
     setBusy(true);
@@ -29,7 +30,9 @@ export function BriefDecision({ sent, url, scored }: { sent: Decision | null; ur
   }
   return (
     <div className={c.field}>
-      {scored && <p className={c.note}>Your recommendation uses your last sent scores.</p>}
+      {scores && <p className={c.note}>{scores === "own"
+        ? "Your recommendation uses your last sent scores."
+        : "Your recommendation uses the scores on record."}</p>}
       {done && (
         <p role="status" className={c.note}>
           Recommendation recorded: <strong>{LABEL[done]}</strong>. {done === "hire" ? "HR will prepare the review for Gift." : "The candidate’s rejection email is queued."}
