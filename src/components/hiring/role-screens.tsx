@@ -392,18 +392,22 @@ export function AdminScreen({ data, reload, readOnly = false, onOpenResults }: {
 const HEAD_KEY = "hiring-head";
 
 function headVisit(row: RunSheetRow, data: HiringData, now: Date) {
-  const mock = data.bookings.find((b) => b.kind === "mock" && b.status === "confirmed" && (b.visitId ?? b.id) === row.visitId);
+  const mocks = data.bookings.filter((b) => b.candidateId === row.candidateId && b.kind === "mock" && b.status === "confirmed");
+  const mock = mocks.find((b) => (b.visitId ?? b.id) === row.visitId);
+  const path = mock ? data.briefPaths[mock.id] : undefined;
   const ended = !!mock && new Date(mock.endTime) <= now;
-  const decision = mock && data.headDecisions.find((d) => d.candidateId === row.candidateId && new Date(d.at) >= new Date(mock.startTime));
-  return { row, mock, ended, decision, due: ended && !decision };
+  mocks.sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+  const decision = mock && data.headDecisions.find((d) =>
+    d.candidateId === row.candidateId && mocks.find((b) => new Date(b.startTime) <= new Date(d.at))?.id === mock.id,
+  );
+  return { row, mock, path, ended, decision, due: ended && !!path && !decision };
 }
 
 function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisit>; data: HiringData; readOnly: boolean }) {
-  const { row, mock, ended, decision, due } = visit;
+  const { row, mock, path, ended, decision, due } = visit;
   const [resume, setResume] = useState(false);
   const resumeId = useId();
   const candidate = data.candidates.find((c) => c.id === row.candidateId);
-  const path = mock ? data.briefPaths[mock.id] : undefined;
   const subject = mock?.subjects[0];
   const scored = mock && data.mocks.some((m) => m.bookingId === mock.id && m.source !== "tracker" && (m.status === "done" || m.status === "needs_check"));
   const briefLabel = !ended ? "Open interview brief" : decision ? "View brief" : "Score and recommend";
@@ -479,8 +483,9 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
     ...headVisits(rows, head.canonicalKey, today),
   ].map((row) => headVisit(row, data, now)) : [];
   const coming = visits.filter(({ row, mock, ended }) => !ended && (row.date >= today || mock));
-  const done = visits.filter(({ ended }) => ended).reverse()
-    .sort((a, b) => Number(b.due) - Number(a.due)).slice(0, 6);
+  const ended = visits.filter((visit) => visit.ended).reverse();
+  const due = ended.filter((visit) => visit.due);
+  const done = ended.filter((visit) => !visit.due).slice(0, 6);
   return (
     <div className={r.screen}>
       <div className={r.section}>
@@ -495,6 +500,15 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
       </div>
       {head && (
         <>
+          {due.length > 0 && (
+            <Section title="Needs your scores" count={due.length}>
+              <div className={r.cards}>
+                {due.map((visit) => (
+                  <HeadCard key={visit.row.visitId} visit={visit} data={data} readOnly={readOnly} />
+                ))}
+              </div>
+            </Section>
+          )}
           <Section title="Coming to you" count={coming.length}>
             {!coming.length && (
               <div className={r.card}>
@@ -511,7 +525,7 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
             </div>
           </Section>
           {done.length > 0 && (
-            <Section title="After the mock: score and recommend" count={done.length}>
+            <Section title="Past mocks" count={done.length}>
               <div className={r.cards}>
                 {done.map((visit) => (
                   <HeadCard key={visit.row.visitId} visit={visit} data={data} readOnly={readOnly} />

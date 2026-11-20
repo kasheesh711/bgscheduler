@@ -74,7 +74,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
       try {
         if (data.packet && window.sessionStorage.getItem(`review-viewed:${data.packet.id}`)) setViewedId(data.packet.id);
       } catch {
-        // The link still records a read in this page.
+        // A read in this page still works when storage is blocked.
       }
     } catch (error) {
       setError({ text: afterSave ? "Could not refresh the review." : (error instanceof Error && error.message) || "Could not open the review.", retry: true });
@@ -123,6 +123,28 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
     }
   }
 
+  async function readPacket(href: string, packetId: string) {
+    setBusy(true);
+    setError(undefined);
+    setViewedId(undefined);
+    try {
+      const response = await fetch(href, { cache: "no-store" });
+      if (!response.ok) throw new Error();
+      try {
+        window.sessionStorage.setItem(`review-viewed:${packetId}`, "1");
+        window.sessionStorage.setItem(returnKey, "1");
+      } catch {
+        // The packet still opens when storage is blocked.
+      }
+      setViewedId(packetId);
+      window.location.assign(href);
+    } catch {
+      setError({ text: "Could not open the packet. Try again." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const stage = signedStage ?? review?.stage;
   const closed = stage === "hired" || stage === "rejected" || stage === "stopped";
   const instruction = `${controlId}-instruction`;
@@ -145,10 +167,14 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
       {!signing && review && packet && (
         <div className={`${css.decisionActions} ${css.packetActions}`}>
           <a className={review.access.gift ? css.primary : css.secondary} href={`${url}?file=html`} target={autoLoad ? undefined : "_blank"} rel="noreferrer" onClick={(event) => {
+            if (autoLoad) {
+              event.preventDefault();
+              if (!busy) void readPacket(event.currentTarget.href, packet.id);
+              return;
+            }
             setViewedId(packet.id);
             try {
               window.sessionStorage.setItem(`review-viewed:${packet.id}`, "1");
-              if (autoLoad && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) window.sessionStorage.setItem(returnKey, "1");
             } catch {
               // The link still works when storage is blocked.
             }

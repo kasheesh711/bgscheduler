@@ -82,6 +82,11 @@ describe("InterviewerBrief", () => {
     expect(page).not.toContain('type="radio"');
   });
 
+  it("makes the recorded recommendation focusable", () => {
+    const page = html({ form: "closed", decision: "hire" });
+    expect(page).toMatch(/<p role="status"[^>]*tabindex="-1">Recommendation recorded: <strong>Yes<\/strong>/i);
+  });
+
   it("gives one message for a dead link", () => {
     expect(renderToStaticMarkup(<BriefGone />)).toContain("invalid or has expired");
   });

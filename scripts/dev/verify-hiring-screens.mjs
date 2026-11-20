@@ -275,7 +275,7 @@ const shot = async (page, name, fullPage = false) => {
 const axeProblems = async (page) => {
   await page.addScriptTag({ content: AXE });
   return page.evaluate(async () => {
-    const result = await window.axe.run(document, { runOnly: ["wcag2a", "wcag2aa", "wcag21aa"] });
+    const result = await window.axe.run(document, { runOnly: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"] });
     return result.violations.filter((v) => v.impact === "serious" || v.impact === "critical").flatMap((v) => v.nodes.map((n) => `${v.id}: ${n.target.join(" ")}`));
   });
 };
@@ -770,10 +770,14 @@ try {
     await page.keyboard.press("ArrowRight");
     await shot(page, "brief-focus-phone");
     for (const width of [320, 390]) {
-      await briefPage("open", width, 700);
-      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `brief scrolls sideways at ${width}px`);
+      await briefPage("open", width, 700, false);
+      // The page scrolls inside main (.page), as in production, so measure that box and the document.
+      assert.ok(await page.evaluate(() => [document.documentElement, document.querySelector("main")].every((box) => box.scrollWidth <= box.clientWidth)), `brief scrolls sideways at ${width}px`);
+      if (width === 320) {
+        await briefPage("open", width, 700);
+        await shot(page, "brief-open-320", true);
+      }
     }
-    await shot(page, "brief-open-320", true);
     await briefPage("wait", 390, 844);
     await shot(page, "brief-wait-phone", true);
     await briefPage("open", 1440, 900);

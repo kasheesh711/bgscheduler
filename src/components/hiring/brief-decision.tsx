@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import c from "./booking.module.css";
 
 type Decision = "hire" | "reject";
@@ -13,7 +13,11 @@ export function BriefDecision({ sent, url, scores, unsent }: { sent: Decision | 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const reasonHintId = useId();
+  const recorded = useRef<HTMLParagraphElement>(null);
   const reasonTooShort = reason.trim().length < 5;
+  useEffect(() => {
+    if (done && !sent) recorded.current?.focus();
+  }, [done, sent]);
   async function send(decision: Decision) {
     setBusy(true);
     setError("");
@@ -40,7 +44,7 @@ export function BriefDecision({ sent, url, scores, unsent }: { sent: Decision | 
         ? "Your recommendation uses your last sent scores."
         : "Your recommendation uses the scores on record."}</p>
       {done && (
-        <p role="status" className={c.note}>
+        <p ref={recorded} role="status" className={c.note} tabIndex={-1}>
           Recommendation recorded: <strong>{LABEL[done]}</strong>. {done === "hire" ? "HR will prepare the review for Gift." : "The candidate’s rejection email is queued."}
         </p>
       )}
