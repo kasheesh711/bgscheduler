@@ -21,7 +21,9 @@ async function Body({ params }: { params: Promise<{ token: string }> }) {
     if (!(error instanceof HiringError)) throw error;
     return <BriefGone />;
   }
-  return <InterviewerBrief brief={brief} resumeUrl={`/api/hiring/brief/${token}/resume`} rubricUrl={`/api/hiring/brief/${token}/rubric`} decisionUrl={`/api/hiring/brief/${token}/decision`} />;
+  // The page is a client component: send only the answers it shows, not the sheet row or submit time.
+  const answers = brief.answers && { ...brief.answers, sourceRow: 0, submittedAt: "" };
+  return <InterviewerBrief brief={{ ...brief, answers }} resumeUrl={`/api/hiring/brief/${token}/resume`} rubricUrl={`/api/hiring/brief/${token}/rubric`} decisionUrl={`/api/hiring/brief/${token}/decision`} />;
 }
 
 export default function Page(props: { params: Promise<{ token: string }> }) {

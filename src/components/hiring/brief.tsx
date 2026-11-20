@@ -61,7 +61,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
         )}
       </section>
       <details className={c.preScreen}>
-        <summary className={c.stepTitle}>Pre-screen answers</summary>
+        <summary className={c.stepTitle}><h2 className={c.summaryHeading}>Pre-screen answers</h2></summary>
         {brief.answers ? (
           <dl className={c.answers}>
             {ANSWER_LABELS.map(([key, label]) => (
@@ -82,7 +82,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
       {brief.form !== "wait" && (
         <section className={c.facts}>
           <h2 className={c.stepTitle}>Your recommendation</h2>
-          <BriefDecision sent={brief.decision} url={decisionUrl} scored={!!brief.rubric || sentScores} />
+          <BriefDecision sent={brief.decision} url={decisionUrl} scored={brief.form === "closed" || !!brief.rubric || sentScores} />
         </section>
       )}
     </>

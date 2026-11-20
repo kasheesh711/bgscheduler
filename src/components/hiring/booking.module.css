@@ -840,3 +840,10 @@ textarea.input {
     transition: none !important;
   }
 }
+
+/* The heading inside the pre-screen summary keeps the summary look. */
+.summaryHeading {
+  display: inline;
+  margin: 0;
+  font: inherit;
+}
