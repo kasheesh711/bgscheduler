@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatInTimeZone } from "date-fns-tz";
-import { localDate, ZONE, type Subject } from "@/lib/hiring/model";
+import { checkRubric, rubricNeedsCheck } from "@/lib/hiring/marking-sheet";
+import { isDecided, localDate, shiftDate, ZONE, type Subject } from "@/lib/hiring/model";
 import { buildRunSheet, headName, headVisits, pastVisits, upcoming, type RunSheetRow } from "@/lib/hiring/run-sheet";
 import { dayTitle, openHeadDecisions, weekCalls } from "@/lib/hiring/role-views";
 import { universityName } from "@/lib/hiring/seek-view";
-import { FinalReview } from "./final-review";
+import { FinalReview, reviewBlocks } from "./final-review";
 import { resultEmailState, ResultUpload } from "./assessment-screen";
 import { callCommand, callState, callSubjects, triesText } from "./calls-screen";
 import { PhoneLink, ResumePeek, SeekApplicationReview } from "./candidate-inspector";
@@ -18,17 +19,20 @@ import r from "./role-screens.module.css";
 const shortDay = (date: string) =>
   new Date(`${date}T12:00:00Z`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 
-function ResumeButton({ open, onToggle, name }: { open: boolean; onToggle: () => void; name: string }) {
+function ResumeButton({ open, onToggle, name, panelId }: { open: boolean; onToggle: () => void; name: string; panelId: string }) {
   return (
-    <button type="button" className={r.big} aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} the résumé of ${name}`} onClick={onToggle}>
+    <button type="button" className={r.big} aria-expanded={open} aria-controls={panelId} aria-label={`${open ? "Hide" : "Show"} the résumé of ${name}`} onClick={(event) => {
+      onToggle();
+      if (open) event.currentTarget.focus();
+    }}>
       {open ? "Hide résumé" : "Résumé"}
     </button>
   );
 }
 
-function Section({ title, count, children, controls }: { title: string; count?: number; children: ReactNode; controls?: ReactNode }) {
+function Section({ title, count, children, controls, id }: { title: string; count?: number; children: ReactNode; controls?: ReactNode; id?: string }) {
   return (
-    <section className={r.section}>
+    <section className={r.section} id={id} tabIndex={id ? -1 : undefined}>
       <div className={r.sectionHead}>
         <h2 className={r.heading}>
           {title}
@@ -160,15 +164,19 @@ function ReviewRecommendations({ data, onOpenResults, readOnly, reload }: {
   reload?: () => Promise<void>;
 }) {
   const byId = new Map(data.candidates.map((candidate) => [candidate.id, candidate]));
-  const decisions = openHeadDecisions(data.headDecisions, data.decisions)
-    .filter(({ candidateId }) => !reload || (candidateId && !["hired", "rejected", "stopped"].includes(byId.get(candidateId)?.stage ?? "")));
+  const [signed, setSigned] = useState<string[]>([]);
+  const decisions = openHeadDecisions(data.headDecisions, data.decisions.filter((decision) => !signed.includes(decision.candidateId)))
+    .filter(({ candidateId }) => !reload || (candidateId && (
+      signed.includes(candidateId) || !["hired", "rejected", "stopped"].includes(byId.get(candidateId)?.stage ?? "")
+    )));
   if (!decisions.length && !reload) return null;
+  const waiting = decisions.filter(({ candidateId }) => candidateId && !signed.includes(candidateId)).length;
   return (
-    <Section title="Tutor recommendations" count={decisions.length}>
-      {!decisions.length && <p className={r.quiet}>No candidates are waiting for final review.</p>}
+    <Section title="Tutor recommendations" count={waiting}>
+      {!waiting && <p className={r.quiet}>No candidates are waiting for final review.</p>}
       <div className={r.cards}>
         {decisions.map((d) => (
-          <article key={d.candidateId} className={r.card}>
+          <article key={d.candidateId} className={reload ? `${r.card} ${r.reviewCard}` : r.card}>
             <div className={r.cardMain}>
               <p className={r.name}>{byId.get(d.candidateId!)?.name ?? "Candidate"}</p>
               <p className={r.meta}>
@@ -182,7 +190,13 @@ function ReviewRecommendations({ data, onOpenResults, readOnly, reload }: {
             <div className={reload && d.decision === "hire" ? r.reviewActions : r.actions}>
               {!readOnly && d.decision === "hire" && d.candidateId && (data.reviewAccess?.hr || data.reviewAccess?.gift)
                 ? <FinalReview id={d.candidateId} autoLoad={data.reviewAccess?.gift && !data.reviewAccess.hr}
-                    pauseNote={!data.writeGate ? "Sign-off works only on the live site." : !data.config.enabled || !data.config.deliveryEnabled ? "Automation or Messages is off, so sign-off will be refused. Ask Kevin to turn both on." : undefined} onChanged={reload} />
+                    {...reviewBlocks(data.writeGate, data.config, d.candidateId)} onChanged={reload && (async (didSign) => {
+                      if (didSign && d.candidateId) {
+                        const candidateId = d.candidateId;
+                        setSigned((current) => [...current, candidateId]);
+                      }
+                      await reload();
+                    })} />
                 : <button type="button" className={r.big} disabled={readOnly} onClick={() => onOpenResults(d.candidateId)}>Open assessment</button>}
             </div>
           </article>
@@ -300,13 +314,10 @@ function useVisits(data: HiringData) {
     const now = new Date();
     const rows = buildRunSheet({ ...data, now });
     const today = localDate(now);
-    const time = formatInTimeZone(now, ZONE, "HH:mm");
-    /** True when the mock has started, so the head can score it. */
-    const started = (row: RunSheetRow) => !!row.mockStart && (row.date < today || (row.date === today && row.mockStart <= time));
-    return { rows, today, started, coming: upcoming(rows, today), recent: pastVisits(rows, today) };
+    return { rows, now, today, coming: upcoming(rows, today), recent: pastVisits(rows, today) };
   }, [data]);
 }
-const clock = (row: RunSheetRow) => row.paperStart ?? row.mockStart ?? "";
+const clock = (row: Pick<RunSheetRow, "paperStart" | "mockStart">) => row.paperStart ?? row.mockStart ?? "";
 const parts = (row: RunSheetRow) => [row.paperStart && `Paper ${row.paperStart}`, row.mockStart && `Mock ${row.mockStart}`].filter(Boolean).join(" · ");
 const byDay = (rows: RunSheetRow[]) => [...new Set(rows.map((row) => row.date))].map((date) => ({ date, rows: rows.filter((row) => row.date === date) }));
 
@@ -381,15 +392,37 @@ export function AdminScreen({ data, reload, readOnly = false, onOpenResults }: {
 
 const HEAD_KEY = "hiring-head";
 
-function HeadCard({ row, data, past, readOnly }: { row: RunSheetRow; data: HiringData; past: boolean; readOnly: boolean }) {
-  const [resume, setResume] = useState(false);
+function headVisit(row: Pick<RunSheetRow, "visitId" | "candidateId" | "date" | "mockStart" | "paperStart" | "subject">,
+  data: HiringData, now: Date, mock?: HiringData["bookings"][number]) {
+  const confirmed = mock?.status === "confirmed" ? mock : undefined;
+  const status = mock?.status === "cancelled" ? "Cancelled" : mock?.status === "no_show" ? "No-show" : undefined;
   const candidate = data.candidates.find((c) => c.id === row.candidateId);
-  const mock = data.bookings.find((b) => b.kind === "mock" && b.status === "confirmed" && (b.visitId ?? b.id) === row.visitId);
-  const path = mock ? data.briefPaths[mock.id] : undefined;
-  const scored = data.mocks.some((m) => m.candidateId === row.candidateId && m.source !== "tracker" && (m.status === "done" || m.status === "needs_check"));
-  const decision = data.headDecisions.find((d) => d.candidateId === row.candidateId);
-  // The brief decides what is open (end time, subject), so the card only tells "done" from "not done".
-  const briefLabel = !past ? "Open interview brief" : decision ? "View brief" : "Score and recommend";
+  const active = !!candidate && candidate.stage !== "stopped" && !isDecided(candidate.stage);
+  const path = confirmed ? data.briefPaths[confirmed.id] : undefined;
+  const ended = !!mock && (!!status || new Date(mock.endTime) <= now);
+  const decision = confirmed && data.headDecisions.find((d) => d.bookingId === confirmed.id);
+  const uncertain = data.headDecisions.some((d) => d.candidateId === row.candidateId && d.bookingId === null);
+  const subject = row.subject;
+  const bookingResult = confirmed && data.mocks.find((m) => m.bookingId === confirmed.id && m.candidateId === row.candidateId && m.subject === subject && m.source !== "tracker");
+  const otherResult = !!confirmed && !!subject && data.mocks.some((m) =>
+    m.candidateId === row.candidateId && m.subject === subject && m.source !== "tracker" && m.bookingId !== confirmed.id);
+  const checkingScores = bookingResult?.status === "uploaded" || bookingResult?.status === "marking";
+  const rubric = bookingResult?.rubric;
+  const scored = bookingResult?.status === "done" && !!rubric && !checkRubric(rubric).length && !rubricNeedsCheck(rubric);
+  const needsCheck = otherResult || (!!bookingResult && !checkingScores && !scored);
+  const draft = data.decisions.some((d) => d.candidateId === row.candidateId && d.status === "draft");
+  const due = ended && !!path && active && !decision && !uncertain && !needsCheck && !!subject && (scored || (!bookingResult && !draft));
+  const missingOutcome = ended && !!confirmed && active && !path && !decision && !uncertain && !needsCheck && (scored || (!bookingResult && !draft));
+  const needsAction = due || missingOutcome || (active && (needsCheck || (!!bookingResult && !scored)));
+  return { row, candidate, active, path, ended, decision, scored, checkingScores, needsCheck, due, missingOutcome, needsAction, status };
+}
+
+function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisit>; data: HiringData; readOnly: boolean }) {
+  const { row, candidate, active, path, decision, scored, checkingScores, needsCheck, due, missingOutcome, status } = visit;
+  const name = candidate?.name ?? "Needs review: candidate record not found";
+  const [resume, setResume] = useState(false);
+  const resumeId = useId();
+  const briefLabel = decision && !needsCheck && !checkingScores ? "View brief" : !due ? "Open interview brief" : scored ? "Record recommendation" : "Score and recommend";
   return (
     <article className={`${r.card} ${r.headCard}`}>
       <p className={r.time}>
@@ -397,9 +430,9 @@ function HeadCard({ row, data, past, readOnly }: { row: RunSheetRow; data: Hirin
         <span>{shortDay(row.date)}</span>
       </p>
       <div className={r.cardMain}>
-        <p className={r.name}>{row.candidateName}</p>
+        <p className={r.name}>{name}{due && <span className={r.due}>Due</span>}</p>
         <p className={r.meta}>
-          {row.subject ?? "Subject not recorded"} · {row.mockStart ? "You run the mock" : "Paper only: no mock"}
+          {row.subject ?? "Subject not recorded"} · {status ?? (row.mockStart ? "You run the mock" : "Paper only: no mock")}
         </p>
         <p className={r.meta}>
           {scored && (
@@ -413,17 +446,27 @@ function HeadCard({ row, data, past, readOnly }: { row: RunSheetRow; data: Hirin
             </span>
           )}
         </p>
+        {checkingScores ? <p className={r.meta}>Scores are being checked.</p>
+          : needsCheck && <p className={r.meta}>Ask admin to check the scores.</p>}
+        {row.mockStart && !path && !status && <p className={r.meta}>{missingOutcome
+          ? (scored ? "Ask admin to record the recommendation" : "Ask admin to record the outcome")
+          : "No interview brief is available."}</p>}
+        {path && !active && <p className={r.meta}>The interview brief is closed.</p>}
+        {candidate?.resumeState === "none" && <p className={r.meta}>No résumé file is stored.</p>}
+        {candidate?.resumeState === "deleted" && <p className={r.meta}>The résumé file was deleted.</p>}
       </div>
       <div className={r.actions}>
-        {path && !readOnly && (
-          <a className={r.big} data-tone={past ? "hire" : "primary"} href={path} target="_blank" rel="noopener noreferrer">
+        {path && active && !readOnly && (
+          <a className={r.big} data-tone="primary" href={due ? `${path}#${scored ? "recommendation" : "scores"}` : path} target="_blank" rel="noopener noreferrer" aria-label={`${briefLabel} for ${name}`}>
             {briefLabel}
           </a>
         )}
-        {candidate && <ResumeButton open={resume} onToggle={() => setResume(!resume)} name={row.candidateName} />}
+        {candidate && <ResumeButton open={resume} onToggle={() => setResume(!resume)} name={name} panelId={resumeId} />}
       </div>
-      {resume && candidate && (
-        <div className={r.resume}><ResumePeek candidate={candidate} months={data.config.resumeRetentionMonths} /></div>
+      {candidate && (
+        <div id={resumeId} className={r.resume} hidden={!resume}>
+          {resume && <ResumePeek candidate={candidate} months={data.config.resumeRetentionMonths} />}
+        </div>
       )}
     </article>
   );
@@ -450,11 +493,22 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
       // As above.
     }
   };
-  const { rows, today, started, recent } = useVisits(data);
+  const { rows, now, today } = useVisits(data);
   const head = heads.find((h) => h.canonicalKey === key);
-  // Started mocks first: they wait for scores and a decision. Same rule as headVisits for whose visit it is.
-  const done = head ? recent.filter((row) => row.hod?.key === head.canonicalKey && row.mockStart).slice(0, 6) : [];
-  const coming = head ? headVisits(rows, head.canonicalKey, today) : [];
+  const visits = head ? [
+    ...data.bookings.filter((mock) => mock.kind === "mock" && mock.interviewerKey === head.canonicalKey).map((mock) => {
+      const start = new Date(mock.startTime);
+      return headVisit({ visitId: mock.id, candidateId: mock.candidateId, date: localDate(start),
+        mockStart: formatInTimeZone(start, ZONE, "HH:mm"), paperStart: null, subject: mock.subjects[0] ?? null }, data, now, mock);
+    }),
+    ...headVisits(rows, head.canonicalKey, today).filter((row) => !row.mockStart).map((row) => headVisit(row, data, now)),
+  ].sort((a, b) => (a.row.date + clock(a.row)).localeCompare(b.row.date + clock(b.row))) : [];
+  const coming = visits.filter((visit) => !visit.ended);
+  const since = shiftDate(today, -56);
+  const ended = visits.filter(({ row, ended, missingOutcome, due, scored }) =>
+    ended && (row.date >= since || missingOutcome || (due && scored))).reverse();
+  const needsAction = ended.filter((visit) => visit.needsAction);
+  const done = ended.filter((visit) => !visit.needsAction).slice(0, 6);
   return (
     <div className={r.screen}>
       <div className={r.section}>
@@ -466,10 +520,22 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
             </button>
           ))}
         </div>
+        {needsAction.length > 0 && coming.length > 0 && (
+          <a className={`${r.ghost} ${r.upcomingLink}`} href="#upcoming-mocks">Go to upcoming mocks</a>
+        )}
       </div>
       {head && (
         <>
-          <Section title="Coming to you" count={coming.length}>
+          {needsAction.length > 0 && (
+            <Section title="Mocks that need action" count={needsAction.length}>
+              <div className={r.cards}>
+                {needsAction.map((visit) => (
+                  <HeadCard key={visit.row.visitId} visit={visit} data={data} readOnly={readOnly} />
+                ))}
+              </div>
+            </Section>
+          )}
+          <Section title="Coming to you" count={coming.length} id="upcoming-mocks">
             {!coming.length && (
               <div className={r.card}>
                 <div className={r.cardMain}>
@@ -479,16 +545,16 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
               </div>
             )}
             <div className={r.cards}>
-              {coming.map((row) => (
-                <HeadCard key={row.visitId} row={row} data={data} past={started(row)} readOnly={readOnly} />
+              {coming.map((visit) => (
+                <HeadCard key={visit.row.visitId} visit={visit} data={data} readOnly={readOnly} />
               ))}
             </div>
           </Section>
           {done.length > 0 && (
-            <Section title="After the mock: score and recommend" count={done.length}>
+            <Section title="Past mocks" count={done.length}>
               <div className={r.cards}>
-                {done.map((row) => (
-                  <HeadCard key={row.visitId} row={row} data={data} past readOnly={readOnly} />
+                {done.map((visit) => (
+                  <HeadCard key={visit.row.visitId} visit={visit} data={data} readOnly={readOnly} />
                 ))}
               </div>
             </Section>

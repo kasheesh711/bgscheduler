@@ -6,7 +6,7 @@ import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { hiringBookings as b, hiringPaperResults as p } from "@/lib/db/schema";
 import { requireHiringAdmin } from "@/lib/hiring/access";
-import { finalReviewAccess, latestReviewPacket, signOffReview, submitReview } from "@/lib/hiring/final-review";
+import { finalReviewAccess, latestReviewPacket, reviewPacketValid, signOffReview, submitReview } from "@/lib/hiring/final-review";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
 import { markedFile } from "@/lib/hiring/marked-file";
 import { HiringError } from "@/lib/hiring/model";
@@ -45,6 +45,7 @@ export async function GET(request: Request, { params }: Context) {
       return NextResponse.json({
         access, stage: candidate.stage, callNotes: access.hr ? candidate.callReview?.notes?.text ?? "" : "", appointment: appointment?.start ?? null,
         packet: packet && { id: packet.id, behavioral: packet.behavioral, offer: packet.offer },
+        packetValid: await reviewPacketValid(db, id, packet),
       }, { headers });
     }
     if (!packet) throw new HiringError(404, "HR has not submitted this review.");

@@ -90,10 +90,33 @@ if (/roles=1|pipeline=1/.test(location.search)) {
   Object.assign(payload, {
     reviewAccess: { hr: true, gift: false },
     calls: [{ candidateId: "k", start: at(0, 10), end: at(0, 10) }, { candidateId: "b", start: at(1, 14), end: at(1, 14) }],
-    headDecisions: [{ candidateId: "r1", decision: "hire", reason: "Clear and warm lesson.", head: "Kru Peat", draftProblem: null, at: at(0, 9) }],
+    headDecisions: [{ candidateId: "r1", bookingId: "v1m", decision: "hire", reason: "Clear and warm lesson.", head: "Kru Peat", draftProblem: null, at: at(0, 9) }],
     briefPaths: { v2m: "/hiring/brief/sample-token" },
     library: [{ id: "qp-phys", kind: "question_paper", subject: "Physics", name: "Physics paper.pdf", status: "ready" }],
   });
+  if (location.search.includes("roles=1")) {
+    const [paper, mock] = payload.bookings as { startTime: string; endTime: string }[];
+    Object.assign(paper, { startTime: at(-4, 9), endTime: at(-4, 11) });
+    Object.assign(mock, { startTime: at(-4, 11), endTime: at(-4, 12) });
+    Object.assign(payload.briefPaths, { v1m: "/hiring/brief/sample-token" });
+    const endedMocks = [
+      ["peat-no-score", "Sample Mali", -3, "confirmed"],
+      ["peat-tracker", "Sample Noi", -2, "confirmed"],
+      ["peat-sent", "Sample Pim", -1, "confirmed"],
+      ["peat-check", "Sample Fah", -1, "confirmed"],
+      ["peat-marking", "Sample Lek", -1, "confirmed"],
+      ["peat-failed", "Sample Nan", -1, "confirmed"],
+      ["peat-incomplete", "Sample Wan", -1, "confirmed"],
+      ["peat-cancelled", "Sample Kwan", -2, "cancelled"],
+      ["peat-no-show", "Sample May", -1, "no_show"],
+    ] as const;
+    for (const [id, name, day, status] of endedMocks) {
+      candidates.push(person(id, name, { seekApplicationId: null, stage: "mock_booked" }));
+      const bookings = payload.bookings as unknown[];
+      bookings.push({ id, candidateId: id, kind: "mock", status, startTime: at(day, 11), endTime: at(day, 12), visitId: null, interviewerKey: "Peat", subjects: ["Mathematics"] });
+      Object.assign(payload.briefPaths, { [id]: "/hiring/brief/sample-token" });
+    }
+  }
 }
 if (location.search.includes("pipeline=1")) {
   candidates.push(person("offer", "Sample Offer", { stage: "hired" }));
@@ -115,10 +138,23 @@ payload.config.interviewers = [{ canonicalKey: "Peat", email: "p@example.test", 
 payload.config.paperPassRules = [{ subject: "Mathematics", level: "Key Stage 3", percent: 50 }, { subject: "Mathematics", level: "AS / A-Level", percent: 50 }, { subject: "Mathematics", level: "IB SL / HL", percent: 60 }];
 payload.papers = [{ id: "p1", candidateId: "r1", bookingId: "v1e", subject: "Mathematics", source: "ai", status: "done", fileId: "f1", updatedAt: "2026-11-02T00:00:00.000Z", markSchemeUsed: false, history: null, error: null, changedBy: null, marks: { missingPages: null, comment: "Strong algebra. Weak on IB vectors.", questions: [...markQuestions("Key Stage 3", [9, 9]), ...markQuestions("AS / A-Level", [6, 5]), ...markQuestions("IB SL / HL", [3, 4])] } }];
 payload.mocks = [{ id: "m1", candidateId: "r1", bookingId: "v1m", subject: "Mathematics", source: "ai", status: "done", fileId: "f2", updatedAt: "2026-11-02T00:00:00.000Z", history: null, error: null, changedBy: null, rubric: { comments: "Clear explanations.", items: { accuracy: 10, concepts: 10, clarity: 7, presentation: 7, interaction: 10, pace: 7, organization: 10, materials: 7, formative: 7, feedback: 9 } } }];
+if (location.search.includes("roles=1")) {
+  const scored = payload.mocks[0] as Record<string, unknown>;
+  payload.mocks.push(
+    { ...scored, id: "tracker", candidateId: "peat-tracker", bookingId: null, source: "tracker", fileId: null, rubric: null },
+    { ...scored, id: "sent", candidateId: "peat-sent", bookingId: "peat-sent", source: "person", status: "done", fileId: null },
+    { ...scored, id: "check", candidateId: "peat-check", bookingId: "peat-check", source: "person", status: "needs_check", fileId: null },
+    { ...scored, id: "marking", candidateId: "peat-marking", bookingId: "peat-marking", status: "marking", rubric: null },
+    { ...scored, id: "failed", candidateId: "peat-failed", bookingId: "peat-failed", status: "failed", rubric: null },
+    { ...scored, id: "incomplete", candidateId: "peat-incomplete", bookingId: "peat-incomplete", rubric: null },
+  );
+}
 let reviewPacket: { id: string; behavioral: string; offer: string } | null = null;
 // ?gift=1: the final review as Gift sees it, with a packet from HR.
 const GIFT = location.search.includes("gift=1");
 if (GIFT) payload.reviewAccess = { hr: false, gift: true };
+// ?live=1: Automation and Messages on, so sign-off is not blocked by a switch.
+if (location.search.includes("live=1")) Object.assign(payload.config, { enabled: true, deliveryEnabled: true });
 const realFetch = window.fetch;
 (window as unknown as { posted: unknown[] }).posted = [];
 (window as unknown as { uploaded: unknown[] }).uploaded = [];
@@ -137,6 +173,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       callNotes: "", packet: null, appointment: "2026-11-20T02:30:00Z" }));
   }
   if (url.pathname === "/api/hiring/review/r1") {
+    if (url.searchParams.get("file") === "html") return new Response((window as unknown as { realPacket: string }).realPacket, { headers: { "Content-Type": "text/html" } });
     if (init?.method === "POST") {
       const body = JSON.parse(String(init.body));
       (window as unknown as { posted: unknown[] }).posted.push(body);
@@ -144,7 +181,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       return new Response(JSON.stringify({ ok: true }));
     }
     return new Response(JSON.stringify({ access: GIFT ? { hr: false, gift: true } : { hr: true, gift: false }, stage: GIFT ? "review" : "mock_booked",
-      callNotes: "Gave a specific example of adapting a lesson.", packet: GIFT ? { id: "packet", behavioral: "Gave a specific example of adapting a lesson.", offer: "Hourly rate 600 THB, 10 hours a week." } : reviewPacket, appointment: null }));
+      callNotes: "Gave a specific example of adapting a lesson.", packet: GIFT ? { id: "packet", behavioral: "Gave a specific example of adapting a lesson.", offer: "Hourly rate 600 THB, 10 hours a week." } : reviewPacket,
+      packetValid: new URLSearchParams(location.search).get("stale") !== "1", appointment: null }));
   }
   if (url.pathname === "/api/hiring/marking") {
     (window as unknown as { posted: unknown[] }).posted.push({ marking: JSON.parse(String(init?.body)) });
@@ -227,6 +265,25 @@ window.history.pushState = (...args) => { push(...args); window.dispatchEvent(ne
 const subscribe = (fn) => { window.addEventListener(change, fn); window.addEventListener("popstate", fn); return () => { window.removeEventListener(change, fn); window.removeEventListener("popstate", fn); }; };
 export const useSearchParams = () => new URLSearchParams(useSyncExternalStore(subscribe, () => location.search));
 `;
+// The real review packet HTML (src/lib/hiring/review-document.ts) for a synthetic packet, so Gift's in-page packet is the real layout.
+const packetModule = await build({ entryPoints: [path.join(ROOT, "src/lib/hiring/review-document.ts")], bundle: true, write: false, platform: "node", format: "esm", tsconfig: path.join(ROOT, "tsconfig.json"), logLevel: "error" });
+const { reviewDocument } = await import(`data:text/javascript;base64,${Buffer.from(packetModule.outputFiles[0].text).toString("base64")}`);
+const rubricItems = { accuracy: 10, concepts: 10, clarity: 7, presentation: 7, interaction: 10, pace: 7, organization: 10, materials: 7, formative: 7, feedback: 9 };
+// PACKET_HTML=<file> shows a packet rendered elsewhere (for a local preview); it is never fetched from a server here.
+const realPacket = process.env.PACKET_HTML ? readFileSync(process.env.PACKET_HTML, "utf8") : await (async () => { const cwd = process.cwd(); process.chdir(ROOT); try { return await reviewDocument({
+  at: "2026-11-19T03:00:00Z", author: "hr@example.test", behavioral: "Gave a specific example of adapting a lesson for a student who struggled with fractions.", offer: "Hourly rate 600 THB. About 10 hours a week, weekend mornings. Start date 1 December 2026.",
+  evidence: { name: "Reply Passed", subject: "Mathematics", call: "2026-11-03T02:00:00Z", recommendation: { head: "Kru Peat", reason: "Clear and warm lesson." },
+    ats: { score: 86, weights: { degree: 10, subject: 10, curriculum: 20, teaching: 20, english: 20, prestige: 20 }, prestige: 0.5, penalty: 4,
+      criteria: ["degree", "subject", "curriculum", "teaching", "english"].map((id) => ({ id, result: "met", evidence: "Taught IGCSE for 2 years" })) },
+    paper: { total: 74, max: 110, result: "passed", levels: [
+      { level: "Key Stage 3", scored: 18, max: 20, percent: 90, passPercent: 50, result: "passed" },
+      { level: "IGCSE / GCSE", scored: 38, max: 40, percent: 95, passPercent: null, result: "pass_mark_missing" },
+      { level: "AS / A-Level", scored: 11, max: 20, percent: 55, passPercent: 50, result: "passed" },
+      { level: "IB SL / HL", scored: 7, max: 20, percent: 35, passPercent: 60, result: "not_passed" },
+      { level: "AP", scored: 0, max: 10, percent: 0, passPercent: null, result: "not_done" },
+    ] },
+    mock: { total: 84, rubric: { items: rubricItems, comments: "Clear explanations. Checked understanding often." } } },
+}, "/api/hiring/review/r1?file=resume", "/api/hiring/review/r1?file=paper"); } finally { process.chdir(cwd); } })();
 const bundled = await build({
   stdin: { contents: ENTRY, resolveDir: ROOT, sourcefile: "hiring-synthetic.tsx", loader: "tsx" },
   bundle: true, write: false, outdir: "out", platform: "browser", format: "iife", target: "es2022", jsx: "automatic", tsconfig: path.join(ROOT, "tsconfig.json"),
@@ -237,6 +294,9 @@ const bundled = await build({
     bundler.onResolve({ filter: /^@vercel\/blob\/client$/ }, () => ({ path: "blob-client", namespace: "fixture" }));
     bundler.onLoad({ filter: /^blob-client$/, namespace: "fixture" }, () => ({ contents: "export const upload = async (pathname) => { window.uploaded.push(pathname); return { pathname }; };" }));
     bundler.onResolve({ filter: /^next-auth\/react$/ }, () => ({ path: "auth", namespace: "fixture" }));
+    // next/link needs the Next router; a plain anchor is enough here.
+    bundler.onResolve({ filter: /^next\/link$/ }, () => ({ path: "link", namespace: "fixture" }));
+    bundler.onLoad({ filter: /^link$/, namespace: "fixture" }, () => ({ contents: "import { createElement } from 'react'; export default function Link({ href, ...rest }) { return createElement('a', { href: String(href), ...rest }); }", resolveDir: ROOT }));
     bundler.onLoad({ filter: /^navigation$/, namespace: "fixture" }, () => ({ contents: NAVIGATION, resolveDir: ROOT }));
     bundler.onLoad({ filter: /^font$/, namespace: "fixture" }, () => ({ contents: "export const Instrument_Serif = () => ({ variable: '' });" }));
     bundler.onLoad({ filter: /^auth$/, namespace: "fixture" }, () => ({ contents: "export const signIn = async () => {};" }));
@@ -246,7 +306,8 @@ const script = bundled.outputFiles.find((f) => f.path.endsWith(".js")).text;
 const moduleCss = bundled.outputFiles.find((f) => f.path.endsWith(".css"))?.text ?? "";
 const from = path.join(ROOT, "src/app/globals.css");
 const globalCss = (await postcss([tailwind({ base: ROOT })]).process(readFileSync(from, "utf8"), { from })).css;
-const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${globalCss}${moduleCss}#root{--font-inter:system-ui;--font-instrument-serif:Georgia;display:flex;flex-direction:column;height:100vh;padding:12px 24px;overflow:hidden}</style></head><body><div id="root"></div><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`;
+const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hiring screens (synthetic)</title><style>${globalCss}${moduleCss}#root{--font-inter:system-ui;--font-instrument-serif:Georgia;display:flex;flex-direction:column;height:100vh;padding:12px 24px;overflow:hidden}</style></head><body><div id="root"></div><script>window.realPacket=${JSON.stringify(realPacket).replaceAll("</", "<\\/")};</script><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`;
+const AXE = readFileSync(path.join(ROOT, "node_modules/axe-core/axe.min.js"), "utf8");
 const PDF = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF";
 
 const resumeRequests = [];
@@ -269,6 +330,14 @@ const shot = async (page, name, fullPage = false) => {
   if (!OUT) return;
   mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: path.join(OUT, `${name}.png`), fullPage, animations: "disabled" });
+};
+// Serious and critical WCAG A/AA problems on the visible page, as "rule: target" lines.
+const axeProblems = async (page) => {
+  await page.addScriptTag({ content: AXE });
+  return page.evaluate(async () => {
+    const result = await window.axe.run(document, { runOnly: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"] });
+    return result.violations.filter((v) => v.impact === "serious" || v.impact === "critical").flatMap((v) => v.nodes.map((n) => `${v.id}: ${n.target.join(" ")}`));
+  });
 };
 // ONLY=<words> runs the checks whose name holds those words, such as ONLY="screen shows" for the role screens.
 const check = async (name, action) => {
@@ -737,19 +806,38 @@ try {
   });
   await check("the head and Gift screens render on phone and desktop", async () => {
     // The brief page scrolls as a whole page, not inside the dashboard frame.
-    const briefPage = async (state, width, height) => {
+    // full: let the document grow for a full-page shot. Otherwise the page scrolls inside .page, as in production.
+    const briefPage = async (state, width, height, full = true) => {
       await page.setViewportSize({ width, height });
       await page.goto(`${origin}/?brief=${state}`);
-      await page.addStyleTag({ content: "#root{height:auto!important;overflow:visible!important;padding:0!important}" });
+      await page.addStyleTag({ content: full ? "#root{height:auto!important;overflow:visible!important;padding:0!important}" : "#root{padding:0!important}" });
       await page.getByRole("heading", { name: "Sample Dao" }).waitFor();
     };
     await briefPage("open", 390, 844);
     await shot(page, "brief-open-phone", true);
+    assert.deepEqual(await axeProblems(page), [], "axe on brief");
     await shot(page, "brief-open-phone-fold");
     for (const select of await page.locator("form select").all()) await select.selectOption({ index: 1 });
     await page.getByRole("button", { name: /Send scores/ }).click();
     await page.getByText(/Scores sent/).waitFor();
     await shot(page, "brief-sent-phone", true);
+    // The jump link lands with the first score row and the Send bar on screen; keyboard focus is visible.
+    await briefPage("open", 390, 844, false);
+    await page.getByRole("link", { name: "Go to mock scores" }).click();
+    await page.waitForTimeout(400);
+    await shot(page, "brief-jump-phone");
+    await page.locator("#scores input[type=radio]").first().focus();
+    await page.keyboard.press("ArrowRight");
+    await shot(page, "brief-focus-phone");
+    for (const width of [320, 390]) {
+      await briefPage("open", width, 700, false);
+      // The page scrolls inside main (.page), as in production, so measure that box and the document.
+      assert.ok(await page.evaluate(() => [document.documentElement, document.querySelector("main")].every((box) => box.scrollWidth <= box.clientWidth)), `brief scrolls sideways at ${width}px`);
+      if (width === 320) {
+        await briefPage("open", width, 700);
+        await shot(page, "brief-open-320", true);
+      }
+    }
     await briefPage("wait", 390, 844);
     await shot(page, "brief-wait-phone", true);
     await briefPage("open", 1440, 900);
@@ -759,17 +847,105 @@ try {
     await page.getByRole("button", { name: "Kru Ek" }).click();
     await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
     await shot(page, "heads-desktop");
+    assert.deepEqual(await axeProblems(page), [], "axe on heads");
     // Reload at phone size: a resize alone can leave a stale paint in the screenshot.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${origin}/?view=heads&roles=1`);
     await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
     await shot(page, "heads-phone");
+    // Kru Peat's ended mocks: each card names its next step.
+    for (const [width, height, size] of [[1440, 900, "desktop"], [390, 844, "phone"]]) {
+      await page.setViewportSize({ width, height });
+      await page.goto(`${origin}/?view=heads&roles=1`);
+      await page.getByRole("button", { name: "Kru Peat" }).click();
+      await page.getByRole("link", { name: /Record recommendation/ }).first().waitFor();
+      await shot(page, `heads-peat-${size}`, size === "phone");
+    }
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto(`${origin}/?view=heads&roles=1`);
+    const actionMocks = page.locator("section").filter({ has: page.getByRole("heading", { name: /Mocks that need action/ }) });
+    for (const [name, note] of [
+      ["Sample Lek", "Scores are being checked."],
+      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => [name, "Ask admin to check the scores."]),
+    ]) {
+      const card = actionMocks.getByRole("article").filter({ hasText: name });
+      await card.getByText(note, { exact: true }).waitFor();
+      assert.equal(await card.getByText("Due", { exact: true }).count(), 0);
+      const link = card.getByRole("link", { name: `Open interview brief for ${name}` });
+      assert.equal(await link.getAttribute("href"), "/hiring/brief/sample-token");
+      const target = await link.boundingBox();
+      assert.ok(target.width >= 44 && target.height >= 44, `brief link is too small for ${name}`);
+    }
+    const dashboardFits = () => page.evaluate(() => [document.documentElement, document.querySelector("#root > div")].every((box) => box.scrollWidth <= box.clientWidth));
+    assert.ok(await dashboardFits(), "Heads scrolls sideways at 320px");
     for (const [width, height, size] of [[1440, 900, "desktop"], [390, 844, "phone"]]) {
       await page.setViewportSize({ width, height });
       await page.goto(`${origin}/?view=review&roles=1&gift=1`);
-      await page.getByRole("link", { name: "Read review packet" }).first().waitFor();
+      await page.getByRole("button", { name: "Read review packet" }).first().waitFor();
       await shot(page, `gift-review-${size}`);
+      assert.deepEqual(await axeProblems(page), [], "axe on gift");
     }
+    // With the switches on, Approve unlocks only after the packet is shown.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${origin}/?view=review&roles=1&gift=1&live=1`);
+    const approve = page.getByRole("button", { name: "Approve and send offer" }).first();
+    await approve.waitFor();
+    assert.equal(await approve.isDisabled(), true);
+    await page.getByRole("button", { name: /Read review packet/ }).first().click();
+    await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" }).waitFor();
+    await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => b.textContent === "Approve and send offer" && !b.disabled));
+    await page.getByRole("button", { name: "Close packet" }).first().click();
+    assert.equal(await approve.isEnabled(), true);
+    await shot(page, "gift-review-ready-phone");
+    await page.goto(`${origin}/?view=review&roles=1&gift=1&stale=1&live=1`);
+    const read = page.getByRole("button", { name: "Read review packet" }).first();
+    const reject = page.getByRole("button", { name: "Reject and inform candidate" }).first();
+    await page.getByRole("alert").filter({ hasText: "The evidence changed. Ask HR to send a new packet." }).waitFor();
+    await page.getByRole("textbox", { name: "Sign-off note (optional for approval)" }).first().fill("Reviewed the evidence.");
+    assert.equal(await approve.isDisabled(), true);
+    assert.equal(await reject.isDisabled(), true);
+    assert.equal(await read.isDisabled(), true);
+    await shot(page, "gift-review-stale-phone");
+    await page.evaluate(() => {
+      const url = new URL(location.href);
+      url.searchParams.delete("stale");
+      history.replaceState(null, "", url);
+    });
+    await page.getByRole("button", { name: "Check again" }).click();
+    await page.getByText("Read the packet first.").first().waitFor();
+    assert.equal(await approve.isDisabled(), true);
+    assert.equal(await reject.isDisabled(), true);
+    await read.click();
+    await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" }).waitFor();
+    await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => b.textContent === "Approve and send offer" && !b.disabled));
+    await page.getByRole("button", { name: "Close packet" }).first().click();
+    assert.equal(await reject.isEnabled(), true);
+    // Gift reads the packet in the page; sign-off unlocks only after it is shown (here Reject still needs a note).
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${origin}/?view=review&roles=1&gift=1`);
+    await page.getByRole("button", { name: /Read review packet/ }).first().click();
+    await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" }).waitFor();
+    await page.waitForTimeout(300);
+    const packetRoot = page.frameLocator("iframe[title^='Review packet']").locator("html");
+    const assertPacketFits = async (width) => {
+      assert.ok(await page.locator("html").evaluate((root) => root.scrollWidth <= root.clientWidth), `Gift page scrolls sideways at ${width}px`);
+      assert.ok(await packetRoot.evaluate(async (root) => {
+        await root.ownerDocument.fonts.ready;
+        return root.scrollWidth <= root.clientWidth;
+      }), `Gift packet iframe scrolls sideways at ${width}px`);
+    };
+    await assertPacketFits(390);
+    await shot(page, "gift-review-packet-phone");
+    assert.deepEqual(await axeProblems(page), [], "axe on gift packet");
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto(`${origin}/?view=review&roles=1&gift=1`);
+    await page.getByRole("button", { name: "Read review packet" }).first().waitFor();
+    assert.ok(await dashboardFits(), "Gift review scrolls sideways at 320px");
+    await shot(page, "gift-review-320");
+    await page.getByRole("button", { name: /Read review packet/ }).first().click();
+    await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" }).waitFor();
+    await assertPacketFits(320);
+    await shot(page, "gift-review-packet-320");
     await page.setViewportSize({ width: 1440, height: 900 });
   });
   await check("the page has no script errors", async () => assert.deepEqual(errors, []));

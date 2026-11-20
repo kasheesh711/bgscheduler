@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { RUBRIC, RUBRIC_ITEMS } from "@/lib/hiring/marking-sheet";
 import { ANSWER_LABELS } from "@/lib/hiring/model";
 import { BriefGone, InterviewerBrief } from "../brief";
+import { BriefDecision } from "../brief-decision";
 
 const answers = Object.fromEntries(ANSWER_LABELS.map(([key]) => [key, `answer for ${key}`]));
 const brief = {
@@ -54,20 +55,50 @@ describe("InterviewerBrief", () => {
     expect(closed).not.toContain("Your recommendation uses your last sent scores.");
     const page = html();
     expect(page.match(/<select/g)).toHaveLength(RUBRIC_ITEMS.length);
-    for (const { part, items } of RUBRIC) for (const text of [part, ...items.map(([, label]) => label)]) expect(page).toContain(text);
+    for (const { part, items } of RUBRIC) {
+      expect(page).toContain(part);
+      for (const [, label] of items) {
+        expect(page).toContain(`<legend>${label}</legend>`);
+        expect(page).toContain(`Other score for ${label}`);
+      }
+    }
+    expect(page.match(/type="radio"/g)).toHaveLength(4 * RUBRIC_ITEMS.length);
     expect(page).toContain("Send scores");
     expect(page).not.toContain("Scores sent");
+    expect(page).toContain("Send your scores first.");
+    expect(page).not.toContain("Reason (required for No)");
+    expect(page).not.toContain("Yes, send to HR");
   });
 
-  it("shows the interviewer's own sent scores again, with the total", () => {
-    const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 7])), comments: "Clear lesson." };
+  it("shows a summary of the interviewer's sent scores", () => {
+    const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 9])), comments: "Clear lesson." };
     const page = html({ rubric });
-    expect(page).toContain("Scores sent. Total 70 / 100");
+    expect(page).toContain('aria-label="Scores sent. 90/100."');
+    expect(page).toContain("Scores sent · <strong>90 / 100</strong>");
+    expect(page).toContain("Edit scores");
     expect(page).toContain('href="#recommendation"');
     expect(page).toContain('id="recommendation"');
     expect(page).toContain("Your recommendation uses your last sent scores.");
-    expect(page).toContain("Clear lesson.");
-    expect(page.match(/aria-checked="true"[^>]*checked=""\/>7</g)).toHaveLength(RUBRIC_ITEMS.length);
+    expect(page).not.toContain("Clear lesson.");
+    expect(page).not.toContain('type="radio"');
+  });
+
+  it("shows the saved total and locks the scores when the recommendation is recorded", () => {
+    const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 9])), comments: "Clear lesson." };
+    const page = html({ form: "closed", decision: "hire", rubric });
+    expect(page).toContain("Scores sent · <strong>90 / 100</strong>");
+    expect(page).toContain("Scores and recommendation are recorded. Ask BeGifted admin to change them.");
+    expect(page).not.toContain("Edit scores");
+    expect(page).toMatch(/<p role="status"[^>]*tabindex="-1">Recommendation recorded: <strong>Yes<\/strong>/i);
+  });
+
+  it("shows the sending status and locks the reason while the recommendation is sent", () => {
+    const page = renderToStaticMarkup(
+      <BriefDecision sent={null} onSent={() => {}} url="/api/hiring/brief/t/decision" scores="own"
+        unsent={false} pending="recommendation" setPending={() => {}} />,
+    );
+    expect(page).toMatch(/<p role="status"[^>]*>Sending recommendation…<\/p>/);
+    expect(page).toMatch(/<textarea[^>]*\bdisabled=""/);
   });
 
   it("gives one message for a dead link", () => {
