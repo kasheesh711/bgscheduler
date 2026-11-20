@@ -746,10 +746,11 @@ try {
   });
   await check("the head and Gift screens render on phone and desktop", async () => {
     // The brief page scrolls as a whole page, not inside the dashboard frame.
-    const briefPage = async (state, width, height) => {
+    // full: let the document grow for a full-page shot. Otherwise the page scrolls inside .page, as in production.
+    const briefPage = async (state, width, height, full = true) => {
       await page.setViewportSize({ width, height });
       await page.goto(`${origin}/?brief=${state}`);
-      await page.addStyleTag({ content: "#root{height:auto!important;overflow:visible!important;padding:0!important}" });
+      await page.addStyleTag({ content: full ? "#root{height:auto!important;overflow:visible!important;padding:0!important}" : "#root{padding:0!important}" });
       await page.getByRole("heading", { name: "Sample Dao" }).waitFor();
     };
     await briefPage("open", 390, 844);
@@ -760,6 +761,19 @@ try {
     await page.getByRole("button", { name: /Send scores/ }).click();
     await page.getByText(/Scores sent/).waitFor();
     await shot(page, "brief-sent-phone", true);
+    // The jump link lands with the first score row and the Send bar on screen; keyboard focus is visible.
+    await briefPage("open", 390, 844, false);
+    await page.getByRole("link", { name: "Go to mock scores" }).click();
+    await page.waitForTimeout(400);
+    await shot(page, "brief-jump-phone");
+    await page.locator("#scores input[type=radio]").first().focus();
+    await page.keyboard.press("ArrowRight");
+    await shot(page, "brief-focus-phone");
+    for (const width of [320, 390]) {
+      await briefPage("open", width, 700);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `brief scrolls sideways at ${width}px`);
+    }
+    await shot(page, "brief-open-320", true);
     await briefPage("wait", 390, 844);
     await shot(page, "brief-wait-phone", true);
     await briefPage("open", 1440, 900);
@@ -782,6 +796,11 @@ try {
       await shot(page, `gift-review-${size}`);
     assert.deepEqual(await axeProblems(page), [], "axe on gift");
     }
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto(`${origin}/?view=review&roles=1&gift=1`);
+    await page.getByRole("link", { name: "Read review packet" }).first().waitFor();
+    assert.ok(await page.evaluate(() => document.querySelector("main, #root").scrollWidth <= window.innerWidth + 1), "Gift review scrolls sideways at 320px");
+    await shot(page, "gift-review-320");
     await page.setViewportSize({ width: 1440, height: 900 });
   });
   await check("the page has no script errors", async () => assert.deepEqual(errors, []));
