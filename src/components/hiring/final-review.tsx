@@ -196,7 +196,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
         ? <p className={css.inspectorMeta} role="status">Loading the review…</p>
         : <button type="button" className={css.secondary} onClick={() => void act()}>{signing ? "Check contract signing" : "Open final review"}</button>)}
       {(awaitingSignOff || stale) && packet && <>
-        {awaitingSignOff && <p className={css.reviewStatus}>Waiting for your sign-off</p>}
+        {awaitingSignOff && <p className={css.reviewStatus}>{stale ? "Waiting for a new packet from HR" : "Waiting for your sign-off"}</p>}
         <p id={instruction} className={css.inspectorMeta} role={stale ? "alert" : undefined}>{stale ? "The evidence changed. Ask HR to send a new packet."
           : sharedBlock ?? (viewed ? "Approve, or write a note and reject." : "Read the packet first.")}</p>
         {stale && <button type="button" className={`${css.secondary} min-h-11 min-w-11`} disabled={!!busy} onClick={() => void act()}>Check again</button>}

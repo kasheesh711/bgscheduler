@@ -123,7 +123,8 @@ export async function reviewDocument(packet: ReviewPacket, resume: string, paper
   const fontLicense = await readFile("public/brand/hiring/geist.txt", "utf8");
   const value = packet.evidence;
   const { ats, paper: sheet, mock, recommendation } = value;
-  const atsScore = Number.isInteger(ats.score) ? String(ats.score) : ats.score.toFixed(1);
+  const atsValue = Math.round(ats.score * 10) / 10;
+  const atsScore = atsValue.toFixed(1);
   const breakdown = atsBreakdown(ats, `${atsScore} / 100`);
   const paperPercent = sheet.max ? Math.round(sheet.total / sheet.max * 10_000) / 100 : 0;
   const levels = sheet.levels.filter(({ max }) => max > 0);
@@ -227,7 +228,7 @@ summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details 
 <h1>Hiring <em>review</em></h1>
 <p class="candidate">${escape(value.name)}</p><p>${escape(value.subject)} tutor</p><p class="meta">Submitted ${date(packet.at)} by ${escape(packet.author)}</p></header>
 <section><h2>Assessment summary</h2><div class="tiles">
-<div class="tile"><h3>ATS</h3>${gauge(ats.score, " / 100", null, atsScore)}</div>
+<div class="tile"><h3>ATS</h3>${gauge(atsValue, " / 100", null, atsScore)}</div>
 <div class="tile"><h3>Paper</h3>${gauge(paperPercent, "%", paperTarget)}
 <p class="paper-detail num">${escape(sheet.total)} / ${escape(sheet.max)} · ${chip(sheet.result, levels.length > 1 ? "Passed a level" : "Pass")}</p>
 ${paperTarget === null ? "" : `<p class="paper-detail meta">Pass mark ${escape(paperTarget)}%</p>`}</div>

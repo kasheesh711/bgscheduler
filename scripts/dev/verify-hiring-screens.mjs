@@ -104,6 +104,9 @@ if (/roles=1|pipeline=1/.test(location.search)) {
       ["peat-tracker", "Sample Noi", -2, "confirmed"],
       ["peat-sent", "Sample Pim", -1, "confirmed"],
       ["peat-check", "Sample Fah", -1, "confirmed"],
+      ["peat-marking", "Sample Lek", -1, "confirmed"],
+      ["peat-failed", "Sample Nan", -1, "confirmed"],
+      ["peat-incomplete", "Sample Wan", -1, "confirmed"],
       ["peat-cancelled", "Sample Kwan", -2, "cancelled"],
       ["peat-no-show", "Sample May", -1, "no_show"],
     ] as const;
@@ -141,6 +144,9 @@ if (location.search.includes("roles=1")) {
     { ...scored, id: "tracker", candidateId: "peat-tracker", bookingId: null, source: "tracker", fileId: null, rubric: null },
     { ...scored, id: "sent", candidateId: "peat-sent", bookingId: "peat-sent", source: "person", status: "done", fileId: null },
     { ...scored, id: "check", candidateId: "peat-check", bookingId: "peat-check", source: "person", status: "needs_check", fileId: null },
+    { ...scored, id: "marking", candidateId: "peat-marking", bookingId: "peat-marking", status: "marking", rubric: null },
+    { ...scored, id: "failed", candidateId: "peat-failed", bookingId: "peat-failed", status: "failed", rubric: null },
+    { ...scored, id: "incomplete", candidateId: "peat-incomplete", bookingId: "peat-incomplete", rubric: null },
   );
 }
 let reviewPacket: { id: string; behavioral: string; offer: string } | null = null;
@@ -175,7 +181,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       return new Response(JSON.stringify({ ok: true }));
     }
     return new Response(JSON.stringify({ access: GIFT ? { hr: false, gift: true } : { hr: true, gift: false }, stage: GIFT ? "review" : "mock_booked",
-      callNotes: "Gave a specific example of adapting a lesson.", packet: GIFT ? { id: "packet", behavioral: "Gave a specific example of adapting a lesson.", offer: "Hourly rate 600 THB, 10 hours a week." } : reviewPacket, appointment: null }));
+      callNotes: "Gave a specific example of adapting a lesson.", packet: GIFT ? { id: "packet", behavioral: "Gave a specific example of adapting a lesson.", offer: "Hourly rate 600 THB, 10 hours a week." } : reviewPacket,
+      packetValid: new URLSearchParams(location.search).get("stale") !== "1", appointment: null }));
   }
   if (url.pathname === "/api/hiring/marking") {
     (window as unknown as { posted: unknown[] }).posted.push({ marking: JSON.parse(String(init?.body)) });
@@ -854,12 +861,29 @@ try {
       await page.getByRole("link", { name: /Record recommendation/ }).first().waitFor();
       await shot(page, `heads-peat-${size}`, size === "phone");
     }
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto(`${origin}/?view=heads&roles=1`);
+    const actionMocks = page.locator("section").filter({ has: page.getByRole("heading", { name: /Mocks that need action/ }) });
+    for (const [name, note] of [
+      ["Sample Lek", "Scores are being checked."],
+      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => [name, "Ask admin to check the scores."]),
+    ]) {
+      const card = actionMocks.getByRole("article").filter({ hasText: name });
+      await card.getByText(note, { exact: true }).waitFor();
+      assert.equal(await card.getByText("Due", { exact: true }).count(), 0);
+      const link = card.getByRole("link", { name: `Open interview brief for ${name}` });
+      assert.equal(await link.getAttribute("href"), "/hiring/brief/sample-token");
+      const target = await link.boundingBox();
+      assert.ok(target.width >= 44 && target.height >= 44, `brief link is too small for ${name}`);
+    }
+    const dashboardFits = () => page.evaluate(() => [document.documentElement, document.querySelector("#root > div")].every((box) => box.scrollWidth <= box.clientWidth));
+    assert.ok(await dashboardFits(), "Heads scrolls sideways at 320px");
     for (const [width, height, size] of [[1440, 900, "desktop"], [390, 844, "phone"]]) {
       await page.setViewportSize({ width, height });
       await page.goto(`${origin}/?view=review&roles=1&gift=1`);
       await page.getByRole("button", { name: "Read review packet" }).first().waitFor();
       await shot(page, `gift-review-${size}`);
-    assert.deepEqual(await axeProblems(page), [], "axe on gift");
+      assert.deepEqual(await axeProblems(page), [], "axe on gift");
     }
     // With the switches on, Approve unlocks only after the packet is shown.
     await page.setViewportSize({ width: 390, height: 844 });
@@ -869,9 +893,33 @@ try {
     assert.equal(await approve.isDisabled(), true);
     await page.getByRole("button", { name: /Read review packet/ }).first().click();
     await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" }).waitFor();
-    await page.waitForFunction(() => ![...document.querySelectorAll("button")].find((b) => b.textContent === "Approve and send offer")?.disabled);
+    await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => b.textContent === "Approve and send offer" && !b.disabled));
     await page.getByRole("button", { name: "Close packet" }).first().click();
+    assert.equal(await approve.isEnabled(), true);
     await shot(page, "gift-review-ready-phone");
+    await page.goto(`${origin}/?view=review&roles=1&gift=1&stale=1&live=1`);
+    const read = page.getByRole("button", { name: "Read review packet" }).first();
+    const reject = page.getByRole("button", { name: "Reject and inform candidate" }).first();
+    await page.getByRole("alert").filter({ hasText: "The evidence changed. Ask HR to send a new packet." }).waitFor();
+    await page.getByRole("textbox", { name: "Sign-off note (optional for approval)" }).first().fill("Reviewed the evidence.");
+    assert.equal(await approve.isDisabled(), true);
+    assert.equal(await reject.isDisabled(), true);
+    assert.equal(await read.isDisabled(), true);
+    await shot(page, "gift-review-stale-phone");
+    await page.evaluate(() => {
+      const url = new URL(location.href);
+      url.searchParams.delete("stale");
+      history.replaceState(null, "", url);
+    });
+    await page.getByRole("button", { name: "Check again" }).click();
+    await page.getByText("Read the packet first.").first().waitFor();
+    assert.equal(await approve.isDisabled(), true);
+    assert.equal(await reject.isDisabled(), true);
+    await read.click();
+    await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" }).waitFor();
+    await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => b.textContent === "Approve and send offer" && !b.disabled));
+    await page.getByRole("button", { name: "Close packet" }).first().click();
+    assert.equal(await reject.isEnabled(), true);
     // Gift reads the packet in the page; sign-off unlocks only after it is shown (here Reject still needs a note).
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${origin}/?view=review&roles=1&gift=1`);
@@ -892,7 +940,7 @@ try {
     await page.setViewportSize({ width: 320, height: 700 });
     await page.goto(`${origin}/?view=review&roles=1&gift=1`);
     await page.getByRole("button", { name: "Read review packet" }).first().waitFor();
-    assert.ok(await page.evaluate(() => document.querySelector("main, #root").scrollWidth <= window.innerWidth + 1), "Gift review scrolls sideways at 320px");
+    assert.ok(await dashboardFits(), "Gift review scrolls sideways at 320px");
     await shot(page, "gift-review-320");
     await page.getByRole("button", { name: /Read review packet/ }).first().click();
     await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" }).waitFor();

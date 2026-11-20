@@ -406,20 +406,22 @@ function headVisit(row: Pick<RunSheetRow, "visitId" | "candidateId" | "date" | "
   const bookingResult = confirmed && data.mocks.find((m) => m.bookingId === confirmed.id && m.candidateId === row.candidateId && m.subject === subject && m.source !== "tracker");
   const otherResult = !!confirmed && !!subject && data.mocks.some((m) =>
     m.candidateId === row.candidateId && m.subject === subject && m.source !== "tracker" && m.bookingId !== confirmed.id);
-  const needsCheck = otherResult || bookingResult?.status === "needs_check";
+  const checkingScores = bookingResult?.status === "uploaded" || bookingResult?.status === "marking";
   const rubric = bookingResult?.rubric;
   const scored = bookingResult?.status === "done" && !!rubric && !checkRubric(rubric).length && !rubricNeedsCheck(rubric);
+  const needsCheck = otherResult || (!!bookingResult && !checkingScores && !scored);
   const draft = data.decisions.some((d) => d.candidateId === row.candidateId && d.status === "draft");
   const due = ended && !!path && active && !decision && !uncertain && !needsCheck && !!subject && (scored || (!bookingResult && !draft));
-  return { row, candidate, active, path, ended, decision, scored, needsCheck, due, status };
+  const needsAction = due || (active && !!bookingResult && !scored);
+  return { row, candidate, active, path, ended, decision, scored, checkingScores, needsCheck, due, needsAction, status };
 }
 
 function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisit>; data: HiringData; readOnly: boolean }) {
-  const { row, candidate, active, path, decision, scored, needsCheck, due, status } = visit;
+  const { row, candidate, active, path, decision, scored, checkingScores, needsCheck, due, status } = visit;
   const name = candidate?.name ?? "Needs review: candidate record not found";
   const [resume, setResume] = useState(false);
   const resumeId = useId();
-  const briefLabel = decision && !needsCheck ? "View brief" : !due ? "Open interview brief" : scored ? "Record recommendation" : "Score and recommend";
+  const briefLabel = decision && !needsCheck && !checkingScores ? "View brief" : !due ? "Open interview brief" : scored ? "Record recommendation" : "Score and recommend";
   return (
     <article className={`${r.card} ${r.headCard}`}>
       <p className={r.time}>
@@ -443,7 +445,8 @@ function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisi
             </span>
           )}
         </p>
-        {needsCheck && <p className={r.meta}>Ask admin to check the scores.</p>}
+        {checkingScores ? <p className={r.meta}>Scores are being checked.</p>
+          : needsCheck && <p className={r.meta}>Ask admin to check the scores.</p>}
         {row.mockStart && !path && !status && <p className={r.meta}>No interview brief is available.</p>}
         {path && !active && <p className={r.meta}>The interview brief is closed.</p>}
         {candidate?.resumeState === "none" && <p className={r.meta}>No résumé file is stored.</p>}
@@ -500,8 +503,8 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
   const coming = visits.filter((visit) => !visit.ended);
   const since = shiftDate(today, -56);
   const ended = visits.filter(({ row, ended }) => ended && row.date >= since).reverse();
-  const due = ended.filter((visit) => visit.due);
-  const done = ended.filter((visit) => !visit.due).slice(0, 6);
+  const needsAction = ended.filter((visit) => visit.needsAction);
+  const done = ended.filter((visit) => !visit.needsAction).slice(0, 6);
   return (
     <div className={r.screen}>
       <div className={r.section}>
@@ -516,10 +519,10 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
       </div>
       {head && (
         <>
-          {due.length > 0 && (
-            <Section title="Mocks that need action" count={due.length}>
+          {needsAction.length > 0 && (
+            <Section title="Mocks that need action" count={needsAction.length}>
               <div className={r.cards}>
-                {due.map((visit) => (
+                {needsAction.map((visit) => (
                   <HeadCard key={visit.row.visitId} visit={visit} data={data} readOnly={readOnly} />
                 ))}
               </div>

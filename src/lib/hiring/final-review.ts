@@ -93,7 +93,9 @@ export async function submitReview(db: Database, id: string, actor: string, inpu
     const material = await evidence(tx, id);
     const detail = { evidence: material, fingerprint: fingerprint(material), ...input };
     const previous = await latestReviewPacket(tx, id);
-    if (previous?.fingerprint === detail.fingerprint && isDeepStrictEqual(comparableEvidence(previous.evidence), comparableEvidence(material)) &&
+    if (previous?.fingerprint === detail.fingerprint && (previous.evidence.ats.weights
+      ? isDeepStrictEqual(previous.evidence, material)
+      : isDeepStrictEqual(comparableEvidence(previous.evidence), comparableEvidence(material))) &&
         previous.behavioral === input.behavioral && previous.offer === input.offer)
       return `${id}:final-review:${previous.id}`;
     const [row] = await tx.insert(s.hiringAudit).values({ action: PACKET, actor, candidateId: id, detail }).returning({ id: s.hiringAudit.id });

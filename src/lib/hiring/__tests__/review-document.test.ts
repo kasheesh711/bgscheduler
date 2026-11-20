@@ -81,6 +81,13 @@ describe("review document", () => {
     expect(levels.match(/class="target"/g)).toHaveLength(4);
   });
 
+  it("uses the displayed ATS score to select the band", async () => {
+    const ats = { ...packet.evidence.ats, score: 59.99999999999999 };
+    const html = await reviewDocument({ ...packet, evidence: { ...packet.evidence, ats } }, "resume.pdf", "marked-exam.pdf");
+    const summary = html.split("<h2>Assessment summary</h2>")[1].split("</section>")[0];
+    expect(summary).toMatch(/<h3>ATS<\/h3>[^]*?<strong>60\.0<\/strong> \/ 100<\/p>\s*<\/div><p class="band">Fair<\/p>/);
+  });
+
   it("shows the radar and folded evidence for an old packet without weighted points", async () => {
     const { score, criteria } = packet.evidence.ats;
     const html = await reviewDocument({ ...packet, evidence: { ...packet.evidence, ats: { score, criteria } } }, "resume.pdf", "marked-exam.pdf");
