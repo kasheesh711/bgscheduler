@@ -67,12 +67,14 @@
 .picker.picker button { min-width: 44px; min-height: 44px; max-width: 100%; padding: 6px 16px; border: 1px solid var(--line); border-radius: 999px; font-weight: 600; overflow-wrap: anywhere; }
 .picker.picker button[aria-pressed="true"] { border-color: #172b4d; background: #172b4d; color: #fff; }
 .picker.picker button:focus-visible, .headCard .big:focus-visible { outline: 2px solid #c65e50; outline-offset: 2px; }
+.upcomingLink { display: none; }
 .headCard .big, .headCard .tag { white-space: normal; text-align: center; }
 .headCard .big[data-tone="primary"] { border-color: #172b4d; background: #172b4d; color: #fff; }
 .headCard .big[data-tone="primary"]:hover { background: #243d60; }
 .due { border-radius: 999px; padding: 1px 8px; background: #f8dfd9; color: #953c35; font-size: 12px; }
 
 @media (max-width: 719px) {
+  .upcomingLink { display: inline-flex; align-items: center; align-self: flex-start; }
   .card { grid-template-columns: auto minmax(0, 1fr); }
   .reviewCard { grid-template-columns: minmax(0, 1fr); }
   .actions { grid-column: 1 / -1; justify-content: stretch; }

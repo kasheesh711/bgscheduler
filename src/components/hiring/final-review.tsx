@@ -23,6 +23,15 @@ export function reviewBlocks(writeGate: boolean, config: Parameters<typeof contr
 type ReviewAction = { action: "submit"; behavioral: string; offer: string }
   | { action: "sign"; packetId: string; decision: "hire" | "reject"; reason: string };
 
+async function fetchReview(url: string) {
+  const response = await fetch(url, { cache: "no-store" });
+  const data: Review | { error?: string } | null = await response.json().catch(() => null);
+  if (!response.ok || !data || !("access" in data)) {
+    throw new Error((data && "error" in data && data.error) || "Could not open the review.");
+  }
+  return data;
+}
+
 const phoneReader = "(width < 720px)";
 function subscribeToPhoneReader(change: () => void) {
   const query = window.matchMedia(phoneReader);
@@ -61,9 +70,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
 
   const load = useCallback(async (afterSave = false, previousPacket?: string) => {
     try {
-      const response = await fetch(url, { cache: "no-store" });
-      const data: Review | { error?: string } | null = await response.json().catch(() => null);
-      if (!response.ok || !data || !("access" in data)) throw new Error(data && "error" in data ? data.error : undefined);
+      const data = await fetchReview(url);
       setReview(data);
       setViewedId((id) => data.packetValid && id === data.packet?.id ? id : undefined);
       if (!previousPacket || previousPacket !== data.packet?.id) {
@@ -89,12 +96,49 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
     if (openPage && phone) packetDialog.current?.showModal();
   }, [openPage, phone]);
 
+  const closeReader = useCallback(() => {
+    packetDialog.current?.close();
+    setPacketPage(undefined);
+    readButton.current?.focus();
+  }, []);
+
+  const closePacket = useCallback(() => {
+    if (!openPage) return;
+    if (window.history.state?.hiringReviewPacket === controlId) window.history.back();
+    closeReader();
+  }, [closeReader, controlId, openPage]);
+
+  useEffect(() => {
+    if (!openPage) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (!phone && event.key === "Escape" && !event.defaultPrevented) {
+        event.preventDefault();
+        closePacket();
+      }
+    }
+    window.addEventListener("popstate", closeReader);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("popstate", closeReader);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [openPage, phone, closeReader, closePacket]);
+
   async function act(body?: ReviewAction) {
     setBusy(body?.action === "sign" ? "sign" : "review");
     setError(undefined);
     try {
       if (body) {
         setSaved(false);
+        if (body.action === "sign") {
+          const current = await fetchReview(url);
+          if (current.packet?.id !== body.packetId || current.packetValid !== true) {
+            setReview((previous) => previous && { ...previous, packetValid: false });
+            setViewedId(undefined);
+            closePacket();
+            return;
+          }
+        }
         const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         if (!response.ok) {
           const data = await response.json().catch(() => null);
@@ -127,7 +171,6 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   async function readPacket(packetId: string) {
     setBusy("packet");
     setError(undefined);
-    setViewedId(undefined);
     try {
       const response = await fetch(`${url}?file=html`, { cache: "no-store" });
       if (response.status === 409) {
@@ -145,6 +188,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
       if (source === html) throw new Error();
       const titleTag = html.match(/<title>[^<]*<\/title>/i)?.[0] ?? "";
       const name = new DOMParser().parseFromString(titleTag, "text/html").title.replace(/^Hiring review \| /, "");
+      window.history.pushState({ hiringReviewPacket: controlId }, "");
       setPacketPage({ id: packetId, html: source, name: name || "candidate" });
     } catch (error) {
       setError({ text: (error instanceof Error && error.message) || "Could not open the packet. Try again.", packetLoad: true });
@@ -153,14 +197,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
     }
   }
 
-  function closePacket() {
-    packetDialog.current?.close();
-    setPacketPage(undefined);
-    readButton.current?.focus();
-  }
-
   async function checkPacket(packetId: string) {
-    if (busy || viewed || stale) return;
+    if (busy || stale) return;
     setBusy("review");
     const current = await load(false, packetId);
     if (current?.packet?.id === packetId) {
@@ -226,7 +264,9 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
               {packetFrame}
             </div>
           ))}
-          <a className={css.secondary} href={`${url}?file=zip`}>Download packet and files</a>
+          {stale ? (
+            <button type="button" className={css.secondary} disabled aria-disabled="true" aria-describedby={instruction}>Download packet and files</button>
+          ) : <a className={css.secondary} href={`${url}?file=zip`}>Download packet and files</a>}
         </div>
       )}
       {!signing && review?.access.hr && !closed && (

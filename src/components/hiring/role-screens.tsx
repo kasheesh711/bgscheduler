@@ -30,9 +30,9 @@ function ResumeButton({ open, onToggle, name, panelId }: { open: boolean; onTogg
   );
 }
 
-function Section({ title, count, children, controls }: { title: string; count?: number; children: ReactNode; controls?: ReactNode }) {
+function Section({ title, count, children, controls, id }: { title: string; count?: number; children: ReactNode; controls?: ReactNode; id?: string }) {
   return (
-    <section className={r.section}>
+    <section className={r.section} id={id} tabIndex={id ? -1 : undefined}>
       <div className={r.sectionHead}>
         <h2 className={r.heading}>
           {title}
@@ -412,12 +412,13 @@ function headVisit(row: Pick<RunSheetRow, "visitId" | "candidateId" | "date" | "
   const needsCheck = otherResult || (!!bookingResult && !checkingScores && !scored);
   const draft = data.decisions.some((d) => d.candidateId === row.candidateId && d.status === "draft");
   const due = ended && !!path && active && !decision && !uncertain && !needsCheck && !!subject && (scored || (!bookingResult && !draft));
-  const needsAction = due || (active && (needsCheck || (!!bookingResult && !scored)));
-  return { row, candidate, active, path, ended, decision, scored, checkingScores, needsCheck, due, needsAction, status };
+  const missingOutcome = ended && !!confirmed && active && !path && !decision && !uncertain && !needsCheck && !bookingResult && !draft;
+  const needsAction = due || missingOutcome || (active && (needsCheck || (!!bookingResult && !scored)));
+  return { row, candidate, active, path, ended, decision, scored, checkingScores, needsCheck, due, missingOutcome, needsAction, status };
 }
 
 function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisit>; data: HiringData; readOnly: boolean }) {
-  const { row, candidate, active, path, decision, scored, checkingScores, needsCheck, due, status } = visit;
+  const { row, candidate, active, path, decision, scored, checkingScores, needsCheck, due, missingOutcome, status } = visit;
   const name = candidate?.name ?? "Needs review: candidate record not found";
   const [resume, setResume] = useState(false);
   const resumeId = useId();
@@ -447,7 +448,7 @@ function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisi
         </p>
         {checkingScores ? <p className={r.meta}>Scores are being checked.</p>
           : needsCheck && <p className={r.meta}>Ask admin to check the scores.</p>}
-        {row.mockStart && !path && !status && <p className={r.meta}>No interview brief is available.</p>}
+        {row.mockStart && !path && !status && <p className={r.meta}>{missingOutcome ? "Ask admin to record the outcome" : "No interview brief is available."}</p>}
         {path && !active && <p className={r.meta}>The interview brief is closed.</p>}
         {candidate?.resumeState === "none" && <p className={r.meta}>No résumé file is stored.</p>}
         {candidate?.resumeState === "deleted" && <p className={r.meta}>The résumé file was deleted.</p>}
@@ -502,7 +503,7 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
   ].sort((a, b) => (a.row.date + clock(a.row)).localeCompare(b.row.date + clock(b.row))) : [];
   const coming = visits.filter((visit) => !visit.ended);
   const since = shiftDate(today, -56);
-  const ended = visits.filter(({ row, ended }) => ended && row.date >= since).reverse();
+  const ended = visits.filter(({ row, ended, missingOutcome }) => ended && (row.date >= since || missingOutcome)).reverse();
   const needsAction = ended.filter((visit) => visit.needsAction);
   const done = ended.filter((visit) => !visit.needsAction).slice(0, 6);
   return (
@@ -516,6 +517,9 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
             </button>
           ))}
         </div>
+        {needsAction.length > 0 && coming.length > 0 && (
+          <a className={`${r.ghost} ${r.upcomingLink}`} href="#upcoming-mocks">Go to upcoming mocks</a>
+        )}
       </div>
       {head && (
         <>
@@ -528,7 +532,7 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
               </div>
             </Section>
           )}
-          <Section title="Coming to you" count={coming.length}>
+          <Section title="Coming to you" count={coming.length} id="upcoming-mocks">
             {!coming.length && (
               <div className={r.card}>
                 <div className={r.cardMain}>
