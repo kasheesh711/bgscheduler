@@ -284,6 +284,9 @@ const bundled = await build({
     bundler.onResolve({ filter: /^@vercel\/blob\/client$/ }, () => ({ path: "blob-client", namespace: "fixture" }));
     bundler.onLoad({ filter: /^blob-client$/, namespace: "fixture" }, () => ({ contents: "export const upload = async (pathname) => { window.uploaded.push(pathname); return { pathname }; };" }));
     bundler.onResolve({ filter: /^next-auth\/react$/ }, () => ({ path: "auth", namespace: "fixture" }));
+    // next/link needs the Next router; a plain anchor is enough here.
+    bundler.onResolve({ filter: /^next\/link$/ }, () => ({ path: "link", namespace: "fixture" }));
+    bundler.onLoad({ filter: /^link$/, namespace: "fixture" }, () => ({ contents: "import { createElement } from 'react'; export default function Link({ href, ...rest }) { return createElement('a', { href: String(href), ...rest }); }", resolveDir: ROOT }));
     bundler.onLoad({ filter: /^navigation$/, namespace: "fixture" }, () => ({ contents: NAVIGATION, resolveDir: ROOT }));
     bundler.onLoad({ filter: /^font$/, namespace: "fixture" }, () => ({ contents: "export const Instrument_Serif = () => ({ variable: '' });" }));
     bundler.onLoad({ filter: /^auth$/, namespace: "fixture" }, () => ({ contents: "export const signIn = async () => {};" }));

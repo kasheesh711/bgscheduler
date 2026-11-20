@@ -76,14 +76,17 @@ summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details 
 <div class="tile"><p class="meta">ATS</p><p class="num"><strong>${atsScore}</strong></p>${bar(ats.score, 100)}</div>
 <div class="tile"><p class="meta">Paper</p><p class="num"><strong>${points.format(paperPercent)}%</strong> · ${escape(sheet.total)} / ${escape(sheet.max)}</p>${chip(sheet.result)}${bar(sheet.total, sheet.max)}</div>
 <div class="tile"><p class="meta">Mock</p><p class="num"><strong>${escape(mock.total)} / 100</strong></p>${bar(mock.total, 100)}</div>
-<div class="tile"><p class="meta">Head</p><p><strong>Yes</strong> · ${escape(recommendation.head)}</p>${bar(1, 1)}</div>
+<div class="tile"><p class="meta">Head</p><p><strong>Yes</strong> · ${escape(recommendation.head)}</p></div>
 </div>${recommendation.reason ? `<p class="copy">${escape(recommendation.reason)}</p>` : ""}
 <div class="files"><a href="${escape(resume)}">Original résumé</a><a href="${escape(paper)}">Marked exam</a></div></section>
 <section><h2>${breakdown ? "ATS breakdown" : "Initial ATS assessment"}</h2>
-${ats.criteria.map(({ id, result, evidence }) => {
-  const weight = weights?.[id] ?? 0;
+${(breakdown
+  // Every weighted part gets a row, so a part with no assessment shows as 0 and is not hidden.
+  ? Object.keys(weights).filter((id) => id !== "prestige").map((id) => ats.criteria.find((c) => c.id === id) ?? { id, result: "unknown" as const, evidence: "" })
+  : ats.criteria).map(({ id, result, evidence }) => {
+  const weight = weights?.[id as keyof typeof weights] ?? 0;
   const earned = weight * VALUE[result];
-  return `<div class="metric"><p class="label"><span>${escape(criterionNames[id] ?? id.replaceAll("_", " "))}</span><span class="num">${
+  return `<div class="metric"><p class="label"><span>${escape((criterionNames as Record<string, string>)[id] ?? id.replaceAll("_", " "))}</span><span class="num">${
     breakdown ? `${points.format(earned)} / ${points.format(weight)} · ` : ""}${escape(criterionResults[result] ?? result)}</span></p>
 ${breakdown ? bar(earned, weight, weight / widest * 100) : ""}
 ${evidence ? `<details><summary>Evidence</summary><p class="copy">${escape(evidence)}</p></details>` : ""}</div>`;
