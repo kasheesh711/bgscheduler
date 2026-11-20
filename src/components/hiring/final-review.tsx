@@ -49,14 +49,15 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   const [reason, setReason] = useState("");
   const [packetPage, setPacketPage] = useState<{ id: string; html: string; name: string }>();
   const [viewedId, setViewedId] = useState<string>();
-  const [stalePacket, setStalePacket] = useState<{ id: string; text: string }>();
+  const [stalePacketId, setStalePacketId] = useState<string>();
   const [busy, setBusy] = useState<"review" | "packet" | "sign" | null>(null);
   const [saved, setSaved] = useState(false);
   const [signedStage, setSignedStage] = useState<"hired" | "rejected">();
   const [error, setError] = useState<{ text: string; retry?: boolean; packetLoad?: boolean }>();
   const packet = review?.packet;
   const openPage = packetPage?.id === packet?.id ? packetPage : undefined;
-  const viewed = !!packet && packet.id === viewedId;
+  const stale = !!packet && packet.id === stalePacketId;
+  const viewed = !!packet && !stale && packet.id === viewedId;
 
   const load = useCallback(async (afterSave = false, previousPacket?: string) => {
     try {
@@ -98,14 +99,14 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
           const data = await response.json().catch(() => null);
           const text = data?.error ?? "Could not save the review.";
           if (body.action === "sign") {
-            const stale = response.status === 409 && /\b(?:evidence|files?|r[ée]sum[ée]|ats assessment|graded paper|mock rubric|must recommend)\b/i.test(text);
-            if (stale) {
-              setStalePacket({ id: body.packetId, text });
+            if (response.status === 409 && /\b(?:evidence|files?|r[ée]sum[ée]|ats assessment|graded paper|mock rubric|must recommend)\b/i.test(text)) {
+              setStalePacketId(body.packetId);
               setViewedId(undefined);
               closePacket();
+              return;
             }
             const current = await load(false, body.packetId);
-            if (!stale && current && current.packet?.id !== body.packetId) {
+            if (current && current.packet?.id !== body.packetId) {
               setViewedId(undefined);
               closePacket();
             }
@@ -133,18 +134,14 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
     setError(undefined);
     setViewedId(undefined);
     try {
-      if (stalePacket?.id === packetId) {
-        const current = await load(false, packetId);
-        if (!current) return;
-        if (!current.packet) throw new Error(stalePacket.text);
-        packetId = current.packet.id;
-      }
       const response = await fetch(`${url}?file=html`, { cache: "no-store" });
+      if (response.status === 409) {
+        setStalePacketId(packetId);
+        return;
+      }
       if (!response.ok) {
         const data = await response.json().catch(() => null);
-        const text = data?.error ?? "Could not open the packet. Try again.";
-        if (response.status === 409) setStalePacket({ id: packetId, text });
-        throw new Error(text);
+        throw new Error(data?.error ?? "Could not open the packet. Try again.");
       }
       const html = await response.text();
       const head = /<head\b[^>]*>/i;
@@ -168,12 +165,11 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   }
 
   async function checkPacket(packetId: string) {
-    if (busy || viewed) return;
+    if (busy || viewed || packetId === stalePacketId) return;
     setBusy("review");
     const current = await load(false, packetId);
     if (current?.packet?.id === packetId) {
       setViewedId(packetId);
-      setStalePacket(undefined);
     } else {
       closePacket();
       if (current) setError({ text: "HR sent a new packet. Read it again." });
@@ -194,17 +190,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   const packetFrame = openPage && (
     <iframe title={packetTitle} srcDoc={openPage.html}
       className={phone ? "block h-full min-h-0 w-full border-0" : undefined}
-      // The phone reader listens for Escape in the frame. The sandbox blocks packet scripts.
-      sandbox={phone ? "allow-same-origin allow-popups allow-popups-to-escape-sandbox" : "allow-popups allow-popups-to-escape-sandbox"}
-      onLoad={(event) => {
-        if (phone) event.currentTarget.contentDocument?.addEventListener("keydown", (key) => {
-          if (key.key === "Escape") {
-            key.preventDefault();
-            closePacket();
-          }
-        });
-        void checkPacket(openPage.id);
-      }} />
+      sandbox="allow-popups allow-popups-to-escape-sandbox"
+      onLoad={() => void checkPacket(openPage.id)} />
   );
   return (
     <section className={signing ? css.finalReview : `${css.inspectorSection} ${css.finalReview}`} id={`review-${id}`} aria-label={signing ? "Contract signing" : "Final hiring review"}>
@@ -212,9 +199,11 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
       {!review && !error && (autoLoad || busy
         ? <p className={css.inspectorMeta} role="status">Loading the review…</p>
         : <button type="button" className={css.secondary} onClick={() => void act()}>{signing ? "Check contract signing" : "Open final review"}</button>)}
-      {awaitingSignOff && packet && <>
-        <p className={css.reviewStatus}>Waiting for your sign-off</p>
-        <p id={instruction} className={css.inspectorMeta}>{sharedBlock ?? (viewed ? "Approve, or write a note and reject." : "Read the packet first.")}</p>
+      {(awaitingSignOff || stale) && packet && <>
+        {awaitingSignOff && <p className={css.reviewStatus}>Waiting for your sign-off</p>}
+        <p id={instruction} className={css.inspectorMeta} role={stale ? "alert" : undefined}>{stale ? "The evidence changed. Ask HR to send a new packet."
+          : sharedBlock ?? (viewed ? "Approve, or write a note and reject." : "Read the packet first.")}</p>
+        {stale && <button type="button" className={`${css.secondary} min-h-11 min-w-11`} disabled={!!busy} onClick={() => void act()}>Check again</button>}
       </>}
       {!signing && review && packet && (
         <div className={`${css.decisionActions} ${css.packetActions}`}>

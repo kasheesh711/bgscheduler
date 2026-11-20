@@ -47,11 +47,13 @@ describe("review document", () => {
   });
 
   it("shows the stored pass result and each level's pass mark", async () => {
-    const html = await reviewDocument(packet, "resume.pdf", "marked-exam.pdf");
+    const ats = { ...packet.evidence.ats, score: 79.5 };
+    const html = await reviewDocument({ ...packet, evidence: { ...packet.evidence, ats } }, "resume.pdf", "marked-exam.pdf");
     const summary = html.split("<h2>Assessment summary</h2>")[1].split("</section>")[0];
     const levels = html.split("<h2>Paper by level</h2>")[1].split("</section>")[0];
     expect(summary).toContain("<strong>45%</strong>");
-    expect(summary).toContain(">Pass</span>");
+    expect(summary).toContain(">Passed a level</span>");
+    expect(summary).toMatch(/<h3>ATS<\/h3>[^]*?<strong>80<\/strong> \/ 100<\/p>\s*<\/div><p class="band">Strong<\/p>/);
     expect(summary.match(/<path [^>]*class="gauge-track"/g)).toHaveLength(3);
     expect(summary).not.toContain('class="target"');
     expect(summary).toContain("Score guide");
@@ -68,14 +70,15 @@ describe("review document", () => {
     expect(notDone).not.toContain('class="bullet-score"');
   });
 
-  it("marks a shared paper pass mark on the paper gauge only", async () => {
+  it("puts equal pass marks on the level charts only", async () => {
     const paper = { ...packet.evidence.paper,
       levels: packet.evidence.paper.levels.map((level) => ({ ...level, passPercent: 80 })) };
     const html = await reviewDocument({ ...packet, evidence: { ...packet.evidence, paper } }, "resume.pdf", "marked-exam.pdf");
     const summary = html.split("<h2>Assessment summary</h2>")[1].split("</section>")[0];
-    expect(summary.match(/class="target"/g)).toHaveLength(1);
-    expect(summary).toMatch(/<h3>Paper<\/h3>[^]*class="target"[^>]*rotate\(-36 66 56\)/);
-    expect(summary).toContain("Pass mark 80%");
+    const levels = html.split("<h2>Paper by level</h2>")[1].split("</section>")[0];
+    expect(summary).not.toContain('class="target"');
+    expect(summary).not.toContain("Pass mark 80%");
+    expect(levels.match(/class="target"/g)).toHaveLength(4);
   });
 
   it("shows the radar and folded evidence for an old packet without weighted points", async () => {

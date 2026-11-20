@@ -60,8 +60,9 @@ async function evidence(db: Database, id: string) {
 type Evidence = Awaited<ReturnType<typeof evidence>>;
 type Packet = { evidence: Evidence; behavioral: string; offer: string; fingerprint: string };
 // Keep the checksum stable for packets saved before the chart fields were added.
+const comparableEvidence = (value: Evidence) => ({ ...value, ats: { score: value.ats.score, criteria: value.ats.criteria } });
 const fingerprint = (value: Evidence) => createHash("sha256")
-  .update(JSON.stringify({ ...value, ats: { score: value.ats.score, criteria: value.ats.criteria } })).digest("hex");
+  .update(JSON.stringify(comparableEvidence(value))).digest("hex");
 
 export async function latestReviewPacket(db: Database, id: string) {
   const [row] = await db.select().from(s.hiringAudit).where(and(eq(s.hiringAudit.candidateId, id), eq(s.hiringAudit.action, PACKET)))
@@ -81,7 +82,7 @@ export async function submitReview(db: Database, id: string, actor: string, inpu
     const material = await evidence(tx, id);
     const detail = { evidence: material, fingerprint: fingerprint(material), ...input };
     const previous = await latestReviewPacket(tx, id);
-    if (previous?.fingerprint === detail.fingerprint && isDeepStrictEqual(previous.evidence, material) &&
+    if (previous?.fingerprint === detail.fingerprint && isDeepStrictEqual(comparableEvidence(previous.evidence), comparableEvidence(material)) &&
         previous.behavioral === input.behavioral && previous.offer === input.offer)
       return `${id}:final-review:${previous.id}`;
     const [row] = await tx.insert(s.hiringAudit).values({ action: PACKET, actor, candidateId: id, detail }).returning({ id: s.hiringAudit.id });

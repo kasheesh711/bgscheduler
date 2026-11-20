@@ -10,15 +10,16 @@ const date = (value: Date | string) => new Date(value).toLocaleDateString("en-GB
 });
 const points = new Intl.NumberFormat("en-GB", { maximumFractionDigits: 2 });
 const percent = (value: number) => Math.min(100, Math.max(0, value));
-const chip = (result: LevelResult) => `<span class="chip ${result === "passed" ? "pass" : result === "not_passed" ? "below" : ""}">${{
-  passed: "Pass", not_passed: "Below pass", pass_mark_missing: "No pass mark", not_done: "Not done",
+const chip = (result: LevelResult, passLabel = "Pass") => `<span class="chip ${result === "passed" ? "pass" : result === "not_passed" ? "below" : ""}">${{
+  passed: passLabel, not_passed: "Below pass", pass_mark_missing: "No pass mark", not_done: "Not done",
 }[result]}</span>`;
 const criterionNames = { degree: "Degree", subject: "Subject", curriculum: "Curriculum", teaching: "Teaching", english: "English" };
 const criterionResults = { met: "Met", partial: "Partial", not_met: "Not met", unknown: "Unknown" };
 const stackColors = ["#2a78d6", "#eb6834", "#199e70", "#c98400", "#d96a97", "#008300"];
 
-function gauge(value: number, shown: string, unit = " / 100", target: number | null = null) {
+function gauge(value: number, unit = " / 100", target: number | null = null) {
   const arc = "M21 56a45 45 0 0 1 90 0";
+  const isPercent = unit === "%";
   const tick = (position: number, target = false) =>
     `<line class="${target ? "target" : "scale-tick"}" x1="${target ? 104 : 107}" y1="56" x2="116" y2="56" transform="rotate(${percent(position) * 1.8 - 180} 66 56)"/>`;
   return `<div class="gauge">
@@ -27,7 +28,7 @@ function gauge(value: number, shown: string, unit = " / 100", target: number | n
 ${value > 0 ? `<path d="${arc}" class="gauge-fill" pathLength="100" stroke-dasharray="${percent(value)} 100"/>` : ""}
 ${[0, 25, 50, 75, 100].map((value) => tick(value)).join("")}${target === null ? "" : tick(target, true)}
 <text x="21" y="72">0</text><text x="111" y="72">100</text>
-</svg><p class="gauge-value"><strong>${escape(shown)}</strong>${escape(unit)}</p>
+</svg><p class="gauge-value"><strong>${escape(value)}${isPercent ? "%" : ""}</strong>${isPercent ? "" : escape(unit)}</p>
 </div><p class="band">${value >= 80 ? "Strong" : value >= 60 ? "Fair" : "Low"}</p>`;
 }
 
@@ -123,10 +124,9 @@ export async function reviewDocument(packet: ReviewPacket, resume: string, paper
   const value = packet.evidence;
   const { ats, paper: sheet, mock, recommendation } = value;
   const breakdown = atsBreakdown(ats, `${ats.score.toFixed(1)} / 100`);
-  const paperPercent = sheet.max ? sheet.total / sheet.max * 100 : 0;
+  const paperPercent = sheet.max ? Math.round(sheet.total / sheet.max * 10_000) / 100 : 0;
   const levels = sheet.levels.filter(({ max }) => max > 0);
-  const passMarks = new Set(levels.map(({ passPercent }) => passPercent));
-  const paperTarget = passMarks.size === 1 ? levels[0].passPercent : null;
+  const paperTarget = levels.length === 1 ? levels[0].passPercent : null;
   return `<!doctype html>
 <html lang="en" data-begifted-look="private-office"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -226,11 +226,11 @@ summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details 
 <h1>Hiring <em>review</em></h1>
 <p class="candidate">${escape(value.name)}</p><p>${escape(value.subject)} tutor</p><p class="meta">Submitted ${date(packet.at)} by ${escape(packet.author)}</p></header>
 <section><h2>Assessment summary</h2><div class="tiles">
-<div class="tile"><h3>ATS</h3>${gauge(ats.score, String(Math.round(ats.score)))}</div>
-<div class="tile"><h3>Paper</h3>${gauge(paperPercent, `${points.format(paperPercent)}%`, "", paperTarget)}
-<p class="paper-detail num">${escape(sheet.total)} / ${escape(sheet.max)} · ${chip(sheet.result)}</p>
+<div class="tile"><h3>ATS</h3>${gauge(Math.round(ats.score))}</div>
+<div class="tile"><h3>Paper</h3>${gauge(paperPercent, "%", paperTarget)}
+<p class="paper-detail num">${escape(sheet.total)} / ${escape(sheet.max)} · ${chip(sheet.result, levels.length > 1 ? "Passed a level" : "Pass")}</p>
 ${paperTarget === null ? "" : `<p class="paper-detail meta">Pass mark ${escape(paperTarget)}%</p>`}</div>
-<div class="tile"><h3>Mock</h3>${gauge(mock.total, String(mock.total))}</div>
+<div class="tile"><h3>Mock</h3>${gauge(mock.total)}</div>
 <div class="tile head-tile"><h3>Head</h3><p><strong>Yes</strong> · ${escape(recommendation.head)}</p></div>
 </div><p class="guide"><span>Score guide</span><span>· Strong ≥80</span><span>· Fair 60 to under 80</span><span>· Low &lt;60</span></p>${recommendation.reason ? `<p class="copy">${escape(recommendation.reason)}</p>` : ""}
 <div class="files"><a href="${escape(resume)}">Original résumé</a><a href="${escape(paper)}">Marked exam</a></div></section>

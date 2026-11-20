@@ -3,7 +3,7 @@
 import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatInTimeZone } from "date-fns-tz";
 import { checkRubric, rubricNeedsCheck } from "@/lib/hiring/marking-sheet";
-import { isDecided, localDate, ZONE, type Subject } from "@/lib/hiring/model";
+import { isDecided, localDate, shiftDate, ZONE, type Subject } from "@/lib/hiring/model";
 import { buildRunSheet, headName, headVisits, pastVisits, upcoming, type RunSheetRow } from "@/lib/hiring/run-sheet";
 import { dayTitle, openHeadDecisions, weekCalls } from "@/lib/hiring/role-views";
 import { universityName } from "@/lib/hiring/seek-view";
@@ -317,7 +317,7 @@ function useVisits(data: HiringData) {
     return { rows, now, today, coming: upcoming(rows, today), recent: pastVisits(rows, today) };
   }, [data]);
 }
-const clock = (row: RunSheetRow) => row.paperStart ?? row.mockStart ?? "";
+const clock = (row: Pick<RunSheetRow, "paperStart" | "mockStart">) => row.paperStart ?? row.mockStart ?? "";
 const parts = (row: RunSheetRow) => [row.paperStart && `Paper ${row.paperStart}`, row.mockStart && `Mock ${row.mockStart}`].filter(Boolean).join(" · ");
 const byDay = (rows: RunSheetRow[]) => [...new Set(rows.map((row) => row.date))].map((date) => ({ date, rows: rows.filter((row) => row.date === date) }));
 
@@ -392,30 +392,29 @@ export function AdminScreen({ data, reload, readOnly = false, onOpenResults }: {
 
 const HEAD_KEY = "hiring-head";
 
-function headVisit(row: RunSheetRow, data: HiringData, now: Date) {
-  const bookings = data.bookings.filter((b) => b.candidateId === row.candidateId && b.kind === "mock" && (b.visitId ?? b.id) === row.visitId);
-  const confirmed = bookings.find((b) => b.status === "confirmed");
-  const mock = confirmed ?? (row.mockStart ? bookings[0] : undefined);
+function headVisit(row: Pick<RunSheetRow, "visitId" | "candidateId" | "date" | "mockStart" | "paperStart" | "subject">,
+  data: HiringData, now: Date, mock?: HiringData["bookings"][number]) {
+  const confirmed = mock?.status === "confirmed" ? mock : undefined;
   const status = mock?.status === "cancelled" ? "Cancelled" : mock?.status === "no_show" ? "No-show" : undefined;
   const candidate = data.candidates.find((c) => c.id === row.candidateId);
   const active = !!candidate && candidate.stage !== "stopped" && !isDecided(candidate.stage);
   const path = confirmed ? data.briefPaths[confirmed.id] : undefined;
-  const ended = !!mock && new Date(mock.endTime) <= now;
+  const ended = !!mock && (!!status || new Date(mock.endTime) <= now);
   const decision = confirmed && data.headDecisions.find((d) => d.bookingId === confirmed.id);
   const uncertain = data.headDecisions.some((d) => d.candidateId === row.candidateId && d.bookingId === null);
-  const subject = mock?.subjects[0];
-  const result = subject && data.mocks.find((m) => m.candidateId === row.candidateId && m.subject === subject && m.source !== "tracker");
-  const bookingResult = result?.bookingId === confirmed?.id ? result : undefined;
+  const subject = row.subject;
+  const bookingResult = confirmed && data.mocks.find((m) => m.bookingId === confirmed.id && m.candidateId === row.candidateId && m.subject === subject && m.source !== "tracker");
   const needsCheck = bookingResult?.status === "needs_check";
   const rubric = bookingResult?.rubric;
   const scored = bookingResult?.status === "done" && !!rubric && !checkRubric(rubric).length && !rubricNeedsCheck(rubric);
   const draft = data.decisions.some((d) => d.candidateId === row.candidateId && d.status === "draft");
-  const due = ended && !!path && active && !decision && !uncertain && !!subject && (scored || (!result && !draft));
-  return { row, mock, candidate, active, path, ended, decision, subject, scored, needsCheck, due, status };
+  const due = ended && !!path && active && !decision && !uncertain && !!subject && (scored || (!bookingResult && !draft));
+  return { row, candidate, active, path, ended, decision, scored, needsCheck, due, status };
 }
 
 function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisit>; data: HiringData; readOnly: boolean }) {
-  const { row, candidate, active, path, decision, subject, scored, needsCheck, due, status } = visit;
+  const { row, candidate, active, path, decision, scored, needsCheck, due, status } = visit;
+  const name = candidate?.name ?? "Needs review: candidate record not found";
   const [resume, setResume] = useState(false);
   const resumeId = useId();
   const briefLabel = decision && !needsCheck ? "View brief" : !due ? "Open interview brief" : scored ? "Record recommendation" : "Score and recommend";
@@ -426,9 +425,9 @@ function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisi
         <span>{shortDay(row.date)}</span>
       </p>
       <div className={r.cardMain}>
-        <p className={r.name}>{row.candidateName}{due && <span className={r.due}>Due</span>}</p>
+        <p className={r.name}>{name}{due && <span className={r.due}>Due</span>}</p>
         <p className={r.meta}>
-          {subject ?? row.subject ?? "Subject not recorded"} · {status ?? (row.mockStart ? "You run the mock" : "Paper only: no mock")}
+          {row.subject ?? "Subject not recorded"} · {status ?? (row.mockStart ? "You run the mock" : "Paper only: no mock")}
         </p>
         <p className={r.meta}>
           {scored && (
@@ -450,11 +449,11 @@ function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisi
       </div>
       <div className={r.actions}>
         {path && active && !readOnly && (
-          <a className={r.big} data-tone="primary" href={due ? `${path}#${scored ? "recommendation" : "scores"}` : path} target="_blank" rel="noopener noreferrer" aria-label={`${briefLabel} for ${row.candidateName}`}>
+          <a className={r.big} data-tone="primary" href={due ? `${path}#${scored ? "recommendation" : "scores"}` : path} target="_blank" rel="noopener noreferrer" aria-label={`${briefLabel} for ${name}`}>
             {briefLabel}
           </a>
         )}
-        {candidate && <ResumeButton open={resume} onToggle={() => setResume(!resume)} name={row.candidateName} panelId={resumeId} />}
+        {candidate && <ResumeButton open={resume} onToggle={() => setResume(!resume)} name={name} panelId={resumeId} />}
       </div>
       {candidate && (
         <div id={resumeId} className={r.resume} hidden={!resume}>
@@ -486,15 +485,19 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
       // As above.
     }
   };
-  const { rows, now, today, recent } = useVisits(data);
+  const { rows, now, today } = useVisits(data);
   const head = heads.find((h) => h.canonicalKey === key);
   const visits = head ? [
-    ...recent.filter((row) => row.hod?.key === head.canonicalKey && row.mockStart).reverse(),
-    ...rows.filter((row) => row.date === today && row.status !== "confirmed" && row.hod?.key === head.canonicalKey && row.mockStart),
-    ...headVisits(rows, head.canonicalKey, today),
-  ].map((row) => headVisit(row, data, now)) : [];
-  const coming = visits.filter(({ row, mock, ended }) => !ended && row.status === "confirmed" && (row.date >= today || mock));
-  const ended = visits.filter((visit) => visit.ended).reverse();
+    ...data.bookings.filter((mock) => mock.kind === "mock" && mock.interviewerKey === head.canonicalKey).map((mock) => {
+      const start = new Date(mock.startTime);
+      return headVisit({ visitId: mock.id, candidateId: mock.candidateId, date: localDate(start),
+        mockStart: formatInTimeZone(start, ZONE, "HH:mm"), paperStart: null, subject: mock.subjects[0] ?? null }, data, now, mock);
+    }),
+    ...headVisits(rows, head.canonicalKey, today).filter((row) => !row.mockStart).map((row) => headVisit(row, data, now)),
+  ].sort((a, b) => (a.row.date + clock(a.row)).localeCompare(b.row.date + clock(b.row))) : [];
+  const coming = visits.filter((visit) => !visit.ended);
+  const since = shiftDate(today, -56);
+  const ended = visits.filter(({ row, ended }) => ended && row.date >= since).reverse();
   const due = ended.filter((visit) => visit.due);
   const done = ended.filter((visit) => !visit.due).slice(0, 6);
   return (
