@@ -103,6 +103,7 @@ if (/roles=1|pipeline=1/.test(location.search)) {
       ["peat-no-score", "Sample Mali", -3],
       ["peat-tracker", "Sample Noi", -2],
       ["peat-sent", "Sample Pim", -1],
+      ["peat-check", "Sample Fah", -1],
     ] as const;
     for (const [id, name, day] of endedMocks) {
       candidates.push(person(id, name, { seekApplicationId: null, stage: "mock_booked" }));
@@ -136,7 +137,8 @@ if (location.search.includes("roles=1")) {
   const scored = payload.mocks[0] as Record<string, unknown>;
   payload.mocks.push(
     { ...scored, id: "tracker", candidateId: "peat-tracker", bookingId: null, source: "tracker", fileId: null, rubric: null },
-    { ...scored, id: "sent", candidateId: "peat-sent", bookingId: "peat-sent", source: "person", status: "needs_check", fileId: null },
+    { ...scored, id: "sent", candidateId: "peat-sent", bookingId: "peat-sent", source: "person", status: "done", fileId: null },
+    { ...scored, id: "check", candidateId: "peat-check", bookingId: "peat-check", source: "person", status: "needs_check", fileId: null },
   );
 }
 let reviewPacket: { id: string; behavioral: string; offer: string } | null = null;
@@ -262,8 +264,14 @@ const rubricItems = { accuracy: 10, concepts: 10, clarity: 7, presentation: 7, i
 const realPacket = process.env.PACKET_HTML ? readFileSync(process.env.PACKET_HTML, "utf8") : await (async () => { const cwd = process.cwd(); process.chdir(ROOT); try { return await reviewDocument({
   at: "2026-11-19T03:00:00Z", author: "hr@example.test", behavioral: "Gave a specific example of adapting a lesson for a student who struggled with fractions.", offer: "Hourly rate 600 THB. About 10 hours a week, weekend mornings. Start date 1 December 2026.",
   evidence: { name: "Reply Passed", subject: "Mathematics", call: "2026-11-03T02:00:00Z", recommendation: { head: "Kru Peat", reason: "Clear and warm lesson." },
-    ats: { score: 86, criteria: ["degree", "subject", "curriculum", "teaching", "english"].map((id) => ({ id, result: "met", evidence: "Taught IGCSE for 2 years" })) },
-    paper: { total: 74, max: 100, levels: [{ level: "Key Stage 3", scored: 18, max: 20, percent: 90, passPercent: 50 }, { level: "AS / A-Level", scored: 11, max: 20, percent: 55, passPercent: 50 }, { level: "IB SL / HL", scored: 7, max: 20, percent: 35, passPercent: null }] },
+    ats: { score: 86, weights: { degree: 10, subject: 10, curriculum: 20, teaching: 20, english: 20, prestige: 20 }, prestige: 0.5, penalty: 4,
+      criteria: ["degree", "subject", "curriculum", "teaching", "english"].map((id) => ({ id, result: "met", evidence: "Taught IGCSE for 2 years" })) },
+    paper: { total: 74, max: 100, result: "passed", levels: [
+      { level: "Key Stage 3", scored: 18, max: 20, percent: 90, passPercent: 50, result: "passed" },
+      { level: "IGCSE / GCSE", scored: 38, max: 40, percent: 95, passPercent: null, result: "pass_mark_missing" },
+      { level: "AS / A-Level", scored: 11, max: 20, percent: 55, passPercent: 50, result: "passed" },
+      { level: "IB SL / HL", scored: 7, max: 20, percent: 35, passPercent: 60, result: "not_passed" },
+    ] },
     mock: { total: 84, rubric: { items: rubricItems, comments: "Clear explanations. Checked understanding often." } } },
 }, "/api/hiring/review/r1?file=resume", "/api/hiring/review/r1?file=paper"); } finally { process.chdir(cwd); } })();
 const bundled = await build({

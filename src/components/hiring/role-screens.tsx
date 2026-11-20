@@ -2,7 +2,7 @@
 
 import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatInTimeZone } from "date-fns-tz";
-import { rubricTotals } from "@/lib/hiring/marking-sheet";
+import { checkRubric, rubricNeedsCheck } from "@/lib/hiring/marking-sheet";
 import { isDecided, localDate, ZONE, type Subject } from "@/lib/hiring/model";
 import { buildRunSheet, headName, headVisits, pastVisits, upcoming, type RunSheetRow } from "@/lib/hiring/run-sheet";
 import { dayTitle, openHeadDecisions, weekCalls } from "@/lib/hiring/role-views";
@@ -402,18 +402,20 @@ function headVisit(row: RunSheetRow, data: HiringData, now: Date) {
   const uncertain = data.headDecisions.some((d) => d.candidateId === row.candidateId && d.bookingId === null);
   const subject = mock?.subjects[0];
   const result = subject && data.mocks.find((m) => m.candidateId === row.candidateId && m.subject === subject && m.source !== "tracker");
-  const scored = !!result && result.bookingId === mock?.id && (result.status === "done" || result.status === "needs_check") &&
-    !!result.rubric && rubricTotals(result.rubric).complete;
+  const bookingResult = result?.bookingId === mock?.id ? result : undefined;
+  const needsCheck = bookingResult?.status === "needs_check";
+  const rubric = bookingResult?.rubric;
+  const scored = bookingResult?.status === "done" && !!rubric && !checkRubric(rubric).length && !rubricNeedsCheck(rubric);
   const draft = data.decisions.some((d) => d.candidateId === row.candidateId && d.status === "draft");
   const due = ended && !!path && active && !decision && !uncertain && !!subject && (scored || (!result && !draft));
-  return { row, mock, candidate, active, path, ended, decision, subject, scored, due };
+  return { row, mock, candidate, active, path, ended, decision, subject, scored, needsCheck, due };
 }
 
 function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisit>; data: HiringData; readOnly: boolean }) {
-  const { row, candidate, active, path, decision, subject, scored, due } = visit;
+  const { row, candidate, active, path, decision, subject, scored, needsCheck, due } = visit;
   const [resume, setResume] = useState(false);
   const resumeId = useId();
-  const briefLabel = decision ? "View brief" : !due ? "Open interview brief" : scored ? "Record recommendation" : "Score and recommend";
+  const briefLabel = decision && !needsCheck ? "View brief" : !due ? "Open interview brief" : scored ? "Record recommendation" : "Score and recommend";
   return (
     <article className={`${r.card} ${r.headCard}`}>
       <p className={r.time}>
@@ -437,6 +439,7 @@ function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisi
             </span>
           )}
         </p>
+        {needsCheck && <p className={r.meta}>Ask admin to check the scores.</p>}
         {row.mockStart && !path && <p className={r.meta}>No interview brief is available.</p>}
         {path && !active && <p className={r.meta}>The interview brief is closed.</p>}
         {candidate?.resumeState === "none" && <p className={r.meta}>No résumé file is stored.</p>}

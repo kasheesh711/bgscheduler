@@ -5,8 +5,8 @@ import * as s from "@/lib/db/schema";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { headRecommendation, queueFinalResult, sendRefusal, type Decision } from "./decisions";
 import { computeSheet, passRulesFor, rubricTotals } from "./marking-sheet";
-import { contractTestAllowed, HiringError, HR_CALENDAR, normalizeEmail, runtimeWritesAllowed } from "./model";
-import { profileScore, workRightsPenalty } from "./scoring";
+import { contractTestAllowed, HiringError, HR_CALENDAR, normalizeEmail, runtimeWritesAllowed, type HiringConfig } from "./model";
+import { profileScore, workRightsPenalty, type Assessment } from "./scoring";
 import { callCalendarState, candidateById, enqueue, settings } from "./service";
 
 const PACKET = "final-review-packet";
@@ -33,13 +33,22 @@ async function evidence(db: Database, id: string) {
   if (!paper?.marks || !paper.fileId || !mock?.rubric || mock.source === "tracker" || !rubricTotals(mock.rubric).complete ||
       (recommendation.detail.mockResultId && recommendation.detail.mockResultId !== mock.id))
     throw new HiringError(409, "The graded paper and the completed mock rubric are required.");
+  const prestige = candidate.universityAssessment?.fraction ?? 0;
+  const penalty = workRightsPenalty(candidate.workRightsAnswer, config);
+  const ats: {
+    score: number;
+    criteria: Assessment["criteria"];
+    weights?: HiringConfig["profileWeights"];
+    prestige?: number;
+    penalty?: number;
+  } = {
+    score: profileScore(candidate.profileAssessment, config.profileWeights, prestige, penalty),
+    criteria: candidate.profileAssessment.criteria,
+    weights: config.profileWeights, prestige, penalty,
+  };
   return {
     name: candidate.name, email: candidate.email, subject, resumeSha256: candidate.resumeSha256,
-    ats: {
-      score: profileScore(candidate.profileAssessment, config.profileWeights, candidate.universityAssessment?.fraction ?? 0,
-        workRightsPenalty(candidate.workRightsAnswer, config)),
-      criteria: candidate.profileAssessment.criteria,
-    },
+    ats,
     paper: { id: paper.id, fileId: paper.fileId, updatedAt: paper.updatedAt.toISOString(), ...computeSheet(paper.marks, passRulesFor(config, subject)) },
     mock: { id: mock.id, rubric: mock.rubric, total: rubricTotals(mock.rubric).total },
     recommendation: { id: recommendation.id, head: String(recommendation.detail.head), reason: String(recommendation.detail.reason ?? "") },
@@ -49,7 +58,9 @@ async function evidence(db: Database, id: string) {
 
 type Evidence = Awaited<ReturnType<typeof evidence>>;
 type Packet = { evidence: Evidence; behavioral: string; offer: string; fingerprint: string };
-const fingerprint = (value: Evidence) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+// Keep the checksum stable for packets saved before the chart fields were added.
+const fingerprint = (value: Evidence) => createHash("sha256")
+  .update(JSON.stringify({ ...value, ats: { score: value.ats.score, criteria: value.ats.criteria } })).digest("hex");
 
 export async function latestReviewPacket(db: Database, id: string) {
   const [row] = await db.select().from(s.hiringAudit).where(and(eq(s.hiringAudit.candidateId, id), eq(s.hiringAudit.action, PACKET)))

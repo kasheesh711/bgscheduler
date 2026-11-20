@@ -121,7 +121,7 @@ export const validatePreScreenAssessment = (
   checkEvidence(preScreenAssessmentSchema.parse(value), source, 6, written);
 type Scored = { criteria: { id: string; result: CriterionResult }[] };
 type CriterionResult = "met" | "partial" | "not_met" | "unknown";
-const VALUE: Record<CriterionResult, number> = { met: 1, partial: 0.5, not_met: 0, unknown: 0 };
+export const VALUE: Record<CriterionResult, number> = { met: 1, partial: 0.5, not_met: 0, unknown: 0 };
 export function profileScore(
   assessment: Scored,
   weights: Omit<typeof DEFAULT_WEIGHTS, "prestige"> & {

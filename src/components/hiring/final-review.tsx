@@ -41,7 +41,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   const [packetPage, setPacketPage] = useState<{ id: string; html: string; title: string }>();
   const [viewedId, setViewedId] = useState<string>();
   const [stalePacket, setStalePacket] = useState<{ id: string; text: string }>();
-  const [busy, setBusy] = useState<"review" | "packet" | null>(null);
+  const [busy, setBusy] = useState<"review" | "packet" | "sign" | null>(null);
   const [saved, setSaved] = useState(false);
   const [signedStage, setSignedStage] = useState<"hired" | "rejected">();
   const [error, setError] = useState<{ text: string; retry?: boolean; packetLoad?: boolean }>();
@@ -76,7 +76,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   }, [signedStage]);
 
   async function act(body?: ReviewAction) {
-    setBusy("review");
+    setBusy(body?.action === "sign" ? "sign" : "review");
     setError(undefined);
     try {
       if (body) {
@@ -86,7 +86,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
           const data = await response.json().catch(() => null);
           const text = data?.error ?? "Could not save the review.";
           if (body.action === "sign") {
-            const stale = response.status === 409 && /evidence changed|source file changed/i.test(text);
+            const stale = response.status === 409 && /\b(?:evidence|files?|r[ée]sum[ée]|ats assessment|graded paper|mock rubric|must recommend)\b/i.test(text);
             if (stale) {
               setStalePacket({ id: body.packetId, text });
               setViewedId(undefined);
@@ -219,7 +219,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
       {awaitingSignOff && (packet ? (
         <>
           <label className={css.fieldLabel}>Sign-off note (optional for approval)
-            <textarea className={css.textarea} aria-describedby={rejectHint} rows={2} maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} />
+            <textarea className={css.textarea} aria-describedby={rejectHint} rows={2} maxLength={2000} value={reason} readOnly={busy === "sign"} onChange={(event) => setReason(event.target.value)} />
           </label>
           <div className={css.signOffActions}>
             <div>
@@ -238,6 +238,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
               {rejectHint && <p id={rejectHint} className={css.inspectorMeta}>Write at least 5 characters to reject.</p>}
             </div>
           </div>
+          {busy === "sign" && <p role="status" className={css.inspectorMeta}>Saving sign-off…</p>}
         </>
       ) : <p>Waiting for HR to send the packet. <button type="button" className={css.secondary} disabled={!!busy} onClick={() => void act()}>Check again</button></p>)}
       <p ref={outcome} role="status" tabIndex={-1}>{closed && (stage === "hired" ? (review?.appointment
