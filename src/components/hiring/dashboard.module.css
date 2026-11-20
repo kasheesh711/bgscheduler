@@ -440,6 +440,19 @@
 .surface .secondary:hover:not(:disabled) { background: var(--tint); }
 .surface .stopButton { color: var(--danger); font-weight: 500; }
 
+.finalReview :is(.primary, .secondary) { min-height: 44px; }
+.packetActions { margin-block: 8px 12px; }
+.packetActions a { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.surface :is(.packetActions, .signOffActions) .primary { background: #172b4d; color: #fff; }
+.surface :is(.packetActions, .signOffActions) .primary:hover:not(:disabled) { background: #243d60; }
+.signOffActions { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; }
+.signOffActions > div { display: grid; gap: 4px; }
+.surface :is(.packetActions, .signOffActions) .secondary { margin-top: 0; }
+.surface .signOffActions .secondary { justify-self: stretch; border-color: var(--danger); color: var(--danger); }
+@media (width < 520px) {
+  .signOffActions { flex-direction: column; align-items: stretch; }
+}
+
 /* Setup */
 .setupBar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 24px; border-bottom: 1px solid var(--line); background: var(--paper); }
 .setupGrid { display: grid; grid-template-columns: 1fr; }

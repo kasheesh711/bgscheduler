@@ -273,8 +273,14 @@ const shot = async (page, name, fullPage = false) => {
 // ONLY=<words> runs the checks whose name holds those words, such as ONLY="screen shows" for the role screens.
 const check = async (name, action) => {
   if (process.env.ONLY && !name.includes(process.env.ONLY)) return;
-  await action();
-  process.stdout.write(`PASS ${name}\n`);
+  // One failed check does not hide the result of the others; the run still exits 1.
+  try {
+    await action();
+    process.stdout.write(`PASS ${name}\n`);
+  } catch (error) {
+    process.exitCode = 1;
+    process.stdout.write(`FAIL ${name}: ${String(error.message).split("\n")[0]}\n`);
+  }
 };
 try {
   browser = await chromium.launch({ executablePath: CHROME, headless: true });
@@ -661,7 +667,7 @@ try {
     await page.goto(`${origin}/?view=heads&roles=1`);
     await page.getByRole("button", { name: "Kru Ek" }).click();
     await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
-    assert.equal(await page.getByRole("link", { name: "Open the candidate page" }).getAttribute("href"), "/hiring/brief/sample-token");
+    assert.equal(await page.getByRole("link", { name: "Open interview brief" }).getAttribute("href"), "/hiring/brief/sample-token");
     await page.getByRole("button", { name: "Show the résumé of Reply Low" }).click();
     await shot(page, "role-heads");
     // The browser remembers the role screen and the head.
@@ -744,7 +750,10 @@ try {
     await page.getByRole("button", { name: "Kru Ek" }).click();
     await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
     await shot(page, "heads-desktop");
+    // Reload at phone size: a resize alone can leave a stale paint in the screenshot.
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${origin}/?view=heads&roles=1`);
+    await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
     await shot(page, "heads-phone");
     for (const [width, height, size] of [[1440, 900, "desktop"], [390, 844, "phone"]]) {
       await page.setViewportSize({ width, height });

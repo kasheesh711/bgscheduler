@@ -53,13 +53,13 @@ export function FinalReview({ id, signing = false, onChanged }: { id: string; si
 
   const closed = review && ["hired", "rejected", "stopped"].includes(review.stage);
   return (
-    <section className={signing ? undefined : css.inspectorSection} id={`review-${id}`} aria-label={signing ? "Contract signing" : "Final hiring review"}>
+    <section className={signing ? css.finalReview : `${css.inspectorSection} ${css.finalReview}`} id={`review-${id}`} aria-label={signing ? "Contract signing" : "Final hiring review"}>
       {!signing && <h3 className={css.inspectorHeading}>Final hiring review</h3>}
       {!review && <button type="button" className={css.secondary} disabled={busy} onClick={() => void act()}>{signing ? "Check contract signing" : "Open final review"}</button>}
       {!signing && review?.packet && (
-        <div className={css.decisionActions}>
-          <a className={css.inlineLink} href={`${url}?file=html`} target="_blank" rel="noreferrer" onClick={() => setViewed(true)}>Read review packet</a>
-          <a className={css.inlineLink} href={`${url}?file=zip`}>Download packet and files</a>
+        <div className={review.access.gift ? `${css.decisionActions} ${css.packetActions}` : css.decisionActions}>
+          <a className={review.access.gift ? css.primary : css.inlineLink} href={`${url}?file=html`} target="_blank" rel="noreferrer" onClick={() => setViewed(true)}>Read review packet</a>
+          <a className={review.access.gift ? css.secondary : css.inlineLink} href={`${url}?file=zip`}>Download packet and files</a>
         </div>
       )}
       {!signing && review?.access.hr && !closed && (
@@ -80,15 +80,19 @@ export function FinalReview({ id, signing = false, onChanged }: { id: string; si
           <label className={css.fieldLabel}>Sign-off note (required to reject)
             <textarea className={css.textarea} rows={2} maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} />
           </label>
-          <div className={css.decisionActions}>
+          {!viewed && <p className={css.inspectorMeta}>Open the review packet first.</p>}
+          <div className={css.signOffActions}>
             <button type="button" className={css.primary} disabled={busy || !viewed} onClick={() => {
               if (window.confirm("Approve this offer letter and send it to the candidate?"))
                 void act({ action: "sign", packetId: review.packet!.id, decision: "hire", reason });
             }}>Approve and send offer</button>
-            <button type="button" className={css.secondary} disabled={busy || !viewed || reason.trim().length < 5} onClick={() => {
-              if (window.confirm("Reject this application and inform the candidate?"))
-                void act({ action: "sign", packetId: review.packet!.id, decision: "reject", reason });
-            }}>Reject and inform candidate</button>
+            <div>
+              <button type="button" className={css.secondary} disabled={busy || !viewed || reason.trim().length < 5} onClick={() => {
+                if (window.confirm("Reject this application and inform the candidate?"))
+                  void act({ action: "sign", packetId: review.packet!.id, decision: "reject", reason });
+              }}>Reject and inform candidate</button>
+              {viewed && reason.trim().length < 5 && <p className={css.inspectorMeta}>Write a note to reject.</p>}
+            </div>
           </div>
         </>
       ) : <p>Waiting for HR to submit the packet.</p>)}

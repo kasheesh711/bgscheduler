@@ -56,13 +56,18 @@
 
 /* Heads picker */
 .picker { display: flex; flex-wrap: wrap; gap: 6px; }
-.picker.picker button { min-height: 40px; padding: 6px 16px; border: 1px solid var(--line); border-radius: 999px; font-weight: 600; }
+.picker.picker button { min-height: 44px; padding: 6px 16px; border: 1px solid var(--line); border-radius: 999px; font-weight: 600; }
 .picker.picker button[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: var(--paper); }
+.headCard .big[data-tone="primary"] { border-color: #172b4d; background: #172b4d; color: #fff; }
+.headCard .big[data-tone="primary"]:hover { background: #243d60; }
 
 @media (max-width: 719px) {
   .card { grid-template-columns: auto minmax(0, 1fr); }
   .actions { grid-column: 1 / -1; justify-content: stretch; }
   .actions > * { flex: 1 1 auto; }
+}
+@media (width < 520px) {
+  .headCard .actions { flex-direction: column; align-items: stretch; }
 }
 
 .dateTools, .date { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
