@@ -33,16 +33,17 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   const url = `/api/hiring/review/${id}`;
   const controlId = useId();
   const readButton = useRef<HTMLButtonElement>(null);
+  const outcome = useRef<HTMLParagraphElement>(null);
   const [review, setReview] = useState<Review>();
   const [behavioral, setBehavioral] = useState("");
   const [offer, setOffer] = useState("");
   const [reason, setReason] = useState("");
   const [packetPage, setPacketPage] = useState<{ id: string; html: string; title: string }>();
   const [viewedId, setViewedId] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<"review" | "packet" | null>(null);
   const [saved, setSaved] = useState(false);
   const [signedStage, setSignedStage] = useState<"hired" | "rejected">();
-  const [error, setError] = useState<{ text: string; retry?: boolean }>();
+  const [error, setError] = useState<{ text: string; retry?: boolean; packetLoad?: boolean }>();
   const packet = review?.packet;
   const openPage = packetPage?.id === packet?.id ? packetPage : undefined;
   const viewed = !!packet && packet.id === viewedId;
@@ -69,15 +70,31 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
     loadStarted.current = true;
     void load();
   }, [autoLoad, load, signing]);
+  useEffect(() => {
+    if (signedStage) outcome.current?.focus();
+  }, [signedStage]);
 
   async function act(body?: ReviewAction) {
-    setBusy(true);
+    setBusy("review");
     setError(undefined);
     try {
       if (body) {
         setSaved(false);
         const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-        if (!response.ok) throw new Error((await response.json()).error ?? "Could not save the review.");
+        if (!response.ok) {
+          if (body.action === "sign") {
+            const current = await load(false, body.packetId);
+            if (!current) return;
+            if (current.packet?.id !== body.packetId) {
+              setViewedId(undefined);
+              closePacket();
+              setError({ text: "HR sent a new packet. Read it before you sign off." });
+              return;
+            }
+          }
+          const data = await response.json().catch(() => null);
+          throw new Error(data?.error ?? "Could not save the review.");
+        }
         setSaved(true);
         if (body.action === "sign") setSignedStage(body.decision === "hire" ? "hired" : "rejected");
       }
@@ -88,12 +105,12 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
     } catch (error) {
       setError({ text: error instanceof Error ? error.message : "Could not save the review." });
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
   async function readPacket(packetId: string) {
-    setBusy(true);
+    setBusy("packet");
     setError(undefined);
     setViewedId(undefined);
     try {
@@ -108,9 +125,9 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
       const name = new DOMParser().parseFromString(titleTag, "text/html").title.replace(/^Hiring review \| /, "");
       setPacketPage({ id: packetId, html: source, title: `Review packet for ${name || "candidate"}` });
     } catch {
-      setError({ text: "Could not open the packet. Try again." });
+      setError({ text: "Could not open the packet. Try again.", packetLoad: true });
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
@@ -121,24 +138,24 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
 
   async function checkPacket(packetId: string) {
     if (busy || viewed) return;
-    setBusy(true);
+    setBusy("review");
     const current = await load(false, packetId);
     if (current?.packet?.id === packetId) setViewedId(packetId);
     else {
       closePacket();
       if (current) setError({ text: "HR sent a new packet. Read it again." });
     }
-    setBusy(false);
+    setBusy(null);
   }
 
   const stage = signedStage ?? review?.stage;
   const closed = stage === "hired" || stage === "rejected" || stage === "stopped";
   const instruction = `${controlId}-instruction`;
-  const sharedReason = approveBlock && approveBlock === rejectBlock ? `${controlId}-block` : undefined;
-  const approveReason = sharedReason ?? (approveBlock && `${controlId}-approve`);
-  const rejectReason = sharedReason ?? (rejectBlock && `${controlId}-reject`);
+  const sharedBlock = approveBlock === rejectBlock ? approveBlock : undefined;
+  const approveReason = !sharedBlock && approveBlock ? `${controlId}-approve` : undefined;
+  const rejectReason = !sharedBlock && rejectBlock ? `${controlId}-reject` : undefined;
   const rejectHint = viewed && reason.trim().length < 5 ? `${controlId}-note` : undefined;
-  const signOffDisabled = busy || !viewed || !!error?.retry;
+  const signOffDisabled = !!busy || !viewed || !!error?.retry;
   const awaitingSignOff = !signing && review?.access.gift && !closed;
   return (
     <section className={signing ? css.finalReview : `${css.inspectorSection} ${css.finalReview}`} id={`review-${id}`} aria-label={signing ? "Contract signing" : "Final hiring review"}>
@@ -148,15 +165,17 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
         : <button type="button" className={css.secondary} onClick={() => void act()}>{signing ? "Check contract signing" : "Open final review"}</button>)}
       {awaitingSignOff && packet && <>
         <p className={css.reviewStatus}>Waiting for your sign-off</p>
-        <p id={instruction} className={css.inspectorMeta}>{viewed ? "Approve, or write a note and reject." : "Read the packet first."}</p>
+        <p id={instruction} className={css.inspectorMeta}>{sharedBlock ?? (viewed ? "Approve, or write a note and reject." : "Read the packet first.")}</p>
       </>}
       {!signing && review && packet && (
         <div className={`${css.decisionActions} ${css.packetActions}`}>
           {review.access.gift ? (
-            <button type="button" className={css.primary} ref={readButton} aria-expanded={!!openPage} aria-disabled={busy || !!openPage}
+            <button type="button" className={css.primary} ref={readButton} aria-expanded={!!openPage} aria-disabled={!!busy || !!openPage}
               aria-controls={openPage ? `${controlId}-packet` : undefined}
               onClick={() => { if (!busy && !openPage) void readPacket(packet.id); }}>Read review packet</button>
           ) : <a className={css.secondary} href={`${url}?file=html`} target="_blank" rel="noreferrer">Read review packet</a>}
+          {busy === "packet" && <p role="status" className={css.inspectorMeta}>Opening packet…</p>}
+          {error?.packetLoad && <p role="alert" className={css.errorText}>{error.text}</p>}
           {openPage && (
             <div className={css.packetPanel} id={`${controlId}-packet`}>
               <button type="button" className={css.secondary} onClick={closePacket}>Close packet</button>
@@ -175,7 +194,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
             <textarea className={css.textarea} rows={6} maxLength={10000} value={offer} onChange={(event) => setOffer(event.target.value)} />
           </label>
           <p className={css.inspectorMeta}>Enter the offer terms. Scheduling adds the contract booking link after approval.</p>
-          <button type="button" className={css.primary} disabled={busy || behavioral.trim().length < 10 || offer.trim().length < 10}
+          <button type="button" className={css.primary} disabled={!!busy || behavioral.trim().length < 10 || offer.trim().length < 10}
             onClick={() => void act({ action: "submit", behavioral, offer })}>Send to Gift</button>
         </>
       )}
@@ -184,33 +203,32 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
           <label className={css.fieldLabel}>Sign-off note (optional for approval)
             <textarea className={css.textarea} aria-describedby={rejectHint} rows={2} maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} />
           </label>
-          {sharedReason && <p id={sharedReason} className={css.inspectorMeta}>{approveBlock}</p>}
           <div className={css.signOffActions}>
             <div>
               <button type="button" className={css.primary} disabled={signOffDisabled || !!approveBlock} aria-describedby={[instruction, approveReason].filter(Boolean).join(" ")} onClick={() => {
                 if (window.confirm("Approve this offer letter and send it to the candidate?"))
                   void act({ action: "sign", packetId: packet.id, decision: "hire", reason });
               }}>Approve and send offer</button>
-              {!sharedReason && approveReason && <p id={approveReason} className={css.inspectorMeta}>{approveBlock}</p>}
+              {approveReason && <p id={approveReason} className={css.inspectorMeta}>{approveBlock}</p>}
             </div>
             <div>
               <button type="button" className={css.secondary} disabled={signOffDisabled || reason.trim().length < 5 || !!rejectBlock} aria-describedby={[instruction, rejectReason, rejectHint].filter(Boolean).join(" ")} onClick={() => {
                 if (window.confirm("Reject this application and inform the candidate?"))
                   void act({ action: "sign", packetId: packet.id, decision: "reject", reason });
               }}>Reject and inform candidate</button>
-              {!sharedReason && rejectReason && <p id={rejectReason} className={css.inspectorMeta}>{rejectBlock}</p>}
+              {rejectReason && <p id={rejectReason} className={css.inspectorMeta}>{rejectBlock}</p>}
               {rejectHint && <p id={rejectHint} className={css.inspectorMeta}>Write at least 5 characters to reject.</p>}
             </div>
           </div>
         </>
-      ) : <p>Waiting for HR to send the packet. <button type="button" className={css.secondary} disabled={busy} onClick={() => void act()}>Check again</button></p>)}
-      <p role="status">{closed && (stage === "hired" ? (review?.appointment
+      ) : <p>Waiting for HR to send the packet. <button type="button" className={css.secondary} disabled={!!busy} onClick={() => void act()}>Check again</button></p>)}
+      <p ref={outcome} role="status" tabIndex={-1}>{closed && (stage === "hired" ? (review?.appointment
         ? `Contract signing booked for ${new Date(review.appointment).toLocaleString("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium", timeStyle: "short" })} (Bangkok).`
         : packet ? "Offer queued." : "There is no contract booking on record.") : `Application ${stage}.`)}</p>
       {saved && !signedStage && <p role="status">Saved.</p>}
-      {error && <div role="alert" className={css.errorText}>
+      {error && !error.packetLoad && <div role="alert" className={css.errorText}>
         <p>{error.text}</p>
-        {error.retry && <button type="button" className={css.secondary} disabled={busy} onClick={() => void act()}>Retry</button>}
+        {error.retry && <button type="button" className={css.secondary} disabled={!!busy} onClick={() => void act()}>Retry</button>}
       </div>}
     </section>
   );

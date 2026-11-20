@@ -119,6 +119,8 @@ let reviewPacket: { id: string; behavioral: string; offer: string } | null = nul
 // ?gift=1: the final review as Gift sees it, with a packet from HR.
 const GIFT = location.search.includes("gift=1");
 if (GIFT) payload.reviewAccess = { hr: false, gift: true };
+// ?live=1: Automation and Messages on, so sign-off is not blocked by a switch.
+if (location.search.includes("live=1")) Object.assign(payload.config, { enabled: true, deliveryEnabled: true });
 const realFetch = window.fetch;
 (window as unknown as { posted: unknown[] }).posted = [];
 (window as unknown as { uploaded: unknown[] }).uploaded = [];
@@ -137,7 +139,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       callNotes: "", packet: null, appointment: "2026-11-20T02:30:00Z" }));
   }
   if (url.pathname === "/api/hiring/review/r1") {
-    if (url.searchParams.get("file") === "html") return new Response("<!doctype html><html><head><style>body{font:15px Georgia;padding:16px}</style></head><body><h1>Review packet: Reply Passed</h1><p>Mock 82/100. Paper 74%. Behavioral: gave a specific example of adapting a lesson.</p><p><a href='/api/hiring/review/r1?file=resume'>Résumé</a></p></body></html>", { headers: { "Content-Type": "text/html" } });
+    if (url.searchParams.get("file") === "html") return new Response((window as unknown as { realPacket: string }).realPacket, { headers: { "Content-Type": "text/html" } });
     if (init?.method === "POST") {
       const body = JSON.parse(String(init.body));
       (window as unknown as { posted: unknown[] }).posted.push(body);
@@ -228,6 +230,17 @@ window.history.pushState = (...args) => { push(...args); window.dispatchEvent(ne
 const subscribe = (fn) => { window.addEventListener(change, fn); window.addEventListener("popstate", fn); return () => { window.removeEventListener(change, fn); window.removeEventListener("popstate", fn); }; };
 export const useSearchParams = () => new URLSearchParams(useSyncExternalStore(subscribe, () => location.search));
 `;
+// The real review packet HTML (src/lib/hiring/review-document.ts) for a synthetic packet, so Gift's in-page packet is the real layout.
+const packetModule = await build({ entryPoints: [path.join(ROOT, "src/lib/hiring/review-document.ts")], bundle: true, write: false, platform: "node", format: "esm", tsconfig: path.join(ROOT, "tsconfig.json"), logLevel: "error" });
+const { reviewDocument } = await import(`data:text/javascript;base64,${Buffer.from(packetModule.outputFiles[0].text).toString("base64")}`);
+const rubricItems = { accuracy: 10, concepts: 10, clarity: 7, presentation: 7, interaction: 10, pace: 7, organization: 10, materials: 7, formative: 7, feedback: 9 };
+const realPacket = await (async () => { const cwd = process.cwd(); process.chdir(ROOT); try { return await reviewDocument({
+  at: "2026-11-19T03:00:00Z", author: "hr@example.test", behavioral: "Gave a specific example of adapting a lesson for a student who struggled with fractions.", offer: "Hourly rate 600 THB. About 10 hours a week, weekend mornings. Start date 1 December 2026.",
+  evidence: { name: "Reply Passed", subject: "Mathematics", call: "2026-11-03T02:00:00Z", recommendation: { head: "Kru Peat", reason: "Clear and warm lesson." },
+    ats: { score: 86, criteria: ["degree", "subject", "curriculum", "teaching", "english"].map((id) => ({ id, result: "met", evidence: "Taught IGCSE for 2 years" })) },
+    paper: { total: 74, max: 100, levels: [{ level: "Key Stage 3", scored: 18, max: 20, percent: 90, passPercent: 50 }, { level: "AS / A-Level", scored: 11, max: 20, percent: 55, passPercent: 50 }, { level: "IB SL / HL", scored: 7, max: 20, percent: 35, passPercent: null }] },
+    mock: { total: 84, rubric: { items: rubricItems, comments: "Clear explanations. Checked understanding often." } } },
+}, "/api/hiring/review/r1?file=resume", "/api/hiring/review/r1?file=paper"); } finally { process.chdir(cwd); } })();
 const bundled = await build({
   stdin: { contents: ENTRY, resolveDir: ROOT, sourcefile: "hiring-synthetic.tsx", loader: "tsx" },
   bundle: true, write: false, outdir: "out", platform: "browser", format: "iife", target: "es2022", jsx: "automatic", tsconfig: path.join(ROOT, "tsconfig.json"),
@@ -247,7 +260,7 @@ const script = bundled.outputFiles.find((f) => f.path.endsWith(".js")).text;
 const moduleCss = bundled.outputFiles.find((f) => f.path.endsWith(".css"))?.text ?? "";
 const from = path.join(ROOT, "src/app/globals.css");
 const globalCss = (await postcss([tailwind({ base: ROOT })]).process(readFileSync(from, "utf8"), { from })).css;
-const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hiring screens (synthetic)</title><style>${globalCss}${moduleCss}#root{--font-inter:system-ui;--font-instrument-serif:Georgia;display:flex;flex-direction:column;height:100vh;padding:12px 24px;overflow:hidden}</style></head><body><div id="root"></div><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`;
+const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hiring screens (synthetic)</title><style>${globalCss}${moduleCss}#root{--font-inter:system-ui;--font-instrument-serif:Georgia;display:flex;flex-direction:column;height:100vh;padding:12px 24px;overflow:hidden}</style></head><body><div id="root"></div><script>window.realPacket=${JSON.stringify(realPacket).replaceAll("</", "<\\/")};</script><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`;
 const AXE = readFileSync(path.join(ROOT, "node_modules/axe-core/axe.min.js"), "utf8");
 const PDF = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF";
 
@@ -801,11 +814,22 @@ try {
       await shot(page, `gift-review-${size}`);
     assert.deepEqual(await axeProblems(page), [], "axe on gift");
     }
+    // With the switches on, Approve unlocks only after the packet is shown.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${origin}/?view=review&roles=1&gift=1&live=1`);
+    const approve = page.getByRole("button", { name: "Approve and send offer" }).first();
+    await approve.waitFor();
+    assert.equal(await approve.isDisabled(), true);
+    await page.getByRole("button", { name: /Read review packet/ }).first().click();
+    await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" }).waitFor();
+    await page.waitForFunction(() => ![...document.querySelectorAll("button")].find((b) => b.textContent === "Approve and send offer")?.disabled);
+    await page.getByRole("button", { name: "Close packet" }).first().click();
+    await shot(page, "gift-review-ready-phone");
     // Gift reads the packet in the page; sign-off unlocks only after it is shown (here Reject still needs a note).
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${origin}/?view=review&roles=1&gift=1`);
     await page.getByRole("button", { name: /Read review packet/ }).first().click();
-    await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: /Review packet/ }).waitFor();
+    await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" }).waitFor();
     await page.waitForTimeout(300);
     await shot(page, "gift-review-packet-phone");
     assert.deepEqual(await axeProblems(page), [], "axe on gift packet");
@@ -814,6 +838,10 @@ try {
     await page.getByRole("button", { name: "Read review packet" }).first().waitFor();
     assert.ok(await page.evaluate(() => document.querySelector("main, #root").scrollWidth <= window.innerWidth + 1), "Gift review scrolls sideways at 320px");
     await shot(page, "gift-review-320");
+    await page.getByRole("button", { name: /Read review packet/ }).first().click();
+    await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" }).waitFor();
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), "Gift packet scrolls sideways at 320px");
+    await shot(page, "gift-review-packet-320");
     await page.setViewportSize({ width: 1440, height: 900 });
   });
   await check("the page has no script errors", async () => assert.deepEqual(errors, []));

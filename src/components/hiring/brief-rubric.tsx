@@ -1,25 +1,28 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { ITEM_MAX, RUBRIC, RUBRIC_ITEMS, type MockRubric, type RubricItem } from "@/lib/hiring/marking-sheet";
+import type { BriefPending } from "./brief";
 import c from "./booking.module.css";
 
 const TILE_SCORES = [10, 7, 4, 1];
 const OTHER_SCORES = [9, 8, 6, 5, 3, 2];
 
 /** The interviewer's score form for one mock. The server checks the scores again and calculates the total. */
-export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSent, onEdit, onSent }: {
+export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSent, pending, setPending, onEdit, onSent }: {
   saved: MockRubric | null;
   form: "wait" | "open" | "closed";
   url: string;
   editCount: number;
   lastSent: { total: number; editCount: number } | null;
   decisionSent: boolean;
+  pending: BriefPending;
+  setPending: (pending: BriefPending) => void;
   onEdit: () => void;
   onSent: (total: number) => void;
 }) {
   const rubricId = useId();
   const [items, setItems] = useState<Partial<Record<RubricItem, number>>>(() => Object.fromEntries(RUBRIC_ITEMS.flatMap((id) => (saved?.items[id] ? [[id, saved.items[id]]] : []))));
   const [comments, setComments] = useState(saved?.comments ?? "");
-  const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
+  const [state, setState] = useState<"idle" | "sent">("idle");
   const [editing, setEditing] = useState(!lastSent);
   const [error, setError] = useState("");
   const feedback = useRef<HTMLParagraphElement>(null);
@@ -40,9 +43,10 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   if (!decisionSent && form === "closed") return <p className={c.note}>Scores for this mock are already recorded. Ask BeGifted admin to change them.</p>;
   const scored = RUBRIC_ITEMS.filter((id) => items[id]).length;
   const complete = scored === RUBRIC_ITEMS.length;
-  const disabled = !complete || state === "sending" || sentTotal !== null;
+  const disabled = !complete || !!pending || sentTotal !== null;
   const max = RUBRIC_ITEMS.length * ITEM_MAX;
   const sentMessage = lastSent ? `Scores sent. ${lastSent.total}/${max}.` : "";
+  const saveError = error && <p ref={feedback} role="alert" className={c.alert} tabIndex={-1}>{error}</p>;
   function selectScore(id: RubricItem, score: number) {
     if (items[id] === score) return;
     setItems({ ...items, [id]: score });
@@ -50,7 +54,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
     if (state === "sent") setState("idle");
   }
   async function send() {
-    setState("sending");
+    setPending("scores");
     setError("");
     try {
       const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items, comments }) });
@@ -60,12 +64,12 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
         setEditing(false);
         setState("sent");
         onSent(body.total);
-        return;
       }
     } catch {
       setError("The scores were not saved. Check your connection, then try again.");
+    } finally {
+      setPending(null);
     }
-    setState("idle");
   }
   if (decisionSent || (!editing && sentTotal !== null)) {
     return (
@@ -73,13 +77,14 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
         {lastSent && <p aria-hidden="true">Scores sent · <strong>{lastSent.total} / {max}</strong></p>}
         {decisionSent ? <p className={c.note}>Scores and recommendation are recorded. Ask BeGifted admin to change them.</p> : <div className={c.scoreActions}>
           <a className={c.button} href="#recommendation">Go to recommendation</a>
-          <button type="button" className={c.ghost} onClick={() => {
+          <button type="button" className={c.ghost} disabled={!!pending} onClick={() => {
             setEditing(true);
             setState("idle");
           }}>
             Edit scores
           </button>
         </div>}
+        {saveError}
       </div>
     );
   }
@@ -93,7 +98,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
     >
       <p className={`${c.note} ${c.scoreHint}`}>Tap a score. Use Other for more scores.</p>
       {RUBRIC.map(({ part, items: partItems }) => (
-        <fieldset key={part} className={c.rubricPart}>
+        <fieldset key={part} className={c.rubricPart} disabled={pending === "scores"}>
           <legend className={c.factLabel}>{part}</legend>
           {partItems.map(([id, label]) => {
             const labelId = `${rubricId}-${id}`;
@@ -144,6 +149,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
           className={c.input}
           rows={3}
           maxLength={4000}
+          disabled={pending === "scores"}
           value={comments}
           onChange={(event) => {
             setComments(event.target.value);
@@ -153,7 +159,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
         />
       </label>
       {state === "sent" && <p ref={feedback} role="status" className={c.success} tabIndex={-1}>{sentMessage}</p>}
-      {error && <p ref={feedback} role="alert" className={c.alert} tabIndex={-1}>{error}</p>}
+      {saveError}
       {lastSent && sentTotal === null && <p className={c.note} role="status">Unsaved changes. Send again to update your scores.</p>}
       <div className={c.field} data-sticky="">
         <div className={c.field}>
@@ -161,7 +167,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
           <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
         </div>
         <button type="submit" className={c.button} disabled={disabled}>
-          {state === "sending" ? "Sending…" : "Send scores"}
+          {pending === "scores" ? "Sending…" : "Send scores"}
         </button>
       </div>
     </form>

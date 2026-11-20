@@ -399,15 +399,18 @@ function headVisit(row: RunSheetRow, data: HiringData, now: Date) {
   const ended = !!mock && new Date(mock.endTime) <= now;
   const decision = mock && data.headDecisions.find((d) => d.bookingId === mock.id);
   const uncertain = data.headDecisions.some((d) => d.candidateId === row.candidateId && d.bookingId === null);
-  return { row, mock, candidate, active, path, ended, decision, due: ended && !!path && active && !decision && !uncertain };
+  const subject = mock?.subjects[0];
+  const result = subject && data.mocks.find((m) => m.candidateId === row.candidateId && m.subject === subject);
+  const scored = !!result && result.bookingId === mock?.id && result.source !== "tracker" && result.status === "done";
+  const draft = data.decisions.some((d) => d.candidateId === row.candidateId && d.status === "draft");
+  const due = ended && !!path && active && !decision && !uncertain && !!subject && (scored || (!result && !draft));
+  return { row, mock, candidate, active, path, ended, decision, subject, scored, due };
 }
 
 function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisit>; data: HiringData; readOnly: boolean }) {
-  const { row, mock, candidate, active, path, decision, due } = visit;
+  const { row, candidate, active, path, decision, subject, scored, due } = visit;
   const [resume, setResume] = useState(false);
   const resumeId = useId();
-  const subject = mock?.subjects[0];
-  const scored = mock && data.mocks.some((m) => m.bookingId === mock.id && m.source !== "tracker" && m.status === "done");
   const briefLabel = decision ? "View brief" : !due ? "Open interview brief" : scored ? "Record recommendation" : "Score and recommend";
   return (
     <article className={`${r.card} ${r.headCard}`}>

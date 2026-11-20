@@ -1,15 +1,23 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import type { BriefPending } from "./brief";
 import c from "./booking.module.css";
 
 type Decision = "hire" | "reject";
 const LABEL: Record<Decision, string> = { hire: "Yes", reject: "No" };
 
 /** The tutor recommends Yes for HR review or No to queue a rejection. */
-export function BriefDecision({ sent, onSent, url, scores, unsent }: { sent: Decision | null; onSent: (decision: Decision) => void; url: string; scores: "own" | "recorded" | null; unsent: boolean }) {
+export function BriefDecision({ sent, onSent, url, scores, unsent, pending, setPending }: {
+  sent: Decision | null;
+  onSent: (decision: Decision) => void;
+  url: string;
+  scores: "own" | "recorded" | null;
+  unsent: boolean;
+  pending: BriefPending;
+  setPending: (pending: BriefPending) => void;
+}) {
   const [reason, setReason] = useState("");
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const reasonHintId = useId();
   const recorded = useRef<HTMLParagraphElement>(null);
@@ -19,7 +27,7 @@ export function BriefDecision({ sent, onSent, url, scores, unsent }: { sent: Dec
     if (sent && sentHere.current) recorded.current?.focus();
   }, [sent]);
   async function send(decision: Decision) {
-    setBusy(true);
+    setPending("recommendation");
     setError("");
     try {
       const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision, reason }) });
@@ -30,8 +38,9 @@ export function BriefDecision({ sent, onSent, url, scores, unsent }: { sent: Dec
       } else setError(body.error ?? "The decision was not saved. Try again.");
     } catch {
       setError("The decision was not saved. Check your connection, then try again.");
+    } finally {
+      setPending(null);
     }
-    setBusy(false);
   }
   if (!scores && !sent) return <p className={c.note}>Send your scores first.</p>;
   return (
@@ -59,10 +68,10 @@ export function BriefDecision({ sent, onSent, url, scores, unsent }: { sent: Dec
           </label>
           {reasonTooShort && <p id={reasonHintId} className={c.note}>Write at least 5 characters to choose No.</p>}
           <div className={c.decisionActions}>
-            <button type="button" className={c.button} disabled={busy} onClick={() => void send("hire")}>
+            <button type="button" className={c.button} disabled={!!pending} onClick={() => void send("hire")}>
               Yes, send to HR
             </button>
-            <button type="button" className={`${c.ghost} ${c.reject}`} disabled={busy || reasonTooShort} onClick={() => void send("reject")}>
+            <button type="button" className={`${c.ghost} ${c.reject}`} disabled={!!pending || reasonTooShort} onClick={() => void send("reject")}>
               No, reject
             </button>
           </div>

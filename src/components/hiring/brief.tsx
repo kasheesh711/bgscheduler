@@ -9,6 +9,7 @@ import { BriefRubric } from "./brief-rubric";
 import c from "./booking.module.css";
 
 type Brief = Awaited<ReturnType<typeof briefView>>;
+export type BriefPending = "scores" | "recommendation" | null;
 
 export const BriefLoading = () => (
   <p role="status" className={c.note}>
@@ -25,6 +26,7 @@ export const BriefGone = () => (
 
 /** The interviewer's page: who they will meet, the résumé, the form answers, and the interviewer's own score form. No contact details and no AI scores. */
 export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: { brief: Brief; resumeUrl: string; rubricUrl: string; decisionUrl: string }) {
+  const [pending, setPending] = useState<BriefPending>(null);
   const [editCount, setEditCount] = useState(0);
   const [lastSent, setLastSent] = useState(() => brief.rubric ? { total: rubricTotals(brief.rubric).total, editCount: 0 } : null);
   const [decision, setDecision] = useState(brief.decision);
@@ -95,6 +97,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
           editCount={editCount}
           lastSent={lastSent}
           decisionSent={!!decision}
+          pending={pending}
+          setPending={setPending}
           onEdit={() => setEditCount((count) => count + 1)}
           onSent={(total) => setLastSent({ total, editCount })}
         />
@@ -108,6 +112,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
             url={decisionUrl}
             scores={lastSent ? "own" : brief.form === "closed" ? "recorded" : null}
             unsent={lastSent !== null && lastSent.editCount !== editCount}
+            pending={pending}
+            setPending={setPending}
           />
         </section>
       )}

@@ -308,8 +308,12 @@
   font-weight: 600;
   cursor: pointer;
 }
-.scoreTile:hover {
+.scoreTile:has(input:enabled):hover {
   border-color: var(--ink);
+}
+.scoreTile:has(input:disabled) {
+  cursor: default;
+  opacity: 0.65;
 }
 .scoreTile:has(input:checked),
 .input.otherScore[data-selected] {

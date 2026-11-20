@@ -22,15 +22,16 @@ export async function reviewDocument(packet: ReviewPacket, resume: string, paper
 <style>
 /* ${fontLicense} */
 @font-face{font-family:Geist;src:url(data:font/woff2;base64,${font}) format("woff2");font-weight:400;font-display:swap}
-*{box-sizing:border-box}body{margin:0;background:#F6F6F3;color:#101A17;font:15px/1.55 Geist,Arial,sans-serif;overflow-wrap:anywhere}
-main{max-width:760px;margin:auto;padding:48px 24px 64px}header{padding-bottom:28px;border-bottom:1px solid #E0E3DD}
+*{box-sizing:border-box}body{max-width:760px;margin:0 auto;padding:48px 24px 64px;background:#F6F6F3;color:#101A17;font:15px/1.55 Geist,Arial,sans-serif;overflow-wrap:anywhere}
+header{padding-bottom:28px;border-bottom:1px solid #E0E3DD}
 img{width:145px;height:auto}h1{font-size:clamp(32px,7vw,53px);font-weight:400;line-height:1.08;letter-spacing:-.035em;margin:16px 0 8px}em{font-style:normal}
 .candidate{font-size:21px}h2{font-size:21px;margin:0 0 8px;break-after:avoid}h3{font-size:15px;margin:14px 0 4px;break-after:avoid}
 p,dl{margin:7px 0}section{padding:23px 0;border-bottom:1px solid #E0E3DD}
 .eyebrow{margin-top:28px;color:#66706B;text-transform:uppercase;letter-spacing:.12em;font-size:12px}
 .meta{color:#66706B}.copy{white-space:pre-wrap}.row{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr);gap:14px;padding:6px 0;border-bottom:1px solid #E0E3DD;break-inside:avoid}dd{margin:0;font-variant-numeric:tabular-nums}
-a{color:#16302A;text-underline-offset:3px}li{margin:6px 0}
-@page{size:A4;margin:16mm}@media print{body{background:white}main{max-width:none;padding:0}section{padding:12px 0}}
+a{display:inline-flex;align-items:center;min-height:44px;padding:6px 8px;color:#16302A;text-underline-offset:3px}li{margin:6px 0}
+@media screen and (width < 520px){body{padding:24px 16px 40px}.row{grid-template-columns:minmax(0,1fr);gap:2px}}
+@page{size:A4;margin:16mm}@media print{body{background:white;max-width:none;padding:0}section{padding:12px 0}a{display:inline;padding:0}}
 </style>
 <main>
 <header><img alt="BeGifted Education" src="data:image/png;base64,${logo}">
