@@ -28,15 +28,23 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
   const facts: [string, string][] = [
     ["Subject", brief.subject],
     ...(brief.exam ? ([["Exam", `${brief.exam} (Bangkok)`]] as [string, string][]) : []),
-    ["Mock teaching", `${brief.mock} (Bangkok)`],
     ["Interviewer", brief.interviewer ?? "To be confirmed"],
-    ["Place", brief.location],
   ];
   return (
     <>
       <section className={c.facts}>
         <h2 className={c.subject}>{brief.name}</h2>
-        <dl className={c.answers}>
+        <dl className={`${c.answers} ${c.briefVisit}`}>
+          <div>
+            <dt className={c.factLabel}>Mock teaching</dt>
+            <dd>{brief.mock} (Bangkok)</dd>
+          </div>
+          <div>
+            <dt className={c.factLabel}>Place</dt>
+            <dd>{brief.location}</dd>
+          </div>
+        </dl>
+        <dl className={`${c.answers} ${c.briefDetails}`}>
           {facts.map(([label, value]) => (
             <div key={label}>
               <dt className={c.factLabel}>{label}</dt>
@@ -48,7 +56,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
       </section>
       <section className={c.facts}>
         <h2 className={c.stepTitle}>Candidate files</h2>
-        {brief.gradedPaper && <p><a className={c.paperLink} href={resumeUrl.replace(/resume$/, "paper")} target="_blank" rel="noreferrer">Open the graded paper</a></p>}
+        {brief.gradedPaper && <a className={`${c.ghost} ${c.jumpLink}`} href={resumeUrl.replace(/resume$/, "paper")} target="_blank" rel="noreferrer">Open the graded paper</a>}
         {brief.resume ? (
           <>
             <a className={c.button} href={resumeUrl} target="_blank" rel="noreferrer">

@@ -67,6 +67,7 @@ export function BriefRubric({ saved, form, url, onSent }: { saved: MockRubric | 
           {partItems.map(([id, label]) => {
             const labelId = `${rubricId}-${id}`;
             const selected = items[id] ?? 0;
+            const otherSelected = OTHER_SCORES.includes(selected);
             return (
               <div key={id} className={c.criterionScore}>
                 <span id={labelId}>{label}</span>
@@ -89,8 +90,9 @@ export function BriefRubric({ saved, form, url, onSent }: { saved: MockRubric | 
                   </div>
                   <select
                     className={`${c.input} ${c.otherScore}`}
+                    data-selected={otherSelected ? "" : undefined}
                     aria-label={`Other score for ${label}`}
-                    value={OTHER_SCORES.includes(selected) ? selected : ""}
+                    value={otherSelected ? selected : ""}
                     onChange={(event) => selectScore(id, Number(event.target.value))}
                   >
                     <option value="" disabled>Other</option>
@@ -127,17 +129,17 @@ export function BriefRubric({ saved, form, url, onSent }: { saved: MockRubric | 
         </>
       )}
       {error && <p ref={feedback} role="alert" className={c.alert} tabIndex={-1}>{error}</p>}
-      <div className={c.field} data-sticky={sentTotal === null ? "" : undefined}>
-        <p className={c.note}>{scored} of {RUBRIC_ITEMS.length} scored</p>
-        <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
-        {lastSent && sentTotal === null && (
-          <p className={c.note} role="status">Unsaved changes. Send again to update your scores.</p>
-        )}
-        <button type="submit" className={c.button} disabled={disabled}>
-          {state === "sending" ? "Sending…" : "Send scores"}
-        </button>
-        {!complete && <p className={c.note}>Score all {RUBRIC_ITEMS.length} items to send.</p>}
-      </div>
+      {sentTotal === null && (
+        <div className={c.field} data-sticky="">
+          <p className={c.note}>{scored} of {RUBRIC_ITEMS.length} scored</p>
+          <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
+          {lastSent && <p className={c.note} role="status">Unsaved changes. Send again to update your scores.</p>}
+          <button type="submit" className={c.button} disabled={disabled}>
+            {state === "sending" ? "Sending…" : "Send scores"}
+          </button>
+          {!complete && <p className={c.note}>Score all {RUBRIC_ITEMS.length} items to send.</p>}
+        </div>
+      )}
     </form>
   );
 }

@@ -197,19 +197,38 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.briefVisit {
+  gap: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--paper);
+}
+.briefVisit > :first-child dd {
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.briefDetails {
+  gap: 8px 16px;
+}
+@media (min-width: 360px) {
+  .briefVisit {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  }
+  .briefDetails {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .page a.jumpLink {
   min-height: 44px;
   text-decoration: none;
 }
-.paperLink,
-.preScreen > summary {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-}
 .preScreen > summary {
   display: flex;
+  align-items: center;
   justify-content: space-between;
+  min-height: 44px;
   list-style: none;
   cursor: pointer;
 }
@@ -264,17 +283,29 @@
 .scoreTile:hover {
   border-color: var(--ink);
 }
-.scoreTile:has(input:checked) {
+.scoreTile:has(input:checked),
+.input.otherScore[data-selected] {
   border-color: var(--ink);
-  background: var(--ink);
-  color: #fbf7ee;
+  background-color: var(--ink);
+  color: #fff;
 }
 .input.otherScore {
+  appearance: none;
   width: 76px;
   min-height: 44px;
-  padding: 0 8px;
+  padding: 0 22px 0 8px;
   border-radius: 12px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 13px center, right 8px center;
+  background-repeat: no-repeat;
+  background-size: 5px 5px;
   font-size: 14px;
+}
+@media (forced-colors: active) {
+  .input.otherScore {
+    appearance: auto;
+  }
 }
 .field[data-sticky] {
   position: sticky;
@@ -865,4 +896,10 @@ textarea.input {
 /* Keyboard focus never lands under the sticky Send block. */
 .page :is(input, select, textarea, button):focus-visible {
   scroll-margin-bottom: 200px;
+}
+
+/* The open dropdown keeps dark text even when the closed select is filled. */
+.input.otherScore option {
+  color: var(--ink);
+  background: #fff;
 }

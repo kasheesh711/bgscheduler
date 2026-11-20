@@ -388,6 +388,8 @@ function HeadCard({ row, data, past, readOnly }: { row: RunSheetRow; data: Hirin
   const path = mock ? data.briefPaths[mock.id] : undefined;
   const scored = data.mocks.some((m) => m.candidateId === row.candidateId && m.source !== "tracker" && (m.status === "done" || m.status === "needs_check"));
   const decision = data.headDecisions.find((d) => d.candidateId === row.candidateId);
+  // The brief decides what is open (end time, subject), so the card only tells "done" from "not done".
+  const briefLabel = !past ? "Open interview brief" : decision ? "View brief" : "Score and recommend";
   return (
     <article className={`${r.card} ${r.headCard}`}>
       <p className={r.time}>
@@ -415,7 +417,7 @@ function HeadCard({ row, data, past, readOnly }: { row: RunSheetRow; data: Hirin
       <div className={r.actions}>
         {path && !readOnly && (
           <a className={r.big} data-tone={past ? "hire" : "primary"} href={path} target="_blank" rel="noopener noreferrer">
-            {past ? "Score and recommend" : "Open interview brief"}
+            {briefLabel}
           </a>
         )}
         {candidate && <ResumeButton open={resume} onToggle={() => setResume(!resume)} name={row.candidateName} />}
