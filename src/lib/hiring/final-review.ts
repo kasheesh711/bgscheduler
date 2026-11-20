@@ -19,7 +19,7 @@ export function finalReviewAccess(actor: string) {
   };
 }
 
-async function evidence(db: Database, id: string) {
+async function evidence(db: Database, id: string, lock = true) {
   const candidate = await candidateById(db, id);
   const recommendation = await headRecommendation(db, id);
   if (recommendation?.detail.decision !== "hire") throw new HiringError(409, "The tutor must recommend Yes first.");
@@ -27,10 +27,12 @@ async function evidence(db: Database, id: string) {
   if (!candidate.resumeSha256 || !candidate.resumePath || !candidate.profileAssessment)
     throw new HiringError(409, "The original résumé and ATS assessment are required.");
   const { config } = await settings(db);
-  const [paper] = await db.select().from(s.hiringPaperResults).where(and(eq(s.hiringPaperResults.candidateId, id),
-    eq(s.hiringPaperResults.subject, subject), eq(s.hiringPaperResults.status, "done"))).for("share");
-  const [mock] = await db.select().from(s.hiringMockResults).where(and(eq(s.hiringMockResults.candidateId, id),
-    eq(s.hiringMockResults.subject, subject), eq(s.hiringMockResults.status, "done"))).for("share");
+  const paperQuery = db.select().from(s.hiringPaperResults).where(and(eq(s.hiringPaperResults.candidateId, id),
+    eq(s.hiringPaperResults.subject, subject), eq(s.hiringPaperResults.status, "done")));
+  const [paper] = await (lock ? paperQuery.for("share") : paperQuery);
+  const mockQuery = db.select().from(s.hiringMockResults).where(and(eq(s.hiringMockResults.candidateId, id),
+    eq(s.hiringMockResults.subject, subject), eq(s.hiringMockResults.status, "done")));
+  const [mock] = await (lock ? mockQuery.for("share") : mockQuery);
   if (!paper?.marks || !paper.fileId || !mock?.rubric || mock.source === "tracker" || !rubricTotals(mock.rubric).complete ||
       (recommendation.detail.mockResultId && recommendation.detail.mockResultId !== mock.id))
     throw new HiringError(409, "The graded paper and the completed mock rubric are required.");
@@ -68,6 +70,15 @@ export async function latestReviewPacket(db: Database, id: string) {
   const [row] = await db.select().from(s.hiringAudit).where(and(eq(s.hiringAudit.candidateId, id), eq(s.hiringAudit.action, PACKET)))
     .orderBy(desc(s.hiringAudit.createdAt)).limit(1);
   return row ? { id: row.id, author: row.actor, at: row.createdAt, ...(row.detail as unknown as Packet) } : null;
+}
+
+export async function reviewPacketValid(db: Database, id: string, packet: ReviewPacket | null) {
+  if (!packet) return false;
+  try {
+    return packet.fingerprint === fingerprint(await evidence(db, id, false));
+  } catch {
+    return false;
+  }
 }
 
 export async function submitReview(db: Database, id: string, actor: string, input: { behavioral: string; offer: string }) {

@@ -404,11 +404,13 @@ function headVisit(row: Pick<RunSheetRow, "visitId" | "candidateId" | "date" | "
   const uncertain = data.headDecisions.some((d) => d.candidateId === row.candidateId && d.bookingId === null);
   const subject = row.subject;
   const bookingResult = confirmed && data.mocks.find((m) => m.bookingId === confirmed.id && m.candidateId === row.candidateId && m.subject === subject && m.source !== "tracker");
-  const needsCheck = bookingResult?.status === "needs_check";
+  const otherResult = !!confirmed && !!subject && data.mocks.some((m) =>
+    m.candidateId === row.candidateId && m.subject === subject && m.source !== "tracker" && m.bookingId !== confirmed.id);
+  const needsCheck = otherResult || bookingResult?.status === "needs_check";
   const rubric = bookingResult?.rubric;
   const scored = bookingResult?.status === "done" && !!rubric && !checkRubric(rubric).length && !rubricNeedsCheck(rubric);
   const draft = data.decisions.some((d) => d.candidateId === row.candidateId && d.status === "draft");
-  const due = ended && !!path && active && !decision && !uncertain && !!subject && (scored || (!bookingResult && !draft));
+  const due = ended && !!path && active && !decision && !uncertain && !needsCheck && !!subject && (scored || (!bookingResult && !draft));
   return { row, candidate, active, path, ended, decision, scored, needsCheck, due, status };
 }
 

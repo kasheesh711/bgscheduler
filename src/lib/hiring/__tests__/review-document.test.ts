@@ -53,7 +53,7 @@ describe("review document", () => {
     const levels = html.split("<h2>Paper by level</h2>")[1].split("</section>")[0];
     expect(summary).toContain("<strong>45%</strong>");
     expect(summary).toContain(">Passed a level</span>");
-    expect(summary).toMatch(/<h3>ATS<\/h3>[^]*?<strong>80<\/strong> \/ 100<\/p>\s*<\/div><p class="band">Strong<\/p>/);
+    expect(summary).toMatch(/<h3>ATS<\/h3>[^]*?<strong>79\.5<\/strong> \/ 100<\/p>\s*<\/div><p class="band">Fair<\/p>/);
     expect(summary.match(/<path [^>]*class="gauge-track"/g)).toHaveLength(3);
     expect(summary).not.toContain('class="target"');
     expect(summary).toContain("Score guide");

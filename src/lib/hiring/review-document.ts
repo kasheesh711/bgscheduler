@@ -17,7 +17,7 @@ const criterionNames = { degree: "Degree", subject: "Subject", curriculum: "Curr
 const criterionResults = { met: "Met", partial: "Partial", not_met: "Not met", unknown: "Unknown" };
 const stackColors = ["#2a78d6", "#eb6834", "#199e70", "#c98400", "#d96a97", "#008300"];
 
-function gauge(value: number, unit = " / 100", target: number | null = null) {
+function gauge(value: number, unit = " / 100", target: number | null = null, label = String(value)) {
   const arc = "M21 56a45 45 0 0 1 90 0";
   const isPercent = unit === "%";
   const tick = (position: number, target = false) =>
@@ -28,7 +28,7 @@ function gauge(value: number, unit = " / 100", target: number | null = null) {
 ${value > 0 ? `<path d="${arc}" class="gauge-fill" pathLength="100" stroke-dasharray="${percent(value)} 100"/>` : ""}
 ${[0, 25, 50, 75, 100].map((value) => tick(value)).join("")}${target === null ? "" : tick(target, true)}
 <text x="21" y="72">0</text><text x="111" y="72">100</text>
-</svg><p class="gauge-value"><strong>${escape(value)}${isPercent ? "%" : ""}</strong>${isPercent ? "" : escape(unit)}</p>
+</svg><p class="gauge-value"><strong>${escape(label)}${isPercent ? "%" : ""}</strong>${isPercent ? "" : escape(unit)}</p>
 </div><p class="band">${value >= 80 ? "Strong" : value >= 60 ? "Fair" : "Low"}</p>`;
 }
 
@@ -123,7 +123,8 @@ export async function reviewDocument(packet: ReviewPacket, resume: string, paper
   const fontLicense = await readFile("public/brand/hiring/geist.txt", "utf8");
   const value = packet.evidence;
   const { ats, paper: sheet, mock, recommendation } = value;
-  const breakdown = atsBreakdown(ats, `${ats.score.toFixed(1)} / 100`);
+  const atsScore = Number.isInteger(ats.score) ? String(ats.score) : ats.score.toFixed(1);
+  const breakdown = atsBreakdown(ats, `${atsScore} / 100`);
   const paperPercent = sheet.max ? Math.round(sheet.total / sheet.max * 10_000) / 100 : 0;
   const levels = sheet.levels.filter(({ max }) => max > 0);
   const paperTarget = levels.length === 1 ? levels[0].passPercent : null;
@@ -226,7 +227,7 @@ summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details 
 <h1>Hiring <em>review</em></h1>
 <p class="candidate">${escape(value.name)}</p><p>${escape(value.subject)} tutor</p><p class="meta">Submitted ${date(packet.at)} by ${escape(packet.author)}</p></header>
 <section><h2>Assessment summary</h2><div class="tiles">
-<div class="tile"><h3>ATS</h3>${gauge(Math.round(ats.score))}</div>
+<div class="tile"><h3>ATS</h3>${gauge(ats.score, " / 100", null, atsScore)}</div>
 <div class="tile"><h3>Paper</h3>${gauge(paperPercent, "%", paperTarget)}
 <p class="paper-detail num">${escape(sheet.total)} / ${escape(sheet.max)} · ${chip(sheet.result, levels.length > 1 ? "Passed a level" : "Pass")}</p>
 ${paperTarget === null ? "" : `<p class="paper-detail meta">Pass mark ${escape(paperTarget)}%</p>`}</div>

@@ -10,6 +10,7 @@ type Review = {
   callNotes: string;
   appointment: string | null;
   packet: { id: string; behavioral: string; offer: string } | null;
+  packetValid: boolean;
 };
 
 export function reviewBlocks(writeGate: boolean, config: Parameters<typeof contractTestAllowed>[0], id: string) {
@@ -49,14 +50,13 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   const [reason, setReason] = useState("");
   const [packetPage, setPacketPage] = useState<{ id: string; html: string; name: string }>();
   const [viewedId, setViewedId] = useState<string>();
-  const [stalePacketId, setStalePacketId] = useState<string>();
   const [busy, setBusy] = useState<"review" | "packet" | "sign" | null>(null);
   const [saved, setSaved] = useState(false);
   const [signedStage, setSignedStage] = useState<"hired" | "rejected">();
   const [error, setError] = useState<{ text: string; retry?: boolean; packetLoad?: boolean }>();
   const packet = review?.packet;
   const openPage = packetPage?.id === packet?.id ? packetPage : undefined;
-  const stale = !!packet && packet.id === stalePacketId;
+  const stale = !!packet && review?.packetValid !== true;
   const viewed = !!packet && !stale && packet.id === viewedId;
 
   const load = useCallback(async (afterSave = false, previousPacket?: string) => {
@@ -65,6 +65,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
       const data: Review | { error?: string } | null = await response.json().catch(() => null);
       if (!response.ok || !data || !("access" in data)) throw new Error(data && "error" in data ? data.error : undefined);
       setReview(data);
+      setViewedId((id) => data.packetValid && id === data.packet?.id ? id : undefined);
       if (!previousPacket || previousPacket !== data.packet?.id) {
         setBehavioral(data.packet?.behavioral ?? data.callNotes ?? "");
         setOffer(data.packet?.offer ?? "");
@@ -99,16 +100,10 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
           const data = await response.json().catch(() => null);
           const text = data?.error ?? "Could not save the review.";
           if (body.action === "sign") {
-            if (response.status === 409 && /\b(?:evidence|files?|r[ée]sum[ée]|ats assessment|graded paper|mock rubric|must recommend)\b/i.test(text)) {
-              setStalePacketId(body.packetId);
-              setViewedId(undefined);
-              closePacket();
-              return;
-            }
             const current = await load(false, body.packetId);
-            if (current && current.packet?.id !== body.packetId) {
-              setViewedId(undefined);
+            if (current && (!current.packetValid || current.packet?.id !== body.packetId)) {
               closePacket();
+              if (current.packet && !current.packetValid) return;
             }
             setError({ text, retry: !current });
             return;
@@ -136,8 +131,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
     try {
       const response = await fetch(`${url}?file=html`, { cache: "no-store" });
       if (response.status === 409) {
-        setStalePacketId(packetId);
-        return;
+        const current = await load(false, packetId);
+        if (!current || (current.packet && !current.packetValid)) return;
       }
       if (!response.ok) {
         const data = await response.json().catch(() => null);
@@ -165,11 +160,12 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   }
 
   async function checkPacket(packetId: string) {
-    if (busy || viewed || packetId === stalePacketId) return;
+    if (busy || viewed || stale) return;
     setBusy("review");
     const current = await load(false, packetId);
     if (current?.packet?.id === packetId) {
-      setViewedId(packetId);
+      if (current.packetValid) setViewedId(packetId);
+      else closePacket();
     } else {
       closePacket();
       if (current) setError({ text: "HR sent a new packet. Read it again." });
@@ -208,7 +204,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
       {!signing && review && packet && (
         <div className={`${css.decisionActions} ${css.packetActions}`}>
           {review.access.gift ? (
-            <button type="button" className={css.primary} ref={readButton} aria-expanded={!!openPage} aria-disabled={!!busy || !!openPage}
+            <button type="button" className={css.primary} ref={readButton} disabled={stale && awaitingSignOff} aria-expanded={!!openPage} aria-disabled={!!busy || !!openPage || (stale && awaitingSignOff)}
               aria-controls={openPage ? `${controlId}-packet` : undefined}
               onClick={() => { if (!busy && !openPage) void readPacket(packet.id); }}>Read review packet</button>
           ) : <a className={css.secondary} href={`${url}?file=html`} target="_blank" rel="noreferrer">Read review packet</a>}
