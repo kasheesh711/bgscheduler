@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { rubricTotals } from "@/lib/hiring/marking-sheet";
+import { ITEM_MAX, RUBRIC_ITEMS, rubricTotals } from "@/lib/hiring/marking-sheet";
 import { ANSWER_LABELS } from "@/lib/hiring/model";
+import { QUESTION_BANK, STRESS_ELEMENTS, STRESS_SCENARIO, STRESS_STEPS } from "@/lib/hiring/rubric-guide";
 import type { briefView } from "@/lib/hiring/service";
 import { BriefDecision } from "./brief-decision";
 import { BriefRubric } from "./brief-rubric";
@@ -28,7 +29,7 @@ export const BriefGone = () => (
 export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: { brief: Brief; resumeUrl: string; rubricUrl: string; decisionUrl: string }) {
   const [pending, setPending] = useState<BriefPending>(null);
   const [editCount, setEditCount] = useState(0);
-  const [lastSent, setLastSent] = useState(() => brief.rubric ? { total: rubricTotals(brief.rubric).total, editCount: 0 } : null);
+  const [lastSent, setLastSent] = useState(() => brief.rubric ? { total: rubricTotals(brief.rubric).total, max: rubricTotals(brief.rubric).max, editCount: 0 } : null);
   const [decision, setDecision] = useState(brief.decision);
   const facts: [string, string][] = [
     ["Subject", brief.subject],
@@ -88,6 +89,33 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
           <p className={c.note}>This candidate has no pre-screen reply.</p>
         )}
       </details>
+      <details className={c.preScreen}>
+        <summary className={c.stepTitle}><h2 className={c.summaryHeading}>Interviewer guide</h2></summary>
+        <h3 className={c.factLabel}>Stress Test: parent role-play</h3>
+        <ul className={c.note}>
+          {STRESS_STEPS.map((step) => <li key={step}>{step}</li>)}
+        </ul>
+        <p><strong>Scenario:</strong> <em>&ldquo;{STRESS_SCENARIO}&rdquo;</em></p>
+        <dl className={c.answers}>
+          {STRESS_ELEMENTS.map(({ key, label, detail }) => (
+            <div key={key}>
+              <dt className={c.factLabel}>{label}</dt>
+              <dd>{detail}</dd>
+            </div>
+          ))}
+        </dl>
+        <h3 className={c.factLabel}>Question bank</h3>
+        <p className={c.note}>Use any of these during or after the mock. The answers are evidence for the linked item. They are not scored separately.</p>
+        <ol className={c.answers}>
+          {QUESTION_BANK.map(({ question, informs, good }) => (
+            <li key={question}>
+              <p><strong>{question}</strong></p>
+              <p className={c.note}>Informs: {informs}</p>
+              <p>A good answer: {good}</p>
+            </li>
+          ))}
+        </ol>
+      </details>
       <section id="scores" className={c.facts} tabIndex={-1}>
         <h2 className={c.stepTitle}>Mock lesson scores</h2>
         <BriefRubric
@@ -100,7 +128,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
           pending={pending}
           setPending={setPending}
           onEdit={() => setEditCount((count) => count + 1)}
-          onSent={(total) => setLastSent({ total, editCount })}
+          onSent={(total) => setLastSent({ total, max: RUBRIC_ITEMS.length * ITEM_MAX, editCount })}
         />
       </section>
       {brief.form !== "wait" && (

@@ -189,7 +189,7 @@ export function resultColumns(candidateId: string, papers: PaperRow[], mocks: Mo
     .map((row) => {
       if (row.history) return `${row.subject}: ${row.history.score ?? row.history.outcome}`;
       if (!row.rubric) return `${row.subject}: ${STATUS_WORDS[row.status] ?? row.status}`;
-      return `${row.subject}: ${rubricTotals(row.rubric).total}/100${row.status === "needs_check" ? " (needs check)" : ""}`;
+      return `${row.subject}: ${rubricTotals(row.rubric).total}/${rubricTotals(row.rubric).max}${row.status === "needs_check" ? " (needs check)" : ""}`;
     })
     .join("; ");
   const sent = decisions.find((row) => row.candidateId === candidateId && row.status === "sent");

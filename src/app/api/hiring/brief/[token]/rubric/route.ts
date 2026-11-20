@@ -8,6 +8,8 @@ const body = z
   .object({
     items: z.object(Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, z.int().min(1).max(ITEM_MAX)]))).strict(),
     comments: z.string().trim().max(4000),
+    stressTest: z.object({ listens: z.boolean(), explains: z.boolean(), plan: z.boolean() }).strict(),
+    checksDone: z.boolean(),
   })
   .strict();
 

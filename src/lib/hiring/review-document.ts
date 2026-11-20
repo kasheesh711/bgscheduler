@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { ITEM_MAX, RUBRIC, type LevelResult } from "./marking-sheet";
+import { ITEM_MAX, RUBRIC, rubricItems, rubricTotals, type LevelResult } from "./marking-sheet";
+import { STRESS_ELEMENTS } from "./rubric-guide";
 import type { ReviewPacket } from "./final-review";
 import { VALUE } from "./scoring";
 
@@ -123,6 +124,8 @@ export async function reviewDocument(packet: ReviewPacket, resume: string, paper
   const fontLicense = await readFile("public/brand/hiring/geist.txt", "utf8");
   const value = packet.evidence;
   const { ats, paper: sheet, mock, recommendation } = value;
+  const mockTotals = rubricTotals(mock.rubric);
+  const mockUsed = new Set<string>(rubricItems(mock.rubric));
   const atsValue = Math.round(ats.score * 10) / 10;
   const atsScore = atsValue.toFixed(1);
   const breakdown = atsBreakdown(ats, `${atsScore} / 100`);
@@ -232,7 +235,7 @@ summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details 
 <div class="tile"><h3>Paper</h3>${gauge(paperPercent, "%", paperTarget)}
 <p class="paper-detail num">${escape(sheet.total)} / ${escape(sheet.max)} · ${chip(sheet.result, levels.length > 1 ? "Passed a level" : "Pass")}</p>
 ${paperTarget === null ? "" : `<p class="paper-detail meta">Pass mark ${escape(paperTarget)}%</p>`}</div>
-<div class="tile"><h3>Mock</h3>${gauge(mock.total)}</div>
+<div class="tile"><h3>Mock</h3>${gauge(mockTotals.percent, "%")}<p class="paper-detail num">${escape(mockTotals.total)} / ${escape(mockTotals.max)}</p></div>
 <div class="tile head-tile"><h3>Head</h3><p><strong>Yes</strong> · ${escape(recommendation.head)}</p></div>
 </div><p class="guide"><span>Score guide</span><span>· Strong ≥80</span><span>· Fair 60 to under 80</span><span>· Low &lt;60</span></p>${recommendation.reason ? `<p class="copy">${escape(recommendation.reason)}</p>` : ""}
 <div class="files"><a href="${escape(resume)}">Original résumé</a><a href="${escape(paper)}">Marked exam</a></div></section>
@@ -254,14 +257,16 @@ ${bullet(level.scored / level.max * 100, level.passPercent)}
 <section class="mock-section"><h2>Mock teaching rubric</h2>
 <div class="mock-row mock-axis" aria-hidden="true"><div class="axis-labels">
 ${mockTicks.map((tick) => `<span style="left:${mockX(tick) / 120 * 100}%">${tick}</span>`).join("")}</div></div>
-${RUBRIC.map(({ part, items }) => {
+${RUBRIC.filter(({ items }) => items.some(([id]) => mockUsed.has(id))).map(({ part, items }) => {
   const scored = items.map(([id]) => mock.rubric.items[id]).filter((score) => score != null);
   const average = scored.length ? `${points.format(scored.reduce((sum, score) => sum + score, 0) / scored.length)} / ${ITEM_MAX}` : "—";
   return `<div class="rubric-group"><h3>${escape(part)} <span>Average ${escape(average)}</span></h3>
 ${items.map(([id, label]) => `<div class="mock-row mock-item">
-<span>${escape(label)}</span><div class="plot">${mockPlot(mock.rubric.items[id])}</div><span class="num">${escape(mock.rubric.items[id] ?? "—")} / ${ITEM_MAX}</span>
+<span>${escape(label)}</span><div class="plot">${mockPlot(mock.rubric.items[id] ?? null)}</div><span class="num">${escape(mock.rubric.items[id] ?? "—")} / ${ITEM_MAX}</span>
 </div>`).join("")}</div>`;
 }).join("")}
+${mockUsed.has("hygiene") ? `<p class="meta">Stress Test ticks: ${escape(STRESS_ELEMENTS.filter(({ key }) => mock.rubric.stressTest?.[key]).map(({ label }) => label).join("; ") || "none")}</p>
+<p class="meta">School's required checks completed: ${mock.rubric.checksDone === true ? "Yes" : mock.rubric.checksDone === false ? "No" : "Not recorded"}</p>` : ""}
 <p class="copy">${escape(mock.rubric.comments)}</p></section>
 <section><h2>Pre-screen call</h2><p class="meta">${value.call ? `Call result recorded ${date(value.call)}` : "Call notes supplied by HR"}</p>
 <p class="copy">${escape(packet.behavioral)}</p></section>
