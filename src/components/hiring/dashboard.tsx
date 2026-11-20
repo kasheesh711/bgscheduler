@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { startTransition, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Instrument_Serif } from "next/font/google";
@@ -326,6 +328,7 @@ export function HiringDashboard() {
             )}
           </p>
           {!role && paused && <p className={css.mobileStatus}>{paused}</p>}
+          {data?.reviewAccess?.hr && <Link className="mt-2 inline-block text-sm underline underline-offset-4" href="/hiring/onboarding">Tutor onboarding and Experts access</Link>}
         </div>
         <div role="status" className={css.notice}>
           {/* Rules and setup shows these beside its Save button, where they are in view. */}

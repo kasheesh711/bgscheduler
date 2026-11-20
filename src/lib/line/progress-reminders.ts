@@ -4,7 +4,8 @@ import {getDb,type Database} from "@/lib/db";
 import {withDatabaseTransaction} from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
 import {bangkokDateKey} from "@/lib/room-capacity/dates";
-import {fetchLineGroupSummary,LinePushError,pushLineTextMessage,replyLineMessage} from "./client";
+import {fetchLineGroupMember,fetchLineGroupSummary,LinePushError,pushLineTextMessage,replyLineMessage} from "./client";
+import {onboardingEnabled,tutorGroupName} from "@/lib/hiring/onboarding-config";
 import {isScheduleBotAdmin} from "./schedule-bot";
 
 const iso=z.iso.datetime({offset:true});
@@ -14,7 +15,8 @@ export type ReminderCandidate=z.infer<typeof candidateSchema>;
 export type ReminderStage="week_before"|"night_before";
 type Delivery=typeof s.progressLineDeliveries.$inferSelect;
 export const progressLineEnabled=()=>process.env.PROGRESS_LINE_REMINDERS_ENABLED==="true";
-export const progressUsesTutorBot=(key:string)=>(process.env.PROGRESS_LINE_TUTOR_BOT_KEYS??"").split(",").some(value=>value.trim()===key);
+export const progressUsesTutorBot=(key:string, registered?:boolean|null) =>
+ registered ?? (process.env.PROGRESS_LINE_TUTOR_BOT_KEYS??"").split(",").some(value=>value.trim()===key);
 const retryWindow=24*3600000;
 
 export function reminderDate(candidate:ReminderCandidate,stage:ReminderStage){
@@ -53,11 +55,32 @@ export async function handleProgressGroupCommand(input:{db:Database;groupId:stri
  if(!match)return false;
  if(!isScheduleBotAdmin(input.lineUserId))return true;
  const key=match[1].trim();
- if(progressUsesTutorBot(key)!==Boolean(input.tutorBot))return true;
+ if(!onboardingEnabled()&&progressUsesTutorBot(key)!==Boolean(input.tutorBot))return true;
+ const [previous]=await input.db.select().from(s.progressLineGroups).where(eq(s.progressLineGroups.canonicalKey,key));
+ const [newHire]=await input.db.select({
+  intake:s.hiringOnboarding.intake, lineUserId:s.hiringOnboarding.lineUserId,
+ }).from(s.hiringOnboarding).where(eq(s.hiringOnboarding.tutorKey,key));
+ if(progressUsesTutorBot(key, newHire ? true : previous?.tutorBot)!==Boolean(input.tutorBot))return true;
  const [contact]=await input.db.select().from(s.tutorContacts).where(and(eq(s.tutorContacts.canonicalKey,key),eq(s.tutorContacts.active,true)));
  if(!contact)throw new Error("The active tutor identity could not be verified.");
  const group=await fetchLineGroupSummary(input.groupId,input.tutorBot);
- const [previous]=await input.db.select().from(s.progressLineGroups).where(eq(s.progressLineGroups.canonicalKey,key));
+ if(newHire){
+  if(group.groupName!==tutorGroupName(newHire.intake.preferredName) ||
+   !newHire.lineUserId || !await fetchLineGroupMember(group.groupId,newHire.lineUserId,true))
+   throw new Error("Verify the new tutor and group name before registering Progress Check.");
+  if(previous && (previous.groupId!==group.groupId || previous.tutorBot!==true))
+   throw new Error("This tutor already has a different Progress Check group.");
+  if(!previous){
+   const [saved]=await input.db.insert(s.progressLineGroups).values({canonicalKey:key,groupId:group.groupId,
+    groupName:group.groupName,tutorBot:true,enabled:false,registeredBy:input.lineUserId})
+    .onConflictDoNothing().returning({groupId:s.progressLineGroups.groupId});
+   if(!saved)throw new Error("This group or tutor already has a Progress Check binding. Review it in Hiring.");
+  }
+  if(input.replyToken)await replyLineMessage({tutorBot:true,replyToken:input.replyToken,
+   text:`Progress Check group verified for ${contact.displayName}. Finish the group checklist in Hiring.`});
+  return true;
+ }
+ if(previous?.tutorBot===true)throw new Error("Review this onboarding group in Hiring before changing it.");
  if(key==="Buzz"&&group.groupName!=="Kru Buzz x BeGifted")throw new Error("Buzz reminders must use Kru Buzz x BeGifted.");
  await input.db.insert(s.progressLineGroups).values({canonicalKey:key,groupId:group.groupId,groupName:group.groupName,enabled:true,registeredBy:input.lineUserId}).onConflictDoUpdate({target:s.progressLineGroups.canonicalKey,set:{groupId:group.groupId,groupName:group.groupName,enabled:true,registeredBy:input.lineUserId,updatedAt:new Date()}});
  // A reply is the setup receipt; it is not a preparation reminder.
@@ -109,7 +132,7 @@ export async function sendProgressLineReminders(db:Database=getDb(),deps:{now?:(
      if(!progressLineEnabled()||!currentGroup?.enabled||currentGroup.groupId!==row.groupId||!contact||other.length){await finish(tx,row.id,"cancelled","The reminder is no longer enabled or another send is already recorded.");return false;}
      const fresh=await load(row.canonicalKey,clock());
      if(!fresh.some(c=>sameOccurrence(c,row.candidate))||reminderAction(row.reminderDate,clock())!=="send"){await finish(tx,row.id,current.attempts>1?"uncertain":"cancelled","The lesson changed before delivery.");return false;}
-     const result=await push({tutorBot:progressUsesTutorBot(row.canonicalKey),to:row.groupId,text:row.text,retryKey:row.retryKey,signal:AbortSignal.timeout(10000)});
+     const result=await push({tutorBot:progressUsesTutorBot(row.canonicalKey,currentGroup.tutorBot),to:row.groupId,text:row.text,retryKey:row.retryKey,signal:AbortSignal.timeout(10000)});
      await tx.update(s.progressLineDeliveries).set({status:"sent",sentAt:clock(),providerMessageId:result.sentMessageId,providerReceipt:result.response,error:null,leaseUntil:null,updatedAt:clock()}).where(eq(s.progressLineDeliveries.id,row.id));
      return true;
     });

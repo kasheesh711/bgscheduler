@@ -393,14 +393,14 @@ export async function handleFeedbackGroupCommand(input: {
 
   // FB-BOT-G1
   const [group] = await input.db
-    .select({ canonicalKey: schema.progressLineGroups.canonicalKey })
+    .select({ canonicalKey: schema.progressLineGroups.canonicalKey, tutorBot: schema.progressLineGroups.tutorBot })
     .from(schema.progressLineGroups)
     .where(and(
       eq(schema.progressLineGroups.groupId, input.groupId),
       eq(schema.progressLineGroups.enabled, true),
     ))
     .limit(1);
-  if (!group || progressUsesTutorBot(group.canonicalKey) !== Boolean(input.tutorBot) || !input.replyToken) {
+  if (!group || progressUsesTutorBot(group.canonicalKey, group.tutorBot) !== Boolean(input.tutorBot) || !input.replyToken) {
     return "feedback_silent_chat";
   }
   const respond = (text: string) =>

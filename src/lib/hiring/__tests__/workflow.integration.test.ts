@@ -14,6 +14,11 @@ import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { configSchema, HiringError, type HiringConfig, type Slot } from "../model";
 import { bookingToken } from "../tokens";
+import { submitOnboarding, onboardingView, linkOnboardingLine, updateOnboarding } from "../onboarding";
+import { deliverExpertsAlerts, recordExpertsEvent, updateExperts } from "../experts";
+import { handleLineWebhookPost } from "@/lib/line/webhook";
+import { handleProgressGroupCommand } from "@/lib/line/progress-reminders";
+import { createHmac } from "node:crypto";
 import { saveBriefDecision } from "../decisions";
 import {
   bookInterview,
@@ -43,7 +48,7 @@ import { latestReviewPacket, signOffReview, submitReview } from "../final-review
 import { deliverCalendar, googleConnectionStatus, readHrBusy } from "../google";
 import { ensureIndex } from "@/lib/search/index";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
-import { pushLineTextMessage } from "@/lib/line/client";
+import { fetchLineGroupMember, fetchLineGroupRoster, fetchLineGroupSummary, pushLineTextMessage, replyLineMessage } from "@/lib/line/client";
 import { RUBRIC_ITEMS, type MockRubric } from "../marking-sheet";
 
 // The visit tests use the real availableVisitSlots against this database. Only the Wise index and the live read are fake.
@@ -59,6 +64,10 @@ vi.mock("../google", () => ({
   googleConnectionStatus: vi.fn(async () => ({ connected: true, freeBusy: false, email: "", lastError: null })), readHrBusy: vi.fn(),
 }));
 vi.mock("@/lib/line/client", () => ({
+  fetchLineGroupMember: vi.fn(),
+  fetchLineGroupRoster: vi.fn(),
+  fetchLineGroupSummary: vi.fn(),
+  replyLineMessage: vi.fn(),
   pushLineTextMessage: vi.fn().mockResolvedValue({
     retryKey: "key",
     sentMessageId: "message",
@@ -108,7 +117,7 @@ beforeEach(async () => {
   vi.stubEnv("PROGRESS_LINE_TUTOR_BOT_KEYS", "");
   vi.clearAllMocks();
   await db.execute(
-    sql`truncate hiring_audit,hiring_outbox,hiring_bookings,hiring_candidates,hiring_settings,progress_line_groups,tutor_sit_in_observations,tutor_sit_in_assignments cascade`,
+    sql`truncate experts_baselines,hiring_audit,hiring_outbox,hiring_bookings,hiring_candidates,hiring_settings,progress_line_groups,tutor_sit_in_observations,tutor_sit_in_assignments cascade`,
   );
   await db.insert(s.hiringSettings).values({
     id: "default",
@@ -964,6 +973,9 @@ describe("hiring workflow persistence", () => {
     it("separates paper and mock, requires Gift’s latest review, and books half an hour with HR", async () => {
       vi.stubEnv("HIRING_FINAL_REVIEWER_EMAIL", "gift@example.com");
       vi.stubEnv("HIRING_HR_EMAIL", "hr@example.com");
+      vi.stubEnv("HIRING_ONBOARDING_ENABLED", "true");
+      vi.stubEnv("HIRING_LINE_LOGIN_ID", "1234");
+      vi.stubEnv("HIRING_LINE_LOGIN_SECRET", "local-only");
       await setVisit({ paperPassRules: [{ subject: "Mathematics", level: "IGCSE / GCSE", percent: 70 }] });
       const row = await invited({ profileAssessment: { ...six, criteria: six.criteria.slice(0, 5) } as never });
       const path = `hiring-resumes/${row.id}/${"a".repeat(64)}.pdf`;
@@ -1015,6 +1027,10 @@ describe("hiring workflow persistence", () => {
       const mail = (await jobsOf(row.id)).find((job) => job.key === result)!;
       expect(mail.payload.text).toEqual(expect.stringContaining(offer));
       const contract = String(mail.payload.text).match(/\/hiring\/book\/([\w.-]+)/)![1];
+      const onboarding = String(mail.payload.text).match(/\/hiring\/onboarding\/([\w.-]+)/)![1];
+      const [decision] = await db.select().from(s.hiringDecisions).where(eq(s.hiringDecisions.candidateId, row.id));
+      expect(decision.emailBody).not.toContain(onboarding);
+      await expect(onboardingView(db, onboarding)).rejects.toMatchObject({ status: 404 });
       const choices = (await contractView(contract, db)).slots;
       expect(choices.length).toBeGreaterThan(1);
       const [first, second] = choices;
@@ -1035,6 +1051,88 @@ describe("hiring workflow persistence", () => {
       expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: row.email, cc: [], subject: "Your BeGifted offer letter" }));
       expect(vi.mocked(deliverCalendar).mock.calls.some(([event]) => event.id === booking.id)).toBe(true);
       expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: row.email, subject: "BeGifted contract signing confirmed" }));
+      const groupId = `C${"1".repeat(32)}`, tutorGroup = `C${"2".repeat(32)}`;
+      const lineUserId = `U${"2".repeat(32)}`, baselineUserId = `U${"1".repeat(32)}`;
+      vi.stubEnv("EXPERTS_LINE_GROUP_ID", groupId);
+      vi.stubEnv("EXPERTS_LINE_GROUP_NAME", "BeGifted Experts");
+      vi.stubEnv("EXPERTS_LINE_BOT", "tutors");
+      vi.stubEnv("HIRING_TUTOR_GROUP_TEMPLATE", "Kru Example x BeGifted");
+      vi.stubEnv("HIRING_TUTOR_GROUP_ADMINS", "Admin A,Admin B");
+      vi.stubEnv("LINE_SCHEDULE_BOT_ADMIN_IDS", baselineUserId);
+      vi.mocked(fetchLineGroupSummary).mockResolvedValueOnce({ groupId, groupName: "BeGifted Experts" });
+      vi.mocked(fetchLineGroupRoster).mockResolvedValueOnce({ count: 1, ids: [baselineUserId], idsAvailable: true });
+      await updateExperts(db, { action: "baseline", count: 1, unresolved: [], confirmed: true }, "hr@example.com");
+
+      const intake = { legalName: "Example Tutor", preferredName: "Example", phone: "+66812345678",
+        onsiteEmail: "onsite@example.com", onlineEmail: "online@example.com", lineId: "example", earliestStart: "2026-12-01" };
+      await expect(onboardingView(db, contract)).rejects.toMatchObject({ status: 404 });
+      await expect(submitOnboarding(db, onboarding, intake, new Date(Date.now() + 15 * 86400000))).rejects.toMatchObject({ status: 404 });
+      await submitOnboarding(db, onboarding, intake);
+      await linkOnboardingLine(db, onboarding, { sub: lineUserId, name: "Example" });
+      expect(await onboardingView(db, onboarding)).toEqual({ submitted: true, linked: true, locked: false });
+      const corrected = { ...intake, lineId: "corrected" };
+      expect(await submitOnboarding(db, onboarding, corrected)).toEqual({ linked: false });
+      await linkOnboardingLine(db, onboarding, { sub: lineUserId, name: "Example" });
+      const hr = "hr@example.com";
+      const approve = { action: "approve", candidateId: row.id, verified: true } as const;
+      await expect(updateOnboarding(db, approve, hr)).rejects.toMatchObject({ status: 409 });
+      await updateOnboarding(db, { action: "signed", candidateId: row.id }, hr);
+      await expect(submitOnboarding(db, onboarding, intake)).rejects.toMatchObject({ status: 409 });
+      await updateOnboarding(db, approve, hr);
+      await updateOnboarding(db, { action: "invited", candidateId: row.id }, hr);
+      vi.mocked(fetchLineGroupMember).mockResolvedValue({ userId: lineUserId, displayName: "Example" });
+      await updateOnboarding(db, { action: "joined", candidateId: row.id }, hr);
+      await db.insert(s.tutorContacts).values({ canonicalKey: "Example", displayName: "Example",
+        onsiteEmail: intake.onsiteEmail, onlineEmail: intake.onlineEmail }).onConflictDoNothing();
+      await updateOnboarding(db, { action: "tutor-key", candidateId: row.id, key: "Example" }, hr);
+      const command = { db, groupId: tutorGroup, lineUserId: baselineUserId, text: "/progress setup Example", replyToken: "reply", tutorBot: true };
+      vi.mocked(fetchLineGroupSummary).mockResolvedValueOnce({ groupId: tutorGroup, groupName: "Incorrect group" });
+      await expect(handleProgressGroupCommand(command)).rejects.toThrow(/group name/);
+      vi.mocked(fetchLineGroupSummary).mockResolvedValueOnce({ groupId: tutorGroup, groupName: "Kru Example x BeGifted" });
+      await handleProgressGroupCommand(command);
+      expect(replyLineMessage).toHaveBeenCalledWith(expect.objectContaining({ tutorBot: true, replyToken: "reply" }));
+      const binding = () => db.select().from(s.progressLineGroups).where(eq(s.progressLineGroups.canonicalKey, "Example"));
+      expect(await binding()).toMatchObject([{ groupId: tutorGroup, tutorBot: true, enabled: false }]);
+      await updateOnboarding(db, { action: "ready", candidateId: row.id, verified: true }, hr);
+      expect(await binding()).toMatchObject([{ groupId: tutorGroup, tutorBot: true, enabled: true }]);
+      const { c: duplicate } = await candidate("second-onboarding@example.com");
+      await db.update(s.hiringCandidates).set({ stage: "hired" }).where(eq(s.hiringCandidates.id, duplicate.id));
+      const [secondDecision] = await db.insert(s.hiringDecisions).values({ candidateId: duplicate.id, decision: "hire", status: "sent",
+        reason: "", emailSubject: "Offer", emailBody: "", outboxKey: "second-onboarding", decidedBy: hr }).returning();
+      await db.insert(s.hiringOutbox).values({ candidateId: duplicate.id, kind: "email", key: "second-onboarding", status: "sent", payload: {} });
+      const secondToken = bookingToken(secondDecision.id, "onboarding", new Date(Date.now() + 86400000));
+      await submitOnboarding(db, secondToken, intake);
+      await expect(linkOnboardingLine(db, secondToken, { sub: lineUserId })).rejects.toThrow();
+      expect(await onboardingView(db, secondToken)).toMatchObject({ submitted: true, linked: false });
+    });
+    it("alerts HR once for a new account from the exact signed group even while Hiring is paused", async () => {
+      const groupId = `C${"1".repeat(32)}`, safe = `U${"1".repeat(32)}`, unknown = `U${"9".repeat(32)}`;
+      vi.stubEnv("EXPERTS_LINE_GROUP_ID", groupId);
+      vi.stubEnv("EXPERTS_LINE_GROUP_NAME", "BeGifted Experts");
+      vi.stubEnv("EXPERTS_LINE_BOT", "tutors");
+      vi.stubEnv("EXPERTS_LINE_ENABLED", "true");
+      vi.stubEnv("HIRING_HR_EMAIL", "hr@example.com");
+      await db.update(s.hiringSettings).set({ config: { ...config, enabled: false, deliveryEnabled: false } });
+      vi.mocked(fetchLineGroupSummary).mockResolvedValueOnce({ groupId, groupName: "BeGifted Experts" });
+      vi.mocked(fetchLineGroupRoster).mockResolvedValueOnce({ count: 1, ids: [safe], idsAvailable: true });
+      await updateExperts(db, { action: "baseline", count: 1, unresolved: [], confirmed: true }, "hr@example.com");
+      const webhook = (id: string, member: string, group = groupId, valid = true) => {
+        const rawBody = JSON.stringify({ events: [{ type: "memberJoined", source: { type: "group", groupId: group },
+          joined: { members: [{ userId: member }] }, webhookEventId: id, timestamp: now.getTime() + 1 }] });
+        return handleLineWebhookPost({ db, rawBody, channelSecret: "secret", progressOnly: true, scheduleProcessing: vi.fn(),
+          signature: valid ? createHmac("sha256", "secret").update(rawBody).digest("base64") : "invalid",
+          observeGroupEvent: async (event) => { await recordExpertsEvent(db, true, event); } });
+      };
+      await webhook("pre-existing", safe);
+      await webhook("wrong-group", unknown, `C${"2".repeat(32)}`);
+      expect((await webhook("bad-signature", unknown, groupId, false)).status).toBe(401);
+      expect(await db.select().from(s.expertsCases)).toEqual([]);
+      await Promise.all([webhook("new-join", unknown), webhook("new-join", unknown), webhook("another-event", unknown)]);
+      expect(await db.select().from(s.expertsCases)).toMatchObject([{ lineUserId: unknown, reason: "join" }]);
+      await Promise.all([deliverExpertsAlerts(db), deliverExpertsAlerts(db)]);
+      expect(sendEmail).toHaveBeenCalledTimes(1);
+      expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: "hr@example.com", subject: "BeGifted Experts group needs review" }));
+      expect(sendEmail.mock.calls[0][0].text).not.toContain(unknown);
     });
     it("links the head to the candidate page, and ends the link with the visit", async () => {
       const row = await invited({ phone: "+66812345678" });

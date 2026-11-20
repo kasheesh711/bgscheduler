@@ -571,15 +571,15 @@ export const BookingLoading = () => (
   </div>
 );
 
-export function BookingShell({ kind, children }: { kind?: "visit" | "mock" | "paper" | "brief" | "call" | "contract"; children: ReactNode }) {
+export function BookingShell({ kind, children }: { kind?: "visit" | "mock" | "paper" | "brief" | "call" | "contract" | "onboarding"; children: ReactNode }) {
   return (
     <main className={c.page}>
       <header className={c.hero} data-brief={kind === "brief" ? "" : undefined}>
         <div className={c.heroInner}>
           <p className={c.brand}>BeGifted Education</p>
           <h1 className={c.title}>
-            {kind === "brief" ? "Interview " : "Book your "}
-            <em>{kind === "brief" ? "brief" : kind === "contract" ? "contract signing" : kind === "call" ? "call with BeGifted" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "assessment"}</em>
+            {kind === "onboarding" ? "Tutor " : kind === "brief" ? "Interview " : "Book your "}
+            <em>{kind === "onboarding" ? "onboarding" : kind === "brief" ? "brief" : kind === "contract" ? "contract signing" : kind === "call" ? "call with BeGifted" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "assessment"}</em>
           </h1>
         </div>
       </header>

@@ -28,8 +28,12 @@ export async function GET(request: NextRequest) {
     { jobKey: "hiring_delivery", triggerSource: "cron", requestMethod: request.method },
     async () => {
       try {
-        const db = getDb(),
-          { config } = await settings(db);
+        const db = getDb();
+        const expertsDelivery = process.env.EXPERTS_LINE_ENABLED === "true"
+          ? import("@/lib/hiring/experts").then(({ deliverExpertsAlerts }) => deliverExpertsAlerts(db))
+            .catch(() => { console.error("Experts alert processing failed"); })
+          : undefined;
+        const { config } = await settings(db);
         const sent = await deliverOutbox(db, config, 20, true);
         let recruitmentSent: number;
         let callsQueued: boolean;
@@ -38,6 +42,7 @@ export async function GET(request: NextRequest) {
         } finally {
           recruitmentSent = await deliverRecruitment(db);
         }
+        await expertsDelivery;
         return NextResponse.json({ sent, recruitmentSent, callsQueued });
       } catch (error) {
         return hiringError(error);

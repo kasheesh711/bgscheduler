@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
   businessDates,
@@ -11,6 +11,7 @@ import {
   type PreScreen,
 } from "../model";
 import { bookingToken, readBookingToken } from "../tokens";
+import { beginOnboardingLine, readOnboardingLineSession, verifyOnboardingLine } from "../onboarding-line";
 import {
   availabilityFraction,
   degreeEligible,
@@ -703,4 +704,30 @@ describe("profile gate", () => {
     expect(gate({ profileAssessment: two }, priority([["Physics", true], ["Mathematics", true]])).subject).toBe("Physics");
     expect(gate({ profileAssessment: two }, priority([["Mathematics", false], ["Physics", true]]))).toMatchObject({ eligible: true, subject: "Physics" });
   });
+});
+
+it("keeps LINE Login bound to the candidate browser and rejects a mismatched LINE identity response", async () => {
+  vi.stubEnv("HIRING_ONBOARDING_ENABLED", "true");
+  vi.stubEnv("HIRING_LINE_LOGIN_ID", "1234");
+  vi.stubEnv("HIRING_LINE_LOGIN_SECRET", "local-only");
+  const mockedFetch = vi.fn<typeof fetch>();
+  vi.stubGlobal("fetch", mockedFetch);
+  try {
+    const { url, cookie } = beginOnboardingLine("test.token");
+    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(readOnboardingLineSession(cookie, "wrong-state")).toBeNull();
+    const state = url.searchParams.get("state");
+    expect(readOnboardingLineSession(cookie, state, Date.now() + 600_001)).toBeNull();
+    const session = readOnboardingLineSession(cookie, state)!;
+    const profile = { iss: "https://access.line.me", aud: "1234", exp: Date.now() / 1000 + 600, sub: `U${"1".repeat(32)}` };
+    mockedFetch.mockResolvedValueOnce(Response.json({ id_token: "dev-only-token" }))
+      .mockResolvedValueOnce(Response.json({ ...profile, nonce: "different-token-nonce" }));
+    await expect(verifyOnboardingLine("code", session)).rejects.toMatchObject({ status: 403 });
+    mockedFetch.mockResolvedValueOnce(Response.json({ id_token: "dev-only-token" }))
+      .mockResolvedValueOnce(Response.json({ ...profile, nonce: session.nonce }));
+    await expect(verifyOnboardingLine("code", session)).resolves.toMatchObject({ sub: profile.sub });
+  } finally {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  }
 });

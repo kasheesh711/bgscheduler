@@ -11,6 +11,12 @@ import {
 } from "@/lib/maintenance";
 import { NextResponse } from "next/server";
 
+function isPublicHiringOnboarding(pathname: string) {
+  return /^\/hiring\/onboarding\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(pathname)
+    || /^\/api\/hiring\/onboarding\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\/line)?$/.test(pathname)
+    || pathname === "/api/hiring/onboarding/line-callback";
+}
+
 function isPublicRoute(pathname: string) {
   return (
     isTeacherEmailAsset(pathname) ||
@@ -37,6 +43,7 @@ function isPublicRoute(pathname: string) {
     // (FB-BOT-L1, src/lib/line/feedback-bot.ts).
     /^\/feedback\/[A-Za-z0-9_.-]+$/.test(pathname) ||
     /^\/weekend-schedule\/[A-Za-z0-9_-]{43}(?:\/print)?$/.test(pathname) ||
+    isPublicHiringOnboarding(pathname) ||
     /^\/hiring\/book\/[^/]+$/.test(pathname) ||
     /^\/api\/hiring\/book\/[^/]+$/.test(pathname) ||
     // The interviewer's candidate page and its résumé file: the token in the path is the access check
@@ -138,7 +145,7 @@ export default edgeAuth(async (req) => {
 
   if (isPublicRoute(pathname)) {
     const response = NextResponse.next();
-    if (pathname.startsWith("/room/") || pathname.startsWith("/api/room/") || pathname.startsWith("/hiring/book/") || pathname.startsWith("/api/hiring/book/") || pathname.startsWith("/hiring/brief/") || pathname.startsWith("/api/hiring/brief/")) {
+    if (isPublicHiringOnboarding(pathname) || pathname.startsWith("/room/") || pathname.startsWith("/api/room/") || pathname.startsWith("/hiring/book/") || pathname.startsWith("/api/hiring/book/") || pathname.startsWith("/hiring/brief/") || pathname.startsWith("/api/hiring/brief/")) {
       response.headers.set("Cache-Control", "private, no-store");
       response.headers.set("Referrer-Policy", "no-referrer");
       response.headers.set("X-Robots-Tag", "noindex, nofollow");

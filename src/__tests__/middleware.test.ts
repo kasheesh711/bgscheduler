@@ -36,6 +36,18 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
       expect([307,401]).toContain(response.status);
     }
   });
+  it("exposes candidate onboarding links without exposing the HR workspace or case API", async () => {
+    for (const path of ["/hiring/onboarding/signed.token", "/api/hiring/onboarding/signed.token",
+      "/api/hiring/onboarding/signed.token/line", "/api/hiring/onboarding/line-callback"]) {
+      const response = await middleware(makeReq(path) as never, {} as never) as Response;
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    }
+    for (const path of ["/hiring/onboarding", "/api/hiring/onboarding", "/api/hiring/onboarding/line-callback/extra"]) {
+      const response = await middleware(makeReq(path) as never, {} as never) as Response;
+      expect(response.status).toBe(307);
+    }
+  });
   it.each(["/api/integrations/progress-export", "/api/integrations/progress-mail"])("passes the exact Progress integration route to its secret check: %s", async pathname => {
     const response = await middleware(makeReq(pathname) as never, {} as never) as Response;
     expect(response.status).toBe(200);

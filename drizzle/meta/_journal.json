@@ -932,6 +932,13 @@
       "when": 1795046400001,
       "tag": "0131_deactivate_staff_rooms",
       "breakpoints": true
+    },
+    {
+      "idx": 131,
+      "version": "7",
+      "when": 1795132800000,
+      "tag": "0132_hiring_experts_onboarding",
+      "breakpoints": true
     }
   ]
 }

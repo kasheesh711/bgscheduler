@@ -28,6 +28,7 @@ export async function handleLineWebhookPost(input: {
   signature: string | null;
   channelSecret: string | undefined;
   progressOnly?: boolean;
+  observeGroupEvent?: (event: unknown) => Promise<void>;
   handleWeekendCommand?: (event: unknown) => Promise<boolean>;
   handleTeacherQuery?: (event: unknown) => Promise<boolean>;
   scheduleProcessing: (lineMessageId: string) => void;
@@ -60,6 +61,7 @@ export async function handleLineWebhookPost(input: {
   const root = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
   const otherEvents: unknown[] = [];
   for (const raw of Array.isArray(root.events) ? root.events : []) {
+    await input.observeGroupEvent?.(raw);
     if (input.progressOnly && await input.handleWeekendCommand?.(raw)) continue;
     if (input.progressOnly && await input.handleTeacherQuery?.(raw)) continue;
     const event = raw as { type?: string; replyToken?: string; message?: { type?: string; text?: string } } | null;

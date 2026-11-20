@@ -93,7 +93,7 @@ export type Subject = z.infer<typeof subjectSchema>;
 export type InterviewKind = "paper" | "mock";
 // `brief` is the interviewer's page for one mock booking: its id is a booking id, not a candidate id.
 // `call` is the candidate's link to book the HR pre-screen call.
-export const tokenKindSchema = z.enum(["paper", "mock", "visit", "paper-visit", "brief", "call", "contract"]);
+export const tokenKindSchema = z.enum(["paper", "mock", "visit", "paper-visit", "brief", "call", "contract", "onboarding"]);
 /** A booking of the visit flows. A row of kind `call` belongs to the HR call list only. */
 export const isVisitBooking = <T extends { kind: string }>(row: T): row is T & { kind: InterviewKind } =>
   row.kind === "paper" || row.kind === "mock";
