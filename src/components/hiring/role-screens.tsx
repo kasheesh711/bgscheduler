@@ -388,7 +388,8 @@ function HeadCard({ row, data, past, readOnly }: { row: RunSheetRow; data: Hirin
   const path = mock ? data.briefPaths[mock.id] : undefined;
   const scored = data.mocks.some((m) => m.candidateId === row.candidateId && m.source !== "tracker" && (m.status === "done" || m.status === "needs_check"));
   const decision = data.headDecisions.find((d) => d.candidateId === row.candidateId);
-  const briefLabel = !past ? "Open interview brief" : !scored ? "Score mock" : decision ? "View brief" : "Record recommendation";
+  // The brief decides what is open (end time, subject), so the card only tells "done" from "not done".
+  const briefLabel = !past ? "Open interview brief" : decision ? "View brief" : "Score and recommend";
   return (
     <article className={`${r.card} ${r.headCard}`}>
       <p className={r.time}>
