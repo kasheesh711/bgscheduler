@@ -447,7 +447,6 @@
 
 .surface .finalReview :is(.primary, .secondary) { min-width: 44px; min-height: 44px; max-width: 100%; text-align: center; overflow-wrap: anywhere; }
 .surface .finalReview :is(.primary, .secondary):disabled { opacity: 1; border: 1px solid #887f74; background: #f6f1e9; color: #5c554c; }
-.finalReview .inspectorHeading:focus-visible,
 .surface :is(.packetActions, .signOffActions) :is(a, button):focus-visible,
 .surface .viewSwitch button:focus-visible { outline: 2px solid #c65e50; outline-offset: 2px; }
 .finalReview .fieldLabel { margin-top: 8px; }
@@ -456,8 +455,11 @@
 .reviewStatus::before { content: ""; flex: 0 0 7px; height: 7px; border-radius: 50%; background: #d57466; }
 .packetActions { margin-block: 8px 12px; }
 .packetActions a { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.packetPanel { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; min-width: 0; gap: 8px; }
+.packetPanel iframe { display: block; box-sizing: border-box; width: 100%; height: 70vh; border: 2px solid #eee4d4; border-radius: 12px; }
 .surface :is(.packetActions, .signOffActions) .primary { background: #172b4d; color: #fff; }
 .surface :is(.packetActions, .signOffActions) .primary:hover:not(:disabled) { background: #243d60; }
+.surface .packetActions .primary[aria-disabled="true"] { cursor: default; }
 .signOffActions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin-top: 8px; }
 .signOffActions > div { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 4px; }
 .surface :is(.packetActions, .signOffActions) .secondary { margin-top: 0; }

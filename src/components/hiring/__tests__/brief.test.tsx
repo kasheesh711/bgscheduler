@@ -82,8 +82,12 @@ describe("InterviewerBrief", () => {
     expect(page).not.toContain('type="radio"');
   });
 
-  it("makes the recorded recommendation focusable", () => {
-    const page = html({ form: "closed", decision: "hire" });
+  it("shows the saved total and locks the scores when the recommendation is recorded", () => {
+    const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 9])), comments: "Clear lesson." };
+    const page = html({ form: "closed", decision: "hire", rubric });
+    expect(page).toContain("Scores sent · <strong>90 / 100</strong>");
+    expect(page).toContain("Scores and recommendation are recorded. Ask BeGifted admin to change them.");
+    expect(page).not.toContain("Edit scores");
     expect(page).toMatch(/<p role="status"[^>]*tabindex="-1">Recommendation recorded: <strong>Yes<\/strong>/i);
   });
 

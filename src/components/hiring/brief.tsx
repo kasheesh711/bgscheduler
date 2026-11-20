@@ -27,6 +27,7 @@ export const BriefGone = () => (
 export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: { brief: Brief; resumeUrl: string; rubricUrl: string; decisionUrl: string }) {
   const [editCount, setEditCount] = useState(0);
   const [lastSent, setLastSent] = useState(() => brief.rubric ? { total: rubricTotals(brief.rubric).total, editCount: 0 } : null);
+  const [decision, setDecision] = useState(brief.decision);
   const facts: [string, string][] = [
     ["Subject", brief.subject],
     ...(brief.exam ? ([["Exam", `${brief.exam} (Bangkok)`]] as [string, string][]) : []),
@@ -93,6 +94,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
           url={rubricUrl}
           editCount={editCount}
           lastSent={lastSent}
+          decisionSent={!!decision}
           onEdit={() => setEditCount((count) => count + 1)}
           onSent={(total) => setLastSent({ total, editCount })}
         />
@@ -101,7 +103,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
         <section id="recommendation" className={c.facts} tabIndex={-1}>
           <h2 className={c.stepTitle}>Your recommendation</h2>
           <BriefDecision
-            sent={brief.decision}
+            sent={decision}
+            onSent={setDecision}
             url={decisionUrl}
             scores={lastSent ? "own" : brief.form === "closed" ? "recorded" : null}
             unsent={lastSent !== null && lastSent.editCount !== editCount}

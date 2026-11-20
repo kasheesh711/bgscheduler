@@ -6,12 +6,13 @@ const TILE_SCORES = [10, 7, 4, 1];
 const OTHER_SCORES = [9, 8, 6, 5, 3, 2];
 
 /** The interviewer's score form for one mock. The server checks the scores again and calculates the total. */
-export function BriefRubric({ saved, form, url, editCount, lastSent, onEdit, onSent }: {
+export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSent, onEdit, onSent }: {
   saved: MockRubric | null;
   form: "wait" | "open" | "closed";
   url: string;
   editCount: number;
   lastSent: { total: number; editCount: number } | null;
+  decisionSent: boolean;
   onEdit: () => void;
   onSent: (total: number) => void;
 }) {
@@ -35,8 +36,8 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, onEdit, onS
     message?.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
     message?.focus({ preventScroll: true });
   }, [state, error, editing, sentTotal]);
-  if (form === "wait") return <p className={c.note}>The score form is here after the mock lesson ends. Refresh this page then.</p>;
-  if (form === "closed") return <p className={c.note}>Scores for this mock are already recorded. Ask BeGifted admin to change them.</p>;
+  if (!decisionSent && form === "wait") return <p className={c.note}>The score form is here after the mock lesson ends. Refresh this page then.</p>;
+  if (!decisionSent && form === "closed") return <p className={c.note}>Scores for this mock are already recorded. Ask BeGifted admin to change them.</p>;
   const scored = RUBRIC_ITEMS.filter((id) => items[id]).length;
   const complete = scored === RUBRIC_ITEMS.length;
   const disabled = !complete || state === "sending" || sentTotal !== null;
@@ -66,11 +67,11 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, onEdit, onS
     }
     setState("idle");
   }
-  if (!editing && sentTotal !== null) {
+  if (decisionSent || (!editing && sentTotal !== null)) {
     return (
-      <div ref={summary} role="group" aria-label={sentMessage} className={c.scoreSummary} tabIndex={-1}>
-        <p aria-hidden="true">Scores sent · <strong>{sentTotal} / {max}</strong></p>
-        <div className={c.scoreActions}>
+      <div ref={summary} role="group" aria-label={sentMessage || undefined} className={c.scoreSummary} tabIndex={-1}>
+        {lastSent && <p aria-hidden="true">Scores sent · <strong>{lastSent.total} / {max}</strong></p>}
+        {decisionSent ? <p className={c.note}>Scores and recommendation are recorded. Ask BeGifted admin to change them.</p> : <div className={c.scoreActions}>
           <a className={c.button} href="#recommendation">Go to recommendation</a>
           <button type="button" className={c.ghost} onClick={() => {
             setEditing(true);
@@ -78,7 +79,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, onEdit, onS
           }}>
             Edit scores
           </button>
-        </div>
+        </div>}
       </div>
     );
   }

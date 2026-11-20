@@ -855,6 +855,7 @@ export async function dashboard(db: Database = getDb()) {
     missedCalls,
     headDecisions: headDecisionRows.map((row) => ({
       candidateId: row.candidateId,
+      bookingId: typeof row.detail.bookingId === "string" ? row.detail.bookingId : null,
       decision: row.detail.decision === "hire" ? ("hire" as const) : ("reject" as const),
       reason: String(row.detail.reason ?? ""),
       head: String(row.detail.head ?? ""),

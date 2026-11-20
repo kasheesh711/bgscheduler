@@ -2,7 +2,7 @@
 
 import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatInTimeZone } from "date-fns-tz";
-import { localDate, ZONE, type Subject } from "@/lib/hiring/model";
+import { isDecided, localDate, ZONE, type Subject } from "@/lib/hiring/model";
 import { buildRunSheet, headName, headVisits, pastVisits, upcoming, type RunSheetRow } from "@/lib/hiring/run-sheet";
 import { dayTitle, openHeadDecisions, weekCalls } from "@/lib/hiring/role-views";
 import { universityName } from "@/lib/hiring/seek-view";
@@ -392,25 +392,23 @@ export function AdminScreen({ data, reload, readOnly = false, onOpenResults }: {
 const HEAD_KEY = "hiring-head";
 
 function headVisit(row: RunSheetRow, data: HiringData, now: Date) {
-  const mocks = data.bookings.filter((b) => b.candidateId === row.candidateId && b.kind === "mock" && b.status === "confirmed");
-  const mock = mocks.find((b) => (b.visitId ?? b.id) === row.visitId);
+  const mock = data.bookings.find((b) => b.candidateId === row.candidateId && b.kind === "mock" && b.status === "confirmed" && (b.visitId ?? b.id) === row.visitId);
+  const candidate = data.candidates.find((c) => c.id === row.candidateId);
+  const active = !!candidate && candidate.stage !== "stopped" && !isDecided(candidate.stage);
   const path = mock ? data.briefPaths[mock.id] : undefined;
   const ended = !!mock && new Date(mock.endTime) <= now;
-  mocks.sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
-  const decision = mock && data.headDecisions.find((d) =>
-    d.candidateId === row.candidateId && mocks.find((b) => new Date(b.startTime) <= new Date(d.at))?.id === mock.id,
-  );
-  return { row, mock, path, ended, decision, due: ended && !!path && !decision };
+  const decision = mock && data.headDecisions.find((d) => d.bookingId === mock.id);
+  const uncertain = data.headDecisions.some((d) => d.candidateId === row.candidateId && d.bookingId === null);
+  return { row, mock, candidate, active, path, ended, decision, due: ended && !!path && active && !decision && !uncertain };
 }
 
 function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisit>; data: HiringData; readOnly: boolean }) {
-  const { row, mock, path, ended, decision, due } = visit;
+  const { row, mock, candidate, active, path, decision, due } = visit;
   const [resume, setResume] = useState(false);
   const resumeId = useId();
-  const candidate = data.candidates.find((c) => c.id === row.candidateId);
   const subject = mock?.subjects[0];
-  const scored = mock && data.mocks.some((m) => m.bookingId === mock.id && m.source !== "tracker" && (m.status === "done" || m.status === "needs_check"));
-  const briefLabel = !ended ? "Open interview brief" : decision ? "View brief" : "Score and recommend";
+  const scored = mock && data.mocks.some((m) => m.bookingId === mock.id && m.source !== "tracker" && m.status === "done");
+  const briefLabel = decision ? "View brief" : !due ? "Open interview brief" : scored ? "Record recommendation" : "Score and recommend";
   return (
     <article className={`${r.card} ${r.headCard}`}>
       <p className={r.time}>
@@ -435,12 +433,13 @@ function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisi
           )}
         </p>
         {row.mockStart && !path && <p className={r.meta}>No interview brief is available.</p>}
+        {path && !active && <p className={r.meta}>The interview brief is closed.</p>}
         {candidate?.resumeState === "none" && <p className={r.meta}>No résumé file is stored.</p>}
         {candidate?.resumeState === "deleted" && <p className={r.meta}>The résumé file was deleted.</p>}
       </div>
       <div className={r.actions}>
-        {path && !readOnly && (
-          <a className={r.big} data-tone="primary" href={path} target="_blank" rel="noopener noreferrer" aria-label={`${briefLabel} for ${row.candidateName}`}>
+        {path && active && !readOnly && (
+          <a className={r.big} data-tone="primary" href={due ? `${path}#${scored ? "recommendation" : "scores"}` : path} target="_blank" rel="noopener noreferrer" aria-label={`${briefLabel} for ${row.candidateName}`}>
             {briefLabel}
           </a>
         )}
@@ -501,7 +500,7 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
       {head && (
         <>
           {due.length > 0 && (
-            <Section title="Needs your scores" count={due.length}>
+            <Section title="Mocks that need action" count={due.length}>
               <div className={r.cards}>
                 {due.map((visit) => (
                   <HeadCard key={visit.row.visitId} visit={visit} data={data} readOnly={readOnly} />

@@ -90,7 +90,7 @@ if (/roles=1|pipeline=1/.test(location.search)) {
   Object.assign(payload, {
     reviewAccess: { hr: true, gift: false },
     calls: [{ candidateId: "k", start: at(0, 10), end: at(0, 10) }, { candidateId: "b", start: at(1, 14), end: at(1, 14) }],
-    headDecisions: [{ candidateId: "r1", decision: "hire", reason: "Clear and warm lesson.", head: "Kru Peat", draftProblem: null, at: at(0, 9) }],
+    headDecisions: [{ candidateId: "r1", bookingId: "v1m", decision: "hire", reason: "Clear and warm lesson.", head: "Kru Peat", draftProblem: null, at: at(0, 9) }],
     briefPaths: { v2m: "/hiring/brief/sample-token" },
     library: [{ id: "qp-phys", kind: "question_paper", subject: "Physics", name: "Physics paper.pdf", status: "ready" }],
   });
@@ -137,6 +137,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       callNotes: "", packet: null, appointment: "2026-11-20T02:30:00Z" }));
   }
   if (url.pathname === "/api/hiring/review/r1") {
+    if (url.searchParams.get("file") === "html") return new Response("<!doctype html><html><head><style>body{font:15px Georgia;padding:16px}</style></head><body><h1>Review packet: Reply Passed</h1><p>Mock 82/100. Paper 74%. Behavioral: gave a specific example of adapting a lesson.</p><p><a href='/api/hiring/review/r1?file=resume'>Résumé</a></p></body></html>", { headers: { "Content-Type": "text/html" } });
     if (init?.method === "POST") {
       const body = JSON.parse(String(init.body));
       (window as unknown as { posted: unknown[] }).posted.push(body);
@@ -796,13 +797,21 @@ try {
     for (const [width, height, size] of [[1440, 900, "desktop"], [390, 844, "phone"]]) {
       await page.setViewportSize({ width, height });
       await page.goto(`${origin}/?view=review&roles=1&gift=1`);
-      await page.getByRole("link", { name: "Read review packet" }).first().waitFor();
+      await page.getByRole("button", { name: "Read review packet" }).first().waitFor();
       await shot(page, `gift-review-${size}`);
     assert.deepEqual(await axeProblems(page), [], "axe on gift");
     }
+    // Gift reads the packet in the page; sign-off unlocks only after it is shown (here Reject still needs a note).
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${origin}/?view=review&roles=1&gift=1`);
+    await page.getByRole("button", { name: /Read review packet/ }).first().click();
+    await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: /Review packet/ }).waitFor();
+    await page.waitForTimeout(300);
+    await shot(page, "gift-review-packet-phone");
+    assert.deepEqual(await axeProblems(page), [], "axe on gift packet");
     await page.setViewportSize({ width: 320, height: 700 });
     await page.goto(`${origin}/?view=review&roles=1&gift=1`);
-    await page.getByRole("link", { name: "Read review packet" }).first().waitFor();
+    await page.getByRole("button", { name: "Read review packet" }).first().waitFor();
     assert.ok(await page.evaluate(() => document.querySelector("main, #root").scrollWidth <= window.innerWidth + 1), "Gift review scrolls sideways at 320px");
     await shot(page, "gift-review-320");
     await page.setViewportSize({ width: 1440, height: 900 });

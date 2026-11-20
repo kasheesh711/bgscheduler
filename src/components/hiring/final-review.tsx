@@ -31,35 +31,21 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   onChanged?: (signed: boolean) => Promise<void>;
 }) {
   const url = `/api/hiring/review/${id}`;
-  const returnKey = `review-return:${id}`;
   const controlId = useId();
-  const heading = useRef<HTMLHeadingElement>(null);
+  const readButton = useRef<HTMLButtonElement>(null);
   const [review, setReview] = useState<Review>();
   const [behavioral, setBehavioral] = useState("");
   const [offer, setOffer] = useState("");
   const [reason, setReason] = useState("");
+  const [packetPage, setPacketPage] = useState<{ id: string; html: string; title: string }>();
   const [viewedId, setViewedId] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [signedStage, setSignedStage] = useState<"hired" | "rejected">();
   const [error, setError] = useState<{ text: string; retry?: boolean }>();
   const packet = review?.packet;
+  const openPage = packetPage?.id === packet?.id ? packetPage : undefined;
   const viewed = !!packet && packet.id === viewedId;
-
-  const restoreFocus = useCallback(() => {
-    const title = heading.current;
-    if (!autoLoad || !title) return false;
-    try {
-      if (!window.sessionStorage.getItem(returnKey)) return false;
-      title.closest("article")?.scrollIntoView({ block: "start" });
-      title.focus();
-      window.sessionStorage.removeItem(returnKey);
-      return true;
-    } catch {
-      // Back still works when storage is blocked.
-    }
-    return false;
-  }, [autoLoad, returnKey]);
 
   const load = useCallback(async (afterSave = false, previousPacket?: string) => {
     try {
@@ -71,11 +57,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
         setBehavioral(data.packet?.behavioral ?? data.callNotes ?? "");
         setOffer(data.packet?.offer ?? "");
       }
-      try {
-        if (data.packet && window.sessionStorage.getItem(`review-viewed:${data.packet.id}`)) setViewedId(data.packet.id);
-      } catch {
-        // A read in this page still works when storage is blocked.
-      }
+      return data;
     } catch (error) {
       setError({ text: afterSave ? "Could not refresh the review." : (error instanceof Error && error.message) || "Could not open the review.", retry: true });
     }
@@ -87,19 +69,6 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
     loadStarted.current = true;
     void load();
   }, [autoLoad, load, signing]);
-
-  useEffect(() => {
-    if (!autoLoad) return;
-    restoreFocus();
-    function onPageShow(event: PageTransitionEvent) {
-      if (!event.persisted || !restoreFocus()) return;
-      setBusy(true);
-      setError(undefined);
-      void load(false, packet?.id).finally(() => setBusy(false));
-    }
-    window.addEventListener("pageshow", onPageShow);
-    return () => window.removeEventListener("pageshow", onPageShow);
-  }, [autoLoad, load, packet?.id, restoreFocus]);
 
   async function act(body?: ReviewAction) {
     setBusy(true);
@@ -123,26 +92,43 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
     }
   }
 
-  async function readPacket(href: string, packetId: string) {
+  async function readPacket(packetId: string) {
     setBusy(true);
     setError(undefined);
     setViewedId(undefined);
     try {
-      const response = await fetch(href, { cache: "no-store" });
+      const response = await fetch(`${url}?file=html`, { cache: "no-store" });
       if (!response.ok) throw new Error();
-      try {
-        window.sessionStorage.setItem(`review-viewed:${packetId}`, "1");
-        window.sessionStorage.setItem(returnKey, "1");
-      } catch {
-        // The packet still opens when storage is blocked.
-      }
-      setViewedId(packetId);
-      window.location.assign(href);
+      const html = await response.text();
+      const head = /<head\b[^>]*>/i;
+      const base = '<base target="_blank">';
+      const source = head.test(html) ? html.replace(head, `$&${base}`) : html.replace(/<html\b[^>]*>/i, `$&<head>${base}`);
+      if (source === html) throw new Error();
+      const titleTag = html.match(/<title>[^<]*<\/title>/i)?.[0] ?? "";
+      const name = new DOMParser().parseFromString(titleTag, "text/html").title.replace(/^Hiring review \| /, "");
+      setPacketPage({ id: packetId, html: source, title: `Review packet for ${name || "candidate"}` });
     } catch {
       setError({ text: "Could not open the packet. Try again." });
     } finally {
       setBusy(false);
     }
+  }
+
+  function closePacket() {
+    setPacketPage(undefined);
+    readButton.current?.focus();
+  }
+
+  async function checkPacket(packetId: string) {
+    if (busy || viewed) return;
+    setBusy(true);
+    const current = await load(false, packetId);
+    if (current?.packet?.id === packetId) setViewedId(packetId);
+    else {
+      closePacket();
+      if (current) setError({ text: "HR sent a new packet. Read it again." });
+    }
+    setBusy(false);
   }
 
   const stage = signedStage ?? review?.stage;
@@ -156,7 +142,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   const awaitingSignOff = !signing && review?.access.gift && !closed;
   return (
     <section className={signing ? css.finalReview : `${css.inspectorSection} ${css.finalReview}`} id={`review-${id}`} aria-label={signing ? "Contract signing" : "Final hiring review"}>
-      {!signing && <h3 className={css.inspectorHeading} ref={heading} tabIndex={-1}>Final hiring review</h3>}
+      {!signing && <h3 className={css.inspectorHeading}>Final hiring review</h3>}
       {!review && !error && (autoLoad || busy
         ? <p className={css.inspectorMeta} role="status">Loading the review…</p>
         : <button type="button" className={css.secondary} onClick={() => void act()}>{signing ? "Check contract signing" : "Open final review"}</button>)}
@@ -166,19 +152,17 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
       </>}
       {!signing && review && packet && (
         <div className={`${css.decisionActions} ${css.packetActions}`}>
-          <a className={review.access.gift ? css.primary : css.secondary} href={`${url}?file=html`} target={autoLoad ? undefined : "_blank"} rel="noreferrer" onClick={(event) => {
-            if (autoLoad) {
-              event.preventDefault();
-              if (!busy) void readPacket(event.currentTarget.href, packet.id);
-              return;
-            }
-            setViewedId(packet.id);
-            try {
-              window.sessionStorage.setItem(`review-viewed:${packet.id}`, "1");
-            } catch {
-              // The link still works when storage is blocked.
-            }
-          }}>Read review packet</a>
+          {review.access.gift ? (
+            <button type="button" className={css.primary} ref={readButton} aria-expanded={!!openPage} aria-disabled={busy || !!openPage}
+              aria-controls={openPage ? `${controlId}-packet` : undefined}
+              onClick={() => { if (!busy && !openPage) void readPacket(packet.id); }}>Read review packet</button>
+          ) : <a className={css.secondary} href={`${url}?file=html`} target="_blank" rel="noreferrer">Read review packet</a>}
+          {openPage && (
+            <div className={css.packetPanel} id={`${controlId}-packet`}>
+              <button type="button" className={css.secondary} onClick={closePacket}>Close packet</button>
+              <iframe title={openPage.title} srcDoc={openPage.html} sandbox="allow-popups allow-popups-to-escape-sandbox" onLoad={() => void checkPacket(openPage.id)} />
+            </div>
+          )}
           <a className={css.secondary} href={`${url}?file=zip`}>Download packet and files</a>
         </div>
       )}
