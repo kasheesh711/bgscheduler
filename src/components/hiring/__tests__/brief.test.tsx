@@ -61,7 +61,7 @@ describe("InterviewerBrief", () => {
     const page = html({ rubric });
     expect(page).toContain("Scores sent. Total 70 / 100");
     expect(page).toContain("Clear lesson.");
-    expect(page.match(/<option[^>]*selected=""[^>]*>7</g)).toHaveLength(RUBRIC_ITEMS.length);
+    expect(page.match(/aria-checked="true"[^>]*checked=""\/>7</g)).toHaveLength(RUBRIC_ITEMS.length);
   });
 
   it("gives one message for a dead link", () => {

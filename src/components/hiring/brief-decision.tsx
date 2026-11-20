@@ -7,7 +7,7 @@ type Decision = "hire" | "reject";
 const LABEL: Record<Decision, string> = { hire: "Yes", reject: "No" };
 
 /** The tutor recommends Yes for HR review or No to queue a rejection. */
-export function BriefDecision({ sent, url }: { sent: Decision | null; url: string }) {
+export function BriefDecision({ sent, url, scored }: { sent: Decision | null; url: string; scored: boolean }) {
   const [done, setDone] = useState<Decision | null>(sent);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -32,20 +32,24 @@ export function BriefDecision({ sent, url }: { sent: Decision | null; url: strin
           Recommendation recorded: <strong>{LABEL[done]}</strong>. {done === "hire" ? "HR will prepare the review for Gift." : "The candidate’s rejection email is queued."}
         </p>
       )}
-      {!done && <><p className={c.note}>Submit the rubric first. Yes sends the application to HR. No queues a rejection email to the candidate.</p>
-      <label className={c.field}>
-        Reason (required for No)
-        <textarea className={c.input} rows={2} maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} />
-      </label>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button type="button" className={c.button} disabled={busy} onClick={() => void send("hire")}>
-          {LABEL.hire}
-        </button>
-        <button type="button" className={c.button} disabled={busy || reason.trim().length < 5} onClick={() => void send("reject")}>
-          {LABEL.reject}
-        </button>
-      </div>
-      </>}
+      {!done && (
+        <>
+          <p className={c.note}>Yes sends the application to HR. No queues a rejection email.</p>
+          <label className={c.field}>
+            Reason (required for No)
+            <textarea className={c.input} rows={2} maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} />
+          </label>
+          {!scored && <p className={c.note}>Send your scores first.</p>}
+          <div className={c.decisionActions}>
+            <button type="button" className={c.button} disabled={!scored || busy} onClick={() => void send("hire")}>
+              Yes, send to HR
+            </button>
+            <button type="button" className={`${c.ghost} ${c.reject}`} disabled={!scored || busy || reason.trim().length < 5} onClick={() => void send("reject")}>
+              No, reject
+            </button>
+          </div>
+        </>
+      )}
       {error && (
         <p role="alert" className={c.alert}>
           {error}

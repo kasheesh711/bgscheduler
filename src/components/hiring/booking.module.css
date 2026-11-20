@@ -107,6 +107,16 @@
     gap: 28px;
   }
 }
+.hero[data-brief] {
+  padding: 18px 20px 56px;
+}
+.hero[data-brief] .title {
+  margin-top: 10px;
+  font-size: clamp(32px, 7vw, 44px);
+}
+.hero[data-brief] + .sheet {
+  margin-top: -40px;
+}
 @keyframes rise {
   from {
     opacity: 0;
@@ -186,6 +196,108 @@
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.page a.scoreLink {
+  min-height: 44px;
+  text-decoration: none;
+}
+.paperLink,
+.preScreen > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+.preScreen > summary {
+  display: flex;
+  justify-content: space-between;
+  list-style: none;
+  cursor: pointer;
+}
+.preScreen > summary::-webkit-details-marker {
+  display: none;
+}
+.preScreen > summary::after {
+  content: "";
+  width: 9px;
+  height: 9px;
+  margin-right: 4px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+}
+.preScreen[open] > summary {
+  margin-bottom: 12px;
+}
+.preScreen[open] > summary::after {
+  transform: rotate(225deg);
+}
+.scoreRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: 380px;
+}
+.scoreTiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(48px, 1fr));
+  gap: 6px;
+  flex: 1 1 210px;
+}
+.scoreTile {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.scoreTile:hover {
+  border-color: var(--ink);
+}
+.scoreTile:has(input:checked) {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fbf7ee;
+}
+.input.otherScore {
+  width: 76px;
+  min-height: 44px;
+  padding: 0 8px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+.scoreProgress {
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink);
+}
+.scoreProgress::-webkit-progress-bar {
+  background: var(--paper);
+}
+.scoreProgress::-webkit-progress-value {
+  background: var(--ink);
+}
+.scoreProgress::-moz-progress-bar {
+  background: var(--ink);
+}
+.decisionActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  text-align: center;
+}
+.ghost.reject:not(:disabled) {
+  border-color: var(--err);
+  color: var(--err);
 }
 
 /* Picker */
@@ -410,6 +522,8 @@ textarea.input {
 .day:focus-visible,
 .button:focus-visible,
 .ghost:focus-visible,
+.preScreen > summary:focus-visible,
+.scoreTile:has(input:focus-visible),
 .page a:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
@@ -725,4 +839,11 @@ textarea.input {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* The heading inside the pre-screen summary keeps the summary look. */
+.summaryHeading {
+  display: inline;
+  margin: 0;
+  font: inherit;
 }

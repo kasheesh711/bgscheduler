@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import { ANSWER_LABELS } from "@/lib/hiring/model";
 import type { briefView } from "@/lib/hiring/service";
 import { BriefDecision } from "./brief-decision";
@@ -21,6 +24,7 @@ export const BriefGone = () => (
 
 /** The interviewer's page: who they will meet, the résumé, the form answers, and the interviewer's own score form. No contact details and no AI scores. */
 export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: { brief: Brief; resumeUrl: string; rubricUrl: string; decisionUrl: string }) {
+  const [sentScores, setSentScores] = useState(false);
   const facts: [string, string][] = [
     ["Subject", brief.subject],
     ...(brief.exam ? ([["Exam", `${brief.exam} (Bangkok)`]] as [string, string][]) : []),
@@ -40,10 +44,11 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
             </div>
           ))}
         </dl>
+        {brief.form === "open" && <a className={`${c.ghost} ${c.scoreLink}`} href="#scores">Go to mock scores</a>}
       </section>
       <section className={c.facts}>
         <h2 className={c.stepTitle}>Candidate files</h2>
-        {brief.gradedPaper && <p><a href={resumeUrl.replace(/resume$/, "paper")} target="_blank" rel="noreferrer">Open the graded paper</a></p>}
+        {brief.gradedPaper && <p><a className={c.paperLink} href={resumeUrl.replace(/resume$/, "paper")} target="_blank" rel="noreferrer">Open the graded paper</a></p>}
         {brief.resume ? (
           <>
             <a className={c.button} href={resumeUrl} target="_blank" rel="noreferrer">
@@ -55,8 +60,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
           <p className={c.note}>No résumé file is stored for this candidate.</p>
         )}
       </section>
-      <section className={c.facts}>
-        <h2 className={c.stepTitle}>Pre-screen answers</h2>
+      <details className={c.preScreen}>
+        <summary className={c.stepTitle}><h2 className={c.summaryHeading}>Pre-screen answers</h2></summary>
         {brief.answers ? (
           <dl className={c.answers}>
             {ANSWER_LABELS.map(([key, label]) => (
@@ -69,15 +74,15 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
         ) : (
           <p className={c.note}>This candidate has no pre-screen reply.</p>
         )}
-      </section>
-      <section className={c.facts}>
+      </details>
+      <section id="scores" className={c.facts} tabIndex={-1}>
         <h2 className={c.stepTitle}>Mock lesson scores</h2>
-        <BriefRubric saved={brief.rubric} form={brief.form} url={rubricUrl} />
+        <BriefRubric saved={brief.rubric} form={brief.form} url={rubricUrl} onSent={() => setSentScores(true)} />
       </section>
       {brief.form !== "wait" && (
         <section className={c.facts}>
           <h2 className={c.stepTitle}>Your recommendation</h2>
-          <BriefDecision sent={brief.decision} url={decisionUrl} />
+          <BriefDecision sent={brief.decision} url={decisionUrl} scored={brief.form === "closed" || !!brief.rubric || sentScores} />
         </section>
       )}
     </>

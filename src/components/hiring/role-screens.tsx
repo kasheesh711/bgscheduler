@@ -20,7 +20,7 @@ const shortDay = (date: string) =>
 
 function ResumeButton({ open, onToggle, name }: { open: boolean; onToggle: () => void; name: string }) {
   return (
-    <button type="button" className={r.ghost} aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} the résumé of ${name}`} onClick={onToggle}>
+    <button type="button" className={r.big} aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} the résumé of ${name}`} onClick={onToggle}>
       {open ? "Hide résumé" : "Résumé"}
     </button>
   );
@@ -388,7 +388,7 @@ function HeadCard({ row, data, past, readOnly }: { row: RunSheetRow; data: Hirin
   const scored = data.mocks.some((m) => m.candidateId === row.candidateId && m.source !== "tracker" && (m.status === "done" || m.status === "needs_check"));
   const decision = data.headDecisions.find((d) => d.candidateId === row.candidateId);
   return (
-    <article className={r.card}>
+    <article className={`${r.card} ${r.headCard}`}>
       <p className={r.time}>
         {row.mockStart ?? row.paperStart}
         <span>{shortDay(row.date)}</span>
@@ -412,12 +412,12 @@ function HeadCard({ row, data, past, readOnly }: { row: RunSheetRow; data: Hirin
         </p>
       </div>
       <div className={r.actions}>
-        {candidate && <ResumeButton open={resume} onToggle={() => setResume(!resume)} name={row.candidateName} />}
         {path && !readOnly && (
-          <a className={r.big} data-tone={past ? "hire" : undefined} href={path} target="_blank" rel="noopener noreferrer">
-            {past ? "Score and recommend" : "Open the candidate page"}
+          <a className={r.big} data-tone={past ? "hire" : "primary"} href={path} target="_blank" rel="noopener noreferrer">
+            {past ? "Score and recommend" : "Open interview brief"}
           </a>
         )}
+        {candidate && <ResumeButton open={resume} onToggle={() => setResume(!resume)} name={row.candidateName} />}
       </div>
       {resume && candidate && (
         <div className={r.resume}><ResumePeek candidate={candidate} months={data.config.resumeRetentionMonths} /></div>
@@ -454,19 +454,27 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
   const coming = head ? headVisits(rows, head.canonicalKey, today) : [];
   return (
     <div className={r.screen}>
-      <div className={r.picker} role="group" aria-label="Choose your name">
-        {heads.map((h) => (
-          <button key={h.canonicalKey} type="button" aria-pressed={h.canonicalKey === key} onClick={() => choose(h.canonicalKey)}>
-            {headName(h.canonicalKey, data.tutors)}
-          </button>
-        ))}
+      <div className={r.section}>
+        {!head && <p className={r.quiet}>Choose your name</p>}
+        <div className={r.picker} role="group" aria-label="Choose your name">
+          {heads.map((h) => (
+            <button key={h.canonicalKey} type="button" aria-pressed={h.canonicalKey === key} onClick={() => choose(h.canonicalKey)}>
+              {headName(h.canonicalKey, data.tutors)}
+            </button>
+          ))}
+        </div>
       </div>
-      {!head ? (
-        <p className={r.quiet}>Choose your name to see your candidates.</p>
-      ) : (
+      {head && (
         <>
           <Section title="Coming to you" count={coming.length}>
-            {!coming.length && <p className={r.quiet}>No candidate is booked with you.</p>}
+            {!coming.length && (
+              <div className={r.card}>
+                <div className={r.cardMain}>
+                  <p>No mock lessons booked for you yet.</p>
+                  <p className={r.quiet}>New bookings show here and in LINE.</p>
+                </div>
+              </div>
+            )}
             <div className={r.cards}>
               {coming.map((row) => (
                 <HeadCard key={row.visitId} row={row} data={data} past={started(row)} readOnly={readOnly} />

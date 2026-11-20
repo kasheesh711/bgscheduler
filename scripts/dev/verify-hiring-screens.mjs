@@ -22,6 +22,8 @@ import { createRoot } from "react-dom/client";
 import { baseConfigSchema, localDate } from "@/lib/hiring/model";
 import { HiringDashboard } from "@/components/hiring/dashboard";
 import { HiringStaffPreview } from "@/components/hiring/staff-preview";
+import { BookingShell } from "@/components/hiring/booking";
+import { InterviewerBrief } from "@/components/hiring/brief";
 
 const assessment = (summary: string) => ({
   summary, briefSummary: summary, subjects: [{ subject: "Mathematics", relevant: true, evidence: "Taught IGCSE", reason: "Named in the resume" }],
@@ -114,6 +116,9 @@ payload.config.paperPassRules = [{ subject: "Mathematics", level: "Key Stage 3",
 payload.papers = [{ id: "p1", candidateId: "r1", bookingId: "v1e", subject: "Mathematics", source: "ai", status: "done", fileId: "f1", updatedAt: "2026-11-02T00:00:00.000Z", markSchemeUsed: false, history: null, error: null, changedBy: null, marks: { missingPages: null, comment: "Strong algebra. Weak on IB vectors.", questions: [...markQuestions("Key Stage 3", [9, 9]), ...markQuestions("AS / A-Level", [6, 5]), ...markQuestions("IB SL / HL", [3, 4])] } }];
 payload.mocks = [{ id: "m1", candidateId: "r1", bookingId: "v1m", subject: "Mathematics", source: "ai", status: "done", fileId: "f2", updatedAt: "2026-11-02T00:00:00.000Z", history: null, error: null, changedBy: null, rubric: { comments: "Clear explanations.", items: { accuracy: 10, concepts: 10, clarity: 7, presentation: 7, interaction: 10, pace: 7, organization: 10, materials: 7, formative: 7, feedback: 9 } } }];
 let reviewPacket: { id: string; behavioral: string; offer: string } | null = null;
+// ?gift=1: the final review as Gift sees it, with a packet from HR.
+const GIFT = location.search.includes("gift=1");
+if (GIFT) payload.reviewAccess = { hr: false, gift: true };
 const realFetch = window.fetch;
 (window as unknown as { posted: unknown[] }).posted = [];
 (window as unknown as { uploaded: unknown[] }).uploaded = [];
@@ -121,6 +126,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   // The Capacity tab reads its own payload, which this fixture does not hold.
   if (String(input).includes("capacity=1")) return new Response(JSON.stringify({ error: "Not in this fixture." }), { status: 503 });
   const url = new URL(String(input), location.origin);
+  if (url.pathname.startsWith("/api/hiring/brief/sample-token/")) {
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    (window as unknown as { posted: unknown[] }).posted.push(body);
+    if (url.pathname.endsWith("/rubric")) return new Response(JSON.stringify({ total: Object.values(body.items as Record<string, number>).reduce((a, b) => a + b, 0) }));
+    return new Response(JSON.stringify({ ok: true }));
+  }
   if (url.pathname === "/api/hiring/review/offer") {
     return new Response(JSON.stringify({ access: { hr: true, gift: false }, stage: "hired",
       callNotes: "", packet: null, appointment: "2026-11-20T02:30:00Z" }));
@@ -132,8 +143,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       reviewPacket = { id: "packet", behavioral: body.behavioral, offer: body.offer };
       return new Response(JSON.stringify({ ok: true }));
     }
-    return new Response(JSON.stringify({ access: { hr: true, gift: false }, stage: "mock_booked",
-      callNotes: "Gave a specific example of adapting a lesson.", packet: reviewPacket, appointment: null }));
+    return new Response(JSON.stringify({ access: GIFT ? { hr: false, gift: true } : { hr: true, gift: false }, stage: GIFT ? "review" : "mock_booked",
+      callNotes: "Gave a specific example of adapting a lesson.", packet: GIFT ? { id: "packet", behavioral: "Gave a specific example of adapting a lesson.", offer: "Hourly rate 600 THB, 10 hours a week." } : reviewPacket, appointment: null }));
   }
   if (url.pathname === "/api/hiring/marking") {
     (window as unknown as { posted: unknown[] }).posted.push({ marking: JSON.parse(String(init?.body)) });
@@ -199,7 +210,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/hiring") return new Response(JSON.stringify(payload));
   return realFetch(input, init);
 }) as typeof fetch;
-createRoot(document.getElementById("root")!).render(<Suspense fallback="Loading">{location.search.includes("preview=1") ? <div className="flex min-h-0 flex-1 flex-col overflow-auto"><HiringStaffPreview role="hr" /></div> : <HiringDashboard />}</Suspense>);
+// ?brief=open|wait|closed: the interviewer's public page from the LINE link, with synthetic data.
+const briefState = new URLSearchParams(location.search).get("brief") as "open" | "wait" | "closed" | null;
+const BRIEF = { decision: null, name: "Sample Dao", subject: "Mathematics", gradedPaper: true, exam: "Sat 28 Nov, 10:00–11:30", mock: "Sat 28 Nov, 12:00–12:45",
+  interviewer: "Kru Peat", location: "BeGifted, 2nd floor, Siam Square One", answers, resume: "pdf" as const,
+  rubric: briefState === "closed" ? payload.mocks[0].rubric : null, form: briefState ?? "open" };
+createRoot(document.getElementById("root")!).render(<Suspense fallback="Loading">{briefState ? <BookingShell kind="brief"><InterviewerBrief brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BookingShell> : location.search.includes("preview=1") ? <div className="flex min-h-0 flex-1 flex-col overflow-auto"><HiringStaffPreview role="hr" /></div> : <HiringDashboard />}</Suspense>);
 `;
 
 // Only the framework parts that need a Next.js server are replaced. The components stay real.
@@ -249,16 +265,22 @@ await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 
 let browser;
-const shot = async (page, name) => {
+const shot = async (page, name, fullPage = false) => {
   if (!OUT) return;
   mkdirSync(OUT, { recursive: true });
-  await page.screenshot({ path: path.join(OUT, `${name}.png`) });
+  await page.screenshot({ path: path.join(OUT, `${name}.png`), fullPage, animations: "disabled" });
 };
 // ONLY=<words> runs the checks whose name holds those words, such as ONLY="screen shows" for the role screens.
 const check = async (name, action) => {
   if (process.env.ONLY && !name.includes(process.env.ONLY)) return;
-  await action();
-  process.stdout.write(`PASS ${name}\n`);
+  // One failed check does not hide the result of the others; the run still exits 1.
+  try {
+    await action();
+    process.stdout.write(`PASS ${name}\n`);
+  } catch (error) {
+    process.exitCode = 1;
+    process.stdout.write(`FAIL ${name}: ${String(error.message).split("\n")[0]}\n`);
+  }
 };
 try {
   browser = await chromium.launch({ executablePath: CHROME, headless: true });
@@ -645,7 +667,7 @@ try {
     await page.goto(`${origin}/?view=heads&roles=1`);
     await page.getByRole("button", { name: "Kru Ek" }).click();
     await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
-    assert.equal(await page.getByRole("link", { name: "Open the candidate page" }).getAttribute("href"), "/hiring/brief/sample-token");
+    assert.equal(await page.getByRole("link", { name: "Open interview brief" }).getAttribute("href"), "/hiring/brief/sample-token");
     await page.getByRole("button", { name: "Show the résumé of Reply Low" }).click();
     await shot(page, "role-heads");
     // The browser remembers the role screen and the head.
@@ -703,6 +725,49 @@ try {
     assert.equal(await workflow.getByRole("button", { name: "Offer & signing" }).getAttribute("aria-pressed"), "true");
     await shot(page, "hiring-offer-dark");
     await page.evaluate(() => document.documentElement.classList.remove("dark"));
+  });
+  await check("the head and Gift screens render on phone and desktop", async () => {
+    // The brief page scrolls as a whole page, not inside the dashboard frame.
+    const briefPage = async (state, width, height) => {
+      await page.setViewportSize({ width, height });
+      await page.goto(`${origin}/?brief=${state}`);
+      await page.addStyleTag({ content: "#root{height:auto!important;overflow:visible!important;padding:0!important}" });
+      await page.getByRole("heading", { name: "Sample Dao" }).waitFor();
+    };
+    await briefPage("open", 390, 844);
+    await shot(page, "brief-open-phone", true);
+    await shot(page, "brief-open-phone-fold");
+    for (const select of await page.locator("form select").all()) await select.selectOption({ index: 1 });
+    await page.getByRole("button", { name: /Send scores/ }).click();
+    await page.getByText(/Scores sent/).waitFor();
+    await shot(page, "brief-sent-phone", true);
+    await briefPage("wait", 390, 844);
+    await shot(page, "brief-wait-phone", true);
+    await briefPage("open", 1440, 900);
+    await shot(page, "brief-open-desktop", true);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${origin}/?view=heads&roles=1`);
+    await page.getByRole("button", { name: "Kru Ek" }).click();
+    await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
+    await shot(page, "heads-desktop");
+    // Reload at phone size: a resize alone can leave a stale paint in the screenshot.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${origin}/?view=heads&roles=1`);
+    await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
+    await shot(page, "heads-phone");
+    for (const [width, height, size] of [[1440, 900, "desktop"], [390, 844, "phone"]]) {
+      await page.setViewportSize({ width, height });
+      await page.goto(`${origin}/?view=review&roles=1&gift=1`);
+      await page.waitForLoadState("networkidle");
+      await shot(page, `gift-review-${size}`);
+      const open = page.getByRole("button", { name: "Open final review" }).first();
+      if (await open.count()) {
+        await open.click();
+        await page.getByRole("link", { name: "Read review packet" }).first().waitFor();
+        await shot(page, `gift-review-open-${size}`);
+      }
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
   });
   await check("the page has no script errors", async () => assert.deepEqual(errors, []));
 } finally {
