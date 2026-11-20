@@ -302,11 +302,28 @@ describe("assignClassrooms", () => {
 
   it("honors preferred rooms before general rooms when valid", () => {
     const result = assignClassrooms([
-      session({ tutorDisplayName: "Apivit (Ek) Sirithana" }),
+      session({ tutorDisplayName: "Usanee (Aey) Tortermpun" }),
     ], DEFAULT_CLASSROOM_ROOMS);
 
-    expect(result.rows[0].preferredRoom).toBe("OMG");
-    expect(result.rows[0].assignedRoom).toBe("OMG");
+    expect(result.rows[0].preferredRoom).toBe("Cool");
+    expect(result.rows[0].assignedRoom).toBe("Cool");
+  });
+
+  it.each([
+    { tutorDisplayName: "Apivit (Ek) Sirithana", room: "Trust the Process" },
+    { tutorDisplayName: "Apivit (Ek) Sirithana Online", room: "Trust the Process" },
+    { tutorDisplayName: "Smit (Tito) Kanjanapas", room: "OMG" },
+    { tutorDisplayName: "Smit (Tito) Kanjanapas Online", room: "OMG" },
+  ])("gives $tutorDisplayName top priority for $room", ({ tutorDisplayName, room }) => {
+    const result = assignClassrooms([
+      session({ wiseSessionId: "other", tutorDisplayName: "Generic Tutor", startMinute: 9 * 60, endMinute: 11 * 60 }),
+      session({ wiseSessionId: "priority", tutorDisplayName, startMinute: 10 * 60, endMinute: 11 * 60 }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    const row = result.rows.find((candidate) => candidate.wiseSessionId === "priority")!;
+    expect(row.preferredRoom).toBe(room);
+    expect(row.assignedRoom).toBe(room);
+    expect(row.ruleTrace).toContain(`assigned priority preferred room: ${room}`);
   });
 
   it("assigns Mek to Iconic (TV) when available", () => {
@@ -372,8 +389,8 @@ describe("assignClassrooms", () => {
     { tutorDisplayName: "Buzz", preferredRoom: "Tesla" },
     { tutorDisplayName: "Lukas", preferredRoom: "Keep Going (TV)" },
     { tutorDisplayName: "Mookie", preferredRoom: "Nerd" },
-    { tutorDisplayName: "Tito", preferredRoom: ROOM_THINK_OUTSIDE_THE_BOX },
-    { tutorDisplayName: "Ek", preferredRoom: "OMG" },
+    { tutorDisplayName: "Tito", preferredRoom: "OMG" },
+    { tutorDisplayName: "Ek", preferredRoom: "Trust the Process" },
   ])("protects $tutorDisplayName's preferred room from an earlier overlapping generic session", ({ tutorDisplayName, preferredRoom }) => {
     const result = assignClassrooms(
       [
@@ -577,8 +594,8 @@ describe("assignClassrooms", () => {
     expect(kevin.preferredRoom).toBe(ROOM_THINK_OUTSIDE_THE_BOX);
     expect(kevin.assignedRoom).toBe(ROOM_THINK_OUTSIDE_THE_BOX);
     expect(kevin.ruleTrace).toContain(`assigned Kevin priority room: ${ROOM_THINK_OUTSIDE_THE_BOX}`);
-    expect(tito.preferredRoom).toBe(ROOM_THINK_OUTSIDE_THE_BOX);
-    expect(tito.assignedRoom).not.toBe(ROOM_THINK_OUTSIDE_THE_BOX);
+    expect(tito.preferredRoom).toBe("OMG");
+    expect(tito.assignedRoom).toBe("OMG");
   });
 
   it("honors Kevin's own valid room override instead of the automatic priority room", () => {
@@ -780,7 +797,7 @@ describe("assignClassrooms", () => {
     expect(mek.assignedRoom).toBe("Iconic (TV)");
   });
 
-  it("lets a displaced preferred tutor (Ek) return to OMG on their next session instead of sticking to the fallback room", () => {
+  it("lets a displaced preferred tutor (Aey) return to Cool on their next session instead of sticking to the fallback room", () => {
     const result = assignClassrooms(
       [
         session({
@@ -792,27 +809,27 @@ describe("assignClassrooms", () => {
         }),
         session({
           wiseSessionId: "ek-first",
-          tutorDisplayName: "Apivit (Ek) Sirithana",
+          tutorDisplayName: "Usanee (Aey) Tortermpun",
           startMinute: 9 * 60,
           endMinute: 10 * 60,
         }),
         session({
           wiseSessionId: "ek-second",
-          tutorDisplayName: "Apivit (Ek) Sirithana",
+          tutorDisplayName: "Usanee (Aey) Tortermpun",
           startMinute: 10 * 60 + 30,
           endMinute: 11 * 60 + 30,
         }),
       ],
-      roomsFor("OMG", "Cool"),
-      new Map([["override-blocker", "OMG"]]),
+      roomsFor("Cool", "OMG"),
+      new Map([["override-blocker", "Cool"]]),
     );
 
     const ekFirst = result.rows.find((row) => row.wiseSessionId === "ek-first")!;
     const ekSecond = result.rows.find((row) => row.wiseSessionId === "ek-second")!;
-    expect(ekFirst.assignedRoom).not.toBe("OMG");
-    expect(ekSecond.preferredRoom).toBe("OMG");
-    expect(ekSecond.assignedRoom).toBe("OMG");
-    expect(ekSecond.ruleTrace).toContain("assigned preferred room: OMG");
+    expect(ekFirst.assignedRoom).not.toBe("Cool");
+    expect(ekSecond.preferredRoom).toBe("Cool");
+    expect(ekSecond.assignedRoom).toBe("Cool");
+    expect(ekSecond.ruleTrace).toContain("assigned preferred room: Cool");
   });
 
   it("uses general continuity (not sticky) when the gap is 15 minutes or less", () => {

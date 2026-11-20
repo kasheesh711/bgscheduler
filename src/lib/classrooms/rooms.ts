@@ -129,8 +129,8 @@ export const PREFERRED_BY_TUTOR = new Map<string, string>(
     ["Tudda (Da) Tudsirivoravat Online", "Do It"],
     ["Wongsiri (Grace) Montrikittiphant", "Do It"],
     ["Wongsiri (Grace) Montrikittiphant Online", "Do It"],
-    ["Apivit (Ek) Sirithana", "OMG"],
-    ["Apivit (Ek) Sirithana Online", "OMG"],
+    ["Apivit (Ek) Sirithana", "Trust the Process"],
+    ["Apivit (Ek) Sirithana Online", "Trust the Process"],
     ["Usanee (Aey) Tortermpun", "Cool"],
     ["Usanee (Aey) Tortermpun Online", "Cool"],
     ["Chidchanok (Linn) Saetiaw", "Focus"],
@@ -139,7 +139,8 @@ export const PREFERRED_BY_TUTOR = new Map<string, string>(
     ["Thanit (Mimi) Montrikittiphant Online", "Take Action"],
     ["Pornnapha (Mint) Montrikittiphant", "Isaac Newton"],
     ["Pornnapha (Mint) Montrikittiphant Online", "Isaac Newton"],
-    ["Smit (Tito) Kanjanapas", ROOM_THINK_OUTSIDE_THE_BOX],
+    ["Smit (Tito) Kanjanapas", "OMG"],
+    ["Smit (Tito) Kanjanapas Online", "OMG"],
     ["Kevin (Kev) Y. Hsieh", ROOM_THINK_OUTSIDE_THE_BOX],
     ["Kevin (Kev) Y. Hsieh Online", ROOM_THINK_OUTSIDE_THE_BOX],
     ["Rachata (Mek) Sakpuaram", "Iconic (TV)"],
@@ -183,6 +184,11 @@ const PRIORITY_PREFERRED_ROOM_BY_TUTOR = new Map<string, string>(
     ["Rachata (Mek) Sakpuaram Online", "Iconic (TV)"],
     ["Rasna (Ras) Rajkitkul", "Never Ever (TV)"],
     ["Rasna (Ras) Rajkitkul Online", "Never Ever (TV)"],
+    // Owner rule 2026-11-20: Ek and Tito get first claim on their own rooms.
+    ["Apivit (Ek) Sirithana", "Trust the Process"],
+    ["Apivit (Ek) Sirithana Online", "Trust the Process"],
+    ["Smit (Tito) Kanjanapas", "OMG"],
+    ["Smit (Tito) Kanjanapas Online", "OMG"],
   ].flatMap(([name, room]) => tutorRuleAliases(name).map((alias) => [normalizeTutorName(alias), room])),
 );
 
