@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
@@ -80,7 +81,8 @@ export async function submitReview(db: Database, id: string, actor: string, inpu
     const material = await evidence(tx, id);
     const detail = { evidence: material, fingerprint: fingerprint(material), ...input };
     const previous = await latestReviewPacket(tx, id);
-    if (previous?.fingerprint === detail.fingerprint && previous.behavioral === input.behavioral && previous.offer === input.offer)
+    if (previous?.fingerprint === detail.fingerprint && isDeepStrictEqual(previous.evidence, material) &&
+        previous.behavioral === input.behavioral && previous.offer === input.offer)
       return `${id}:final-review:${previous.id}`;
     const [row] = await tx.insert(s.hiringAudit).values({ action: PACKET, actor, candidateId: id, detail }).returning({ id: s.hiringAudit.id });
     const link = new URL(`/hiring?view=hr#review-${id}`, process.env.APP_BASE_URL || "https://bgscheduler.vercel.app");

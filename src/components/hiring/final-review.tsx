@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { contractTestAllowed } from "@/lib/hiring/model";
 import css from "./dashboard.module.css";
 
@@ -22,6 +22,13 @@ export function reviewBlocks(writeGate: boolean, config: Parameters<typeof contr
 type ReviewAction = { action: "submit"; behavioral: string; offer: string }
   | { action: "sign"; packetId: string; decision: "hire" | "reject"; reason: string };
 
+const phoneReader = "(width < 720px)";
+function subscribeToPhoneReader(change: () => void) {
+  const query = window.matchMedia(phoneReader);
+  query.addEventListener("change", change);
+  return () => query.removeEventListener("change", change);
+}
+
 export function FinalReview({ id, signing = false, autoLoad = false, approveBlock, rejectBlock, onChanged }: {
   id: string;
   signing?: boolean;
@@ -33,12 +40,14 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   const url = `/api/hiring/review/${id}`;
   const controlId = useId();
   const readButton = useRef<HTMLButtonElement>(null);
+  const packetDialog = useRef<HTMLDialogElement>(null);
   const outcome = useRef<HTMLParagraphElement>(null);
+  const phone = useSyncExternalStore(subscribeToPhoneReader, () => window.matchMedia(phoneReader).matches, () => false);
   const [review, setReview] = useState<Review>();
   const [behavioral, setBehavioral] = useState("");
   const [offer, setOffer] = useState("");
   const [reason, setReason] = useState("");
-  const [packetPage, setPacketPage] = useState<{ id: string; html: string; title: string }>();
+  const [packetPage, setPacketPage] = useState<{ id: string; html: string; name: string }>();
   const [viewedId, setViewedId] = useState<string>();
   const [stalePacket, setStalePacket] = useState<{ id: string; text: string }>();
   const [busy, setBusy] = useState<"review" | "packet" | "sign" | null>(null);
@@ -74,6 +83,9 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   useEffect(() => {
     if (signedStage) outcome.current?.focus();
   }, [signedStage]);
+  useEffect(() => {
+    if (openPage && phone) packetDialog.current?.showModal();
+  }, [openPage, phone]);
 
   async function act(body?: ReviewAction) {
     setBusy(body?.action === "sign" ? "sign" : "review");
@@ -124,7 +136,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
       if (stalePacket?.id === packetId) {
         const current = await load(false, packetId);
         if (!current) return;
-        if (!current.packet || current.packet.id === packetId) throw new Error(stalePacket.text);
+        if (!current.packet) throw new Error(stalePacket.text);
         packetId = current.packet.id;
       }
       const response = await fetch(`${url}?file=html`, { cache: "no-store" });
@@ -141,7 +153,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
       if (source === html) throw new Error();
       const titleTag = html.match(/<title>[^<]*<\/title>/i)?.[0] ?? "";
       const name = new DOMParser().parseFromString(titleTag, "text/html").title.replace(/^Hiring review \| /, "");
-      setPacketPage({ id: packetId, html: source, title: `Review packet for ${name || "candidate"}` });
+      setPacketPage({ id: packetId, html: source, name: name || "candidate" });
     } catch (error) {
       setError({ text: (error instanceof Error && error.message) || "Could not open the packet. Try again.", packetLoad: true });
     } finally {
@@ -150,6 +162,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   }
 
   function closePacket() {
+    packetDialog.current?.close();
     setPacketPage(undefined);
     readButton.current?.focus();
   }
@@ -158,8 +171,10 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
     if (busy || viewed) return;
     setBusy("review");
     const current = await load(false, packetId);
-    if (current?.packet?.id === packetId) setViewedId(packetId);
-    else {
+    if (current?.packet?.id === packetId) {
+      setViewedId(packetId);
+      setStalePacket(undefined);
+    } else {
       closePacket();
       if (current) setError({ text: "HR sent a new packet. Read it again." });
     }
@@ -175,6 +190,22 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   const rejectHint = viewed && reason.trim().length < 5 ? `${controlId}-note` : undefined;
   const signOffDisabled = !!busy || !viewed || !!error?.retry;
   const awaitingSignOff = !signing && review?.access.gift && !closed;
+  const packetTitle = openPage && `Review packet for ${openPage.name}`;
+  const packetFrame = openPage && (
+    <iframe title={packetTitle} srcDoc={openPage.html}
+      className={phone ? "block h-full min-h-0 w-full border-0" : undefined}
+      // The phone reader listens for Escape in the frame. The sandbox blocks packet scripts.
+      sandbox={phone ? "allow-same-origin allow-popups allow-popups-to-escape-sandbox" : "allow-popups allow-popups-to-escape-sandbox"}
+      onLoad={(event) => {
+        if (phone) event.currentTarget.contentDocument?.addEventListener("keydown", (key) => {
+          if (key.key === "Escape") {
+            key.preventDefault();
+            closePacket();
+          }
+        });
+        void checkPacket(openPage.id);
+      }} />
+  );
   return (
     <section className={signing ? css.finalReview : `${css.inspectorSection} ${css.finalReview}`} id={`review-${id}`} aria-label={signing ? "Contract signing" : "Final hiring review"}>
       {!signing && <h3 className={css.inspectorHeading}>Final hiring review</h3>}
@@ -194,12 +225,22 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
           ) : <a className={css.secondary} href={`${url}?file=html`} target="_blank" rel="noreferrer">Read review packet</a>}
           {busy === "packet" && <p role="status" className={css.inspectorMeta}>Opening packet…</p>}
           {error?.packetLoad && <p role="alert" className={css.errorText}>{error.text}</p>}
-          {openPage && (
+          {openPage && (phone ? (
+            <dialog ref={packetDialog} id={`${controlId}-packet`} aria-label={packetTitle}
+              className="fixed inset-0 m-0 h-dvh max-h-none w-full max-w-none grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-0 bg-white p-0 open:grid"
+              onCancel={(event) => { event.preventDefault(); closePacket(); }}>
+              <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+                <span className="min-w-0 [overflow-wrap:anywhere]">{openPage.name}</span>
+                <button type="button" className={`${css.secondary} min-h-11 min-w-11 shrink-0`} onClick={closePacket}>Close packet</button>
+              </div>
+              {packetFrame}
+            </dialog>
+          ) : (
             <div className={css.packetPanel} id={`${controlId}-packet`}>
               <button type="button" className={css.secondary} onClick={closePacket}>Close packet</button>
-              <iframe title={openPage.title} srcDoc={openPage.html} sandbox="allow-popups allow-popups-to-escape-sandbox" onLoad={() => void checkPacket(openPage.id)} />
+              {packetFrame}
             </div>
-          )}
+          ))}
           <a className={css.secondary} href={`${url}?file=zip`}>Download packet and files</a>
         </div>
       )}

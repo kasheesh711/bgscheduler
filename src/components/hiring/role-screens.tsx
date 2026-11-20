@@ -393,26 +393,29 @@ export function AdminScreen({ data, reload, readOnly = false, onOpenResults }: {
 const HEAD_KEY = "hiring-head";
 
 function headVisit(row: RunSheetRow, data: HiringData, now: Date) {
-  const mock = data.bookings.find((b) => b.candidateId === row.candidateId && b.kind === "mock" && b.status === "confirmed" && (b.visitId ?? b.id) === row.visitId);
+  const bookings = data.bookings.filter((b) => b.candidateId === row.candidateId && b.kind === "mock" && (b.visitId ?? b.id) === row.visitId);
+  const confirmed = bookings.find((b) => b.status === "confirmed");
+  const mock = confirmed ?? (row.mockStart ? bookings[0] : undefined);
+  const status = mock?.status === "cancelled" ? "Cancelled" : mock?.status === "no_show" ? "No-show" : undefined;
   const candidate = data.candidates.find((c) => c.id === row.candidateId);
   const active = !!candidate && candidate.stage !== "stopped" && !isDecided(candidate.stage);
-  const path = mock ? data.briefPaths[mock.id] : undefined;
+  const path = confirmed ? data.briefPaths[confirmed.id] : undefined;
   const ended = !!mock && new Date(mock.endTime) <= now;
-  const decision = mock && data.headDecisions.find((d) => d.bookingId === mock.id);
+  const decision = confirmed && data.headDecisions.find((d) => d.bookingId === confirmed.id);
   const uncertain = data.headDecisions.some((d) => d.candidateId === row.candidateId && d.bookingId === null);
   const subject = mock?.subjects[0];
   const result = subject && data.mocks.find((m) => m.candidateId === row.candidateId && m.subject === subject && m.source !== "tracker");
-  const bookingResult = result?.bookingId === mock?.id ? result : undefined;
+  const bookingResult = result?.bookingId === confirmed?.id ? result : undefined;
   const needsCheck = bookingResult?.status === "needs_check";
   const rubric = bookingResult?.rubric;
   const scored = bookingResult?.status === "done" && !!rubric && !checkRubric(rubric).length && !rubricNeedsCheck(rubric);
   const draft = data.decisions.some((d) => d.candidateId === row.candidateId && d.status === "draft");
   const due = ended && !!path && active && !decision && !uncertain && !!subject && (scored || (!result && !draft));
-  return { row, mock, candidate, active, path, ended, decision, subject, scored, needsCheck, due };
+  return { row, mock, candidate, active, path, ended, decision, subject, scored, needsCheck, due, status };
 }
 
 function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisit>; data: HiringData; readOnly: boolean }) {
-  const { row, candidate, active, path, decision, subject, scored, needsCheck, due } = visit;
+  const { row, candidate, active, path, decision, subject, scored, needsCheck, due, status } = visit;
   const [resume, setResume] = useState(false);
   const resumeId = useId();
   const briefLabel = decision && !needsCheck ? "View brief" : !due ? "Open interview brief" : scored ? "Record recommendation" : "Score and recommend";
@@ -425,7 +428,7 @@ function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisi
       <div className={r.cardMain}>
         <p className={r.name}>{row.candidateName}{due && <span className={r.due}>Due</span>}</p>
         <p className={r.meta}>
-          {subject ?? row.subject ?? "Subject not recorded"} · {row.mockStart ? "You run the mock" : "Paper only: no mock"}
+          {subject ?? row.subject ?? "Subject not recorded"} · {status ?? (row.mockStart ? "You run the mock" : "Paper only: no mock")}
         </p>
         <p className={r.meta}>
           {scored && (
@@ -440,7 +443,7 @@ function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisi
           )}
         </p>
         {needsCheck && <p className={r.meta}>Ask admin to check the scores.</p>}
-        {row.mockStart && !path && <p className={r.meta}>No interview brief is available.</p>}
+        {row.mockStart && !path && !status && <p className={r.meta}>No interview brief is available.</p>}
         {path && !active && <p className={r.meta}>The interview brief is closed.</p>}
         {candidate?.resumeState === "none" && <p className={r.meta}>No résumé file is stored.</p>}
         {candidate?.resumeState === "deleted" && <p className={r.meta}>The résumé file was deleted.</p>}
@@ -487,9 +490,10 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
   const head = heads.find((h) => h.canonicalKey === key);
   const visits = head ? [
     ...recent.filter((row) => row.hod?.key === head.canonicalKey && row.mockStart).reverse(),
+    ...rows.filter((row) => row.date === today && row.status !== "confirmed" && row.hod?.key === head.canonicalKey && row.mockStart),
     ...headVisits(rows, head.canonicalKey, today),
   ].map((row) => headVisit(row, data, now)) : [];
-  const coming = visits.filter(({ row, mock, ended }) => !ended && (row.date >= today || mock));
+  const coming = visits.filter(({ row, mock, ended }) => !ended && row.status === "confirmed" && (row.date >= today || mock));
   const ended = visits.filter((visit) => visit.ended).reverse();
   const due = ended.filter((visit) => visit.due);
   const done = ended.filter((visit) => !visit.due).slice(0, 6);

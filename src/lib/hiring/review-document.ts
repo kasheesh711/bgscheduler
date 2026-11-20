@@ -99,7 +99,7 @@ ${penalty > 0 ? `<p class="label penalty"><span>Work-rights penalty</span><span 
 ${sheet.levels.filter((level) => level.max).map((level) => `<div class="metric">
 <p class="label"><span>${escape(level.level)}</span><span class="num">${escape(level.scored)} / ${escape(level.max)} · ${escape(level.percent)}%</span></p>
 ${bar(level.scored, level.max, 100, level.passPercent)}
-<p class="paperNote">${chip(level.passPercent === null ? "pass_mark_missing" : level.result)}${level.passPercent === null ? "" : `<span class="meta num">Pass mark ${escape(level.passPercent)}%</span>`}</p></div>`).join("")}</section>
+<p class="paperNote">${chip(level.result)}${level.passPercent === null ? "" : `<span class="meta num">Pass mark ${escape(level.passPercent)}%</span>`}</p></div>`).join("")}</section>
 <section><h2>Mock teaching rubric</h2><div class="rubric">
 ${RUBRIC.map(({ part, items }) => `<div><h3>${part}</h3>${items.map(([id, label]) => `<div class="metric">
 <p class="label"><span>${label}</span><span class="num">${escape(mock.rubric.items[id])} / ${ITEM_MAX}</span></p>

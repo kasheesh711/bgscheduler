@@ -8,6 +8,7 @@ const paper = computeSheet({ questions: [
   { id: "1", level: "Key Stage 3", marks: 18, max: 20, reason: "Correct method", attempted: true, readable: true },
   { id: "2", level: "AS / A-Level", marks: 11, max: 20, reason: "Partial method", attempted: true, readable: true },
   { id: "3", level: "IB SL / HL", marks: 7, max: 20, reason: "Partial method", attempted: true, readable: true },
+  { id: "4", level: "AP", marks: 0, max: 20, reason: "Blank", attempted: false, readable: true },
 ] }, new Map([["Key Stage 3", 80], ["AS / A-Level", 60]]));
 
 const packet: ReviewPacket = {
@@ -43,12 +44,14 @@ describe("review document", () => {
     const html = await reviewDocument(packet, "resume.pdf", "marked-exam.pdf");
     const summary = html.split("<h2>Assessment summary</h2>")[1].split("</section>")[0];
     const levels = html.split("<h2>Paper by level</h2>")[1].split("</section>")[0];
-    expect(summary).toContain("<strong>60%</strong>");
+    expect(summary).toContain("<strong>45%</strong>");
     expect(summary).toContain(">Pass</span>");
     expect(levels).toContain("18 / 20 · 90%");
     expect(levels).toContain("Pass mark 80%");
     expect(levels).toContain(">Below pass</span>");
-    expect(levels).toContain(">No pass mark</span>");
+    const rows = levels.split('<div class="metric">');
+    expect(rows.find((row) => row.includes(">IB SL / HL<"))).toContain(">No pass mark</span>");
+    expect(rows.find((row) => row.includes(">AP<"))).toContain(">Not done</span>");
   });
 
   it("shows the criteria without ATS bars for an old packet", async () => {

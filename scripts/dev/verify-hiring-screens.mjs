@@ -100,15 +100,17 @@ if (/roles=1|pipeline=1/.test(location.search)) {
     Object.assign(mock, { startTime: at(-4, 11), endTime: at(-4, 12) });
     Object.assign(payload.briefPaths, { v1m: "/hiring/brief/sample-token" });
     const endedMocks = [
-      ["peat-no-score", "Sample Mali", -3],
-      ["peat-tracker", "Sample Noi", -2],
-      ["peat-sent", "Sample Pim", -1],
-      ["peat-check", "Sample Fah", -1],
+      ["peat-no-score", "Sample Mali", -3, "confirmed"],
+      ["peat-tracker", "Sample Noi", -2, "confirmed"],
+      ["peat-sent", "Sample Pim", -1, "confirmed"],
+      ["peat-check", "Sample Fah", -1, "confirmed"],
+      ["peat-cancelled", "Sample Kwan", -2, "cancelled"],
+      ["peat-no-show", "Sample May", -1, "no_show"],
     ] as const;
-    for (const [id, name, day] of endedMocks) {
+    for (const [id, name, day, status] of endedMocks) {
       candidates.push(person(id, name, { seekApplicationId: null, stage: "mock_booked" }));
       const bookings = payload.bookings as unknown[];
-      bookings.push({ id, candidateId: id, kind: "mock", status: "confirmed", startTime: at(day, 11), endTime: at(day, 12), visitId: null, interviewerKey: "Peat", subjects: ["Mathematics"] });
+      bookings.push({ id, candidateId: id, kind: "mock", status, startTime: at(day, 11), endTime: at(day, 12), visitId: null, interviewerKey: "Peat", subjects: ["Mathematics"] });
       Object.assign(payload.briefPaths, { [id]: "/hiring/brief/sample-token" });
     }
   }
@@ -266,11 +268,12 @@ const realPacket = process.env.PACKET_HTML ? readFileSync(process.env.PACKET_HTM
   evidence: { name: "Reply Passed", subject: "Mathematics", call: "2026-11-03T02:00:00Z", recommendation: { head: "Kru Peat", reason: "Clear and warm lesson." },
     ats: { score: 86, weights: { degree: 10, subject: 10, curriculum: 20, teaching: 20, english: 20, prestige: 20 }, prestige: 0.5, penalty: 4,
       criteria: ["degree", "subject", "curriculum", "teaching", "english"].map((id) => ({ id, result: "met", evidence: "Taught IGCSE for 2 years" })) },
-    paper: { total: 74, max: 100, result: "passed", levels: [
+    paper: { total: 74, max: 110, result: "passed", levels: [
       { level: "Key Stage 3", scored: 18, max: 20, percent: 90, passPercent: 50, result: "passed" },
       { level: "IGCSE / GCSE", scored: 38, max: 40, percent: 95, passPercent: null, result: "pass_mark_missing" },
       { level: "AS / A-Level", scored: 11, max: 20, percent: 55, passPercent: 50, result: "passed" },
       { level: "IB SL / HL", scored: 7, max: 20, percent: 35, passPercent: 60, result: "not_passed" },
+      { level: "AP", scored: 0, max: 10, percent: 0, passPercent: null, result: "not_done" },
     ] },
     mock: { total: 84, rubric: { items: rubricItems, comments: "Clear explanations. Checked understanding often." } } },
 }, "/api/hiring/review/r1?file=resume", "/api/hiring/review/r1?file=paper"); } finally { process.chdir(cwd); } })();
@@ -875,6 +878,15 @@ try {
     await page.getByRole("button", { name: /Read review packet/ }).first().click();
     await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" }).waitFor();
     await page.waitForTimeout(300);
+    const packetRoot = page.frameLocator("iframe[title^='Review packet']").locator("html");
+    const assertPacketFits = async (width) => {
+      assert.ok(await page.locator("html").evaluate((root) => root.scrollWidth <= root.clientWidth), `Gift page scrolls sideways at ${width}px`);
+      assert.ok(await packetRoot.evaluate(async (root) => {
+        await root.ownerDocument.fonts.ready;
+        return root.scrollWidth <= root.clientWidth;
+      }), `Gift packet iframe scrolls sideways at ${width}px`);
+    };
+    await assertPacketFits(390);
     await shot(page, "gift-review-packet-phone");
     assert.deepEqual(await axeProblems(page), [], "axe on gift packet");
     await page.setViewportSize({ width: 320, height: 700 });
@@ -884,7 +896,7 @@ try {
     await shot(page, "gift-review-320");
     await page.getByRole("button", { name: /Read review packet/ }).first().click();
     await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" }).waitFor();
-    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), "Gift packet scrolls sideways at 320px");
+    await assertPacketFits(320);
     await shot(page, "gift-review-packet-320");
     await page.setViewportSize({ width: 1440, height: 900 });
   });
