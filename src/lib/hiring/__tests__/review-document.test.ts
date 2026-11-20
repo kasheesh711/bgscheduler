@@ -92,8 +92,9 @@ describe("review document", () => {
     const { score, criteria } = packet.evidence.ats;
     const html = await reviewDocument({ ...packet, evidence: { ...packet.evidence, ats: { score, criteria } } }, "resume.pdf", "marked-exam.pdf");
     const ats = html.split("<h2>Initial ATS assessment</h2>")[1].split("</section>")[0];
-    expect(ats).toContain("Degree");
-    expect(ats).toContain("<summary>Evidence</summary>");
+    expect([...ats.matchAll(/<summary>([^<]+)<\/summary>/g)].map((match) => match[1])).toEqual([
+      "Degree evidence", "Subject evidence", "Curriculum evidence", "Teaching evidence", "English evidence",
+    ]);
     expect(ats).toContain('<svg class="radar"');
     expect(ats).not.toContain('<svg class="stack"');
   });

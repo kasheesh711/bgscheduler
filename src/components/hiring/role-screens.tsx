@@ -412,7 +412,7 @@ function headVisit(row: Pick<RunSheetRow, "visitId" | "candidateId" | "date" | "
   const needsCheck = otherResult || (!!bookingResult && !checkingScores && !scored);
   const draft = data.decisions.some((d) => d.candidateId === row.candidateId && d.status === "draft");
   const due = ended && !!path && active && !decision && !uncertain && !needsCheck && !!subject && (scored || (!bookingResult && !draft));
-  const needsAction = due || (active && !!bookingResult && !scored);
+  const needsAction = due || (active && (needsCheck || (!!bookingResult && !scored)));
   return { row, candidate, active, path, ended, decision, scored, checkingScores, needsCheck, due, needsAction, status };
 }
 

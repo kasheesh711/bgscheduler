@@ -74,11 +74,15 @@ export async function latestReviewPacket(db: Database, id: string) {
 
 export async function reviewPacketValid(db: Database, id: string, packet: ReviewPacket | null) {
   if (!packet) return false;
+  let currentEvidence: Evidence;
   try {
-    return packet.fingerprint === fingerprint(await evidence(db, id, false));
-  } catch {
-    return false;
+    currentEvidence = await evidence(db, id, false);
+  } catch (error) {
+    if (error instanceof HiringError && error.status === 409) return false;
+    throw error;
   }
+  return packet.fingerprint === fingerprint(currentEvidence) &&
+    (!packet.evidence.ats.weights || isDeepStrictEqual(packet.evidence, currentEvidence));
 }
 
 export async function submitReview(db: Database, id: string, actor: string, input: { behavioral: string; offer: string }) {

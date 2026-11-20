@@ -244,7 +244,7 @@ ${ats.criteria.map(({ id, result, evidence }) => {
   if (!evidence && name) return "";
   const title = escape(name ?? id.replaceAll("_", " "));
   return `<div><strong>${title}</strong>${name ? "" : ` · ${escape(criterionResults[result] ?? result)}`}
-${evidence ? `<details aria-label="${title} evidence"><summary>Evidence</summary><p class="copy">${escape(evidence)}</p></details>` : ""}</div>`;
+${evidence ? `<details><summary>${title} evidence</summary><p class="copy">${escape(evidence)}</p></details>` : ""}</div>`;
 }).join("")}</div></section>
 <section><h2>Paper by level</h2>
 ${levels.map((level) => `<div class="metric">
