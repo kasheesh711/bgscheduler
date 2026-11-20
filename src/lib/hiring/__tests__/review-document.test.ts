@@ -38,6 +38,12 @@ describe("review document", () => {
     expect(parts.reduce((sum, part) => sum + Number(part[2]), 0)).toBe(100);
     expect(parts.reduce((sum, part) => sum + Number(part[1]), 0) - penalty).toBe(packet.evidence.ats.score);
     expect(ats).toContain(`<strong>Total</strong><strong class="num">${packet.evidence.ats.score.toFixed(1)} / 100</strong>`);
+    expect(ats.match(/<svg class="stack"/g)).toHaveLength(1);
+    expect(ats.match(/<polygon class="radar-grid"/g)).toHaveLength(4);
+    expect(ats.match(/<circle class="radar-dot"/g)).toHaveLength(5);
+    expect(ats).toContain(">Partial</tspan>");
+    expect(ats).toContain('fill="url(#lost-points)"');
+    expect(ats).toContain('<path class="penalty-marker"');
   });
 
   it("shows the stored pass result and each level's pass mark", async () => {
@@ -46,21 +52,51 @@ describe("review document", () => {
     const levels = html.split("<h2>Paper by level</h2>")[1].split("</section>")[0];
     expect(summary).toContain("<strong>45%</strong>");
     expect(summary).toContain(">Pass</span>");
+    expect(summary.match(/<path [^>]*class="gauge-track"/g)).toHaveLength(3);
+    expect(summary).not.toContain('class="target"');
+    expect(summary).toContain("Score guide");
     expect(levels).toContain("18 / 20 · 90%");
     expect(levels).toContain("Pass mark 80%");
     expect(levels).toContain(">Below pass</span>");
     const rows = levels.split('<div class="metric">');
-    expect(rows.find((row) => row.includes(">IB SL / HL<"))).toContain(">No pass mark</span>");
-    expect(rows.find((row) => row.includes(">AP<"))).toContain(">Not done</span>");
+    expect(rows.find((row) => row.includes(">Key Stage 3<"))).toContain('class="target" x1="317.6"');
+    const noPassMark = rows.find((row) => row.includes(">IB SL / HL<"));
+    expect(noPassMark).toContain(">No pass mark</span>");
+    expect(noPassMark).not.toContain('class="target"');
+    const notDone = rows.find((row) => row.includes(">AP<"));
+    expect(notDone).toContain(">Not done</span>");
+    expect(notDone).not.toContain('class="bullet-score"');
   });
 
-  it("shows the criteria without ATS bars for an old packet", async () => {
+  it("marks a shared paper pass mark on the paper gauge only", async () => {
+    const paper = { ...packet.evidence.paper,
+      levels: packet.evidence.paper.levels.map((level) => ({ ...level, passPercent: 80 })) };
+    const html = await reviewDocument({ ...packet, evidence: { ...packet.evidence, paper } }, "resume.pdf", "marked-exam.pdf");
+    const summary = html.split("<h2>Assessment summary</h2>")[1].split("</section>")[0];
+    expect(summary.match(/class="target"/g)).toHaveLength(1);
+    expect(summary).toMatch(/<h3>Paper<\/h3>[^]*class="target"[^>]*rotate\(-36 66 56\)/);
+    expect(summary).toContain("Pass mark 80%");
+  });
+
+  it("shows the radar and folded evidence for an old packet without weighted points", async () => {
     const { score, criteria } = packet.evidence.ats;
     const html = await reviewDocument({ ...packet, evidence: { ...packet.evidence, ats: { score, criteria } } }, "resume.pdf", "marked-exam.pdf");
     const ats = html.split("<h2>Initial ATS assessment</h2>")[1].split("</section>")[0];
     expect(ats).toContain("Degree");
     expect(ats).toContain("<summary>Evidence</summary>");
-    expect(ats).not.toContain('class="track"');
+    expect(ats).toContain('<svg class="radar"');
+    expect(ats).not.toContain('<svg class="stack"');
+  });
+
+  it("plots all mock items and prints the scores and averages", async () => {
+    const html = await reviewDocument(packet, "resume.pdf", "marked-exam.pdf");
+    const mock = html.split("<h2>Mock teaching rubric</h2>")[1].split("</section>")[0];
+    expect(mock.match(/<svg class="dot-plot"/g)).toHaveLength(10);
+    expect(mock.match(/<path class="dot"/g)).toHaveLength(10);
+    expect(mock.match(/<h3>/g)).toHaveLength(4);
+    expect(mock).toContain("Average 9 / 10");
+    expect(mock).toMatch(/Feedback Quality[^]*?<span class="num">9 \/ 10<\/span>/);
+    expect(mock).toContain("Clear explanations.");
   });
 
   it("escapes the name and criterion evidence", async () => {
