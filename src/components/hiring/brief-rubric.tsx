@@ -11,16 +11,18 @@ export function BriefRubric({ saved, form, url, onSent }: { saved: MockRubric | 
   const [items, setItems] = useState<Partial<Record<RubricItem, number>>>(() => Object.fromEntries(RUBRIC_ITEMS.flatMap((id) => (saved?.items[id] ? [[id, saved.items[id]]] : []))));
   const [comments, setComments] = useState(saved?.comments ?? "");
   const [state, setState] = useState<"idle" | "sending">("idle");
-  const [sentTotal, setSentTotal] = useState<number | null>(saved ? rubricTotals(saved).total : null);
+  const [editCount, setEditCount] = useState(0);
+  const [lastSent, setLastSent] = useState(() => saved ? { total: rubricTotals(saved).total, editCount: 0 } : null);
   const [error, setError] = useState("");
   if (form === "wait") return <p className={c.note}>The score form is here after the mock lesson ends. Refresh this page then.</p>;
   if (form === "closed") return <p className={c.note}>Scores for this mock are already recorded. Ask BeGifted admin to change them.</p>;
   const scored = RUBRIC_ITEMS.filter((id) => items[id]).length;
   const complete = scored === RUBRIC_ITEMS.length;
+  const sentTotal = lastSent?.editCount === editCount ? lastSent.total : null;
   const disabled = !complete || state === "sending" || sentTotal !== null;
   function selectScore(id: RubricItem, score: number) {
     setItems({ ...items, [id]: score });
-    setSentTotal(null);
+    setEditCount((count) => count + 1);
   }
   async function send() {
     setState("sending");
@@ -30,7 +32,7 @@ export function BriefRubric({ saved, form, url, onSent }: { saved: MockRubric | 
       const body = (await response.json().catch(() => ({}))) as { total?: number; error?: string };
       if (!response.ok || typeof body.total !== "number") setError(body.error ?? "The scores were not saved. Try again.");
       else {
-        setSentTotal(body.total);
+        setLastSent({ total: body.total, editCount });
         onSent();
       }
     } catch {
@@ -48,13 +50,13 @@ export function BriefRubric({ saved, form, url, onSent }: { saved: MockRubric | 
     >
       <p className={c.note}>Tap a score. Use Other for 9, 8, 6, 5, 3 or 2.</p>
       {RUBRIC.map(({ part, items: partItems }) => (
-        <fieldset key={part} className={c.field}>
+        <fieldset key={part} className={c.rubricPart}>
           <legend className={c.factLabel}>{part}</legend>
           {partItems.map(([id, label]) => {
             const labelId = `${rubricId}-${id}`;
             const selected = items[id] ?? 0;
             return (
-              <div key={id} className={c.field}>
+              <div key={id} className={c.criterionScore}>
                 <span id={labelId}>{label}</span>
                 <div className={c.scoreRow}>
                   <div className={c.scoreTiles} role="radiogroup" aria-labelledby={labelId}>
@@ -99,26 +101,27 @@ export function BriefRubric({ saved, form, url, onSent }: { saved: MockRubric | 
           value={comments}
           onChange={(event) => {
             setComments(event.target.value);
-            setSentTotal(null);
+            setEditCount((count) => count + 1);
           }}
         />
       </label>
-      {error && (
-        <p role="alert" className={c.alert}>
-          {error}
-        </p>
-      )}
       {sentTotal !== null && (
         <p role="status" className={c.success}>
           Scores sent. Total {sentTotal} / {RUBRIC_ITEMS.length * ITEM_MAX}. You can change a score and send again while this link works.
         </p>
       )}
-      <p className={c.note}>{scored} of {RUBRIC_ITEMS.length} scored</p>
-      <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
-      <button type="submit" className={c.button} disabled={disabled}>
-        {state === "sending" ? "Sending…" : "Send scores"}
-      </button>
-      {!complete && <p className={c.note}>Score all {RUBRIC_ITEMS.length} items to send.</p>}
+      <div className={c.field} data-sticky={sentTotal === null ? "" : undefined}>
+        {error && <p role="alert" className={c.alert}>{error}</p>}
+        <p className={c.note}>{scored} of {RUBRIC_ITEMS.length} scored</p>
+        <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
+        {lastSent && sentTotal === null && (
+          <p className={c.note} role="status">Unsaved changes. Send again to update your scores.</p>
+        )}
+        <button type="submit" className={c.button} disabled={disabled}>
+          {state === "sending" ? "Sending…" : "Send scores"}
+        </button>
+        {!complete && <p className={c.note}>Score all {RUBRIC_ITEMS.length} items to send.</p>}
+      </div>
     </form>
   );
 }

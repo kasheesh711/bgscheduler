@@ -1,3 +1,6 @@
+.desktop { display: contents; }
+.mobile { display: none; }
+
 .tools {
   display: flex;
   flex-wrap: wrap;
@@ -59,6 +62,34 @@
 
 .steps button[aria-pressed="true"] span {
   color: inherit;
+}
+
+@media (width < 720px) {
+  .desktop { display: none; }
+  .mobile { display: block; flex: 0 0 100%; min-width: 0; }
+  .mobile > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 44px;
+    padding: 0 12px;
+    border-radius: 8px;
+    background: var(--tint);
+    font-weight: 600;
+    list-style: none;
+    cursor: pointer;
+  }
+  .mobile > summary::-webkit-details-marker { display: none; }
+  .mobile > summary::after {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(45deg);
+  }
+  .mobile[open] > summary::after { transform: rotate(225deg); }
+  .tools.tools > button { min-width: 44px; min-height: 44px; }
 }
 
 @media (min-width: 720px) {

@@ -692,10 +692,16 @@ try {
     assert.ok(await tools.getByRole("button", { name: "Visit schedule" }).isVisible());
     assert.equal(await workflow.getByRole("button", { name: "HR calls" }).getAttribute("aria-pressed"), "true");
     await page.getByRole("region", { name: "Candidates for HR to call" }).waitFor();
+    const menu = page.locator("header details > summary");
     for (const width of [1440, 768, 390]) {
       await page.setViewportSize({ width, height: 900 });
-      assert.ok(await workflow.evaluate((nav) => nav.scrollWidth <= nav.clientWidth));
       await shot(page, `hiring-workflow-${width}`);
+      if (width === 390) {
+        assert.equal(await workflow.isVisible(), false);
+        assert.equal(await menu.textContent(), "2 HR calls");
+        await menu.press("Enter");
+      }
+      assert.ok(await workflow.evaluate((nav) => nav.scrollWidth <= nav.clientWidth));
     }
     const paper = workflow.getByRole("button", { name: "Paper test" });
     await paper.focus();
@@ -703,15 +709,18 @@ try {
     await page.getByRole("region", { name: "Mock and paper" }).waitFor();
     assert.match(page.url(), /view=assessment$/);
     await shot(page, "hiring-paper-phone");
+    await menu.click();
     await workflow.getByRole("button", { name: "Mock teaching" }).click();
     await page.getByRole("group", { name: "Choose your name" }).waitFor();
     await shot(page, "hiring-mock-phone");
+    await menu.click();
     await workflow.getByRole("button", { name: "Final review" }).click();
     await page.getByRole("button", { name: "Open final review" }).click();
     const assessment = page.getByLabel("Behavioral assessment from the pre-screen call");
     await assessment.waitFor();
     assert.equal(await assessment.inputValue(), "Gave a specific example of adapting a lesson.");
     await shot(page, "hiring-review-phone");
+    await menu.click();
     await workflow.getByRole("button", { name: "Offer & signing" }).click();
     await page.getByText(/Sent Thu 19 Nov, 09:00/).waitFor();
     await page.getByRole("button", { name: "Check contract signing" }).click();
