@@ -12,7 +12,7 @@ import {
   type AssessmentRange,
   type AssessmentRow,
 } from "@/lib/hiring/assessment-view";
-import { FinalReview } from "./final-review";
+import { FinalReview, reviewBlocks } from "./final-review";
 import { RUBRIC, computeSheet, passRulesFor, rubricTotals, type LevelResult, type RubricItem } from "@/lib/hiring/marking-sheet";
 import { SUBJECTS, ZONE, type Subject } from "@/lib/hiring/model";
 import { markAgain, runMarking, type ResultKind } from "./assessment-setup";
@@ -596,8 +596,8 @@ function DecisionBox({ candidate, data, command, busy }: { candidate: HiringCand
         </dl>
       )}
       {email?.error && <p className={css.errorText}>{email.error}</p>}
-      {hasReview ? (data.reviewAccess?.hr || data.reviewAccess?.gift ? <FinalReview id={candidate.id}
-        pauseNote={!data.writeGate ? "Sign-off works only on the live site." : !data.config.enabled || !data.config.deliveryEnabled ? "Automation or Messages is off, so sign-off will be refused. Ask Kevin to turn both on." : undefined} /> : !sent && <p>Waiting for HR and Gift’s final review.</p>) : draft?.decision === "reject" && !sent ? (
+      {hasReview ? (data.reviewAccess?.hr || data.reviewAccess?.gift ? <FinalReview key={candidate.id} id={candidate.id}
+        {...reviewBlocks(data.writeGate, data.config, candidate.id)} /> : !sent && <p>Waiting for HR and Gift’s final review.</p>) : draft?.decision === "reject" && !sent ? (
         <DraftEditor key={draft.id} draft={draft} to={candidate.email} data={data} command={command} busy={busy} />
       ) : !sent && (
         <>

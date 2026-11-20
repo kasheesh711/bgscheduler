@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { rubricTotals } from "@/lib/hiring/marking-sheet";
 import { ANSWER_LABELS } from "@/lib/hiring/model";
 import type { briefView } from "@/lib/hiring/service";
 import { BriefDecision } from "./brief-decision";
@@ -24,7 +25,8 @@ export const BriefGone = () => (
 
 /** The interviewer's page: who they will meet, the résumé, the form answers, and the interviewer's own score form. No contact details and no AI scores. */
 export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: { brief: Brief; resumeUrl: string; rubricUrl: string; decisionUrl: string }) {
-  const [sentScores, setSentScores] = useState(false);
+  const [editCount, setEditCount] = useState(0);
+  const [lastSent, setLastSent] = useState(() => brief.rubric ? { total: rubricTotals(brief.rubric).total, editCount: 0 } : null);
   const facts: [string, string][] = [
     ["Subject", brief.subject],
     ...(brief.exam ? ([["Exam", `${brief.exam} (Bangkok)`]] as [string, string][]) : []),
@@ -85,12 +87,25 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
       </details>
       <section id="scores" className={c.facts} tabIndex={-1}>
         <h2 className={c.stepTitle}>Mock lesson scores</h2>
-        <BriefRubric saved={brief.rubric} form={brief.form} url={rubricUrl} onSent={() => setSentScores(true)} />
+        <BriefRubric
+          saved={brief.rubric}
+          form={brief.form}
+          url={rubricUrl}
+          editCount={editCount}
+          lastSent={lastSent}
+          onEdit={() => setEditCount((count) => count + 1)}
+          onSent={(total) => setLastSent({ total, editCount })}
+        />
       </section>
       {brief.form !== "wait" && (
         <section id="recommendation" className={c.facts} tabIndex={-1}>
           <h2 className={c.stepTitle}>Your recommendation</h2>
-          <BriefDecision sent={brief.decision} url={decisionUrl} scores={brief.rubric || sentScores ? "own" : brief.form === "closed" ? "recorded" : null} />
+          <BriefDecision
+            sent={brief.decision}
+            url={decisionUrl}
+            scores={lastSent ? "own" : brief.form === "closed" ? "recorded" : null}
+            unsent={lastSent !== null && lastSent.editCount !== editCount}
+          />
         </section>
       )}
     </>

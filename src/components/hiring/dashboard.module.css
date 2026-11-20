@@ -446,17 +446,23 @@
 .surface .secondary:hover:not(:disabled) { background: var(--tint); }
 .surface .stopButton { color: var(--danger); font-weight: 500; }
 
-.finalReview :is(.primary, .secondary) { min-height: 44px; }
+.surface .finalReview :is(.primary, .secondary) { min-width: 44px; min-height: 44px; max-width: 100%; text-align: center; overflow-wrap: anywhere; }
+.surface .finalReview :is(.primary, .secondary):disabled { opacity: 1; border: 1px solid #887f74; background: #f6f1e9; color: #5c554c; }
+.finalReview .inspectorHeading:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.finalReview .fieldLabel { margin-top: 8px; }
+.finalReview .textarea { min-height: 44px; }
+.reviewStatus { display: flex; align-items: center; gap: 8px; margin-top: 4px; color: var(--support); }
+.reviewStatus::before { content: ""; flex: 0 0 7px; height: 7px; border-radius: 50%; background: #d57466; }
 .packetActions { margin-block: 8px 12px; }
 .packetActions a { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 .surface :is(.packetActions, .signOffActions) .primary { background: #172b4d; color: #fff; }
 .surface :is(.packetActions, .signOffActions) .primary:hover:not(:disabled) { background: #243d60; }
-.signOffActions { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; }
-.signOffActions > div { display: grid; gap: 4px; }
+.signOffActions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin-top: 8px; }
+.signOffActions > div { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 4px; }
 .surface :is(.packetActions, .signOffActions) .secondary { margin-top: 0; }
 .surface .signOffActions .secondary { justify-self: stretch; border-color: var(--danger); color: var(--danger); }
 @media (width < 520px) {
-  .signOffActions { flex-direction: column; align-items: stretch; }
+  .packetActions, .signOffActions { flex-direction: column; align-items: stretch; }
 }
 
 /* Setup */
@@ -772,6 +778,15 @@
 .skeletonLine { height: 44px; border-radius: 6px; }
 /* The title block has a fixed basis, so whether the view switch wraps does not depend on the subtitle that loads later. */
 .topbar > div:first-child { flex: 1 1 60ch; min-width: 0; }
+.topbar[data-heads] .viewSwitch button { min-height: 44px; }
+@media (width < 720px) {
+  .topbar[data-heads] { gap: 8px; padding-inline: 16px; }
+  .topbar[data-heads] > div:first-child { flex: 1 1 0; }
+  .topbar[data-heads] .viewSwitch { align-self: flex-start; }
+  .topbar[data-heads] .viewSwitch button { padding-inline: 10px; }
+  .topbar[data-heads] .notice { order: 1; flex-basis: 100%; }
+  .topbar[data-heads] .notice:empty { display: none; }
+}
 /* Setup rows: the action never wraps per letter; inputs shrink instead; a status value keeps its word whole. */
 .interviewerRow > input { min-width: 0; }
 .interviewerRow .inlineLink { white-space: nowrap; }

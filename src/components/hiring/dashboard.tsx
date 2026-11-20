@@ -290,7 +290,7 @@ export function HiringDashboard() {
         <ol className={nav.steps} role="list">
           {STEPS.map((name, index) => (
             <li key={name}>
-              <button type="button" aria-pressed={view === name} onClick={() => setView(name)}>
+              <button type="button" data-review={name === "review" ? "" : undefined} aria-pressed={view === name} onClick={() => setView(name)}>
                 <span aria-hidden="true">{index + 1}</span>
                 {VIEWS[name]}
               </button>
@@ -308,7 +308,7 @@ export function HiringDashboard() {
 
   return (
     <div className={`${css.surface} ${serif.variable}`}>
-      <header className={css.topbar} data-compact={view === "hr" ? "" : undefined}>
+      <header className={css.topbar} data-compact={view === "hr" || view === "heads" ? "" : undefined} data-heads={view === "heads" ? "" : undefined}>
         <div>
           <h1 className={css.title}>
             Tutor <em>hiring</em>
@@ -345,6 +345,7 @@ export function HiringDashboard() {
             <div className={nav.desktop}>{navigation}</div>
             <details
               className={nav.mobile}
+              data-review={view === "review" ? "" : undefined}
               onKeyDown={(event) => {
                 if (event.key !== "Escape" || !event.currentTarget.open) return;
                 event.preventDefault();
@@ -363,7 +364,7 @@ export function HiringDashboard() {
           </>
         )}
       </header>
-      {view !== "hr" && <p className={css.purpose}>{PURPOSE[view]}</p>}
+      {view !== "hr" && <p className={css.purpose}>{view === "review" && data?.reviewAccess?.gift && !data.reviewAccess.hr ? "Read the packet and sign off." : PURPOSE[view]}</p>}
       {error && view !== "setup" && (
         <p role="alert" className={css.alert}>
           {error}
