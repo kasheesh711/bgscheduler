@@ -10,7 +10,8 @@ type Review = {
   callNotes: string;
   appointment: string | null;
   packet: { id: string; behavioral: string; offer: string } | null;
-  packetValid: boolean;
+  /** null: the server could not check the packet just now. */
+  packetValid: boolean | null;
 };
 
 export function reviewBlocks(writeGate: boolean, config: Parameters<typeof contractTestAllowed>[0], id: string) {
@@ -65,7 +66,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   const [error, setError] = useState<{ text: string; retry?: boolean; packetLoad?: boolean }>();
   const packet = review?.packet;
   const openPage = packetPage?.id === packet?.id ? packetPage : undefined;
-  const stale = !!packet && review?.packetValid !== true;
+  // A signed or closed review never shows the stale alert; the contract-signing card neither.
+  const stale = !!packet && !signing && !["hired", "rejected", "stopped"].includes(review?.stage ?? "") && review?.packetValid !== true;
   const viewed = !!packet && !stale && packet.id === viewedId;
 
   const load = useCallback(async (afterSave = false, previousPacket?: string) => {
@@ -101,6 +103,11 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
     setPacketPage(undefined);
     readButton.current?.focus();
   }, []);
+
+  // An open reader leaves no stray history entry when the card unmounts.
+  useEffect(() => () => {
+    if (window.history.state?.hiringReviewPacket === controlId) window.history.back();
+  }, [controlId]);
 
   const closePacket = useCallback(() => {
     if (!openPage) return;
@@ -242,7 +249,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
         : <button type="button" className={css.secondary} onClick={() => void act()}>{signing ? "Check contract signing" : "Open final review"}</button>)}
       {(awaitingSignOff || stale) && packet && <>
         {awaitingSignOff && <p className={css.reviewStatus}>{stale ? "Waiting for a new packet from HR" : "Waiting for your sign-off"}</p>}
-        <p id={instruction} className={css.inspectorMeta} role={stale ? "alert" : undefined}>{stale ? "The evidence changed. Ask HR to send a new packet."
+        <p id={instruction} className={css.inspectorMeta} role={stale ? "alert" : undefined}>{stale ? (review?.packetValid === null ? "Could not check the packet just now. Check again." : "The evidence changed. Ask HR to send a new packet.")
           : sharedBlock ?? (viewed ? "Approve, or write a note and reject." : "Read the packet first.")}</p>
         {stale && <button type="button" className={`${css.secondary} min-h-11 min-w-11`} disabled={!!busy} onClick={() => void act()}>Check again</button>}
       </>}

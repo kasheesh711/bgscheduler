@@ -72,14 +72,16 @@ export async function latestReviewPacket(db: Database, id: string) {
   return row ? { id: row.id, author: row.actor, at: row.createdAt, ...(row.detail as unknown as Packet) } : null;
 }
 
-export async function reviewPacketValid(db: Database, id: string, packet: ReviewPacket | null) {
+export async function reviewPacketValid(db: Database, id: string, packet: ReviewPacket | null): Promise<boolean | null> {
   if (!packet) return false;
   let currentEvidence: Evidence;
   try {
     currentEvidence = await evidence(db, id, false);
   } catch (error) {
     if (error instanceof HiringError && error.status === 409) return false;
-    throw error;
+    // Unknown, not stale: the page keeps sign-off locked and asks to check again.
+    console.error(`[hiring] packet check failed: ${error instanceof Error ? error.name : "unknown"}`);
+    return null;
   }
   return packet.fingerprint === fingerprint(currentEvidence) &&
     (!packet.evidence.ats.weights || isDeepStrictEqual(packet.evidence, currentEvidence));

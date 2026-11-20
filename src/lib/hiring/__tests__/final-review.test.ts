@@ -70,10 +70,11 @@ it("returns false when the head recommends No", async () => {
 });
 
 it.each([new Error("Could not read the database."), new HiringError(404, "Candidate not found.")])(
-  "passes through an unexpected evidence error: %s",
+  "reports an unexpected evidence error as unknown (null), not stale: %s",
   async (error) => {
     const { db, packet } = reviewFixture();
     vi.mocked(candidateById).mockRejectedValueOnce(error);
-    await expect(reviewPacketValid(db, "candidate", packet)).rejects.toBe(error);
+    vi.spyOn(console, "error").mockImplementationOnce(() => {});
+    await expect(reviewPacketValid(db, "candidate", packet)).resolves.toBeNull();
   },
 );
