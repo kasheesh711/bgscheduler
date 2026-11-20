@@ -133,7 +133,14 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
         if (body.action === "sign") {
           const current = await fetchReview(url);
           if (current.packet?.id !== body.packetId || current.packetValid !== true) {
-            setReview((previous) => previous && { ...previous, packetValid: false });
+            if (current.packet && current.packetValid === true) {
+              setReview(current);
+              setBehavioral(current.packet.behavioral);
+              setOffer(current.packet.offer);
+              setError({ text: "HR sent a new packet. Read it again." });
+            } else {
+              setReview((previous) => previous && { ...previous, packetValid: false });
+            }
             setViewedId(undefined);
             closePacket();
             return;

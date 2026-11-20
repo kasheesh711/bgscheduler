@@ -412,7 +412,7 @@ function headVisit(row: Pick<RunSheetRow, "visitId" | "candidateId" | "date" | "
   const needsCheck = otherResult || (!!bookingResult && !checkingScores && !scored);
   const draft = data.decisions.some((d) => d.candidateId === row.candidateId && d.status === "draft");
   const due = ended && !!path && active && !decision && !uncertain && !needsCheck && !!subject && (scored || (!bookingResult && !draft));
-  const missingOutcome = ended && !!confirmed && active && !path && !decision && !uncertain && !needsCheck && !bookingResult && !draft;
+  const missingOutcome = ended && !!confirmed && active && !path && !decision && !uncertain && !needsCheck && (scored || (!bookingResult && !draft));
   const needsAction = due || missingOutcome || (active && (needsCheck || (!!bookingResult && !scored)));
   return { row, candidate, active, path, ended, decision, scored, checkingScores, needsCheck, due, missingOutcome, needsAction, status };
 }
@@ -448,7 +448,9 @@ function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisi
         </p>
         {checkingScores ? <p className={r.meta}>Scores are being checked.</p>
           : needsCheck && <p className={r.meta}>Ask admin to check the scores.</p>}
-        {row.mockStart && !path && !status && <p className={r.meta}>{missingOutcome ? "Ask admin to record the outcome" : "No interview brief is available."}</p>}
+        {row.mockStart && !path && !status && <p className={r.meta}>{missingOutcome
+          ? (scored ? "Ask admin to record the recommendation" : "Ask admin to record the outcome")
+          : "No interview brief is available."}</p>}
         {path && !active && <p className={r.meta}>The interview brief is closed.</p>}
         {candidate?.resumeState === "none" && <p className={r.meta}>No résumé file is stored.</p>}
         {candidate?.resumeState === "deleted" && <p className={r.meta}>The résumé file was deleted.</p>}
@@ -503,7 +505,8 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
   ].sort((a, b) => (a.row.date + clock(a.row)).localeCompare(b.row.date + clock(b.row))) : [];
   const coming = visits.filter((visit) => !visit.ended);
   const since = shiftDate(today, -56);
-  const ended = visits.filter(({ row, ended, missingOutcome }) => ended && (row.date >= since || missingOutcome)).reverse();
+  const ended = visits.filter(({ row, ended, missingOutcome, due, scored }) =>
+    ended && (row.date >= since || missingOutcome || (due && scored))).reverse();
   const needsAction = ended.filter((visit) => visit.needsAction);
   const done = ended.filter((visit) => !visit.needsAction).slice(0, 6);
   return (
