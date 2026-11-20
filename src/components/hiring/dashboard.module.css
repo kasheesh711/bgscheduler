@@ -67,6 +67,10 @@
 .viewSwitch { display: flex; flex-wrap: wrap; max-width: 100%; gap: 2px; padding: 2px; border-radius: 18px; background: var(--tint); }
 .surface .viewSwitch button { padding: 5px 14px; white-space: nowrap; border-radius: 999px; font-weight: 500; color: var(--support); transition: color 150ms, background-color 150ms; }
 .surface .viewSwitch button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+@media (width < 720px) {
+  .statusSubtitle { display: none; }
+  .surface .viewSwitch button { min-height: 44px; }
+}
 .alert { margin: 8px 24px 0; padding: 8px 12px; border-radius: 8px; background: #fdecec; color: var(--danger); }
 .loading { padding: 32px 24px; color: var(--muted); }
 

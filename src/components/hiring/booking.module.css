@@ -231,6 +231,13 @@
 .preScreen[open] > summary::after {
   transform: rotate(225deg);
 }
+.rubricPart,
+.criterionScore {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+.criterionScore { gap: 2px; }
 .scoreRow {
   display: flex;
   flex-wrap: wrap;
@@ -240,7 +247,7 @@
 }
 .scoreTiles {
   display: grid;
-  grid-template-columns: repeat(4, minmax(48px, 1fr));
+  grid-template-columns: repeat(4, minmax(44px, 1fr));
   gap: 6px;
   flex: 1 1 210px;
 }
@@ -248,8 +255,7 @@
   position: relative;
   display: grid;
   place-items: center;
-  aspect-ratio: 1;
-  min-height: 48px;
+  min-height: 44px;
   border: 1px solid var(--line);
   border-radius: 12px;
   font-weight: 600;
@@ -270,6 +276,14 @@
   border-radius: 12px;
   font-size: 14px;
 }
+.field[data-sticky] {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding: 8px 12px;
+  background: var(--paper);
+  box-shadow: 0 -4px 12px rgb(20 33 61 / 0.08);
+}
 .scoreProgress {
   appearance: none;
   width: 100%;
@@ -277,11 +291,11 @@
   overflow: hidden;
   border: 0;
   border-radius: 999px;
-  background: var(--paper);
+  background: var(--line);
   color: var(--ink);
 }
 .scoreProgress::-webkit-progress-bar {
-  background: var(--paper);
+  background: var(--line);
 }
 .scoreProgress::-webkit-progress-value {
   background: var(--ink);
@@ -846,4 +860,9 @@ textarea.input {
   display: inline;
   margin: 0;
   font: inherit;
+}
+
+/* Keyboard focus never lands under the sticky Send block. */
+.page :is(input, select, textarea, button):focus-visible {
+  scroll-margin-bottom: 200px;
 }

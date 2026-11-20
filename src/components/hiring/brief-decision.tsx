@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import c from "./booking.module.css";
 
 type Decision = "hire" | "reject";
@@ -12,6 +12,8 @@ export function BriefDecision({ sent, url, scored }: { sent: Decision | null; ur
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const reasonHintId = useId();
+  const reasonTooShort = reason.trim().length < 5;
   async function send(decision: Decision) {
     setBusy(true);
     setError("");
@@ -27,6 +29,7 @@ export function BriefDecision({ sent, url, scored }: { sent: Decision | null; ur
   }
   return (
     <div className={c.field}>
+      {scored && <p className={c.note}>Your recommendation uses your last sent scores.</p>}
       {done && (
         <p role="status" className={c.note}>
           Recommendation recorded: <strong>{LABEL[done]}</strong>. {done === "hire" ? "HR will prepare the review for Gift." : "The candidate’s rejection email is queued."}
@@ -37,14 +40,15 @@ export function BriefDecision({ sent, url, scored }: { sent: Decision | null; ur
           <p className={c.note}>Yes sends the application to HR. No queues a rejection email.</p>
           <label className={c.field}>
             Reason (required for No)
-            <textarea className={c.input} rows={2} maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} />
+            <textarea className={c.input} rows={2} maxLength={1000} value={reason} aria-describedby={scored && reasonTooShort ? reasonHintId : undefined} onChange={(event) => setReason(event.target.value)} />
           </label>
+          {scored && reasonTooShort && <p id={reasonHintId} className={c.note}>Write at least 5 characters to choose No.</p>}
           {!scored && <p className={c.note}>Send your scores first.</p>}
           <div className={c.decisionActions}>
             <button type="button" className={c.button} disabled={!scored || busy} onClick={() => void send("hire")}>
               Yes, send to HR
             </button>
-            <button type="button" className={`${c.ghost} ${c.reject}`} disabled={!scored || busy || reason.trim().length < 5} onClick={() => void send("reject")}>
+            <button type="button" className={`${c.ghost} ${c.reject}`} disabled={!scored || busy || reasonTooShort} onClick={() => void send("reject")}>
               No, reject
             </button>
           </div>

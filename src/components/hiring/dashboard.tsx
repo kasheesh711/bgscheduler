@@ -274,6 +274,30 @@ export function HiringDashboard() {
       setSelected(id);
       setView("overview");
     });
+  const step = STEPS.findIndex((name) => name === view) + 1;
+  const navigation = (
+    <>
+      <nav className={nav.tools} aria-label="Hiring tools">
+        {TOOLS.map((name) => (
+          <button key={name} type="button" aria-pressed={view === name} onClick={() => setView(name)}>
+            {VIEWS[name]}
+          </button>
+        ))}
+      </nav>
+      <nav className={nav.workflow} aria-label="Hiring steps">
+        <ol className={nav.steps} role="list">
+          {STEPS.map((name, index) => (
+            <li key={name}>
+              <button type="button" aria-pressed={view === name} onClick={() => setView(name)}>
+                <span aria-hidden="true">{index + 1}</span>
+                {VIEWS[name]}
+              </button>
+            </li>
+          ))}
+        </ol>
+      </nav>
+    </>
+  );
 
   return (
     <div className={`${css.surface} ${serif.variable}`}>
@@ -283,7 +307,7 @@ export function HiringDashboard() {
             Tutor <em>hiring</em>
           </h1>
           {/* Always one line, so the tabs below do not move down when the data arrives. */}
-          <p className={css.subtitle}>
+          <p className={role ? css.subtitle : `${css.subtitle} ${css.statusSubtitle}`}>
             {role ? (
               VIEWS[view]
             ) : data ? (
@@ -308,32 +332,20 @@ export function HiringDashboard() {
             </button>
           </div>
         ) : (
-          <nav className={nav.tools} aria-label="Hiring tools">
-            {TOOLS.map((name) => (
-              <button
-                key={name}
-                type="button"
-                aria-pressed={view === name}
-                onClick={() => setView(name)}
-              >
-                {VIEWS[name]}
-              </button>
-            ))}
-          </nav>
-        )}
-        {!role && (
-          <nav className={nav.workflow} aria-label="Hiring steps">
-            <ol className={nav.steps} role="list">
-              {STEPS.map((name, index) => (
-                <li key={name}>
-                  <button type="button" aria-pressed={view === name} onClick={() => setView(name)}>
-                    <span aria-hidden="true">{index + 1}</span>
-                    {VIEWS[name]}
-                  </button>
-                </li>
-              ))}
-            </ol>
-          </nav>
+          <>
+            <div className={nav.desktop}>{navigation}</div>
+            <details
+              className={nav.mobile}
+              onClick={(event) => {
+                if (!(event.target instanceof Element) || !event.target.closest("button")) return;
+                event.currentTarget.open = false;
+                event.currentTarget.querySelector("summary")?.focus();
+              }}
+            >
+              <summary>{step ? `${step} ${VIEWS[view]}` : VIEWS[view]}</summary>
+              {navigation}
+            </details>
+          </>
         )}
       </header>
       {view !== "hr" && <p className={css.purpose}>{PURPOSE[view]}</p>}
