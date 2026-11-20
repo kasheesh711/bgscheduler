@@ -182,7 +182,7 @@ function ReviewRecommendations({ data, onOpenResults, readOnly, reload }: {
             <div className={reload && d.decision === "hire" ? r.reviewActions : r.actions}>
               {!readOnly && d.decision === "hire" && d.candidateId && (data.reviewAccess?.hr || data.reviewAccess?.gift)
                 ? <FinalReview id={d.candidateId} autoLoad={data.reviewAccess?.gift && !data.reviewAccess.hr}
-                    sendingPaused={!data.writeGate || !data.config.enabled || !data.config.deliveryEnabled} onChanged={reload} />
+                    pauseNote={!data.writeGate ? "Sign-off works only on the live site." : !data.config.enabled || !data.config.deliveryEnabled ? "Automation or Messages is off, so sign-off will be refused. Ask Kevin to turn both on." : undefined} onChanged={reload} />
                 : <button type="button" className={r.big} disabled={readOnly} onClick={() => onOpenResults(d.candidateId)}>Open assessment</button>}
             </div>
           </article>

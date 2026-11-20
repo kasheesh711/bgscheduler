@@ -11,11 +11,12 @@ type Review = {
   packet: { id: string; behavioral: string; offer: string } | null;
 };
 
-export function FinalReview({ id, signing = false, autoLoad = false, sendingPaused = false, onChanged }: {
+export function FinalReview({ id, signing = false, autoLoad = false, pauseNote, onChanged }: {
   id: string;
   signing?: boolean;
   autoLoad?: boolean;
-  sendingPaused?: boolean;
+  /** Why sign-off would be refused now, from the dashboard payload; the server still decides. */
+  pauseNote?: string;
   onChanged?: () => Promise<void>;
 }) {
   const url = `/api/hiring/review/${id}`;
@@ -29,7 +30,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, sendingPaus
 
   const load = useCallback(async () => {
     const response = await fetch(url, { cache: "no-store" });
-    const data = await response.json();
+    const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error ?? "Could not open the review.");
     setReview(data);
     setBehavioral(data.packet?.behavioral ?? data.callNotes ?? "");
@@ -96,7 +97,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, sendingPaus
             <textarea className={css.textarea} rows={2} maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} />
           </label>
           {!viewed && <p className={css.inspectorMeta}>Open the review packet first.</p>}
-          {sendingPaused && <p className={css.warnWord}>Sending is paused. Ask Kevin to turn on Automation and Messages before you sign off.</p>}
+          {pauseNote && <p className={css.warnWord}>{pauseNote}</p>}
           <div className={css.signOffActions}>
             <button type="button" className={css.primary} disabled={busy || !viewed} onClick={() => {
               if (window.confirm("Approve this offer letter and send it to the candidate?"))
@@ -111,7 +112,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, sendingPaus
             </div>
           </div>
         </>
-      ) : <p>Waiting for HR to send the packet.</p>)}
+      ) : <p>Waiting for HR to send the packet. <button type="button" className={css.secondary} disabled={busy} onClick={() => void act()}>Check again</button></p>)}
       {closed && <p>{review.stage === "hired" ? (review.appointment
         ? `Contract signing booked for ${new Date(review.appointment).toLocaleString("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium", timeStyle: "short" })} (Bangkok).`
         : review.packet ? "Offer approved. Waiting for the contract booking." : "There is no contract booking on record.") : `Application ${review.stage}.`}</p>}

@@ -597,7 +597,7 @@ function DecisionBox({ candidate, data, command, busy }: { candidate: HiringCand
       )}
       {email?.error && <p className={css.errorText}>{email.error}</p>}
       {hasReview ? (data.reviewAccess?.hr || data.reviewAccess?.gift ? <FinalReview id={candidate.id}
-        sendingPaused={!data.writeGate || !data.config.enabled || !data.config.deliveryEnabled} /> : !sent && <p>Waiting for HR and Gift’s final review.</p>) : draft?.decision === "reject" && !sent ? (
+        pauseNote={!data.writeGate ? "Sign-off works only on the live site." : !data.config.enabled || !data.config.deliveryEnabled ? "Automation or Messages is off, so sign-off will be refused. Ask Kevin to turn both on." : undefined} /> : !sent && <p>Waiting for HR and Gift’s final review.</p>) : draft?.decision === "reject" && !sent ? (
         <DraftEditor key={draft.id} draft={draft} to={candidate.email} data={data} command={command} busy={busy} />
       ) : !sent && (
         <>
