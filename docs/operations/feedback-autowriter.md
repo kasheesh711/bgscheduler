@@ -170,6 +170,18 @@ switch there covers both of their Wise accounts; "Partly on" means the CLI switc
 
 ## 4. When it halts
 
+### Activity endpoint outage — 8 November 2026
+
+The institute events endpoint last succeeded on 4 November at 13:32 Bangkok and first returned HTTP 404 at
+13:47. The same credentials still read the owner account, institute, session and credits. Wise's current public
+API schema does not list the events endpoint; its web client still uses it. A Wise-side access change or service
+failure is suspected, but not confirmed. Do not replace the missing event with an empty event list or clear a
+verification halt on that basis. Restore event access and verify the original submission before resuming.
+
+The submission precheck now reads the event log before its final session read. If that read fails, it leaves
+the draft pending for retry and does not claim or send the POST. Existing post-submit event checks still apply.
+
+
 `--status` (or the dashboard banner) shows `haltReason`; several reasons are joined with `| then:` — read all of
 them, resuming clears every one. The class named there may have: a POST whose outcome is unclear, a read-back that
 did not match, a second credit entry, a tutor/admin save between the fresh read and the POST (possible overwrite),
