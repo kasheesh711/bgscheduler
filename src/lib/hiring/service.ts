@@ -1311,6 +1311,9 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     .where(and(eq(s.hiringAudit.candidateId, mock.candidateId), eq(s.hiringAudit.action, "head-decision")))
     .orderBy(desc(s.hiringAudit.createdAt))
     .limit(1);
+  const recommendationReady = own.form !== "wait" && !!(await completedBriefResult(db, mock));
+  const result = own.replaced;
+  const checking = result?.bookingId === mock.id && (result.status === "uploaded" || result.status === "marking");
   return {
     // The last head decision for this candidate, so the page shows what was sent.
     decision: (!decided?.detail.bookingId || decided.detail.bookingId === mock.id) && decided?.detail.decision === "hire" ? ("hire" as const) : decided?.detail.decision === "reject" ? ("reject" as const) : null,
@@ -1326,7 +1329,16 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     // The interviewer's own scores for this mock, to show again. Never an AI score or another person's.
     rubric: own.rubric,
     form: own.form,
+    recommendationReady,
+    recommendationBlock: own.form !== "closed" || recommendationReady ? null : checking ? ("checking" as const) : ("admin" as const),
   };
+}
+/** Read the completed result for this booking, using the same check for the brief and its decision. */
+export async function completedBriefResult(db: Database, mock: { id: string; candidateId: string }) {
+  const m = s.hiringMockResults;
+  const [result] = await db.select({ id: m.id, rubric: m.rubric }).from(m).where(and(eq(m.candidateId, mock.candidateId),
+    eq(m.bookingId, mock.id), eq(m.status, "done")));
+  return result?.rubric && !checkRubric(result.rubric).length && !rubricNeedsCheck(result.rubric) ? result : null;
 }
 const briefSubject = (mock: { subjects: Subject[] }) => mock.subjects[0];
 type MockResult = typeof s.hiringMockResults.$inferSelect;

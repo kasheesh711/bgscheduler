@@ -40,6 +40,13 @@
   outline-offset: 2px;
 }
 .surface i { display: inline-block; font-style: normal; }
+.surface[data-heads-review] {
+  --serif: var(--font-cormorant, "Cormorant Garamond"), Georgia, serif;
+}
+.surface[data-heads-review] :is(.topbar, .purpose) {
+  padding-inline: max(16px, calc((100% - 948px) / 2));
+  font-size: 14px;
+}
 
 /* Header */
 .topbar {
@@ -67,6 +74,7 @@
 .viewSwitch { display: flex; flex-wrap: wrap; max-width: 100%; gap: 2px; padding: 2px; border-radius: 18px; background: var(--tint); }
 .surface .viewSwitch button { min-height: 44px; padding: 5px 14px; white-space: nowrap; border-radius: 999px; font-weight: 500; color: var(--support); transition: color 150ms, background-color 150ms; }
 .surface .viewSwitch button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+@media (width >= 720px) { .viewSwitch.phoneOnly { display: none; } }
 .mobileStatus { display: none; color: var(--muted); white-space: nowrap; }
 @media (width < 720px) {
   .statusSubtitle { display: none; }
@@ -447,7 +455,12 @@
 
 .surface .finalReview :is(.primary, .secondary) { min-width: 44px; min-height: 44px; max-width: 100%; text-align: center; overflow-wrap: anywhere; }
 .surface .finalReview :is(.primary, .secondary):disabled { opacity: 1; border: 1px solid #887f74; background: #f6f1e9; color: #5c554c; }
-.surface :is(.packetActions, .signOffActions) :is(a, button):focus-visible,
+.surface .finalReview :is(.primary, .secondary, .textarea, [tabindex="-1"]):focus { outline: 2px solid #14213d; outline-offset: 2px; }
+:global(.dark) .surface .finalReview :is(.primary, .secondary, .textarea, [tabindex="-1"]):focus { outline-color: #fff; }
+/* The phone packet reader stays white in dark mode. */
+:global(.dark) .surface .finalReview dialog .secondary:focus { outline-color: #14213d; }
+.surface .finalReview :is(.primary, .secondary, .fieldLabel, .textarea) { font-size: 16px; }
+.finalReview .inspectorMeta { font-size: 14px; }
 .surface .viewSwitch button:focus-visible { outline: 2px solid #c65e50; outline-offset: 2px; }
 .finalReview .fieldLabel { margin-top: 8px; }
 .finalReview .textarea { min-height: 44px; }
@@ -458,6 +471,8 @@
 .packetPanel { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; min-width: 0; gap: 8px; }
 .packetPanel iframe { display: block; box-sizing: border-box; width: 100%; height: 70vh; border: 2px solid #eee4d4; border-radius: 12px; }
 .surface :is(.packetActions, .signOffActions) .primary { background: #172b4d; color: #fff; }
+.surface[data-heads-review] :is(.packetActions, .signOffActions) .primary:not(:disabled),
+.surface[data-heads-review] .finalReview > .primary:not(:disabled) { background: #14213d; color: #fff; }
 .surface :is(.packetActions, .signOffActions) .primary:hover:not(:disabled) { background: #243d60; }
 .surface .packetActions .primary[aria-disabled="true"] { cursor: default; }
 .signOffActions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin-top: 8px; }
@@ -466,6 +481,7 @@
 .surface .signOffActions .secondary { justify-self: stretch; border-color: var(--danger); color: var(--danger); }
 @media (width < 520px) {
   .packetActions, .signOffActions { flex-direction: column; align-items: stretch; }
+  .surface[data-heads-review] .finalReview > .primary { width: 100%; }
 }
 
 /* Setup */

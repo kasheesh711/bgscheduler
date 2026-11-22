@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 
-import { startTransition, useEffect, useMemo, useState } from "react";
+import { startTransition, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useSearchParams } from "next/navigation";
 import { Instrument_Serif } from "next/font/google";
 import { signIn } from "next-auth/react";
@@ -77,7 +77,7 @@ export type HiringView = keyof typeof VIEWS;
 const STEPS = ["seek", "calls", "prescreen", "assessment", "mock", "review", "offer"] as const;
 const TOOLS = ["overview", "capacity", "visitday", "setup", "hr", "admin", "heads"] as const;
 /** One line under the tabs, so a new user can name what each tab is for. */
-const PURPOSE: Record<HiringView, string> = {
+const PURPOSE: Record<Exclude<HiringView, "hr" | "heads">, string> = {
   overview: "Where every candidate stands, and who is ready for the next step.",
   capacity: "Which subjects need new tutors first, from busy-hours use and new students.",
   seek: "Check applications from SEEK and their ATS scores.",
@@ -89,9 +89,7 @@ const PURPOSE: Record<HiringView, string> = {
   review: "HR adds the behavioral assessment and sends the packet to Gift for approval or rejection.",
   offer: "After approval, the candidate receives an offer letter and can book a 30-minute signing with HR on site.",
   setup: "Scores, limits, heads and messages. A change applies to every tab.",
-  hr: "Your calls this week, who to call next, and the decisions the heads sent.",
   admin: "Who comes when, the paper to print, and where to upload the completed paper.",
-  heads: "See your mock bookings, mark the rubric and record your recommendation.",
 };
 /** The browser remembers a role screen, so /hiring opens on it the next time. */
 const ROLE_KEY = "hiring-role-view";
@@ -104,6 +102,15 @@ function remember(name: string | null) {
   }
 }
 
+function subscribeToReviewLink(change: () => void) {
+  window.addEventListener("hashchange", change);
+  window.addEventListener("popstate", change);
+  return () => {
+    window.removeEventListener("hashchange", change);
+    window.removeEventListener("popstate", change);
+  };
+}
+
 export function HiringDashboard() {
   const [data, setData] = useState<HiringData | null>(null);
   const [config, setConfig] = useState<HiringConfig | null>(null);
@@ -112,7 +119,13 @@ export function HiringDashboard() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const param = useSearchParams().get("view");
-  const view: HiringView = param && Object.hasOwn(VIEWS, param) ? (param as HiringView) : "overview";
+  const hash = useSyncExternalStore(subscribeToReviewLink, () => window.location.hash, () => null);
+  const reviewLink = param === "hr" && hash ? /^#review-(.+)$/.exec(hash)?.[1] : undefined;
+  const giftOnly = !!data?.reviewAccess?.gift && !data.reviewAccess.hr;
+  const linkedReview = data?.reviewAccess?.gift ? reviewLink : undefined;
+  const view: HiringView = giftOnly && linkedReview ? "review" : param && Object.hasOwn(VIEWS, param) ? (param as HiringView) : "overview";
+  const giftReview = view === "review" && giftOnly;
+  const loaded = !!data;
   // Next.js keeps useSearchParams in step with pushState, and this does not reload the page.
   const setView = (name: HiringView, keepRole = false) => {
     // Leaving a role screen for the full dashboard forgets it. Opening one remembers it.
@@ -121,6 +134,7 @@ export function HiringDashboard() {
   };
   const role = isRoleView(view);
   useEffect(() => {
+    if (hash === null || (reviewLink && (!loaded || giftOnly))) return;
     if (isRoleView(param)) return remember(param);
     if (param) return;
     try {
@@ -129,7 +143,7 @@ export function HiringDashboard() {
     } catch {
       // As in remember().
     }
-  }, [param]);
+  }, [param, hash, reviewLink, loaded, giftOnly]);
   const [selected, setSelected] = useState<string | null>(null);
   const [assessmentVisit, setAssessmentVisit] = useState<string | null>(null);
   // The candidate whose résumé viewer is open. It loads the file only on request.
@@ -306,15 +320,17 @@ export function HiringDashboard() {
     !data.config.deliveryEnabled && "Messages paused",
   ].filter(Boolean).join(" · ");
 
+  if ((param === "hr" && hash === null) || (reviewLink && !loaded && !error)) return <TabSkeleton label="Loading hiring…" />;
+
   return (
-    <div className={`${css.surface} ${serif.variable}`}>
-      <header className={css.topbar} data-compact={view === "hr" || view === "heads" ? "" : undefined} data-heads={view === "heads" ? "" : undefined}>
+    <div className={`${css.surface} ${serif.variable}`} data-heads-review={view === "heads" || view === "review" ? "" : undefined}>
+      <header className={css.topbar} data-compact={view === "hr" || view === "heads" || giftReview ? "" : undefined} data-heads={view === "heads" ? "" : undefined}>
         <div>
           <h1 className={css.title}>
-            Tutor <em>hiring</em>
+            {giftReview ? VIEWS[view] : <>Tutor <em>hiring</em></>}
           </h1>
           {/* Always one line, so the tabs below do not move down when the data arrives. */}
-          <p className={role ? css.subtitle : `${css.subtitle} ${css.statusSubtitle}`}>
+          {!giftReview && <p className={role ? css.subtitle : `${css.subtitle} ${css.statusSubtitle}`}>
             {role ? (
               VIEWS[view]
             ) : data ? (
@@ -326,9 +342,9 @@ export function HiringDashboard() {
             ) : (
               "\u00a0"
             )}
-          </p>
-          {!role && paused && <p className={css.mobileStatus}>{paused}</p>}
-          {data?.reviewAccess?.hr && <Link className="mt-2 inline-block text-sm underline underline-offset-4" href="/hiring/onboarding">Tutor onboarding and Experts access</Link>}
+          </p>}
+          {!role && !giftReview && paused && <p className={css.mobileStatus}>{paused}</p>}
+          {view !== "heads" && data?.reviewAccess?.hr && <Link className="mt-2 inline-block text-sm underline underline-offset-4" href="/hiring/onboarding">Tutor onboarding and Experts access</Link>}
         </div>
         <div role="status" className={css.notice}>
           {/* Rules and setup shows these beside its Save button, where they are in view. */}
@@ -343,7 +359,13 @@ export function HiringDashboard() {
         ) : (
           <>
             <div className={nav.desktop}>{navigation}</div>
-            <details
+            {/* Gift's phone screen has no step menu, so this is her way to the other tabs. */}
+            {giftReview && <div className={`${css.viewSwitch} ${css.phoneOnly}`}>
+              <button type="button" onClick={() => setView("overview")}>
+                Full dashboard
+              </button>
+            </div>}
+            {!giftReview && (view !== "review" || loaded) && <details
               className={nav.mobile}
               data-review={view === "review" ? "" : undefined}
               onKeyDown={(event) => {
@@ -360,11 +382,11 @@ export function HiringDashboard() {
             >
               <summary>{step ? `${step} ${VIEWS[view]}` : VIEWS[view]}</summary>
               {navigation}
-            </details>
+            </details>}
           </>
         )}
       </header>
-      {view !== "hr" && <p className={css.purpose}>{view === "review" && data?.reviewAccess?.gift && !data.reviewAccess.hr ? "Read the packet and sign off." : PURPOSE[view]}</p>}
+      {view !== "hr" && view !== "heads" && !giftReview && <p className={css.purpose}>{PURPOSE[view]}</p>}
       {error && view !== "setup" && (
         <p role="alert" className={css.alert}>
           {error}
@@ -436,14 +458,14 @@ export function HiringDashboard() {
         <div hidden={view !== "prescreen"} className={css.viewPane}>
           <PreScreenScreen data={data} extras={extras} holds={holds} command={command} busy={busy} error={error} notice={notice} />
         </div>
-        {view === "hr" && <HrScreen data={data} command={command} busy={busy} onOpenResults={() => setView("assessment", true)} />}
+        {view === "hr" && <HrScreen data={data} command={command} busy={busy} linkedReview={linkedReview} onOpenResults={() => setView("assessment", true)} />}
         {view === "admin" && <AdminScreen data={data} reload={() => load(true)} onOpenResults={(id) => {
           setAssessmentVisit(id);
           setView("assessment", true);
         }} />}
         {(view === "heads" || view === "mock") && <HeadsScreen data={data} />}
         {(view === "review" || view === "offer") && (
-          <HiringReviewScreen key={view} data={data} offers={view === "offer"} reload={() => load(true)} onOpenResults={(id) => {
+          <HiringReviewScreen key={view} data={data} offers={view === "offer"} linkedReview={linkedReview} reload={() => load(true)} onOpenResults={(id) => {
             const rows = assessmentRows(data.bookings, data.papers, data.mocks).filter((row) => row.candidateId === id);
             setAssessmentVisit((rows.find((row) => row.mockAt) ?? rows[0])?.key ?? null);
             setView("assessment");

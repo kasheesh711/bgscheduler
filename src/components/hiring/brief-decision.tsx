@@ -8,11 +8,11 @@ type Decision = "hire" | "reject";
 const LABEL: Record<Decision, string> = { hire: "Yes", reject: "No" };
 
 /** The tutor recommends Yes for HR review or No to queue a rejection. */
-export function BriefDecision({ sent, onSent, url, scores, unsent, pending, setPending }: {
+export function BriefDecision({ sent, onSent, url, hasScores, unsent, pending, setPending }: {
   sent: Decision | null;
   onSent: (decision: Decision) => void;
   url: string;
-  scores: "own" | "recorded" | null;
+  hasScores: boolean;
   unsent: boolean;
   pending: BriefPending;
   setPending: (pending: BriefPending) => void;
@@ -42,36 +42,29 @@ export function BriefDecision({ sent, onSent, url, scores, unsent, pending, setP
       setPending(null);
     }
   }
-  if (!scores && !sent) return <p className={c.note}>Send your scores first.</p>;
+  if (!hasScores && !sent) return <p className={c.note}>Send your scores first.</p>;
   return (
     <div className={c.field}>
       {!sent && unsent && (
-        <p className={`${c.note} ${c.scoreChanges}`}>
-          <span role="status">You have unsent score changes.</span>{" "}
-          <a href="#scores">Go to scores</a>
-        </p>
+        <p className={c.note} role="status">Recommendation uses sent scores.</p>
       )}
-      {!sent && <p className={c.note}>{scores === "own"
-        ? "Your recommendation uses your last sent scores."
-        : "Your recommendation uses the scores on record."}</p>}
       {sent && (
-        <p ref={recorded} role="status" className={c.note} tabIndex={-1}>
-          Recommendation recorded: <strong>{LABEL[sent]}</strong>. {sent === "hire" ? "HR will prepare the review for Gift." : "The candidate’s rejection email is queued."}
+        <p ref={recorded} role="status" className={c.success} tabIndex={-1}>
+          Recommendation recorded: <strong>{LABEL[sent]}</strong>. {sent === "hire" ? "HR prepares the review for Gift." : "The rejection email is queued."}
         </p>
       )}
       {!sent && (
         <>
-          <p className={c.note}>Yes sends the application to HR. No queues a rejection email.</p>
+          <p className={c.note}>No queues a rejection email to the candidate.</p>
           <label className={c.field}>
-            Reason (required for No)
-            <textarea className={c.input} rows={2} maxLength={1000} value={reason} disabled={pending === "recommendation"} aria-describedby={reasonTooShort ? reasonHintId : undefined} onChange={(event) => setReason(event.target.value)} />
+            <span id={reasonHintId}>Reason for No (5+ characters)</span>
+            <textarea className={c.input} rows={2} maxLength={1000} value={reason} disabled={pending === "recommendation"} onChange={(event) => setReason(event.target.value)} />
           </label>
-          {reasonTooShort && <p id={reasonHintId} className={c.note}>Write at least 5 characters to choose No.</p>}
           <div className={c.decisionActions}>
             <button type="button" className={c.button} disabled={!!pending} onClick={() => void send("hire")}>
               Yes, send to HR
             </button>
-            <button type="button" className={`${c.ghost} ${c.reject}`} disabled={!!pending || reasonTooShort} onClick={() => void send("reject")}>
+            <button type="button" className={`${c.ghost} ${c.reject}`} disabled={!!pending || reasonTooShort} aria-describedby={reasonTooShort ? reasonHintId : undefined} onClick={() => void send("reject")}>
               No, reject
             </button>
           </div>

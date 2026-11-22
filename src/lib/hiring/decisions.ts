@@ -4,12 +4,11 @@ import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
 import { hireBlockers } from "./assessment-view";
 import { HiringError, runtimeWritesAllowed, type HiringConfig } from "./model";
-import { checkRubric, rubricNeedsCheck } from "./marking-sheet";
 import { hiringEmailHtmlFromText } from "./email";
 import { bookingToken } from "./tokens";
 import { hiringOrigin, onboardingEnabled } from "./onboarding-config";
 import { queueRecruitmentHeadDecision } from "./recruitment";
-import { audit, briefMock, candidateById, endVisit, enqueue, settings } from "./service";
+import { audit, briefMock, candidateById, completedBriefResult, endVisit, enqueue, settings } from "./service";
 
 export type Decision = "hire" | "reject";
 const d = s.hiringDecisions;
@@ -153,9 +152,8 @@ export async function saveBriefDecision(token: string, input: { decision: Decisi
     const mock = await briefMock(token, tx, now);
     if (now < mock.endTime) throw new HiringError(409, "Send your recommendation after the mock lesson ends.");
     const candidate = await candidateById(tx, mock.candidateId);
-    const [result] = await tx.select().from(s.hiringMockResults).where(and(eq(s.hiringMockResults.candidateId, candidate.id),
-      eq(s.hiringMockResults.bookingId, mock.id), eq(s.hiringMockResults.status, "done")));
-    if (!result?.rubric || checkRubric(result.rubric).length || rubricNeedsCheck(result.rubric))
+    const result = await completedBriefResult(tx, mock);
+    if (!result)
       throw new HiringError(409, "Send the completed rubric for this mock first.");
     const last = await headRecommendation(tx, candidate.id);
     if (last?.detail.bookingId === mock.id) {

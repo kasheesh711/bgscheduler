@@ -573,7 +573,7 @@ export const BookingLoading = () => (
 
 export function BookingShell({ kind, children }: { kind?: "visit" | "mock" | "paper" | "brief" | "call" | "contract" | "onboarding"; children: ReactNode }) {
   return (
-    <main className={c.page}>
+    <main className={c.page} data-brief={kind === "brief" ? "" : undefined}>
       <header className={c.hero} data-brief={kind === "brief" ? "" : undefined}>
         <div className={c.heroInner}>
           <p className={c.brand}>BeGifted Education</p>

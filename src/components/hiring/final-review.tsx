@@ -15,10 +15,15 @@ type Review = {
 };
 
 export function reviewBlocks(writeGate: boolean, config: Parameters<typeof contractTestAllowed>[0], id: string) {
-  const paused = !config.enabled && !config.deliveryEnabled ? "Automation and Messages are off."
-    : !config.enabled ? "Automation is off." : !config.deliveryEnabled ? "Messages are off." : undefined;
+  const bothOff = !config.enabled && !config.deliveryEnabled;
+  const paused = bothOff ? "Automation and Messages"
+    : !config.enabled ? "Automation" : !config.deliveryEnabled ? "Messages" : undefined;
   const live = writeGate ? undefined : "Sign-off works only on the live site.";
-  return { approveBlock: live ?? (contractTestAllowed(config, id) ? undefined : paused), rejectBlock: live ?? paused };
+  const testAllowed = contractTestAllowed(config, id);
+  const pausedStatus = paused && !testAllowed ? `${paused} off` : undefined;
+  const instruction = paused && (testAllowed ? `Ask Kevin to enable ${paused}.`
+    : bothOff ? "Ask Kevin to enable both." : "Ask Kevin to enable it.");
+  return { approveBlock: live ?? (testAllowed ? undefined : instruction), rejectBlock: live ?? instruction, pausedStatus };
 }
 
 type ReviewAction = { action: "submit"; behavioral: string; offer: string }
@@ -40,17 +45,22 @@ function subscribeToPhoneReader(change: () => void) {
   return () => query.removeEventListener("change", change);
 }
 
-export function FinalReview({ id, signing = false, autoLoad = false, approveBlock, rejectBlock, onChanged }: {
+export function FinalReview({ id, signing = false, autoLoad = false, hideHeading = false, approveBlock, rejectBlock, pausedStatus, onChanged }: {
   id: string;
   signing?: boolean;
   autoLoad?: boolean;
+  hideHeading?: boolean;
   approveBlock?: string;
   rejectBlock?: string;
+  pausedStatus?: string;
   onChanged?: (signed: boolean) => Promise<void>;
 }) {
   const url = `/api/hiring/review/${id}`;
   const controlId = useId();
   const readButton = useRef<HTMLButtonElement>(null);
+  const approveButton = useRef<HTMLButtonElement>(null);
+  const retryButton = useRef<HTMLButtonElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
   const packetDialog = useRef<HTMLDialogElement>(null);
   const outcome = useRef<HTMLParagraphElement>(null);
   const phone = useSyncExternalStore(subscribeToPhoneReader, () => window.matchMedia(phoneReader).matches, () => false);
@@ -69,6 +79,10 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   // A signed or closed review never shows the stale alert; the contract-signing card neither.
   const stale = !!packet && !signing && !["hired", "rejected", "stopped"].includes(review?.stage ?? "") && review?.packetValid !== true;
   const viewed = !!packet && !stale && packet.id === viewedId;
+  const instruction = `${controlId}-instruction`;
+  const pauseReason = !stale && pausedStatus ? `${controlId}-paused` : undefined;
+  const sharedBlock = approveBlock === rejectBlock ? approveBlock : undefined;
+  const approveReason = !sharedBlock && approveBlock ? `${controlId}-approve` : undefined;
 
   const load = useCallback(async (afterSave = false, previousPacket?: string) => {
     try {
@@ -95,14 +109,35 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
     if (signedStage) outcome.current?.focus();
   }, [signedStage]);
   useEffect(() => {
-    if (openPage && phone) packetDialog.current?.showModal();
+    if (!openPage || !phone) return;
+    packetDialog.current?.showModal();
+    closeButton.current?.focus();
   }, [openPage, phone]);
 
+  const refocus = useRef(false);
+  const backTimer = useRef<number | undefined>(undefined);
+  const stopBack = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => stopBack.current?.(), []);
+  const [refocusTick, setRefocusTick] = useState(0);
   const closeReader = useCallback(() => {
     packetDialog.current?.close();
     setPacketPage(undefined);
-    readButton.current?.focus();
+    refocus.current = true;
   }, []);
+  // After the reader is gone from the page: focus set while the modal dialog is still mounted is lost.
+  useEffect(() => {
+    if (openPage || !refocus.current) return;
+    refocus.current = false;
+    const approve = approveButton.current;
+    if (viewed && approve && !approve.disabled) {
+      approve.focus();
+    } else if (readButton.current && !readButton.current.disabled) {
+      readButton.current.focus();
+    } else {
+      // A stale packet disables Read. Check again is the way on.
+      retryButton.current?.focus();
+    }
+  }, [openPage, viewed, refocusTick]);
 
   // An open reader leaves no stray history entry when the card unmounts.
   useEffect(() => () => {
@@ -111,7 +146,21 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
 
   const closePacket = useCallback(() => {
     if (!openPage) return;
-    if (window.history.state?.hiringReviewPacket === controlId) window.history.back();
+    if (window.history.state?.hiringReviewPacket === controlId) {
+      // The step back in history makes the browser drop focus, so set it again one tick after it.
+      const onBack = () => {
+        backTimer.current = window.setTimeout(() => {
+          refocus.current = true;
+          setRefocusTick((tick) => tick + 1);
+        });
+      };
+      window.addEventListener("popstate", onBack, { once: true });
+      stopBack.current = () => {
+        window.removeEventListener("popstate", onBack);
+        window.clearTimeout(backTimer.current);
+      };
+      window.history.back();
+    }
     closeReader();
   }, [closeReader, controlId, openPage]);
 
@@ -146,7 +195,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
               setOffer(current.packet.offer);
               setError({ text: "HR sent a new packet. Read it again." });
             } else {
-              setReview((previous) => previous && { ...previous, packetValid: false });
+              setReview((previous) => previous && { ...previous, packetValid: current.packet?.id === body.packetId ? current.packetValid : false });
             }
             setViewedId(undefined);
             closePacket();
@@ -227,13 +276,12 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
 
   const stage = signedStage ?? review?.stage;
   const closed = stage === "hired" || stage === "rejected" || stage === "stopped";
-  const instruction = `${controlId}-instruction`;
-  const sharedBlock = approveBlock === rejectBlock ? approveBlock : undefined;
-  const approveReason = !sharedBlock && approveBlock ? `${controlId}-approve` : undefined;
   const rejectReason = !sharedBlock && rejectBlock ? `${controlId}-reject` : undefined;
   const rejectHint = viewed && reason.trim().length < 5 ? `${controlId}-note` : undefined;
   const signOffDisabled = !!busy || !viewed || !!error?.retry;
   const awaitingSignOff = !signing && review?.access.gift && !closed;
+  // Announce readiness when the phone dialog closes and the page is no longer inert.
+  const ready = viewed && !sharedBlock && !error?.retry && !(phone && openPage);
   const packetTitle = openPage && `Review packet for ${openPage.name}`;
   const packetFrame = openPage && (
     <iframe title={packetTitle} srcDoc={openPage.html}
@@ -243,22 +291,23 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   );
   return (
     <section className={signing ? css.finalReview : `${css.inspectorSection} ${css.finalReview}`} id={`review-${id}`} aria-label={signing ? "Contract signing" : "Final hiring review"}>
-      {!signing && <h3 className={css.inspectorHeading}>Final hiring review</h3>}
+      {!signing && !hideHeading && <h3 className={css.inspectorHeading}>Final hiring review</h3>}
       {!review && !error && (autoLoad || busy
         ? <p className={css.inspectorMeta} role="status">Loading the review…</p>
         : <button type="button" className={css.secondary} onClick={() => void act()}>{signing ? "Check contract signing" : "Open final review"}</button>)}
       {(awaitingSignOff || stale) && packet && <>
-        {awaitingSignOff && <p className={css.reviewStatus}>{stale ? "Waiting for a new packet from HR" : "Waiting for your sign-off"}</p>}
-        <p id={instruction} className={css.inspectorMeta} role={stale ? "alert" : undefined}>{stale ? (review?.packetValid === null ? "Could not check the packet just now. Check again." : "The evidence changed. Ask HR to send a new packet.")
-          : sharedBlock ?? (viewed ? "Approve, or write a note and reject." : "Read the packet first.")}</p>
-        {stale && <button type="button" className={`${css.secondary} min-h-11 min-w-11`} disabled={!!busy} onClick={() => void act()}>Check again</button>}
+        {pauseReason && <p id={pauseReason} className={css.reviewStatus}>{pausedStatus}</p>}
+        <p id={ready ? undefined : instruction} className={ready ? css.reviewStatus : css.inspectorMeta} role="status">{stale ? (review?.packetValid === null ? "Could not check the packet just now." : "Evidence changed. Ask HR for a new packet.")
+          : ready ? "Ready for sign-off." : sharedBlock ?? (viewed && error?.retry ? "Retry the review check to unlock sign-off." : "Read the packet to unlock sign-off.")}</p>
+        {ready && <p id={instruction} className="sr-only">Approve, or write a note and reject.</p>}
+        {stale && <button type="button" ref={retryButton} className={`${css.primary} mt-2.5 min-h-11 min-w-11`} disabled={!!busy} onClick={() => void act()}>Check again</button>}
       </>}
       {!signing && review && packet && (
         <div className={`${css.decisionActions} ${css.packetActions}`}>
           {review.access.gift ? (
-            <button type="button" className={css.primary} ref={readButton} disabled={stale && awaitingSignOff} aria-expanded={!!openPage} aria-disabled={!!busy || !!openPage || (stale && awaitingSignOff)}
+            <button type="button" className={viewed ? css.secondary : css.primary} ref={readButton} disabled={stale && awaitingSignOff} aria-expanded={!!openPage} aria-disabled={!!busy || !!openPage || (stale && awaitingSignOff)}
               aria-controls={openPage ? `${controlId}-packet` : undefined}
-              onClick={() => { if (!busy && !openPage) void readPacket(packet.id); }}>Read review packet</button>
+              onClick={() => { if (!busy && !openPage) void readPacket(packet.id); }}>{viewed ? "Read packet again" : "Read review packet"}</button>
           ) : <a className={css.secondary} href={`${url}?file=html`} target="_blank" rel="noreferrer">Read review packet</a>}
           {busy === "packet" && <p role="status" className={css.inspectorMeta}>Opening packet…</p>}
           {error?.packetLoad && <p role="alert" className={css.errorText}>{error.text}</p>}
@@ -266,9 +315,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
             <dialog ref={packetDialog} id={`${controlId}-packet`} aria-label={packetTitle}
               className="fixed inset-0 m-0 h-dvh max-h-none w-full max-w-none grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-0 bg-white p-0 open:grid"
               onCancel={(event) => { event.preventDefault(); closePacket(); }}>
-              <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
-                <span className="min-w-0 [overflow-wrap:anywhere]">{openPage.name}</span>
-                <button type="button" className={`${css.secondary} min-h-11 min-w-11 shrink-0`} onClick={closePacket}>Close packet</button>
+              <div className="flex justify-end border-b px-3 py-2">
+                <button type="button" ref={closeButton} className={`${css.secondary} min-h-11 min-w-11 shrink-0`} onClick={closePacket}>Close packet</button>
               </div>
               {packetFrame}
             </dialog>
@@ -279,8 +327,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
             </div>
           ))}
           {stale ? (
-            <button type="button" className={css.secondary} disabled aria-disabled="true" aria-describedby={instruction}>Download packet and files</button>
-          ) : <a className={css.secondary} href={`${url}?file=zip`}>Download packet and files</a>}
+            <button type="button" className={css.secondary} disabled aria-disabled="true" aria-label="Download files (packet and attachments)" aria-describedby={instruction}>Download files</button>
+          ) : <a className={css.secondary} href={`${url}?file=zip`} aria-label="Download files (packet and attachments)">Download files</a>}
         </div>
       )}
       {!signing && review?.access.hr && !closed && (
@@ -292,30 +340,30 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
             <textarea className={css.textarea} rows={6} maxLength={10000} value={offer} onChange={(event) => setOffer(event.target.value)} />
           </label>
           <p className={css.inspectorMeta}>Enter the offer terms. Scheduling adds the contract booking link after approval.</p>
-          <button type="button" className={css.primary} disabled={!!busy || behavioral.trim().length < 10 || offer.trim().length < 10}
+          <button type="button" className={awaitingSignOff && packet && !stale ? css.secondary : css.primary} disabled={!!busy || behavioral.trim().length < 10 || offer.trim().length < 10}
             onClick={() => void act({ action: "submit", behavioral, offer })}>Send to Gift</button>
         </>
       )}
       {awaitingSignOff && (packet ? (
         <>
-          <label className={css.fieldLabel}>Sign-off note (optional for approval)
-            <textarea className={css.textarea} aria-describedby={rejectHint} rows={2} maxLength={2000} value={reason} readOnly={busy === "sign"} onChange={(event) => setReason(event.target.value)} />
+          <label className={css.fieldLabel}>
+            <span id={rejectHint}>Rejection note (5+ characters)</span>
+            <textarea className={css.textarea} rows={2} maxLength={2000} value={reason} readOnly={busy === "sign"} onChange={(event) => setReason(event.target.value)} />
           </label>
           <div className={css.signOffActions}>
             <div>
-              <button type="button" className={css.primary} disabled={signOffDisabled || !!approveBlock} aria-describedby={[instruction, approveReason].filter(Boolean).join(" ")} onClick={() => {
+              <button type="button" ref={approveButton} className={css.primary} disabled={signOffDisabled || !!approveBlock} aria-describedby={[pauseReason, instruction, approveReason].filter(Boolean).join(" ")} onClick={() => {
                 if (window.confirm("Approve this offer letter and send it to the candidate?"))
                   void act({ action: "sign", packetId: packet.id, decision: "hire", reason });
               }}>Approve and send offer</button>
               {approveReason && <p id={approveReason} className={css.inspectorMeta}>{approveBlock}</p>}
             </div>
             <div>
-              <button type="button" className={css.secondary} disabled={signOffDisabled || reason.trim().length < 5 || !!rejectBlock} aria-describedby={[instruction, rejectReason, rejectHint].filter(Boolean).join(" ")} onClick={() => {
+              <button type="button" className={css.secondary} disabled={signOffDisabled || reason.trim().length < 5 || !!rejectBlock} aria-describedby={[pauseReason, instruction, rejectReason, rejectHint].filter(Boolean).join(" ")} onClick={() => {
                 if (window.confirm("Reject this application and inform the candidate?"))
                   void act({ action: "sign", packetId: packet.id, decision: "reject", reason });
               }}>Reject and inform candidate</button>
               {rejectReason && <p id={rejectReason} className={css.inspectorMeta}>{rejectBlock}</p>}
-              {rejectHint && <p id={rejectHint} className={css.inspectorMeta}>Write at least 5 characters to reject.</p>}
             </div>
           </div>
           {busy === "sign" && <p role="status" className={css.inspectorMeta}>Saving sign-off…</p>}
@@ -323,7 +371,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
       ) : <p>Waiting for HR to send the packet. <button type="button" className={css.secondary} disabled={!!busy} onClick={() => void act()}>Check again</button></p>)}
       <p ref={outcome} role="status" tabIndex={-1}>{closed && (stage === "hired" ? (review?.appointment
         ? `Contract signing booked for ${new Date(review.appointment).toLocaleString("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium", timeStyle: "short" })} (Bangkok).`
-        : packet ? "Offer queued." : "There is no contract booking on record.") : `Application ${stage}.`)}</p>
+        : packet ? (signedStage ? "Offer approved. The offer email is queued." : "Offer approved.") : "There is no contract booking on record.")
+        : stage === "rejected" ? (signedStage ? "Application rejected. The email is queued." : "Application rejected.") : "Application stopped.")}</p>
       {saved && !signedStage && <p role="status">Saved.</p>}
       {error && !error.packetLoad && <div role="alert" className={css.errorText}>
         <p>{error.text}</p>

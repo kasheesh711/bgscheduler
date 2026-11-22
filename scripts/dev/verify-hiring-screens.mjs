@@ -3,18 +3,25 @@
 // No candidate data, vendor connection, production database or credentials are used: the fixture below replaces fetch.
 // Run: node scripts/dev/verify-hiring-screens.mjs [screenshot-folder]
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import postcss from "postcss";
 import tailwind from "@tailwindcss/postcss";
-import { chromium } from "playwright-core";
+import { chromium, webkit } from "playwright-core";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const OUT = process.argv[2];
 const CHROME = process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const BRIEF_STATES = [
+  ["wait", "Scores open after the mock.", "Check again"],
+  ["checking", "Scores are being checked.", "Check again"],
+  ["admin", "Ask BeGifted admin to check the scores.", null],
+  ["closed", "Scores are recorded. Ask admin to edit scores.", "Yes, send to HR"],
+];
 
 const ENTRY = `
 import { Suspense } from "react";
@@ -99,6 +106,15 @@ if (/roles=1|pipeline=1/.test(location.search)) {
     Object.assign(paper, { startTime: at(-4, 9), endTime: at(-4, 11) });
     Object.assign(mock, { startTime: at(-4, 11), endTime: at(-4, 12) });
     Object.assign(payload.briefPaths, { v1m: "/hiring/brief/sample-token" });
+    if (location.search.includes("headNext=1")) {
+      candidates.push(person("ek-paper", "Sample Paper", { seekApplicationId: null, stage: "onsite_booked" }));
+      const bookings = payload.bookings as unknown[];
+      bookings.push(
+        { id: "ek-paper", candidateId: "ek-paper", kind: "paper", status: "confirmed", startTime: at(1, 8), endTime: at(1, 10), visitId: null, interviewerKey: null, subjects: ["Physics"] },
+        { id: "ek-later", candidateId: "r2", kind: "mock", status: "confirmed", startTime: at(3, 11), endTime: at(3, 12), visitId: null, interviewerKey: "Ek", subjects: ["Physics"] },
+      );
+      Object.assign((payload.bookings as { id: string }[]).find(({ id }) => id === "v2m")!, { startTime: at(2, 11), endTime: at(2, 12) });
+    }
     const endedMocks = [
       ["peat-no-score", "Sample Mali", -3, "confirmed"],
       ["peat-tracker", "Sample Noi", -2, "confirmed"],
@@ -152,7 +168,10 @@ if (location.search.includes("roles=1")) {
 let reviewPacket: { id: string; behavioral: string; offer: string } | null = null;
 // ?gift=1: the final review as Gift sees it, with a packet from HR.
 const GIFT = location.search.includes("gift=1");
-if (GIFT) payload.reviewAccess = { hr: false, gift: true };
+if (GIFT) payload.reviewAccess = { hr: location.search.includes("hr=1"), gift: true };
+if (GIFT && location.hash === "#review-r1") {
+  (payload.headDecisions as unknown[]).unshift({ candidateId: "r2", decision: "reject", reason: "Other application.", head: "Kru Ek", draftProblem: null });
+}
 // ?live=1: Automation and Messages on, so sign-off is not blocked by a switch.
 if (location.search.includes("live=1")) Object.assign(payload.config, { enabled: true, deliveryEnabled: true });
 const realFetch = window.fetch;
@@ -163,6 +182,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (String(input).includes("capacity=1")) return new Response(JSON.stringify({ error: "Not in this fixture." }), { status: 503 });
   const url = new URL(String(input), location.origin);
   if (url.pathname.startsWith("/api/hiring/brief/sample-token/")) {
+    if (url.pathname.endsWith("/rubric") && location.search.includes("sendFailed=1"))
+      return new Response(JSON.stringify({ error: "The scores were not saved. Try again." }), { status: 503 });
     const body = JSON.parse(String(init?.body ?? "{}"));
     (window as unknown as { posted: unknown[] }).posted.push(body);
     if (url.pathname.endsWith("/rubric")) return new Response(JSON.stringify({ total: Object.values(body.items as Record<string, number>).reduce((a, b) => a + b, 0) }));
@@ -180,9 +201,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       reviewPacket = { id: "packet", behavioral: body.behavioral, offer: body.offer };
       return new Response(JSON.stringify({ ok: true }));
     }
-    return new Response(JSON.stringify({ access: GIFT ? { hr: false, gift: true } : { hr: true, gift: false }, stage: GIFT ? "review" : "mock_booked",
+    return new Response(JSON.stringify({ access: GIFT ? payload.reviewAccess : { hr: true, gift: false }, stage: GIFT ? "review" : "mock_booked",
       callNotes: "Gave a specific example of adapting a lesson.", packet: GIFT ? { id: "packet", behavioral: "Gave a specific example of adapting a lesson.", offer: "Hourly rate 600 THB, 10 hours a week." } : reviewPacket,
-      packetValid: new URLSearchParams(location.search).get("stale") !== "1", appointment: null }));
+      packetValid: new URLSearchParams(location.search).get("stale") === "unknown" ? null : !location.search.includes("stale=1"), appointment: null }));
   }
   if (url.pathname === "/api/hiring/marking") {
     (window as unknown as { posted: unknown[] }).posted.push({ marking: JSON.parse(String(init?.body)) });
@@ -248,11 +269,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/hiring") return new Response(JSON.stringify(payload));
   return realFetch(input, init);
 }) as typeof fetch;
-// ?brief=open|wait|closed: the interviewer's public page from the LINE link, with synthetic data.
-const briefState = new URLSearchParams(location.search).get("brief") as "open" | "wait" | "closed" | null;
+// ?brief=open|wait|closed|checking|admin: the interviewer's public page from the LINE link, with synthetic data.
+const briefState = new URLSearchParams(location.search).get("brief");
+const recommendationBlock = briefState === "checking" || briefState === "admin" ? briefState : null;
 const BRIEF = { decision: null, name: "Sample Dao", subject: "Mathematics", gradedPaper: true, exam: "Sat 28 Nov, 10:00–11:30", mock: "Sat 28 Nov, 12:00–12:45",
   interviewer: "Kru Peat", location: "BeGifted, 2nd floor, Siam Square One", answers, resume: "pdf" as const,
-  rubric: briefState === "closed" ? payload.mocks[0].rubric : null, form: briefState ?? "open" };
+  rubric: null, form: recommendationBlock ? "closed" : briefState ?? "open", recommendationReady: briefState === "closed", recommendationBlock };
 createRoot(document.getElementById("root")!).render(<Suspense fallback="Loading">{briefState ? <BookingShell kind="brief"><InterviewerBrief brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BookingShell> : location.search.includes("preview=1") ? <div className="flex min-h-0 flex-1 flex-col overflow-auto"><HiringStaffPreview role="hr" /></div> : <HiringDashboard />}</Suspense>);
 `;
 
@@ -306,7 +328,7 @@ const script = bundled.outputFiles.find((f) => f.path.endsWith(".js")).text;
 const moduleCss = bundled.outputFiles.find((f) => f.path.endsWith(".css"))?.text ?? "";
 const from = path.join(ROOT, "src/app/globals.css");
 const globalCss = (await postcss([tailwind({ base: ROOT })]).process(readFileSync(from, "utf8"), { from })).css;
-const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hiring screens (synthetic)</title><style>${globalCss}${moduleCss}#root{--font-inter:system-ui;--font-instrument-serif:Georgia;display:flex;flex-direction:column;height:100vh;padding:12px 24px;overflow:hidden}</style></head><body><div id="root"></div><script>window.realPacket=${JSON.stringify(realPacket).replaceAll("</", "<\\/")};</script><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`;
+const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hiring screens (synthetic)</title><style>${globalCss}${moduleCss}html{--font-inter:Inter,system-ui;--font-cormorant:"Cormorant Garamond";--font-sarabun:Sarabun;--font-instrument-serif:Georgia}#root{display:flex;flex-direction:column;height:100vh;padding:12px 24px;overflow:hidden}</style></head><body><div id="root"></div><script>window.realPacket=${JSON.stringify(realPacket).replaceAll("</", "<\\/")};</script><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`;
 const AXE = readFileSync(path.join(ROOT, "node_modules/axe-core/axe.min.js"), "utf8");
 const PDF = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF";
 
@@ -326,19 +348,132 @@ await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 
 let browser;
+const textDumps = new Set();
 const shot = async (page, name, fullPage = false) => {
   if (!OUT) return;
   mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: path.join(OUT, `${name}.png`), fullPage, animations: "disabled" });
+  // The words on the head and Gift screens, for the text-budget review. Closed <details> are left out, as on screen.
+  if (/^(brief|heads|gift)-/.test(name)) {
+    const words = async (frame) => frame.evaluate(() => {
+      // innerText includes clipped text for screen readers. Omit it from the visible word count.
+      const style = document.createElement("style");
+      style.textContent = ".sr-only { display: none !important; }";
+      document.head.append(style);
+      try {
+        const visible = document.querySelector("dialog:modal") ?? document.body;
+        return visible.innerText.replace(/\n{2,}/g, "\n").trim();
+      } finally {
+        style.remove();
+      }
+    });
+    const packet = page.frames().find((frame) => frame !== page.mainFrame() && frame.parentFrame() === page.mainFrame());
+    const dump = `${name}.txt`;
+    writeFileSync(path.join(OUT, dump), (await words(page)) + (packet ? "\n--- packet ---\n" + (await words(packet).catch(() => "")) : ""));
+    textDumps.add(dump);
+  }
 };
-// Serious and critical WCAG A/AA problems on the visible page, as "rule: target" lines.
-const axeProblems = async (page) => {
-  await page.addScriptTag({ content: AXE });
-  return page.evaluate(async () => {
-    const result = await window.axe.run(document, { runOnly: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"] });
-    return result.violations.filter((v) => v.impact === "serious" || v.impact === "critical").flatMap((v) => v.nodes.map((n) => `${v.id}: ${n.target.join(" ")}`));
+// Serious and critical WCAG A/AA problems on the visible page, as "rule: target" lines. The walkthrough passes `all`, more tags and `first`.
+const axeProblems = async (page, { tags = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"], all = false, first = false } = {}) => {
+  await page.evaluate(AXE); // evaluate, not a script tag, so a page with a strict policy still works
+  return page.evaluate(async (opt) => {
+    const result = await window.axe.run(document, { runOnly: opt.tags });
+    return result.violations.filter((v) => opt.all || v.impact === "serious" || v.impact === "critical").flatMap((v) => (opt.first ? v.nodes.slice(0, 1) : v.nodes).map((n) => `${v.id}: ${n.target.join(" ")}`));
+  }, { tags, all, first });
+};
+// Page-side measuring for the walkthrough. Installed before the page scripts run, so it also counts every scroll of the page.
+function installHelpers() {
+  window.__scroll = 0;
+  const last = new WeakMap();
+  document.addEventListener("scroll", (event) => {
+    const box = event.target === document ? document.scrollingElement : event.target;
+    window.__scroll += Math.abs(box.scrollTop - (last.get(box) ?? 0));
+    last.set(box, box.scrollTop);
+  }, true);
+  const tool = () => {
+    const memo = [new Map(), new Map()];
+    // Visible to the eye. With aria, an aria-hidden subtree does not count. Content of a closed <details> is hidden except its <summary>.
+    const vis = (el, aria) => {
+      if (!el) return true;
+      const seen = memo[+aria];
+      if (!seen.has(el)) {
+        const style = getComputedStyle(el), parent = el.parentElement;
+        seen.set(el, !(aria && el.getAttribute("aria-hidden") === "true") && !el.hidden && style.display !== "none" && style.visibility !== "hidden"
+          && !(parent && parent.tagName === "DETAILS" && !parent.open && el.tagName !== "SUMMARY") && vis(parent, aria));
+      }
+      return seen.get(el);
+    };
+    const texts = (aria = true) => {
+      const out = [], walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let node; (node = walker.nextNode());) {
+        const text = node.nodeValue.trim(), parent = node.parentElement;
+        if (!text || !parent || /^(SCRIPT|STYLE|NOSCRIPT)$/.test(parent.tagName) || !vis(parent, aria)) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const box = range.getBoundingClientRect();
+        if (box.width <= 1 || box.height <= 1) continue;
+        const px = parseFloat(getComputedStyle(parent).fontSize);
+        const matrix = parent instanceof SVGTextContentElement && parent.getScreenCTM();
+        out.push({ text, parent, px: matrix ? Math.round(px * Math.hypot(matrix.c, matrix.d) * 100) / 100 : px, bottom: box.bottom });
+      }
+      return out;
+    };
+    return { vis, texts };
+  };
+  const hint = (el) => `${el.tagName.toLowerCase()}${el.hasAttribute("data-sticky") ? "[data-sticky]" : ""}.${(el.getAttribute("class") ?? "").split(" ")[0]}`;
+  const fonts = (all) => ({
+    minFontPx: all.reduce((min, x) => Math.min(min, x.px), 99),
+    tinyText: all.filter((x) => x.px < 14).map((x) => ({ text: x.text.slice(0, 40), px: x.px, at: hint(x.parent) })),
   });
-};
+  window.__m = {
+    fonts: () => fonts(tool().texts(false)),
+    // How far the control is below the fold, and the visible words rendered above its top edge.
+    first(el) {
+      const box = el.getBoundingClientRect();
+      return { below: Math.max(0, Math.round(box.bottom - innerHeight)), words: tool().texts().filter((x) => x.bottom <= box.top + 1).reduce((n, x) => n + x.text.split(/\s+/).length, 0) };
+    },
+    snap() {
+      const { vis, texts } = tool(), all = texts();
+      const small = [], seen = new Set();
+      for (const el of document.querySelectorAll("a[href],button,select,textarea,summary,[role=button],input:not([type=hidden])")) {
+        let box = el;
+        if (el.matches("input[type=radio],input[type=checkbox]") ) box = el.closest("label") || el;
+        if (seen.has(box) || !vis(box, false)) continue;
+        seen.add(box);
+        const r = box.getBoundingClientRect();
+        if (!r.width || !r.height || (r.width + 0.01 >= 44 && r.height + 0.01 >= 44)) continue;
+        const rest = el.parentElement ? el.parentElement.innerText.replace(el.innerText, "").trim() : "";
+        small.push({ name: (el.getAttribute("aria-label") || (el.labels && el.labels[0] && el.labels[0].textContent.trim()) || box.innerText || el.id || el.tagName).trim().slice(0, 50),
+          in: ((box.closest("fieldset") || {}).querySelector?.call(box.closest("fieldset"), "legend") || {}).textContent || undefined,
+          w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10,
+          ...(el.tagName === "A" && getComputedStyle(el).display === "inline" && rest.split(/\s+/).length >= 4 ? { inline: true } : {}) });
+      }
+      const { minFontPx: minFont, tinyText: tiny } = fonts(all);
+      const long = [];
+      for (const el of document.body.querySelectorAll("*")) {
+        if (![...el.childNodes].some((n) => n.nodeType === 3 && n.nodeValue.trim()) || !vis(el, true) || getComputedStyle(el).display.startsWith("inline") || ![...el.children].every((ch) => getComputedStyle(ch).display.startsWith("inline"))) continue;
+        for (const sentence of el.innerText.split(/[.!?]\s+|\n+/)) if (sentence.trim().split(/\s+/).length > 20) long.push({ words: sentence.trim().split(/\s+/).length, text: sentence.trim().slice(0, 80) });
+      }
+      const wide = (el) => !!el && el.scrollWidth > el.clientWidth;
+      return { small, tiny, minFont, long,
+        side: { page: wide(document.documentElement), main: wide(document.querySelector("main")), root: wide(document.querySelector("#root > div")) },
+        states: [...document.querySelectorAll("[role=status],[role=alert],[aria-live]")].filter((el) => vis(el, true) && el.innerText.trim()).map((el) => `${el.getAttribute("role") || "live"}: ${el.innerText.trim().slice(0, 90)}`) };
+    },
+    // Keyboard-focus the control (a label focuses its input) and report its ring and any sticky or fixed bar over it.
+    probe(el) {
+      const target = el.tagName === "LABEL" ? el.querySelector("input,select,textarea") || el : el;
+      target.focus();
+      const ring = target.matches("input[type=radio],input[type=checkbox]") ? target.closest("label") || target : target;
+      const style = getComputedStyle(ring), box = ring.getBoundingClientRect();
+      const over = [...document.querySelectorAll("*")].filter((x) => {
+        const position = getComputedStyle(x).position, b = x.getBoundingClientRect();
+        return (position === "sticky" || position === "fixed") && !x.contains(target) && b.height > 0
+          && Math.min(box.right, b.right) - Math.max(box.left, b.left) > 1 && Math.min(box.bottom, b.bottom) - Math.max(box.top, b.top) > 1;
+      }).map(hint);
+      return { focused: document.activeElement === target, outline: style.outlineStyle === "none" ? 0 : parseFloat(style.outlineWidth), shadow: style.boxShadow !== "none", over };
+    },
+  };
+}
 // ONLY=<words> runs the checks whose name holds those words, such as ONLY="screen shows" for the role screens.
 const check = async (name, action) => {
   if (process.env.ONLY && !name.includes(process.env.ONLY)) return;
@@ -349,6 +484,8 @@ const check = async (name, action) => {
   } catch (error) {
     process.exitCode = 1;
     process.stdout.write(`FAIL ${name}: ${String(error.message).split("\n")[0]}\n`);
+    // The harness line of the failed step, for a quick fix.
+    process.stdout.write(`     ${String(error.message).split("\n").slice(1, 6).join(" ")} ${String(error.stack).split("\n").find((line) => line.includes("verify-hiring-screens.mjs")) ?? ""}\n`);
   }
 };
 try {
@@ -735,13 +872,13 @@ try {
   await check("the Heads screen shows the chosen head's candidates and remembers the screen", async () => {
     await page.goto(`${origin}/?view=heads&roles=1`);
     await page.getByRole("button", { name: "Kru Ek" }).click();
-    await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
+    await page.getByRole("heading", { name: "Next mock" }).waitFor();
     assert.equal(await page.getByRole("link", { name: "Open interview brief" }).getAttribute("href"), "/hiring/brief/sample-token");
     await page.getByRole("button", { name: "Show the résumé of Reply Low" }).click();
     await shot(page, "role-heads");
     // The browser remembers the role screen and the head.
     await page.goto(`${origin}/?roles=1`);
-    await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
+    await page.getByRole("heading", { name: "Next mock" }).waitFor();
     await page.setViewportSize({ width: 390, height: 844 });
     await shot(page, "role-heads-phone");
     await page.goto(`${origin}/?view=hr&roles=1`);
@@ -805,6 +942,18 @@ try {
     await page.evaluate(() => document.documentElement.classList.remove("dark"));
   });
   await check("the head and Gift screens render on phone and desktop", async () => {
+    const onOneLine = (locator) => locator.evaluate((node) => {
+      const text = document.createRange();
+      text.selectNodeContents(node);
+      return text.getClientRects().length === 1;
+    });
+    const assertLeftEdge = async (...locators) => {
+      const edges = await Promise.all(locators.map((locator) => locator.evaluate((node) => node.getBoundingClientRect().x + (node.tagName === "P" ? parseFloat(getComputedStyle(node).paddingLeft) : 0))));
+      assert.ok(Math.max(...edges) - Math.min(...edges) <= 1, `Uneven left edges: ${edges.join(", ")}`);
+    };
+    const title = page.getByRole("heading", { level: 1 });
+    const headsEdge = () => assertLeftEdge(title,
+      page.getByRole("group", { name: "Choose your name" }), page.getByRole("heading", { name: "Next mock" }), page.locator("#next-mock > :last-child"));
     // The brief page scrolls as a whole page, not inside the dashboard frame.
     // full: let the document grow for a full-page shot. Otherwise the page scrolls inside .page, as in production.
     const briefPage = async (state, width, height, full = true) => {
@@ -813,14 +962,84 @@ try {
       await page.addStyleTag({ content: full ? "#root{height:auto!important;overflow:visible!important;padding:0!important}" : "#root{padding:0!important}" });
       await page.getByRole("heading", { name: "Sample Dao" }).waitFor();
     };
+    for (const [state, message, button] of BRIEF_STATES) {
+      await briefPage(state, 390, 844);
+      assert.equal(await page.getByText(message, { exact: true }).count(), 1);
+      assert.equal(await page.getByRole("button", { name: "Yes, send to HR" }).count(), state === "closed" ? 1 : 0);
+      assert.equal(await page.getByRole("button", { name: "Check again" }).count(), button === "Check again" ? 1 : 0);
+      const resume = page.getByRole("link", { name: "Open the résumé (PDF)" });
+      assert.equal(await resume.evaluate((el) => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
+      await shot(page, `brief-${state}-phone`, true);
+      if (button) {
+        await briefPage(state, 390, 844, false);
+        const action = page.getByRole("button", { name: button });
+        assert.ok(await action.evaluate((el) => el.getBoundingClientRect().bottom <= innerHeight && document.querySelector("main").scrollTop === 0));
+        assert.equal(await action.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(20, 33, 61)");
+        await shot(page, `brief-${state}-phone-fold`);
+      }
+    }
     await briefPage("open", 390, 844);
     await shot(page, "brief-open-phone", true);
     assert.deepEqual(await axeProblems(page), [], "axe on brief");
+    await briefPage("open", 390, 844, false);
     await shot(page, "brief-open-phone-fold");
-    for (const select of await page.locator("form select").all()) await select.selectOption({ index: 1 });
+    // 14 score tiles, then the required Yes/No checks answer; Send scores stays disabled until both are done.
+    const tiles = page.locator("form label:has(input[type=radio][value='8'])");
+    assert.equal(await tiles.count(), 14);
+    assert.equal(await page.locator("#scores select").count(), 0);
+    await page.getByRole("status").filter({ hasText: /^0 of 14 scored$/ }).waitFor();
+    assert.equal(await page.getByText(/^Suggested score/).count(), 0);
+    const tick = page.getByRole("checkbox").first();
+    await tick.check();
+    await page.getByText(/^Suggested score: (4|7|10)\.$/).waitFor();
+    assert.equal(await tick.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(20, 33, 61)");
+    await page.emulateMedia({ forcedColors: "active" });
+    assert.equal(await tick.evaluate((el) => getComputedStyle(el).appearance), "auto");
+    await page.emulateMedia({ forcedColors: "none" });
+    for (let i = 0, n = await tiles.count(); i < n; i++) await tiles.nth(i).click();
+    await page.getByRole("status").filter({ hasText: "Answer the required checks to send." }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Send scores" }).isDisabled(), true);
+    await page.locator("form label", { hasText: /^Yes$/ }).click();
     await page.getByRole("button", { name: /Send scores/ }).click();
-    await page.getByText(/Scores sent/).waitFor();
-    await shot(page, "brief-sent-phone", true);
+    await page.getByText("112/140", { exact: true }).waitFor();
+    await page.waitForFunction(() => document.activeElement?.matches('[role="group"][aria-label^="Scores sent"]'));
+    assert.equal(await page.getByRole("status").filter({ hasText: "Scores sent" }).count(), 0);
+    assert.ok(await page.getByRole("button", { name: "Yes, send to HR" }).isVisible());
+    const recommendJump = page.getByRole("link", { name: "Go to recommendation" });
+    assert.equal(await recommendJump.getAttribute("href"), "#recommendation");
+    assert.equal(await recommendJump.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(20, 33, 61)");
+    await shot(page, "brief-sent-phone");
+    await page.getByRole("button", { name: "Edit scores" }).click();
+    const firstScore = page.locator("#scores input[type=radio]").first();
+    await page.waitForFunction(() => document.activeElement === document.querySelector("#scores input[type=radio]"));
+    await firstScore.locator("..").click();
+    await page.locator("[data-sticky]").getByRole("status").filter({ hasText: "Score changes not sent." }).waitFor();
+    assert.equal(await page.getByRole("link", { name: "Go to mock scores" }).getAttribute("href"), "#scores");
+    assert.equal(await page.getByRole("link", { name: "Go to scores", exact: true }).count(), 0);
+    const usesSent = page.getByRole("status").filter({ hasText: "Recommendation uses sent scores." });
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      assert.ok(await onOneLine(usesSent), `The sent score instruction wraps at ${width}px`);
+    }
+    await shot(page, "brief-unsent-phone");
+    await page.evaluate(() => history.replaceState(null, "", "?brief=open&sendFailed=1"));
+    await page.getByRole("button", { name: "Send scores" }).click();
+    const failure = page.getByRole("alert").filter({ hasText: "The scores were not saved. Try again." });
+    assert.equal(await failure.evaluate((el) => getComputedStyle(el).fontSize), "16px");
+    await page.evaluate(() => history.replaceState(null, "", "?brief=open"));
+    await page.getByRole("button", { name: "Send scores" }).click();
+    await page.getByRole("button", { name: "Edit scores" }).waitFor();
+    await page.getByRole("button", { name: "Yes, send to HR" }).click();
+    await page.getByText(/Recommendation recorded/).first().waitFor();
+    assert.equal(await page.getByRole("link", { name: /^Go to (mock scores|recommendation)$/ }).count(), 0);
+    await page.addStyleTag({ content: "#root{height:auto!important;overflow:visible!important}" });
+    await page.locator("main").evaluate((el) => { el.scrollTop = 0; });
+    await shot(page, "brief-recommended-phone", true);
+    await briefPage("open", 390, 844);
+    await page.locator('summary[aria-label="Guide: what each score means for Accuracy of Information"]').click();
+    await shot(page, "brief-bands-phone", true);
+    await page.locator("summary", { hasText: "Interviewer guide" }).click();
+    await shot(page, "brief-guide-phone", true);
     // The jump link lands with the first score row and the Send bar on screen; keyboard focus is visible.
     await briefPage("open", 390, 844, false);
     await page.getByRole("link", { name: "Go to mock scores" }).click();
@@ -828,8 +1047,18 @@ try {
     await shot(page, "brief-jump-phone");
     await page.locator("#scores input[type=radio]").first().focus();
     await page.keyboard.press("ArrowRight");
+    assert.equal(await page.getByRole("radio", { name: "9", exact: true }).first().isChecked(), true);
     await shot(page, "brief-focus-phone");
     for (const width of [320, 390]) {
+      await briefPage("closed", width, 700, false);
+      const yes = page.getByRole("button", { name: "Yes, send to HR" });
+      const no = page.getByRole("button", { name: "No, reject" });
+      const reason = page.getByRole("textbox", { name: "Reason for No (5+ characters)" });
+      assert.equal(await no.getAttribute("aria-describedby"), await reason.locator("xpath=../span").getAttribute("id"));
+      await reason.fill("More practice needed.");
+      const [yesBox, noBox, reasonBox] = await Promise.all([yes.boundingBox(), no.boundingBox(), reason.boundingBox()]);
+      assert.ok(noBox.y >= yesBox.y + yesBox.height && yesBox.width === reasonBox.width && noBox.width === reasonBox.width);
+      assert.ok(await onOneLine(yes) && await onOneLine(no), `Decision buttons wrap at ${width}px`);
       await briefPage("open", width, 700, false);
       // The page scrolls inside main (.page), as in production, so measure that box and the document.
       assert.ok(await page.evaluate(() => [document.documentElement, document.querySelector("main")].every((box) => box.scrollWidth <= box.clientWidth)), `brief scrolls sideways at ${width}px`);
@@ -838,41 +1067,53 @@ try {
         await shot(page, "brief-open-320", true);
       }
     }
-    await briefPage("wait", 390, 844);
-    await shot(page, "brief-wait-phone", true);
     await briefPage("open", 1440, 900);
     await shot(page, "brief-open-desktop", true);
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`${origin}/?view=heads&roles=1`);
     await page.getByRole("button", { name: "Kru Ek" }).click();
-    await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
+    await page.getByRole("heading", { name: "Next mock" }).waitFor();
+    await headsEdge();
     await shot(page, "heads-desktop");
     assert.deepEqual(await axeProblems(page), [], "axe on heads");
     // Reload at phone size: a resize alone can leave a stale paint in the screenshot.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${origin}/?view=heads&roles=1`);
-    await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
+    await page.getByRole("heading", { name: "Next mock" }).waitFor();
+    await headsEdge();
     await shot(page, "heads-phone");
+    await page.goto(`${origin}/?view=heads&roles=1&headNext=1`);
+    await page.getByRole("status").filter({ hasText: /Kru Ek · next mock .*11:00/ }).waitFor();
+    assert.match(await page.locator("#next-mock").innerText(), /Reply Low/);
+    assert.doesNotMatch(await page.locator("#next-mock").innerText(), /Paper only/);
+    await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
+    const paperCard = page.locator("section").filter({ has: page.getByRole("heading", { name: /Paper visits/ }) }).getByRole("article").filter({ hasText: "Sample Paper" });
+    assert.ok(await paperCard.getByText("Physics", { exact: true }).isVisible());
+    assert.equal(await page.getByRole("link", { name: "Tutor onboarding and Experts access" }).count(), 0);
+    await shot(page, "heads-next-phone");
     // Kru Peat's ended mocks: each card names its next step.
     for (const [width, height, size] of [[1440, 900, "desktop"], [390, 844, "phone"]]) {
       await page.setViewportSize({ width, height });
       await page.goto(`${origin}/?view=heads&roles=1`);
       await page.getByRole("button", { name: "Kru Peat" }).click();
       await page.getByRole("link", { name: /Record recommendation/ }).first().waitFor();
+      const decidedCard = page.getByRole("article").filter({ hasText: "Recommendation: Yes" });
+      assert.equal(await decidedCard.getByText("Scores sent", { exact: true }).count(), 0);
       await shot(page, `heads-peat-${size}`, size === "phone");
     }
     await page.setViewportSize({ width: 320, height: 700 });
     await page.goto(`${origin}/?view=heads&roles=1`);
     const actionMocks = page.locator("section").filter({ has: page.getByRole("heading", { name: /Mocks that need action/ }) });
     for (const [name, note] of [
-      ["Sample Lek", "Scores are being checked."],
-      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => [name, "Ask admin to check the scores."]),
+      ["Sample Lek", "Scores are being checked. Come back later."],
+      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => [name, "Ask admin to check scores."]),
     ]) {
       const card = actionMocks.getByRole("article").filter({ hasText: name });
       await card.getByText(note, { exact: true }).waitFor();
       assert.equal(await card.getByText("Due", { exact: true }).count(), 0);
       const link = card.getByRole("link", { name: `Open interview brief for ${name}` });
       assert.equal(await link.getAttribute("href"), "/hiring/brief/sample-token");
+      assert.equal(await link.getAttribute("data-tone"), null);
       const target = await link.boundingBox();
       assert.ok(target.width >= 44 && target.height >= 44, `brief link is too small for ${name}`);
     }
@@ -882,29 +1123,75 @@ try {
       await page.setViewportSize({ width, height });
       await page.goto(`${origin}/?view=review&roles=1&gift=1`);
       await page.getByRole("button", { name: "Read review packet" }).first().waitFor();
+      assert.equal(await title.textContent(), "Final review");
+      await assertLeftEdge(title, page.locator("article").filter({ has: page.getByRole("heading", { name: "Reply Passed" }) }));
+      assert.equal(await page.locator("header details").count(), 0);
+      assert.equal(await page.getByText("Automation paused · Messages paused", { exact: true }).count(), 0);
+      await page.getByText("Automation and Messages off", { exact: true }).waitFor();
+      await page.getByRole("status").filter({ hasText: "Ask Kevin to enable both." }).waitFor();
       await shot(page, `gift-review-${size}`);
       assert.deepEqual(await axeProblems(page), [], "axe on gift");
     }
     // With the switches on, Approve unlocks only after the packet is shown.
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(`${origin}/?view=review&roles=1&gift=1&live=1`);
+    await page.goto(`${origin}/?view=hr&roles=1&gift=1&hr=1&live=1#review-r1`);
+    const linkedHeading = page.getByRole("heading", { name: "Reply Passed" });
+    await linkedHeading.waitFor();
+    await page.waitForFunction(() => document.activeElement?.textContent === "Reply Passed");
+    assert.ok(await page.getByRole("heading", { name: "Booked calls by day" }).isVisible());
+    assert.ok(await linkedHeading.evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      return box.top >= 0 && box.bottom <= innerHeight;
+    }));
+    await page.goto(`${origin}/?view=hr&roles=1&gift=1&live=1#review-r1`);
+    await linkedHeading.waitFor();
+    await page.waitForFunction(() => document.activeElement?.textContent === "Reply Passed");
+    assert.equal(await page.getByRole("heading", { name: "Booked calls by day" }).count(), 0);
+    assert.equal(await page.getByRole("heading", { name: /Reply (Passed|Low)/ }).first().textContent(), "Reply Passed");
     const approve = page.getByRole("button", { name: "Approve and send offer" }).first();
     await approve.waitFor();
+    await page.getByText("Read the packet to unlock sign-off.", { exact: true }).waitFor();
     assert.equal(await approve.isDisabled(), true);
+    await shot(page, "gift-review-unread-phone");
     await page.getByRole("button", { name: /Read review packet/ }).first().click();
     await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" }).waitFor();
     await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => b.textContent === "Approve and send offer" && !b.disabled));
+    assert.ok(await page.getByRole("button", { name: "Close packet" }).evaluate((node) => document.activeElement === node), "Close packet is not focused: " + await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 120)));
     await page.getByRole("button", { name: "Close packet" }).first().click();
     assert.equal(await approve.isEnabled(), true);
+    // Close goes through history.back(), so focus lands a tick later.
+    await page.waitForFunction(() => document.activeElement?.textContent === "Approve and send offer", null, { timeout: 3000 });
+    assert.ok(await page.getByRole("button", { name: "Read packet again" }).isVisible());
+    await page.getByText("Ready for sign-off.", { exact: true }).waitFor();
+    const approveDescription = await approve.getAttribute("aria-describedby");
+    assert.match(await page.locator(`[id="${approveDescription}"]`).getAttribute("class"), /sr-only/);
     await shot(page, "gift-review-ready-phone");
+    await page.evaluate(() => {
+      const url = new URL(location.href);
+      url.searchParams.set("stale", "unknown");
+      history.replaceState(null, "", url);
+    });
+    page.once("dialog", (dialog) => dialog.accept());
+    await approve.click();
+    await page.getByText("Could not check the packet just now.", { exact: true }).waitFor();
+    assert.ok(await page.getByRole("button", { name: "Check again" }).isEnabled());
+    assert.equal(await approve.isDisabled(), true);
+    assert.deepEqual(await page.evaluate(() => window.posted), []);
     await page.goto(`${origin}/?view=review&roles=1&gift=1&stale=1&live=1`);
     const read = page.getByRole("button", { name: "Read review packet" }).first();
     const reject = page.getByRole("button", { name: "Reject and inform candidate" }).first();
-    await page.getByRole("alert").filter({ hasText: "The evidence changed. Ask HR to send a new packet." }).waitFor();
-    await page.getByRole("textbox", { name: "Sign-off note (optional for approval)" }).first().fill("Reviewed the evidence.");
+    await page.getByRole("status").filter({ hasText: "Evidence changed. Ask HR for a new packet." }).waitFor();
+    const rejectionNote = page.getByRole("textbox", { name: "Rejection note (5+ characters)" }).first();
+    await rejectionNote.fill("Reviewed the evidence.");
     assert.equal(await approve.isDisabled(), true);
     assert.equal(await reject.isDisabled(), true);
     assert.equal(await read.isDisabled(), true);
+    const checkAgain = page.getByRole("button", { name: "Check again" });
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      assert.equal(await checkAgain.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(20, 33, 61)");
+      assert.equal((await checkAgain.boundingBox()).width, (await rejectionNote.boundingBox()).width);
+    }
     await shot(page, "gift-review-stale-phone");
     await page.evaluate(() => {
       const url = new URL(location.href);
@@ -912,7 +1199,7 @@ try {
       history.replaceState(null, "", url);
     });
     await page.getByRole("button", { name: "Check again" }).click();
-    await page.getByText("Read the packet first.").first().waitFor();
+    await page.getByText("Read the packet to unlock sign-off.", { exact: true }).waitFor();
     assert.equal(await approve.isDisabled(), true);
     assert.equal(await reject.isDisabled(), true);
     await read.click();
@@ -920,6 +1207,9 @@ try {
     await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => b.textContent === "Approve and send offer" && !b.disabled));
     await page.getByRole("button", { name: "Close packet" }).first().click();
     assert.equal(await reject.isEnabled(), true);
+    page.once("dialog", (dialog) => dialog.accept());
+    await reject.click();
+    await page.getByRole("status").filter({ hasText: /^Application rejected\. The email is queued\.$/ }).waitFor();
     // Gift reads the packet in the page; sign-off unlocks only after it is shown (here Reject still needs a note).
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${origin}/?view=review&roles=1&gift=1`);
@@ -928,15 +1218,46 @@ try {
     await page.waitForTimeout(300);
     const packetRoot = page.frameLocator("iframe[title^='Review packet']").locator("html");
     const assertPacketFits = async (width) => {
+      const reader = page.getByRole("dialog", { name: "Review packet for Reply Passed" });
+      const header = reader.getByRole("button", { name: "Close packet" }).locator("..");
+      // The name stays for screen readers only.
+      assert.deepEqual(await header.evaluate((el) => [...el.children].filter((child) => child.getBoundingClientRect().width > 1).map((child) => child.textContent)), ["Close packet"], "packet header shows more than Close");
+      assert.match(await header.evaluate((el) => getComputedStyle(el).justifyContent), /end$/);
       assert.ok(await page.locator("html").evaluate((root) => root.scrollWidth <= root.clientWidth), `Gift page scrolls sideways at ${width}px`);
       assert.ok(await packetRoot.evaluate(async (root) => {
         await root.ownerDocument.fonts.ready;
         return root.scrollWidth <= root.clientWidth;
       }), `Gift packet iframe scrolls sideways at ${width}px`);
+      const gauges = await packetRoot.locator(".gauge").evaluateAll((nodes) => nodes.map((gauge) => {
+        const svg = gauge.querySelector("svg").getBoundingClientRect();
+        const ends = gauge.querySelector(".gauge-ends").getBoundingClientRect();
+        const [zero, hundred] = gauge.querySelectorAll(".gauge-ends span");
+        const score = gauge.querySelector(".gauge-value");
+        const value = score.getBoundingClientRect();
+        const number = score.querySelector("strong").getBoundingClientRect();
+        const text = document.createRange();
+        text.selectNodeContents(hundred);
+        return ends.top >= svg.bottom && value.top >= ends.bottom && text.getClientRects().length === 1
+          && zero.offsetTop === hundred.offsetTop && score.scrollWidth <= score.clientWidth && number.bottom <= value.bottom + 2;
+      }));
+      assert.deepEqual(gauges, [true, true, true], `Gauge labels and scores do not fit at ${width}px`);
+      assert.equal(await packetRoot.locator(".stack-ends").evaluate((el) => getComputedStyle(el).fontSize), "14px");
+      assert.equal(await packetRoot.locator(".rubric-group h3 span").first().evaluate((el) => getComputedStyle(el).fontSize), "16px");
     };
     await assertPacketFits(390);
     await shot(page, "gift-review-packet-phone");
+    // The weighted breakdown with one evidence row open.
+    await packetRoot.evaluate((root) => {
+      const row = root.querySelector(".stack-key details");
+      if (row) row.open = true;
+      (row ?? root).scrollIntoView({ block: "center" });
+    });
+    await shot(page, "gift-review-packet-ats-phone");
+    assert.ok(await packetRoot.evaluate((root) => root.scrollWidth <= root.clientWidth), "the packet scrolls sideways with evidence open");
     assert.deepEqual(await axeProblems(page), [], "axe on gift packet");
+    await page.getByRole("button", { name: "Close packet" }).click();
+    // Approve is blocked, so focus returns to the Read button.
+    await page.waitForFunction(() => /Read (review packet|packet again)/.test(document.activeElement?.textContent ?? ""), null, { timeout: 3000 });
     await page.setViewportSize({ width: 320, height: 700 });
     await page.goto(`${origin}/?view=review&roles=1&gift=1`);
     await page.getByRole("button", { name: "Read review packet" }).first().waitFor();
@@ -946,9 +1267,202 @@ try {
     await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" }).waitFor();
     await assertPacketFits(320);
     await shot(page, "gift-review-packet-320");
+    // The weighted breakdown with one evidence row open.
+    await packetRoot.evaluate((root) => {
+      const row = root.querySelector(".stack-key details");
+      if (row) row.open = true;
+      (row ?? root).scrollIntoView({ block: "center" });
+    });
+    await shot(page, "gift-review-packet-ats-320");
+    assert.ok(await packetRoot.evaluate((root) => root.scrollWidth <= root.clientWidth), "the packet scrolls sideways with evidence open");
     await page.setViewportSize({ width: 1440, height: 900 });
   });
+  await check("walkthrough", async () => {
+    // The three tasks, as a user does them, in each engine at two widths. It records numbers; the anchors are judged from metrics.json.
+    const AXE_TAGS = { tags: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"], all: true, first: true };
+    let wk;
+    try {
+      wk = await webkit.launch();
+    } catch (error) {
+      wk = { error: String(error.message).split("\n")[0] };
+    }
+    const task = async (engine, width, height, id) => {
+      const context = await engine.newContext({ viewport: { width, height } });
+      await context.route("**/*", (route) => (route.request().url().startsWith(origin) ? route.continue() : route.abort()));
+      await context.addInitScript(installHelpers);
+      const tab = await context.newPage();
+      tab.on("pageerror", (error) => errors.push(error.message));
+      const m = { taps: 0, scrollPx: 0, small: new Map(), tiny: new Map(), long: new Map(), minFont: 99, side: {}, states: new Set(), focusVisible: [], focusObscured: [], axe: new Set(), confirms: [] };
+      const drain = async () => {
+        m.scrollPx += await tab.evaluate(() => window.__scroll ?? 0);
+        await tab.evaluate(() => { window.__scroll = 0; });
+      };
+      const snap = async () => {
+        const r = await tab.evaluate(() => window.__m.snap());
+        r.small.forEach((x) => m.small.set(`${x.name}|${x.w}|${x.h}`, x));
+        r.tiny.forEach((x) => m.tiny.set(`${x.text}|${x.px}`, x));
+        r.long.forEach((x) => m.long.set(x.text, x));
+        m.minFont = Math.min(m.minFont, r.minFont);
+        for (const [key, value] of Object.entries(r.side)) m.side[key] = m.side[key] || value;
+        r.states.forEach((x) => m.states.add(x));
+      };
+      const axe = async (frame = tab, prefix = "") => {
+        if (engine === chromium || engine === browser) (await axeProblems(frame, AXE_TAGS)).forEach((x) => m.axe.add(prefix + x));
+      };
+      const open = async (query) => {
+        await drain();
+        await tab.goto(`${origin}/?${query}`);
+        await tab.addStyleTag({ content: "#root{padding:0!important}" });
+      };
+      // The first control of the task: how far below the fold, and the words above it.
+      const first = async (loc, name, key = "") => {
+        const found = await loc.evaluate((el) => window.__m.first(el));
+        m[`${key}firstAction`] = name;
+        m[`${key}scrollBeforeFirstActionPx`] = found.below;
+        m[`${key}wordsAboveFirstAction`] = found.words;
+      };
+      const tap = async (loc, name) => {
+        await tab.keyboard.press("Shift");
+        const probe = await loc.evaluate((el) => window.__m.probe(el));
+        if (!probe.focused || (probe.outline < 2 && !probe.shadow)) m.focusVisible.push({ name, outline: probe.outline, shadow: probe.shadow, focused: probe.focused });
+        if (probe.over.length) m.focusObscured.push({ name, by: probe.over });
+        await loc.click();
+        m.taps++;
+      };
+      tab.on("dialog", (dialog) => {
+        m.confirms.push(dialog.message());
+        m.taps++;
+        void dialog.accept();
+      });
+      try {
+        if (id === "H1") {
+          await open("brief=open");
+          await tab.getByRole("heading", { name: "Sample Dao" }).waitFor();
+          const jump = tab.getByRole("link", { name: "Go to mock scores" });
+          await first(jump, "Go to mock scores");
+          await snap();
+          await axe();
+          await tap(jump, "Go to mock scores");
+          const tiles = tab.locator("form label:has(input[type=radio][value='8'])");
+          for (let i = 0, n = await tiles.count(); i < n; i++) await tap(tiles.nth(i), `score 8, item ${i + 1}`);
+          await snap();
+          await tap(tab.locator("form label", { hasText: /^Yes$/ }), "required checks: Yes");
+          await tap(tab.getByRole("button", { name: /Send scores/ }), "Send scores");
+          await tab.getByText(/Scores sent/).first().waitFor();
+          m.scoreReceipt = await tab.getByRole("group", { name: /Scores sent/ }).evaluate((receipt) => {
+            const recommendation = document.getElementById("recommendation").querySelector("h2").getBoundingClientRect();
+            return { topPx: Math.round(receipt.getBoundingClientRect().top), focused: document.activeElement === receipt,
+              recommendationInView: recommendation.top >= 0 && recommendation.bottom <= innerHeight };
+          });
+          await snap();
+          await tap(tab.getByRole("button", { name: "Yes, send to HR" }), "Yes, send to HR");
+          await tab.getByText(/Recommendation recorded/).first().waitFor();
+          await snap();
+          await axe();
+        } else if (id === "H2") {
+          await open("view=heads&roles=1");
+          const ek = tab.getByRole("button", { name: "Kru Ek" });
+          await ek.waitFor();
+          await first(ek, "Kru Ek");
+          await snap();
+          await axe();
+          await tap(ek, "Kru Ek");
+          await tab.getByRole("heading", { name: "Next mock" }).waitFor();
+          await snap();
+          // Return visit: the browser remembers the head, so the next mock card should already be there.
+          await drain();
+          const firstVisit = m.scrollPx;
+          await tab.reload();
+          await tab.addStyleTag({ content: "#root{padding:0!important}" });
+          const card = tab.locator("#next-mock article").first();
+          await card.waitFor();
+          await first(card, (await card.innerText()).replace(/\s+/g, " ").slice(0, 60), "return");
+          await snap();
+          await axe();
+          m.returnVisit = { taps: 0, firstAction: m.returnfirstAction, scrollBeforeFirstActionPx: m.returnscrollBeforeFirstActionPx, wordsAboveFirstAction: m.returnwordsAboveFirstAction, firstVisitScrollPx: firstVisit };
+        } else {
+          await open("view=review&roles=1&gift=1&live=1");
+          const read = tab.getByRole("button", { name: /Read review packet/ }).first();
+          await read.waitFor();
+          await first(read, "Read review packet");
+          await snap();
+          await axe();
+          await tap(read, "Read review packet");
+          const heading = tab.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" });
+          await heading.waitFor();
+          await tab.waitForTimeout(300);
+          const frame = tab.frames().find((f) => f !== tab.mainFrame());
+          m.side.packet = await frame.evaluate(async () => { await document.fonts.ready; return document.documentElement.scrollWidth > document.documentElement.clientWidth; });
+          await frame.evaluate(installHelpers);
+          m.packet = await frame.evaluate(() => window.__m.fonts());
+          assert.ok(m.packet.minFontPx >= 12, "Packet text is smaller than 12px");
+          assert.equal(m.side.packet, false, "Packet iframe scrolls sideways");
+          await snap();
+          await axe();
+          // The sandboxed iframe does not run axe, so the same packet HTML is checked in a page of its own.
+          const packetTab = await context.newPage();
+          await packetTab.setContent(await tab.evaluate(() => window.realPacket));
+          await axe(packetTab, "packet: ");
+          await packetTab.close();
+          await tap(tab.getByRole("button", { name: "Close packet" }).first(), "Close packet");
+          await tab.getByText("Ready for sign-off.").first().waitFor();
+          await snap();
+          await tap(tab.getByRole("button", { name: "Approve and send offer" }).first(), "Approve and send offer");
+          await tab.getByRole("status").filter({ hasText: /^Offer approved\. The offer email is queued\.$/ }).waitFor();
+          await snap();
+        }
+        await drain();
+        const cap = (map, n) => [...map.values()].slice(0, n);
+        const { small, tiny, long, axe: found, states, minFont, ...rest } = m;
+        return { ...rest, smallTargets: cap(small, 60), minFontPx: minFont, tinyText: cap(tiny, 30), longSentences: cap(long, 20), sidewaysScroll: m.side, axe: [...found], states: [...states] };
+      } finally {
+        await context.close();
+      }
+    };
+    const metrics = {};
+    for (const [name, engine] of [["chromium", browser], ["webkit", wk]]) {
+      if (engine.error) {
+        metrics[name] = { error: engine.error };
+        continue;
+      }
+      metrics[name] = {};
+      for (const [width, height] of [[390, 844], [320, 700]]) {
+        metrics[name][`${width}x${height}`] = {};
+        for (const id of ["H1", "H2", "G1"]) {
+          process.stderr.write(`walkthrough ${name} ${width}x${height} ${id}\n`);
+          metrics[name][`${width}x${height}`][id] = await task(engine, width, height, id);
+        }
+      }
+    }
+    await wk.close?.();
+    await page.setViewportSize({ width: 390, height: 844 });
+    const briefStates = {};
+    for (const [state, message, button] of BRIEF_STATES) {
+      await page.goto(`${origin}/?brief=${state}`);
+      await page.addStyleTag({ content: "#root{padding:0!important}" });
+      const nextAction = button ? page.getByRole("button", { name: button }) : page.getByText(message, { exact: true });
+      briefStates[state] = { nextAction: button ?? message, belowFoldPx: await nextAction.evaluate((el) =>
+        Math.max(0, Math.ceil(el.getBoundingClientRect().bottom - innerHeight))) };
+      assert.equal(briefStates[state].belowFoldPx, 0, `${state} next action is below the fold`);
+    }
+    metrics.chromium["390x844"].briefStates = briefStates;
+    if (OUT) {
+      mkdirSync(OUT, { recursive: true });
+      writeFileSync(path.join(OUT, "metrics.json"), JSON.stringify(metrics, null, 2));
+    }
+    for (const [name, sizes] of Object.entries(metrics)) {
+      if (sizes.error) process.stdout.write(`  ${name}: ${sizes.error}\n`);
+      for (const [size, tasks] of Object.entries(sizes.error ? {} : sizes)) for (const [id, r] of Object.entries(tasks)) {
+        if (id === "briefStates") continue;
+        const row = [name, size, id, `taps ${r.taps}`, `scroll ${Math.round(r.scrollPx)}`, `below ${r.scrollBeforeFirstActionPx}`, `words ${r.wordsAboveFirstAction}`, `small ${r.smallTargets.filter((x) => !x.inline).length}`, `font ${r.minFontPx}`, `long ${r.longSentences.length}`, `side ${Object.values(r.sidewaysScroll).some(Boolean)}`, `axe ${r.axe.length}`, `focus ${r.focusVisible.length}/${r.focusObscured.length}`];
+        process.stdout.write(`  ${row.join(" | ")}\n`);
+      }
+    }
+  });
   await check("the page has no script errors", async () => assert.deepEqual(errors, []));
+  if (OUT && textDumps.size) {
+    writeFileSync(path.join(OUT, "words.txt"), execFileSync("wc", ["-w", ...[...textDumps].sort()], { cwd: OUT }));
+  }
 } finally {
   await browser?.close();
   server.close();

@@ -1,11 +1,11 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { RUBRIC, RUBRIC_ITEMS, stressSuggestion, type MockRubric, type RubricItem, type StressTicks } from "@/lib/hiring/marking-sheet";
+import { ITEM_MAX, RUBRIC, RUBRIC_ITEMS, stressSuggestion, type MockRubric, type RubricItem, type StressTicks } from "@/lib/hiring/marking-sheet";
 import { BAND_LABELS, RUBRIC_GUIDE, STRESS_ELEMENTS } from "@/lib/hiring/rubric-guide";
 import type { BriefPending } from "./brief";
 import c from "./booking.module.css";
 
-const TILE_SCORES = [10, 7, 4, 1];
-const OTHER_SCORES = [9, 8, 6, 5, 3, 2];
+const TILE_SCORES = Array.from({ length: ITEM_MAX }, (_, index) => ITEM_MAX - index);
+const BAND_SCORES = [10, 7, 4, 1];
 
 /** The interviewer's score form for one mock. The server checks the scores again and calculates the total. */
 export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSent, pending, setPending, onEdit, onSent }: {
@@ -24,6 +24,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   const [items, setItems] = useState<Partial<Record<RubricItem, number>>>(() => Object.fromEntries(RUBRIC_ITEMS.flatMap((id) => (saved?.items[id] ? [[id, saved.items[id]]] : []))));
   const [comments, setComments] = useState(saved?.comments ?? "");
   const [ticks, setTicks] = useState<StressTicks>(() => saved?.stressTest ?? { listens: false, explains: false, plan: false });
+  const [ticksUsed, setTicksUsed] = useState(() => !!saved?.stressTest && Object.values(saved.stressTest).some(Boolean));
   const [checksDone, setChecksDone] = useState<boolean | null>(saved?.checksDone ?? null);
   const [state, setState] = useState<"idle" | "sent">("idle");
   const [editing, setEditing] = useState(!lastSent);
@@ -31,6 +32,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   const feedback = useRef<HTMLParagraphElement>(null);
   const summary = useRef<HTMLDivElement>(null);
   const firstScore = useRef<HTMLInputElement>(null);
+  const sendBar = useRef<HTMLDivElement>(null);
   const sentTotal = lastSent?.editCount === editCount ? lastSent.total : null;
   useEffect(() => {
     if (state !== "sent" && !error) {
@@ -39,12 +41,12 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
     }
     const message = summary.current ?? feedback.current;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    message?.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
+    message?.scrollIntoView({ block: error ? "center" : "start", behavior: error && !reducedMotion ? "smooth" : "instant" });
     message?.focus({ preventScroll: true });
   }, [state, error, editing, sentTotal]);
-  if (!decisionSent && form === "wait") return <p className={c.note}>The score form is here after the mock lesson ends. Refresh this page then.</p>;
-  if (!decisionSent && form === "closed") return <p className={c.note}>Scores for this mock are already recorded. Ask BeGifted admin to change them.</p>;
+  if (!decisionSent && form === "closed") return <p className={c.note}>Scores are recorded. Ask admin to edit scores.</p>;
   const scored = RUBRIC_ITEMS.filter((id) => items[id]).length;
+  const checksMissing = scored === RUBRIC_ITEMS.length && checksDone === null;
   const complete = scored === RUBRIC_ITEMS.length && checksDone !== null;
   const disabled = !complete || !!pending || sentTotal !== null;
   // An old 10-item send is out of 100.
@@ -82,9 +84,11 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   if (decisionSent || (!editing && sentTotal !== null)) {
     return (
       <div ref={summary} role="group" aria-label={sentMessage || undefined} className={c.scoreSummary} tabIndex={-1}>
-        {lastSent && <p aria-hidden="true">Scores sent · <strong>{lastSent.total} / {lastSent.max}</strong> · {percent(lastSent)}%</p>}
-        {decisionSent ? <p className={c.note}>Scores and recommendation are recorded. Ask BeGifted admin to change them.</p> : <div className={c.scoreActions}>
-          <a className={c.button} href="#recommendation">Go to recommendation</a>
+        {lastSent && <p aria-hidden="true">
+          {decisionSent ? <span className="sr-only">Scores sent </span> : "Scores sent · "}
+          <strong>{lastSent.total}/{lastSent.max}</strong> · {percent(lastSent)}%
+        </p>}
+        {decisionSent ? <p className={c.note}>Ask admin to edit scores.</p> : <div className={c.scoreActions}>
           <button type="button" className={c.ghost} disabled={!!pending} onClick={() => {
             setEditing(true);
             setState("idle");
@@ -99,25 +103,35 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   return (
     <form
       className={c.field}
+      onFocus={(event) => {
+        const bar = sendBar.current;
+        if (!bar || bar.contains(event.target)) return;
+        const row = event.target.closest(`.${c.scoreRow}, label`) ?? event.target;
+        const bounds = row.getBoundingClientRect();
+        const sticky = bar.getBoundingClientRect();
+        // A browser can skip its focus scroll when a control is already in the viewport.
+        if (bounds.bottom > sticky.top && bounds.top < sticky.bottom) {
+          row.scrollIntoView({ block: "center", behavior: "instant" });
+        }
+      }}
       onSubmit={(event) => {
         event.preventDefault();
         if (!disabled) void send();
       }}
     >
-      <p className={`${c.note} ${c.scoreHint}`}>Tap a score. Use Other for more scores.</p>
       {RUBRIC.map(({ part, items: partItems }) => (
         <fieldset key={part} className={c.rubricPart} disabled={!!pending}>
           <legend className={c.factLabel}>{part}</legend>
           {partItems.map(([id, label]) => {
             const labelId = `${rubricId}-${id}`;
             const selected = items[id] ?? 0;
-            const otherSelected = OTHER_SCORES.includes(selected);
             return (
               <fieldset key={id} className={c.criterionScore}>
                 <legend>{label}</legend>
                 <details className={c.note}>
-                  <summary>What each score means</summary>
+                  <summary aria-label={`Guide: what each score means for ${label}`}>Guide</summary>
                   {RUBRIC_GUIDE[id].hint && <p><em>{RUBRIC_GUIDE[id].hint}</em></p>}
+                  {id === "stress" && <p>The ticks suggest a score. You choose the score.</p>}
                   <dl>
                     {RUBRIC_GUIDE[id].bands.map((band, index) => (
                       <div key={BAND_LABELS[index]}>
@@ -136,45 +150,34 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                           checked={ticks[key]}
                           onChange={(event) => {
                             setTicks({ ...ticks, [key]: event.target.checked });
+                            setTicksUsed(true);
                             changed();
                           }}
                         />{" "}
                         {element}
                       </label>
                     ))}
-                    <p className={c.note} aria-live="polite">Suggested score: {stressSuggestion(ticks)}. You choose the score.</p>
+                    {/* Before the head uses the ticks, "Suggested score: 1" reads as advice. It stays once a box was touched, also when all are clear again. */}
+                    <p className={`${c.note} empty:absolute`} aria-live="polite">
+                      {ticksUsed && `Suggested score: ${stressSuggestion(ticks)}.`}
+                    </p>
                   </div>
                 )}
-                <div className={c.scoreRow}>
-                  <div className={c.scoreTiles}>
-                    {TILE_SCORES.map((score) => (
-                      <label key={score} className={c.scoreTile}>
-                        <input
-                          type="radio"
-                          ref={id === RUBRIC_ITEMS[0] && score === TILE_SCORES[0] ? firstScore : undefined}
-                          name={labelId}
-                          value={score}
-                          className={c.hidden}
-                          checked={selected === score}
-                          onChange={() => selectScore(id, score)}
-                        />
-                        {score}
-                      </label>
-                    ))}
-                  </div>
-                  <label className={c.hidden} htmlFor={labelId}>Other score for {label}</label>
-                  <select
-                    id={labelId}
-                    className={`${c.input} ${c.otherScore}`}
-                    data-selected={otherSelected ? "" : undefined}
-                    value={otherSelected ? selected : ""}
-                    onChange={(event) => selectScore(id, Number(event.target.value))}
-                  >
-                    <option value="" disabled>Other</option>
-                    {OTHER_SCORES.map((score) => (
-                      <option key={score}>{score}</option>
-                    ))}
-                  </select>
+                <div className={`${c.scoreRow} ${c.scoreTiles}`}>
+                  {TILE_SCORES.map((score) => (
+                    <label key={score} className={c.scoreTile} data-band={BAND_SCORES.includes(score) ? "" : undefined}>
+                      <input
+                        type="radio"
+                        ref={id === RUBRIC_ITEMS[0] && score === ITEM_MAX ? firstScore : undefined}
+                        name={labelId}
+                        value={score}
+                        className={c.hidden}
+                        checked={selected === score}
+                        onChange={() => selectScore(id, score)}
+                      />
+                      {score}
+                    </label>
+                  ))}
                 </div>
               </fieldset>
             );
@@ -183,7 +186,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       ))}
       <fieldset className={c.rubricPart} disabled={!!pending}>
         <legend className={c.factLabel}>School&apos;s required checks completed</legend>
-        <p className={c.note}>Not scored. The candidate cannot be hired until this is Yes.</p>
+        <p className={c.note}>Not scored. Must be Yes to hire.</p>
         <div className={c.scoreTiles}>
           {([[true, "Yes"], [false, "No"]] as const).map(([value, text]) => (
             <label key={text} className={c.scoreTile}>
@@ -219,11 +222,9 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       </label>
       {state === "sent" && <p ref={feedback} role="status" className={c.success} tabIndex={-1}>{sentMessage}</p>}
       {saveError}
-      {lastSent && sentTotal === null && <p className={c.note} role="status">Unsaved changes. Send again to update your scores.</p>}
-      <div className={c.field} data-sticky="">
+      <div ref={sendBar} className={c.field} data-sticky="">
         {sentTotal !== null ? (
           <>
-            <p className={c.note}>Scores are up to date.</p>
             <button type="button" className={c.ghost} onClick={() => {
               setEditing(false);
               setState("sent");
@@ -234,7 +235,10 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
         ) : (
           <>
             <div className={c.field}>
-              <p className={c.note}>{scored} of {RUBRIC_ITEMS.length} scored{checksDone === null ? " · required checks not answered" : ""}</p>
+              <p role="status" className={checksMissing || lastSent ? undefined : c.note}>{checksMissing
+                ? "Answer the required checks to send."
+                : lastSent ? "Score changes not sent."
+                  : `${scored} of ${RUBRIC_ITEMS.length} scored`}</p>
               <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
             </div>
             <button type="submit" className={c.button} disabled={disabled}>

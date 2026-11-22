@@ -31,11 +31,30 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
   const [editCount, setEditCount] = useState(0);
   const [lastSent, setLastSent] = useState(() => brief.rubric ? { total: rubricTotals(brief.rubric).total, max: rubricTotals(brief.rubric).max, editCount: 0 } : null);
   const [decision, setDecision] = useState(brief.decision);
+  const unsent = lastSent !== null && lastSent.editCount !== editCount;
+  const jumpToRecommendation = lastSent !== null && !unsent;
+  const blocked = brief.form === "closed" && !brief.recommendationReady && !decision;
+  const earlyRecommendation = brief.form === "closed" && brief.recommendationReady;
   const facts: [string, string][] = [
     ["Subject", brief.subject],
-    ...(brief.exam ? ([["Exam", `${brief.exam} (Bangkok)`]] as [string, string][]) : []),
+    ...(brief.exam ? ([["Exam", brief.exam]] as [string, string][]) : []),
     ["Interviewer", brief.interviewer ?? "To be confirmed"],
   ];
+  const recommendation = (
+    <section id="recommendation" className={c.facts} tabIndex={-1}>
+      <h2 className={decision ? "sr-only" : c.stepTitle}>Your recommendation</h2>
+      <BriefDecision
+        sent={decision}
+        onSent={setDecision}
+        url={decisionUrl}
+        hasScores={lastSent !== null || brief.form === "closed"}
+        unsent={unsent}
+        pending={pending}
+        setPending={setPending}
+      />
+    </section>
+  );
+  const wait = brief.form === "wait" && !decision;
   return (
     <>
       <section className={c.facts}>
@@ -58,21 +77,34 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
             </div>
           ))}
         </dl>
-        {brief.form === "open" && <a className={`${c.ghost} ${c.jumpLink}`} href="#scores">Go to mock scores</a>}
+        {brief.form === "open" && !decision && (
+          <a className={`${c.button} ${c.jumpLink}`} href={jumpToRecommendation ? "#recommendation" : "#scores"}>
+            {jumpToRecommendation ? "Go to recommendation" : "Go to mock scores"}
+          </a>
+        )}
       </section>
+      {(wait || blocked) && (
+        <div className={c.field}>
+          <p role="status">{wait ? "Scores open after the mock."
+            : brief.recommendationBlock === "checking" ? "Scores are being checked."
+            : "Ask BeGifted admin to check the scores."}</p>
+          {(wait || brief.recommendationBlock === "checking") && (
+            <button type="button" className={c.button} onClick={() => window.location.reload()}>Check again</button>
+          )}
+        </div>
+      )}
+      {earlyRecommendation && recommendation}
       <section className={c.facts}>
         <h2 className={c.stepTitle}>Candidate files</h2>
-        {brief.gradedPaper && <a className={`${c.ghost} ${c.jumpLink}`} href={resumeUrl.replace(/resume$/, "paper")} target="_blank" rel="noreferrer">Open the graded paper</a>}
+        {brief.gradedPaper && <a className={`${c.ghost} ${c.jumpLink}`} href={resumeUrl.replace(/resume$/, "paper")} target="_blank" rel="noreferrer" aria-label="Open the graded paper">Graded paper</a>}
         {brief.resume ? (
-          <>
-            <a className={c.button} href={resumeUrl} target="_blank" rel="noreferrer">
-              {brief.resume === "pdf" ? "Open the résumé (PDF)" : "Download the résumé (Word file)"}
-            </a>
-            <p className={c.note}>The résumé holds personal data. Do not share this page or the file.</p>
-          </>
+          <a className={`${c.ghost} ${c.jumpLink}`} href={resumeUrl} target="_blank" rel="noreferrer" aria-label={brief.resume === "pdf" ? "Open the résumé (PDF)" : undefined}>
+            {brief.resume === "pdf" ? "Résumé (PDF)" : "Download résumé (Word)"}
+          </a>
         ) : (
           <p className={c.note}>No résumé file is stored for this candidate.</p>
         )}
+        {(brief.resume || brief.gradedPaper) && <p className={c.note}>Personal data. Do not share.</p>}
       </section>
       <details className={c.preScreen}>
         <summary className={c.stepTitle}><h2 className={c.summaryHeading}>Pre-screen answers</h2></summary>
@@ -116,35 +148,24 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
           ))}
         </ol>
       </details>
-      <section id="scores" className={c.facts} tabIndex={-1}>
-        <h2 className={c.stepTitle}>Mock lesson scores</h2>
-        <BriefRubric
-          saved={brief.rubric}
-          form={brief.form}
-          url={rubricUrl}
-          editCount={editCount}
-          lastSent={lastSent}
-          decisionSent={!!decision}
-          pending={pending}
-          setPending={setPending}
-          onEdit={() => setEditCount((count) => count + 1)}
-          onSent={(total) => setLastSent({ total, max: RUBRIC_ITEMS.length * ITEM_MAX, editCount })}
-        />
-      </section>
-      {brief.form !== "wait" && (
-        <section id="recommendation" className={c.facts} tabIndex={-1}>
-          <h2 className={c.stepTitle}>Your recommendation</h2>
-          <BriefDecision
-            sent={decision}
-            onSent={setDecision}
-            url={decisionUrl}
-            scores={lastSent ? "own" : brief.form === "closed" ? "recorded" : null}
-            unsent={lastSent !== null && lastSent.editCount !== editCount}
+      {!wait && !blocked && (
+        <section id="scores" className={c.facts} tabIndex={-1}>
+          <h2 className={c.stepTitle}>Mock lesson scores</h2>
+          <BriefRubric
+            saved={brief.rubric}
+            form={brief.form}
+            url={rubricUrl}
+            editCount={editCount}
+            lastSent={lastSent}
+            decisionSent={!!decision}
             pending={pending}
             setPending={setPending}
+            onEdit={() => setEditCount((count) => count + 1)}
+            onSent={(total) => setLastSent({ total, max: RUBRIC_ITEMS.length * ITEM_MAX, editCount })}
           />
         </section>
       )}
+      {brief.form !== "wait" && !blocked && !earlyRecommendation && recommendation}
     </>
   );
 }

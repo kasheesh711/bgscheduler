@@ -15,7 +15,7 @@ const chip = (result: LevelResult, passLabel = "Pass") => `<span class="chip ${r
   passed: passLabel, not_passed: "Below pass", pass_mark_missing: "No pass mark", not_done: "Not done",
 }[result]}</span>`;
 const criterionNames = { degree: "Degree", subject: "Subject", curriculum: "Curriculum", teaching: "Teaching", english: "English" };
-const criterionResults = { met: "Met", partial: "Partial", not_met: "Not met", unknown: "Unknown" };
+const criterionResults = { met: "Met", partial: "Partly", not_met: "Not met", unknown: "Unknown" };
 const stackColors = ["#2a78d6", "#eb6834", "#199e70", "#c98400", "#d96a97", "#008300"];
 
 function gauge(value: number, unit = " / 100", target: number | null = null, label = String(value)) {
@@ -24,12 +24,12 @@ function gauge(value: number, unit = " / 100", target: number | null = null, lab
   const tick = (position: number, target = false) =>
     `<line class="${target ? "target" : "scale-tick"}" x1="${target ? 104 : 107}" y1="56" x2="116" y2="56" transform="rotate(${percent(position) * 1.8 - 180} 66 56)"/>`;
   return `<div class="gauge">
-<svg viewBox="0 0 132 76" aria-hidden="true">
+<svg viewBox="0 0 132 62" aria-hidden="true">
 <path d="${arc}" class="gauge-track"/>
 ${value > 0 ? `<path d="${arc}" class="gauge-fill" pathLength="100" stroke-dasharray="${percent(value)} 100"/>` : ""}
 ${[0, 25, 50, 75, 100].map((value) => tick(value)).join("")}${target === null ? "" : tick(target, true)}
-<text x="21" y="72">0</text><text x="111" y="72">100</text>
-</svg><p class="gauge-value"><strong>${escape(label)}${isPercent ? "%" : ""}</strong>${isPercent ? "" : escape(unit)}</p>
+</svg><div class="gauge-ends" aria-hidden="true"><span>0</span><span>100</span></div>
+<p class="gauge-value"><strong>${escape(label)}${isPercent ? "%" : ""}</strong>${isPercent ? "" : escape(unit)}</p>
 </div><p class="band">${value >= 80 ? "Strong" : value >= 60 ? "Fair" : "Low"}</p>`;
 }
 
@@ -65,10 +65,11 @@ function atsBreakdown(ats: ReviewPacket["evidence"]["ats"], atsScore: string) {
   if (!weights || prestige === undefined || penalty === undefined) return "";
   const parts = Object.entries(criterionNames).map(([id, name]) => {
     const max = weights[id as keyof typeof weights];
-    const result = ats.criteria.find((entry) => entry.id === id)?.result ?? "unknown";
-    return { name, max, earned: max * VALUE[result] };
+    const criterion = ats.criteria.find((entry) => entry.id === id);
+    const result = criterion?.result ?? "unknown";
+    return { name, status: criterionResults[result], max, earned: max * VALUE[result], evidence: criterion?.evidence };
   });
-  parts.push({ name: "School", max: weights.prestige, earned: weights.prestige * prestige });
+  parts.push({ name: "School", status: "", max: weights.prestige, earned: weights.prestige * prestige, evidence: undefined });
   const gross = parts.reduce((sum, part) => sum + part.earned, 0);
   const barWidth = 304;
   const barX = (value: number) => 8 + barWidth * percent(value) / 100;
@@ -83,17 +84,19 @@ ${start > 0 ? `<path class="stack-gap" d="M${barX(start)} 2v14"/>` : ""}`;
   const netX = barX(ats.score);
   return `<div class="ats-points"><h3>Weighted points</h3>
 <p class="score"><strong>Total</strong><strong class="num">${escape(atsScore)}</strong></p>
-<svg class="stack" viewBox="0 0 320 44" aria-hidden="true">
+<svg class="stack" viewBox="0 0 320 26" aria-hidden="true">
 <defs><pattern id="lost-points" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0v6"/></pattern></defs>
 ${segments}
 ${gross < 100 ? `<rect class="stack-ghost" x="${barX(gross)}" y="2" width="${barX(100) - barX(gross)}" height="14"/>
 <rect x="${barX(gross)}" y="2" width="${barX(100) - barX(gross)}" height="14" fill="url(#lost-points)"/>
 ${gross > 0 ? `<path class="stack-gap" d="M${barX(gross)} 2v14"/>` : ""}` : ""}
-<text x="8" y="37" text-anchor="start">0</text><text x="312" y="37" text-anchor="end">100</text>
 ${penalty > 0 ? `<path class="penalty-marker" d="M${netX} 18l-5 7h10z"/>` : ""}
-</svg>
+</svg><div class="stack-ends" aria-hidden="true"><span>0</span><span>100</span></div>
 <ul class="stack-key">
-${parts.map(({ name, earned, max }, index) => `<li><i style="background:${stackColors[index]}"></i><span>${escape(name)}</span><span class="num">${points.format(earned)} / ${points.format(max)}</span></li>`).join("")}
+${parts.map(({ name, status, earned, max, evidence }, index) => {
+  const row = `<i style="background:${stackColors[index]}"></i><span>${escape(name)}${status ? ` · ${escape(status)}` : ""}</span><span class="num">${points.format(earned)} / ${points.format(max)}</span>`;
+  return `<li>${evidence ? `<details><summary>${row}</summary><p class="copy">${escape(evidence)}</p></details>` : row}</li>`;
+}).join("")}
 ${gross < 100 ? `<li><i class="ghost-key"></i><span>Lost points</span><span class="num">${points.format(100 - gross)}</span></li>` : ""}
 ${penalty > 0 ? `<li><i class="penalty-key"></i><span>Work-rights penalty</span><span class="num">−${points.format(penalty)}</span></li>` : ""}
 </ul></div>`;
@@ -152,27 +155,27 @@ svg{display:block;width:100%;height:auto}
 .tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;break-inside:avoid}
 .tile{padding:10px;background:var(--surface);border:1px solid var(--line);border-radius:9px;text-align:center}
 .tile h3{font-weight:600}.tile p{margin:0}
-.gauge{position:relative;margin:0 auto;max-width:148px}
+.gauge{margin:0 auto;max-width:148px}
 .gauge-track,.gauge-fill{fill:none;stroke-width:6}
 .gauge-track{stroke:var(--line)}.gauge-fill{stroke:var(--ink)}
 .scale-tick{stroke:var(--muted);stroke-width:1}
-.gauge text,.stack text{fill:var(--muted);font-size:12px}
-.gauge text{text-anchor:middle}
-.gauge-value{position:absolute;inset:auto 0 27%;font-size:12px;line-height:1}
+.gauge-ends,.stack-ends{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;line-height:1}
+.gauge-ends span,.stack-ends span{white-space:nowrap}
+.stack-ends{padding-inline:2.5%;margin-bottom:8px}
+.gauge-value{white-space:nowrap;font-size:12px}
 .gauge-value strong{font-size:clamp(20px,3.6vw,26px);font-weight:600;letter-spacing:-.05em}
 .band{font-size:13px;font-weight:600}
-.tile .paper-detail{margin-top:4px;font-size:12px}
+.tile .paper-detail{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:2px 6px;margin-top:4px;font-size:12px}
 .guide{display:flex;flex-wrap:wrap;gap:0 6px;color:var(--muted);font-size:12px}
 .head-tile{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
 .head-tile p{padding:5px 9px;background:#fff0e2;border-radius:8px}
-.ats-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);align-items:start;gap:16px;break-inside:avoid}
 .radar{max-width:340px;margin:auto}
 .radar-grid{fill:none;stroke:var(--line);stroke-width:1}
 .radar-fill{fill:var(--ink);fill-opacity:.10;stroke:var(--ink);stroke-width:2;stroke-linejoin:round}
 .radar-dot{fill:var(--ink);stroke:var(--page);stroke-width:4;paint-order:stroke}
 .radar text{fill:var(--ink);font-size:14px;font-weight:600}
 .radar tspan{fill:var(--muted);font-size:13px;font-weight:400}
-.ats-points{padding:12px 14px;background:var(--surface);border:1px solid var(--line);border-radius:9px}
+.ats-points{padding:12px 14px;background:var(--surface);border:1px solid var(--line);border-radius:9px;break-inside:avoid}
 .score{display:flex;align-items:baseline;justify-content:space-between;gap:6px;flex-wrap:wrap;margin:2px 0 6px}
 .score strong:last-child{font-size:32px;font-variant-numeric:normal;font-weight:600;letter-spacing:-.04em;line-height:1.2}
 .stack-gap{stroke:var(--surface);stroke-width:2;vector-effect:non-scaling-stroke}
@@ -180,7 +183,13 @@ svg{display:block;width:100%;height:auto}
 #lost-points path{stroke:#b4aa9b;stroke-width:1.2}
 .penalty-marker,.penalty-key{fill:var(--accent);background:var(--accent)}
 .stack-key{margin:0;padding:0;list-style:none;font-size:13px}
-.stack-key li{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:baseline;gap:7px}
+.stack-key li,.stack-key summary{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:7px}
+.stack-key details{grid-column:1/-1;min-width:0;break-inside:avoid}
+.stack-key summary{width:100%}
+.stack-key summary::-webkit-details-marker{display:none}
+.stack-key summary > span:not(.num)::after{content:"";display:inline-block;width:7px;height:7px;margin-left:7px;border:solid currentColor;border-width:0 2px 2px 0;vertical-align:2px;transform:rotate(45deg)}
+.stack-key details[open] summary > span:not(.num)::after{transform:rotate(225deg);vertical-align:0}
+.stack-key details p{margin-inline-start:17px}
 .stack-key i{width:8px;height:8px;border-radius:2px}
 .stack-key .penalty-key{clip-path:polygon(50% 0,100% 100%,0 100%);border-radius:0}
 .evidence-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 12px;margin-top:10px}
@@ -210,9 +219,16 @@ svg{display:block;width:100%;height:auto}
 .files{display:flex;flex-wrap:wrap;gap:0 8px;margin-top:7px}
 a,summary{color:var(--ink);text-underline-offset:3px}a{display:inline-flex;align-items:center;min-height:44px;padding:6px 8px}
 summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details p{margin:0 0 7px}
+@media screen{
+.stack-key summary{font-size:16px}
+  body{font-size:16px}
+  .tile h3,.mock-item,.rubric-group h3 span{font-size:16px}
+  .guide,.tile .paper-detail,.chip,.axis-labels,.gauge-ends,.gauge-value,.band,.paperNote,.stack-key,.stack-ends{font-size:14px}
+  a:focus,summary:focus{outline:2px solid #14213d;outline-offset:2px}
+}
 @media screen and (width < 560px){
   body{padding:24px 16px 40px}.tiles,.evidence-list{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .ats-layout{grid-template-columns:minmax(0,1fr);gap:8px}.mock-row{gap:0 8px}
+  .mock-row{gap:0 8px}
 }
 @page{size:A4;margin:16mm}@media print{
   body{--page:#fff;background:var(--page);max-width:none;padding:0;font-size:13px;print-color-adjust:exact;-webkit-print-color-adjust:exact}
@@ -227,28 +243,30 @@ summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details 
 </style>
 </head><body><main>
 <header><img alt="BeGifted Education" src="data:image/png;base64,${logo}">
-<p class="eyebrow">Confidential hiring review</p>
+<p class="eyebrow">Confidential</p>
 <h1>Hiring <em>review</em></h1>
 <p class="candidate">${escape(value.name)}</p><p>${escape(value.subject)} tutor</p><p class="meta">Submitted ${date(packet.at)} by ${escape(packet.author)}</p></header>
 <section><h2>Assessment summary</h2><div class="tiles">
 <div class="tile"><h3>ATS</h3>${gauge(atsValue, " / 100", null, atsScore)}</div>
 <div class="tile"><h3>Paper</h3>${gauge(paperPercent, "%", paperTarget)}
-<p class="paper-detail num">${escape(sheet.total)} / ${escape(sheet.max)} · ${chip(sheet.result, levels.length > 1 ? "Passed a level" : "Pass")}</p>
+<p class="paper-detail num"><span>${escape(sheet.total)} / ${escape(sheet.max)}</span>${chip(sheet.result, levels.length > 1 ? "Level passed" : "Pass")}</p>
 ${paperTarget === null ? "" : `<p class="paper-detail meta">Pass mark ${escape(paperTarget)}%</p>`}</div>
-<div class="tile"><h3>Mock</h3>${gauge(mockTotals.percent, "%")}<p class="paper-detail num">${escape(mockTotals.total)} / ${escape(mockTotals.max)}</p></div>
+<div class="tile"><h3>Mock</h3>${gauge(mockTotals.percent, "%")}${mockTotals.max === 100 ? "" : `<p class="paper-detail num">${escape(mockTotals.total)} / ${escape(mockTotals.max)}</p>`}</div>
 <div class="tile head-tile"><h3>Head</h3><p><strong>Yes</strong> · ${escape(recommendation.head)}</p></div>
-</div><p class="guide"><span>Score guide</span><span>· Strong ≥80</span><span>· Fair 60 to under 80</span><span>· Low &lt;60</span></p>${recommendation.reason ? `<p class="copy">${escape(recommendation.reason)}</p>` : ""}
+</div><p class="guide"><span role="group" aria-label="Score guide">Strong ≥80 · Fair 60 to under 80 · Low &lt;60</span></p>${recommendation.reason ? `<p class="copy">${escape(recommendation.reason)}</p>` : ""}
 <div class="files"><a href="${escape(resume)}">Original résumé</a><a href="${escape(paper)}">Marked exam</a></div></section>
 <section><h2>${breakdown ? "ATS breakdown" : "Initial ATS assessment"}</h2>
-<div class="${breakdown ? "ats-layout" : ""}">${radar(ats.criteria)}${breakdown}</div>
+${breakdown || `${radar(ats.criteria)}
 <div class="evidence-list">
 ${ats.criteria.map(({ id, result, evidence }) => {
   const name = (criterionNames as Record<string, string>)[id];
   if (!evidence && name) return "";
   const title = escape(name ?? id.replaceAll("_", " "));
-  return `<div><strong>${title}</strong>${name ? "" : ` · ${escape(criterionResults[result] ?? result)}`}
-${evidence ? `<details><summary>${title} evidence</summary><p class="copy">${escape(evidence)}</p></details>` : ""}</div>`;
-}).join("")}</div></section>
+  const status = name ? "" : ` · ${escape(criterionResults[result] ?? result)}`;
+  return evidence
+    ? `<div><details><summary>${title} evidence${status}</summary><p class="copy">${escape(evidence)}</p></details></div>`
+    : `<div><strong>${title}</strong>${status}</div>`;
+}).join("")}</div>`}</section>
 <section><h2>Paper by level</h2>
 ${levels.map((level) => `<div class="metric">
 <p class="label"><span>${escape(level.level)}</span><span class="num">${escape(level.scored)} / ${escape(level.max)} · ${escape(level.percent)}%</span></p>
