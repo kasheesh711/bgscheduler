@@ -1056,9 +1056,13 @@ describe("hiring workflow persistence", () => {
         expect(message.text).not.toContain("/hiring/brief/");
       }
       expect(sent().map((m) => m.text.match(/\nHead: (\w+)/)![1]).sort()).toEqual(["Ek", "Peat"]);
+      // A move tells each head once, with the old time.
+      await bookVisit(bookingToken(row.id, "paper-visit", LINK), choice(EXAM_TUE, { move: true }), db);
+      await deliverOutbox(db, heads);
+      expect(sent().slice(2).map((m) => m.text.split("\n")[0])).toEqual(Array(2).fill(expect.stringMatching(/^Paper test moved \(test only\)\. The old time .+ is cancelled\./)));
       await click(row.id, "cancel_visit", [], "Candidate asked on LINE");
       await deliverOutbox(db, heads);
-      expect(sent().slice(2).map((m) => m.text.split("\n")[0])).toEqual(["Paper test cancelled (test only)", "Paper test cancelled (test only)"]);
+      expect(sent().slice(4).map((m) => m.text.split("\n")[0])).toEqual(["Paper test cancelled (test only)", "Paper test cancelled (test only)"]);
     });
     it("separates paper and mock, requires Gift’s latest review, and books half an hour with HR", async () => {
       vi.stubEnv("HIRING_FINAL_REVIEWER_EMAIL", "gift@example.com");
