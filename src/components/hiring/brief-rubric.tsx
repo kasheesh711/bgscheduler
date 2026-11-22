@@ -154,8 +154,8 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                         {element}
                       </label>
                     ))}
-                    <p className={`${c.note} empty:absolute`} aria-live="polite">
-                      {Object.values(ticks).some(Boolean) && `Suggested: ${stressSuggestion(ticks)}`}
+                    <p className={c.note} aria-live="polite">
+                      Suggested score: {stressSuggestion(ticks)}. You choose the score.
                     </p>
                   </div>
                 )}

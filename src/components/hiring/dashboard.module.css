@@ -455,6 +455,7 @@
 .surface .finalReview :is(.primary, .secondary) { min-width: 44px; min-height: 44px; max-width: 100%; text-align: center; overflow-wrap: anywhere; }
 .surface .finalReview :is(.primary, .secondary):disabled { opacity: 1; border: 1px solid #887f74; background: #f6f1e9; color: #5c554c; }
 .surface .finalReview :is(.primary, .secondary, .textarea, [tabindex="-1"]):focus { outline: 2px solid #14213d; outline-offset: 2px; }
+:global(.dark) .surface .finalReview :is(.primary, .secondary, .textarea, [tabindex="-1"]):focus { outline-color: #fff; }
 .surface .finalReview :is(.primary, .secondary, .fieldLabel, .textarea) { font-size: 16px; }
 .finalReview .inspectorMeta { font-size: 14px; }
 .surface .viewSwitch button:focus-visible { outline: 2px solid #c65e50; outline-offset: 2px; }

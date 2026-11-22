@@ -62,7 +62,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
         <dl className={`${c.answers} ${c.briefVisit}`}>
           <div>
             <dt className={c.factLabel}>Mock teaching</dt>
-            <dd>{brief.mock}</dd>
+            <dd>{brief.mock} (Bangkok)</dd>
           </div>
           <div>
             <dt className={c.factLabel}>Place</dt>

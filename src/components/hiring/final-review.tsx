@@ -115,6 +115,9 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   }, [openPage, phone]);
 
   const refocus = useRef(false);
+  const backTimer = useRef<number | undefined>(undefined);
+  const stopBack = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => stopBack.current?.(), []);
   const [refocusTick, setRefocusTick] = useState(0);
   const closeReader = useCallback(() => {
     packetDialog.current?.close();
@@ -145,10 +148,17 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
     if (!openPage) return;
     if (window.history.state?.hiringReviewPacket === controlId) {
       // The step back in history makes the browser drop focus, so set it again one tick after it.
-      window.addEventListener("popstate", () => window.setTimeout(() => {
-        refocus.current = true;
-        setRefocusTick((tick) => tick + 1);
-      }), { once: true });
+      const onBack = () => {
+        backTimer.current = window.setTimeout(() => {
+          refocus.current = true;
+          setRefocusTick((tick) => tick + 1);
+        });
+      };
+      window.addEventListener("popstate", onBack, { once: true });
+      stopBack.current = () => {
+        window.removeEventListener("popstate", onBack);
+        window.clearTimeout(backTimer.current);
+      };
       window.history.back();
     }
     closeReader();
@@ -271,7 +281,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   const signOffDisabled = !!busy || !viewed || !!error?.retry;
   const awaitingSignOff = !signing && review?.access.gift && !closed;
   // Announce readiness when the phone dialog closes and the page is no longer inert.
-  const ready = viewed && !sharedBlock && !(phone && openPage);
+  const ready = viewed && !sharedBlock && !error?.retry && !(phone && openPage);
   const packetTitle = openPage && `Review packet for ${openPage.name}`;
   const packetFrame = openPage && (
     <iframe title={packetTitle} srcDoc={openPage.html}
@@ -361,8 +371,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       ) : <p>Waiting for HR to send the packet. <button type="button" className={css.secondary} disabled={!!busy} onClick={() => void act()}>Check again</button></p>)}
       <p ref={outcome} role="status" tabIndex={-1}>{closed && (stage === "hired" ? (review?.appointment
         ? `Contract signing booked for ${new Date(review.appointment).toLocaleString("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium", timeStyle: "short" })} (Bangkok).`
-        : packet ? "Offer approved. The offer email is queued." : "There is no contract booking on record.")
-        : stage === "rejected" ? "Application rejected. The email is queued." : "Application stopped.")}</p>
+        : packet ? (signedStage ? "Offer approved. The offer email is queued." : "Offer approved.") : "There is no contract booking on record.")
+        : stage === "rejected" ? (signedStage ? "Application rejected. The email is queued." : "Application rejected.") : "Application stopped.")}</p>
       {saved && !signedStage && <p role="status">Saved.</p>}
       {error && !error.packetLoad && <div role="alert" className={css.errorText}>
         <p>{error.text}</p>

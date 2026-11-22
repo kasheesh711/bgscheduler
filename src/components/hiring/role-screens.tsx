@@ -542,7 +542,7 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
       {head && (
         <>
           <Section title="Next mock" id="next-mock">
-            {nextMock ? <HeadCard visit={nextMock} data={data} readOnly={readOnly} /> : (
+            {nextMock ? <HeadCard key={nextMock.row.visitId} visit={nextMock} data={data} readOnly={readOnly} /> : (
               <div className={r.card}>
                 <div className={r.cardMain}>
                   <p>No mock booked yet.</p>

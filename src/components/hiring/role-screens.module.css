@@ -74,6 +74,8 @@
 .picker.picker button { min-width: 44px; min-height: 44px; max-width: 100%; padding: 6px 16px; border: 1px solid var(--line); border-radius: 999px; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
 .picker.picker button[aria-pressed="true"] { border-color: var(--role-navy); background: var(--role-navy); color: #fff; }
 .picker.picker button:focus, .headCard .big:focus { outline: 2px solid var(--role-navy); outline-offset: 2px; }
+/* Navy cannot be seen on the dark surface. */
+:global(.dark) :is(.picker.picker button, .headCard .big):focus { outline-color: #fff; }
 .screen[data-heads-review] .big { font-size: 16px; }
 .headCard .time span { font-size: 16px; }
 .headCard .big, .headCard .tag { white-space: normal; text-align: center; }
