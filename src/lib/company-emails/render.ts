@@ -58,18 +58,19 @@ function copy(paragraphs: string[]): string { return paragraphs.map(p=>`<p style
 function details(entries: EmailDetail[]): string {
   return `<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="table-layout:fixed;">${entries.map(d=>`<tr><td valign="top" width="36%" style="padding:10px 16px 10px 0;border-bottom:1px solid #E8E3DA;color:${MUTED};font-size:14px;overflow-wrap:anywhere;word-break:break-word;">${e(d.label)}</td><td valign="top" style="padding:10px 0;border-bottom:1px solid #E8E3DA;font-weight:700;overflow-wrap:anywhere;word-break:break-word;">${e(d.value)}</td></tr>`).join('')}</table>`;
 }
-const ACCENT = '#B84A00', TINT = '#FFF4EA', RULE = '#E8E3DA';
-function stepMark(s: CompanySection, i: number): string {
-  const here = s.state === 'current' ? ` <span style="display:inline-block;margin-left:6px;padding:2px 10px;border-radius:999px;background:${TINT};color:${ACCENT};font-weight:700;">You are here</span>` : '';
-  const done = s.state === 'done' ? ' · Done' : '';
-  return `<p style="margin:0 0 4px;font-size:13px;line-height:1.5;color:${s.state === 'current' ? ACCENT : MUTED};font-weight:${s.state === 'current' ? 700 : 500};">Step ${i+1}${done}${here}</p>`;
+const ACCENT = '#B84A00', TINT = '#FFF4EC', RULE = '#E8E3DA';
+/** The reader's place only: the list's order carries the sequence, so there is no "Step 2" label (taste lint). */
+function stepMark(s: CompanySection): string {
+  if (s.state === 'current') return `<p style="margin:0 0 6px;"><span style="display:inline-block;padding:1px 10px;border:1px solid ${ACCENT};border-radius:999px;background:#FFFFFF;color:${ACCENT};font-size:13px;line-height:1.5;font-weight:700;">You are here</span></p>`;
+  if (s.state === 'done') return `<p style="margin:0 0 4px;font-size:13px;line-height:1.5;color:${MUTED};">Done</p>`;
+  return '';
 }
 /** Steps with icons: a picture, the step number, and a real button for an action. */
 function iconSteps(entries: CompanySection[]): string {
   return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="table-layout:fixed;">${entries.map((s,i)=>{
     const bg = s.state === 'current' ? `background:${TINT};` : '';
     const fade = s.state === 'done' ? 'opacity:0.55;' : '';
-    return `<tr><td width="72" valign="top" style="padding:18px 0 18px 12px;border-top:1px solid ${RULE};${bg}">${s.icon ? `<img src="${e(companyEmailUrl(s.icon,true))}" alt="" width="48" height="48" style="display:block;width:48px;height:48px;border:0;${fade}"/>` : ''}</td><td valign="top" style="padding:18px 12px 18px 8px;border-top:1px solid ${RULE};${bg}overflow-wrap:anywhere;word-break:break-word;">${stepMark(s,i)}<h3 style="margin:0 0 6px;font-size:18px;line-height:1.35;color:${s.state === 'done' ? MUTED : NAVY};">${e(s.heading)}</h3>${copy(s.paragraphs||[])}${s.bullets?.length ? `<ul style="padding-left:22px;">${s.bullets.map(b=>`<li>${e(b)}</li>`).join('')}</ul>` : ''}${s.action ? actionHtml(s.action) : ''}</td></tr>`;
+    return `<tr><td width="72" valign="top" style="padding:18px 0 18px 12px;border-top:1px solid ${RULE};${bg}">${s.icon ? `<img src="${e(companyEmailUrl(s.icon,true))}" alt="" width="48" height="48" style="display:block;width:48px;height:48px;border:0;${fade}"/>` : ''}</td><td valign="top" style="padding:18px 12px 18px 8px;border-top:1px solid ${RULE};${bg}overflow-wrap:anywhere;word-break:break-word;">${stepMark(s)}<h3 style="margin:0 0 6px;font-size:18px;line-height:1.35;color:${s.state === 'done' ? MUTED : NAVY};">${e(s.heading)}</h3>${copy(s.paragraphs||[])}${s.bullets?.length ? `<ul style="padding-left:22px;">${s.bullets.map(b=>`<li>${e(b)}</li>`).join('')}</ul>` : ''}${s.action ? actionHtml(s.action) : ''}</td></tr>`;
   }).join('')}</table>`;
 }
 function photoCredit(photo: EmailPhoto): string {

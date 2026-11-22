@@ -147,7 +147,7 @@ export const stepIcon = (step: 1 | 2 | 3 | 4 | 5) => asset(PROCESS_ICONS[step - 
 
 /** BeGifted's own photographs (website set, no credit line needed), one for each part of the process. */
 const HEROES = {
-  r1: { file: "hero-r1.jpg", alt: "The BeGifted front desk under the lit orange BeGifted logo" },
+  r1: { file: "hero-r1.jpg", alt: "A BeGifted tutoring room with a yellow table and a wide window view of Bangkok" },
   next: { file: "hero-next-steps.jpg", alt: "A BeGifted classroom with a blue table, orange chairs and a chalkboard wall of equations" },
   visit: { file: "hero-visit.jpg", alt: "The orange and grey corridor to the tutoring rooms at BeGifted" },
   offer: { file: "hero-offer.jpg", alt: "The wood-panelled BeGifted lounge with orange leather armchairs" },

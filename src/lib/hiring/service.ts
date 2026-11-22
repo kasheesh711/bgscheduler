@@ -78,7 +78,7 @@ import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
 import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
 import { checkRubric, computeSheet, passRulesFor, RUBRIC_ITEMS, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
-import { HIRING_LINE_URL, HIRING_PROCESS, hiringEmail, mockPrep, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
+import { HIRING_LINE_URL, hiringEmail, mockPrep, stepIcon, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -344,6 +344,7 @@ export async function inviteToMock(
       to: candidate.email,
       ...hiringEmail({
         subject: "BeGifted mock teaching invitation",
+        hero: "visit",
         preheader: "Book your onsite mock teaching session.",
         title: "Book your mock teaching session",
         tone: "ink",
@@ -426,8 +427,8 @@ export const callInviteEmail = (input: { name: string; url: string }) =>
       { label: "Link closes", value: `${CALL_LINK_DAYS} days after this email` },
     ],
     action: { label: "Book your R1 interview", url: input.url },
-    stepsHeading: "How our process works",
-    steps: HIRING_PROCESS,
+    hero: "r1",
+    process: 1,
     after: [
       "After you book, Google Calendar sends you an invitation with the Google Meet link. The booking page also asks for a phone number, which we use only if the video call fails.",
     ],
@@ -465,6 +466,8 @@ export const preScreenEmail = (name: string, email: string, reminder: boolean, v
           : "Next steps: your BeGifted pre-screening questions and onsite visit",
         preheader: "Answer a short questionnaire, then book your onsite visit.",
         title: reminder ? "Your questions are still open" : "Thank you for R1. Here are your next steps",
+        hero: "next",
+        process: 2,
         name,
         paragraphs: [
           reminder
@@ -476,7 +479,6 @@ export const preScreenEmail = (name: string, email: string, reminder: boolean, v
           { label: "Questionnaire", value: "About 5–7 minutes" },
           { label: "Onsite visit", value: VISIT_LENGTH },
         ],
-        action: { label: "Answer the pre-screening questions", url: PRE_SCREEN_URL },
         stepsHeading: "Your next steps",
         steps: [
           {
@@ -485,6 +487,7 @@ export const preScreenEmail = (name: string, email: string, reminder: boolean, v
               "Use this email address on the form. One question asks which subject you want to be tested on at your visit.",
             ],
             action: { label: "Open the questionnaire", url: PRE_SCREEN_URL },
+            icon: stepIcon(2),
           },
           {
             heading: "Book your onsite visit",
@@ -492,6 +495,7 @@ export const preScreenEmail = (name: string, email: string, reminder: boolean, v
               "We check your answers first. When booking opens, we email you. Then choose your visit time on this link.",
             ],
             action: { label: "Book your onsite visit", url: visitUrl },
+            icon: stepIcon(3),
           },
         ],
       })
@@ -516,6 +520,7 @@ export const preScreenEmail = (name: string, email: string, reminder: boolean, v
 export const visitInviteEmail = (input: { name: string; subject: string; url: string; location: string; expireDays?: number }) =>
   hiringEmail({
     subject: input.expireDays === undefined ? "Reminder: book your BeGifted onsite visit" : "BeGifted onsite visit invitation",
+    hero: "visit",
     preheader: `Book one onsite visit for ${input.subject}.`,
     title: input.expireDays === undefined ? "Your visit is not booked yet" : "Book your onsite visit",
     tone: "ink",
@@ -532,6 +537,7 @@ export const visitInviteEmail = (input: { name: string; subject: string; url: st
       ...(input.expireDays === undefined ? [] : [{ label: "Link closes", value: `${input.expireDays} days after this email` }]),
     ],
     action: { label: "Book your visit", url: input.url },
+    stepsHeading: "Your visit day",
     steps: VISIT_STEPS,
     list: VISIT_BRING,
     after: ["The time that you book covers the test and the mock teaching interview.", ...mockPrep(input.subject).paragraphs],
@@ -1241,6 +1247,7 @@ export async function bookInterview(
           to: candidate.email,
           ...hiringEmail({
             subject: `BeGifted ${cap.kind === "mock" ? "mock teaching" : "paper assessment"} confirmed`,
+            hero: "visit",
             preheader: `Your ${cap.kind === "mock" ? "mock teaching" : "paper assessment"} appointment is confirmed.`,
             title: `Your ${cap.kind === "mock" ? "mock teaching" : "paper assessment"} is confirmed`,
             tone: "ink",
@@ -1923,6 +1930,8 @@ export async function bookCall(token: string, value: unknown, db: Database = get
           cc: [],
           ...hiringEmail({
             subject: `BeGifted R1: HR Interview ${own ? "moved" : "confirmed"}`,
+            hero: "r1",
+            process: 1,
             preheader: `${bangkok(call.startTime)} (Bangkok). Google Meet video call.`,
             title: own ? "Your R1 interview has moved" : "Your R1 interview is confirmed",
             name: candidate.name,
@@ -2021,6 +2030,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
         key: `booking:${paper.id}:email`, candidateId: cap.id, bookingId: paper.id, kind: "email",
         payload: { to: candidate.email, ...hiringEmail({
           subject: "BeGifted paper assessment confirmed", preheader: bangkok(paper.startTime),
+          hero: "visit",
           title: "Your paper assessment is confirmed", name: candidate.name,
           paragraphs: ["We will contact you after we grade your paper."],
           details: [
@@ -2129,6 +2139,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
           to: candidate.email,
           ...hiringEmail({
             subject: `BeGifted onsite visit ${rows.length ? "moved" : "confirmed"}`,
+            hero: "visit",
             preheader: `Test ${bangkok(exam.startTime)} (Bangkok). If you pass, mock teaching follows on the same day.`,
             title: rows.length ? "Your visit has moved" : "Your visit is confirmed",
             tone: "ink",
@@ -2143,6 +2154,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
             ...(rows.length
               ? {}
               : { action: { label: "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!, "visit") } }),
+            stepsHeading: "Your visit day",
             steps: VISIT_STEPS,
             list: VISIT_BRING,
             after: [
@@ -2543,6 +2555,7 @@ export async function bookContract(token: string, value: unknown, db: Database =
     }).returning();
     const mail = hiringEmail({
       subject: "BeGifted contract signing confirmed", preheader: bangkok(booking.startTime),
+      hero: "offer",
       title: "Your contract signing is confirmed", name: current.name,
       paragraphs: ["Please meet our HR team at the location below."],
       details: [

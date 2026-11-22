@@ -83,6 +83,14 @@ describe("preScreenEmail with a visit link (Next steps)", () => {
       expect(part).toContain("ann@example.com");
     }
   });
+  it("shows the two steps as buttons, R1 as done and this step as the reader's place", () => {
+    const email = preScreenEmail("Ann", "ann@example.com", false, visit);
+    expect(email.html).toContain(">Open the questionnaire</a>");
+    expect(email.html).toContain(">Book your onsite visit</a>");
+    expect(email.text).toContain("2. Pre-screening questions and visit booking (You are here)");
+    expect(email.html).toContain(">Done</p>");
+    expect(email.html).toContain("/brand/email/hiring/v1/hero-next-steps.jpg");
+  });
   it("keeps the visit link in the reminder, and a form sent before this change keeps the old wording", () => {
     expect(preScreenEmail("Ann", "ann@example.com", true, visit).text).toContain(visit);
     const old = preScreenEmail("Ann", "ann@example.com", false);

@@ -58,6 +58,18 @@ describe("candidate emails keep their facts", () => {
     expect(email.text).not.toMatch(/by phone|phone call/i);
   });
 
+  it("puts BeGifted's own photo on candidate emails, the five step icons, and marks the reader's step", () => {
+    const email = callInviteEmail({ name: "Ann", url: "https://bgscheduler.vercel.app/hiring/book/r1" });
+    expect(email.html).toContain("/brand/email/hiring/v1/hero-r1.jpg");
+    for (const icon of ["step-r1-interview", "step-form-booking", "step-exam", "step-mock-teaching", "step-offer"])
+      expect(email.html).toContain(`/brand/email/hiring/v1/${icon}.png`);
+    expect(email.html.match(/You are here/g)).toHaveLength(1);
+    expect(email.text).toContain("1. R1: HR Interview (You are here)");
+    // The photo has alt text and no credit line; an email without a hero has no photo.
+    expect(email.html).toMatch(/hero-r1\.jpg" alt="[^"]+"/);
+    expect(hiringEmail({ subject: "S", preheader: "P", title: "T", name: "HR team", paragraphs: [] }).html).not.toContain("/brand/email/hiring/");
+  });
+
   it("pre-screen invitation and reminder", () => {
     const invite = preScreenEmail("Ann", "ann@example.com", false);
     const reminder = preScreenEmail("Ann", "ann@example.com", true);
