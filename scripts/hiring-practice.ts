@@ -24,6 +24,7 @@ async function main() {
     }
   }
   console.log("Real taps send real messages: a head's No or Yes posts in the recruitment LINE group; a No, and Gift's decision, email the practice address with HR copied.");
+  console.log("Gift's Yes sends an offer email with working links. Do not book the contract slot or complete the onboarding form from that email.");
   console.log("If hiring settings (weights, penalty, pass marks) change after seeding, Gift's packet shows 'Evidence changed': HR sends it again.");
 }
 
