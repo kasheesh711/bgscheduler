@@ -1008,6 +1008,10 @@ textarea.input {
     background: Highlight;
     color: HighlightText;
   }
+  /* forced-color-adjust: none keeps the navy ring too, which cannot be seen on a dark canvas. */
+  .page[data-brief] .scoreTile:has(> input:checked:focus) {
+    outline-color: CanvasText;
+  }
   .page[data-brief] .criterionScore input[type="checkbox"] {
     appearance: auto;
   }
