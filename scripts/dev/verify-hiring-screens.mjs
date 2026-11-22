@@ -351,6 +351,12 @@ const shot = async (page, name, fullPage = false) => {
   if (!OUT) return;
   mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: path.join(OUT, `${name}.png`), fullPage, animations: "disabled" });
+  // The words on the head and Gift screens, for the text-budget review. Closed <details> are left out, as on screen.
+  if (/^(brief|heads|gift)-/.test(name)) {
+    const words = async (frame) => frame.evaluate(() => document.body.innerText.replace(/\n{2,}/g, "\n").trim());
+    const packet = page.frames().find((frame) => frame !== page.mainFrame() && frame.parentFrame() === page.mainFrame());
+    writeFileSync(path.join(OUT, `${name}.txt`), (await words(page)) + (packet ? "\n--- packet ---\n" + (await words(packet).catch(() => "")) : ""));
+  }
 };
 // Serious and critical WCAG A/AA problems on the visible page, as "rule: target" lines. The walkthrough passes `all`, more tags and `first`.
 const axeProblems = async (page, { tags = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"], all = false, first = false } = {}) => {
