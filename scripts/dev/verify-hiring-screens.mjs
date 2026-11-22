@@ -1220,7 +1220,7 @@ try {
       const header = reader.getByRole("button", { name: "Close packet" }).locator("..");
       // The name stays for screen readers only.
       assert.deepEqual(await header.evaluate((el) => [...el.children].filter((child) => child.getBoundingClientRect().width > 1).map((child) => child.textContent)), ["Close packet"], "packet header shows more than Close");
-      assert.match(await header.evaluate((el) => getComputedStyle(el).justifyContent), /^(flex-)?end$/);
+      assert.match(await header.evaluate((el) => getComputedStyle(el).justifyContent), /end$/);
       assert.ok(await page.locator("html").evaluate((root) => root.scrollWidth <= root.clientWidth), `Gift page scrolls sideways at ${width}px`);
       assert.ok(await packetRoot.evaluate(async (root) => {
         await root.ownerDocument.fonts.ready;
