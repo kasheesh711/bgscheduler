@@ -24,6 +24,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   const [items, setItems] = useState<Partial<Record<RubricItem, number>>>(() => Object.fromEntries(RUBRIC_ITEMS.flatMap((id) => (saved?.items[id] ? [[id, saved.items[id]]] : []))));
   const [comments, setComments] = useState(saved?.comments ?? "");
   const [ticks, setTicks] = useState<StressTicks>(() => saved?.stressTest ?? { listens: false, explains: false, plan: false });
+  const [ticksUsed, setTicksUsed] = useState(() => !!saved?.stressTest && Object.values(saved.stressTest).some(Boolean));
   const [checksDone, setChecksDone] = useState<boolean | null>(saved?.checksDone ?? null);
   const [state, setState] = useState<"idle" | "sent">("idle");
   const [editing, setEditing] = useState(!lastSent);
@@ -130,6 +131,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                 <details className={c.note}>
                   <summary aria-label={`Guide: what each score means for ${label}`}>Guide</summary>
                   {RUBRIC_GUIDE[id].hint && <p><em>{RUBRIC_GUIDE[id].hint}</em></p>}
+                  {id === "stress" && <p>The ticks suggest a score. You choose the score.</p>}
                   <dl>
                     {RUBRIC_GUIDE[id].bands.map((band, index) => (
                       <div key={BAND_LABELS[index]}>
@@ -148,14 +150,16 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                           checked={ticks[key]}
                           onChange={(event) => {
                             setTicks({ ...ticks, [key]: event.target.checked });
+                            setTicksUsed(true);
                             changed();
                           }}
                         />{" "}
                         {element}
                       </label>
                     ))}
-                    <p className={c.note} aria-live="polite">
-                      Suggested score: {stressSuggestion(ticks)}. You choose the score.
+                    {/* Before the head uses the ticks, "Suggested score: 1" reads as advice. It stays once a box was touched, also when all are clear again. */}
+                    <p className={`${c.note} empty:absolute`} aria-live="polite">
+                      {ticksUsed && `Suggested score: ${stressSuggestion(ticks)}.`}
                     </p>
                   </div>
                 )}

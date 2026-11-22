@@ -1001,6 +1001,13 @@ textarea.input {
   transform: translateY(-1px) rotate(45deg);
 }
 @media (forced-colors: active) {
+  /* The radio is hidden, so the chosen tile must carry the system selection colours. */
+  .scoreTile:has(input:checked) {
+    forced-color-adjust: none;
+    border-color: Highlight;
+    background: Highlight;
+    color: HighlightText;
+  }
   .page[data-brief] .criterionScore input[type="checkbox"] {
     appearance: auto;
   }

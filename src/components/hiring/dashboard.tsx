@@ -360,7 +360,7 @@ export function HiringDashboard() {
           <>
             <div className={nav.desktop}>{navigation}</div>
             {/* Gift's phone screen has no step menu, so this is her way to the other tabs. */}
-            {giftReview && <div className={`${css.viewSwitch} min-[720px]:hidden`}>
+            {giftReview && <div className={`${css.viewSwitch} ${css.phoneOnly}`}>
               <button type="button" onClick={() => setView("overview")}>
                 Full dashboard
               </button>

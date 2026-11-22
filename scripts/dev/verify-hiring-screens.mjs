@@ -988,10 +988,10 @@ try {
     assert.equal(await tiles.count(), 14);
     assert.equal(await page.locator("#scores select").count(), 0);
     await page.getByRole("status").filter({ hasText: /^0 of 14 scored$/ }).waitFor();
-    await page.getByText("Suggested score: 1. You choose the score.", { exact: true }).waitFor();
+    assert.equal(await page.getByText(/^Suggested score/).count(), 0);
     const tick = page.getByRole("checkbox").first();
     await tick.check();
-    await page.getByText(/^Suggested score: (4|7|10)\. You choose the score\.$/).waitFor();
+    await page.getByText(/^Suggested score: (4|7|10)\.$/).waitFor();
     assert.equal(await tick.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(20, 33, 61)");
     await page.emulateMedia({ forcedColors: "active" });
     assert.equal(await tick.evaluate((el) => getComputedStyle(el).appearance), "auto");

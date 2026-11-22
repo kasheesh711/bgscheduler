@@ -298,7 +298,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       {(awaitingSignOff || stale) && packet && <>
         {pauseReason && <p id={pauseReason} className={css.reviewStatus}>{pausedStatus}</p>}
         <p id={ready ? undefined : instruction} className={ready ? css.reviewStatus : css.inspectorMeta} role="status">{stale ? (review?.packetValid === null ? "Could not check the packet just now." : "Evidence changed. Ask HR for a new packet.")
-          : ready ? "Ready for sign-off." : sharedBlock ?? "Read the packet to unlock sign-off."}</p>
+          : ready ? "Ready for sign-off." : sharedBlock ?? (viewed && error?.retry ? "Retry the review check to unlock sign-off." : "Read the packet to unlock sign-off.")}</p>
         {ready && <p id={instruction} className="sr-only">Approve, or write a note and reject.</p>}
         {stale && <button type="button" ref={retryButton} className={`${css.primary} mt-2.5 min-h-11 min-w-11`} disabled={!!busy} onClick={() => void act()}>Check again</button>}
       </>}
