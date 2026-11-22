@@ -105,7 +105,10 @@ export type GroupFunnel = {
   /** Share of the step before, 3 places; `null` when the step before has nobody. */
   conv: Record<Exclude<FunnelStep, "applied">, number | null>;
   stuck: number;
-  /** Weeks the group's applicants span: 1 for a week group, else from max(window start, first applicant) to now, at least 1. */
+  /**
+   * Weeks the group's applicants span: 1 for a week group, else from max(window start, first applicant) to now
+   * (a month group ends at the end of its month), at least 1.
+   */
   weeks: number;
   stepDays: Partial<Record<StepName, Stat>>;
   currentStage: Record<string, StageStat>;
@@ -116,7 +119,7 @@ export type FunnelReport = {
   excludedBeforeWindow: number;
   /** True when the payload holds PAYLOAD_ROW_CAP candidates: older rows were cut, so counts can be low. */
   capped: boolean;
-  /** "all", "campaign:<seekJobId or tracker-only>", "week:<ISO week>". */
+  /** "all", "campaign:<seekJobId or tracker-only>", "month:<Bangkok month, 2026-11>", "week:<ISO week>". */
   groups: Record<string, GroupFunnel>;
   /** Every candidate in the payload, in the window or not: the stage key (a STUCK_RULES key), days in it and stuck. */
   byCandidate: Record<string, CandidateStage>;
@@ -314,13 +317,16 @@ export function buildFunnel(data: FunnelInput, now: Date): FunnelReport {
 
   const keys = new Map<string, Row[]>([["all", rows]]);
   for (const row of rows)
-    for (const g of [`campaign:${row.campaign}`, `week:${row.week}`]) {
+    for (const g of [`campaign:${row.campaign}`, `month:${new Date(row.firstSeen + BANGKOK_MS).toISOString().slice(0, 7)}`, `week:${row.week}`]) {
       const list = keys.get(g) ?? [];
       list.push(row);
       keys.set(g, list);
     }
+  // A past month stops at its last day, or its weekly rate would fall with each week after it.
+  const endOf = (g: string) =>
+    g.startsWith("month:") ? Math.min(nowMs, Date.UTC(Number(g.slice(6, 10)), Number(g.slice(11)), 1) - BANGKOK_MS) : nowMs;
   const weeksOf = (g: string, list: Row[]) =>
-    g.startsWith("week:") ? 1 : Math.max(1, (nowMs - Math.max(start, Math.min(...list.map((r) => r.firstSeen)))) / (7 * DAY));
+    g.startsWith("week:") ? 1 : Math.max(1, (endOf(g) - Math.max(start, Math.min(...list.map((r) => r.firstSeen)))) / (7 * DAY));
   const groups = Object.fromEntries([...keys].map(([g, list]) => [g, summarize(list, weeksOf(g, list))]));
   return {
     now: now.toISOString(),
