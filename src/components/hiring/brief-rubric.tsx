@@ -43,7 +43,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
     message?.scrollIntoView({ block: error ? "center" : "start", behavior: error && !reducedMotion ? "smooth" : "instant" });
     message?.focus({ preventScroll: true });
   }, [state, error, editing, sentTotal]);
-  if (!decisionSent && form === "closed") return <p className={c.note}>Scores are recorded. Ask admin to change them.</p>;
+  if (!decisionSent && form === "closed") return <p className={c.note}>Scores are recorded. Ask admin to edit scores.</p>;
   const scored = RUBRIC_ITEMS.filter((id) => items[id]).length;
   const checksMissing = scored === RUBRIC_ITEMS.length && checksDone === null;
   const complete = scored === RUBRIC_ITEMS.length && checksDone !== null;
@@ -154,7 +154,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                         {element}
                       </label>
                     ))}
-                    <p className={c.note} aria-live="polite">
+                    <p className={`${c.note} empty:absolute`} aria-live="polite">
                       {Object.values(ticks).some(Boolean) && `Suggested: ${stressSuggestion(ticks)}`}
                     </p>
                   </div>

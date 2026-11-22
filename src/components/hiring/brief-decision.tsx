@@ -46,10 +46,7 @@ export function BriefDecision({ sent, onSent, url, hasScores, unsent, pending, s
   return (
     <div className={c.field}>
       {!sent && unsent && (
-        <p className={`${c.note} ${c.scoreChanges}`}>
-          <span role="status">Recommendation uses sent scores.</span>{" "}
-          <a href="#scores">Go to scores</a>
-        </p>
+        <p className={c.note} role="status">Recommendation uses sent scores.</p>
       )}
       {sent && (
         <p ref={recorded} role="status" className={c.success} tabIndex={-1}>

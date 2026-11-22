@@ -20,7 +20,7 @@ const BRIEF_STATES = [
   ["wait", "Scores open after the mock.", "Check again"],
   ["checking", "Scores are being checked.", "Check again"],
   ["admin", "Ask BeGifted admin to check the scores.", null],
-  ["closed", "Scores are recorded. Ask admin to change them.", "Yes, send to HR"],
+  ["closed", "Scores are recorded. Ask admin to edit scores.", "Yes, send to HR"],
 ];
 
 const ENTRY = `
@@ -484,6 +484,8 @@ const check = async (name, action) => {
   } catch (error) {
     process.exitCode = 1;
     process.stdout.write(`FAIL ${name}: ${String(error.message).split("\n")[0]}\n`);
+    // The harness line of the failed step, for a quick fix.
+    process.stdout.write(`     ${String(error.message).split("\n").slice(1, 6).join(" ")} ${String(error.stack).split("\n").find((line) => line.includes("verify-hiring-screens.mjs")) ?? ""}\n`);
   }
 };
 try {
@@ -1013,7 +1015,7 @@ try {
     await firstScore.locator("..").click();
     await page.locator("[data-sticky]").getByRole("status").filter({ hasText: "Score changes not sent." }).waitFor();
     assert.equal(await page.getByRole("link", { name: "Go to mock scores" }).getAttribute("href"), "#scores");
-    assert.equal(await page.getByRole("link", { name: "Go to scores", exact: true }).getAttribute("href"), "#scores");
+    assert.equal(await page.getByRole("link", { name: "Go to scores", exact: true }).count(), 0);
     const usesSent = page.getByRole("status").filter({ hasText: "Recommendation uses sent scores." });
     for (const width of [320, 390]) {
       await page.setViewportSize({ width, height: 844 });
@@ -1125,8 +1127,8 @@ try {
       await assertLeftEdge(title, page.locator("article").filter({ has: page.getByRole("heading", { name: "Reply Passed" }) }));
       assert.equal(await page.locator("header details").count(), 0);
       assert.equal(await page.getByText("Automation paused · Messages paused", { exact: true }).count(), 0);
-      await page.getByText("Sign-off is paused", { exact: true }).waitFor();
-      await page.getByRole("status").filter({ hasText: "Ask Kevin to enable Automation and Messages." }).waitFor();
+      await page.getByText("Automation and Messages off", { exact: true }).waitFor();
+      await page.getByRole("status").filter({ hasText: "Ask Kevin to enable both." }).waitFor();
       await shot(page, `gift-review-${size}`);
       assert.deepEqual(await axeProblems(page), [], "axe on gift");
     }
@@ -1244,10 +1246,18 @@ try {
     };
     await assertPacketFits(390);
     await shot(page, "gift-review-packet-phone");
+    // The weighted breakdown with one evidence row open.
+    await packetRoot.evaluate((root) => {
+      const row = root.querySelector(".stack-key details");
+      if (row) row.open = true;
+      (row ?? root).scrollIntoView({ block: "center" });
+    });
+    await shot(page, "gift-review-packet-ats-phone");
+    assert.ok(await packetRoot.evaluate((root) => root.scrollWidth <= root.clientWidth), "the packet scrolls sideways with evidence open");
     assert.deepEqual(await axeProblems(page), [], "axe on gift packet");
     await page.getByRole("button", { name: "Close packet" }).click();
-    const blocker = page.getByRole("status").filter({ hasText: "Ask Kevin to enable Automation and Messages." });
-    assert.ok(await blocker.evaluate((node) => document.activeElement === node));
+    // Approve is blocked, so focus returns to the Read button.
+    await page.waitForFunction(() => /Read (review packet|packet again)/.test(document.activeElement?.textContent ?? ""), null, { timeout: 3000 });
     await page.setViewportSize({ width: 320, height: 700 });
     await page.goto(`${origin}/?view=review&roles=1&gift=1`);
     await page.getByRole("button", { name: "Read review packet" }).first().waitFor();
@@ -1257,6 +1267,14 @@ try {
     await page.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" }).waitFor();
     await assertPacketFits(320);
     await shot(page, "gift-review-packet-320");
+    // The weighted breakdown with one evidence row open.
+    await packetRoot.evaluate((root) => {
+      const row = root.querySelector(".stack-key details");
+      if (row) row.open = true;
+      (row ?? root).scrollIntoView({ block: "center" });
+    });
+    await shot(page, "gift-review-packet-ats-320");
+    assert.ok(await packetRoot.evaluate((root) => root.scrollWidth <= root.clientWidth), "the packet scrolls sideways with evidence open");
     await page.setViewportSize({ width: 1440, height: 900 });
   });
   await check("walkthrough", async () => {

@@ -65,10 +65,11 @@ function atsBreakdown(ats: ReviewPacket["evidence"]["ats"], atsScore: string) {
   if (!weights || prestige === undefined || penalty === undefined) return "";
   const parts = Object.entries(criterionNames).map(([id, name]) => {
     const max = weights[id as keyof typeof weights];
-    const result = ats.criteria.find((entry) => entry.id === id)?.result ?? "unknown";
-    return { name, status: criterionResults[result], max, earned: max * VALUE[result] };
+    const criterion = ats.criteria.find((entry) => entry.id === id);
+    const result = criterion?.result ?? "unknown";
+    return { name, status: criterionResults[result], max, earned: max * VALUE[result], evidence: criterion?.evidence };
   });
-  parts.push({ name: "School", status: "", max: weights.prestige, earned: weights.prestige * prestige });
+  parts.push({ name: "School", status: "", max: weights.prestige, earned: weights.prestige * prestige, evidence: undefined });
   const gross = parts.reduce((sum, part) => sum + part.earned, 0);
   const barWidth = 304;
   const barX = (value: number) => 8 + barWidth * percent(value) / 100;
@@ -92,7 +93,10 @@ ${gross > 0 ? `<path class="stack-gap" d="M${barX(gross)} 2v14"/>` : ""}` : ""}
 ${penalty > 0 ? `<path class="penalty-marker" d="M${netX} 18l-5 7h10z"/>` : ""}
 </svg><div class="stack-ends" aria-hidden="true"><span>0</span><span>100</span></div>
 <ul class="stack-key">
-${parts.map(({ name, status, earned, max }, index) => `<li><i style="background:${stackColors[index]}"></i><span>${escape(name)}${status ? ` · ${escape(status)}` : ""}</span><span class="num">${points.format(earned)} / ${points.format(max)}</span></li>`).join("")}
+${parts.map(({ name, status, earned, max, evidence }, index) => {
+  const row = `<i style="background:${stackColors[index]}"></i><span>${escape(name)}${status ? ` · ${escape(status)}` : ""}</span><span class="num">${points.format(earned)} / ${points.format(max)}</span>`;
+  return `<li>${evidence ? `<details><summary>${row}</summary><p class="copy">${escape(evidence)}</p></details>` : row}</li>`;
+}).join("")}
 ${gross < 100 ? `<li><i class="ghost-key"></i><span>Lost points</span><span class="num">${points.format(100 - gross)}</span></li>` : ""}
 ${penalty > 0 ? `<li><i class="penalty-key"></i><span>Work-rights penalty</span><span class="num">−${points.format(penalty)}</span></li>` : ""}
 </ul></div>`;
@@ -179,7 +183,13 @@ svg{display:block;width:100%;height:auto}
 #lost-points path{stroke:#b4aa9b;stroke-width:1.2}
 .penalty-marker,.penalty-key{fill:var(--accent);background:var(--accent)}
 .stack-key{margin:0;padding:0;list-style:none;font-size:13px}
-.stack-key li{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:baseline;gap:7px}
+.stack-key li,.stack-key summary{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:7px}
+.stack-key details{grid-column:1/-1;min-width:0;break-inside:avoid}
+.stack-key summary{width:100%}
+.stack-key summary::-webkit-details-marker{display:none}
+.stack-key summary > span:not(.num)::after{content:"";display:inline-block;width:7px;height:7px;margin-left:7px;border:solid currentColor;border-width:0 2px 2px 0;vertical-align:2px;transform:rotate(45deg)}
+.stack-key details[open] summary > span:not(.num)::after{transform:rotate(225deg);vertical-align:0}
+.stack-key details p{margin-inline-start:17px}
 .stack-key i{width:8px;height:8px;border-radius:2px}
 .stack-key .penalty-key{clip-path:polygon(50% 0,100% 100%,0 100%);border-radius:0}
 .evidence-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 12px;margin-top:10px}
@@ -245,7 +255,7 @@ ${paperTarget === null ? "" : `<p class="paper-detail meta">Pass mark ${escape(p
 </div><p class="guide"><span role="group" aria-label="Score guide">Strong ≥80 · Fair 60 to under 80 · Low &lt;60</span></p>${recommendation.reason ? `<p class="copy">${escape(recommendation.reason)}</p>` : ""}
 <div class="files"><a href="${escape(resume)}">Original résumé</a><a href="${escape(paper)}">Marked exam</a></div></section>
 <section><h2>${breakdown ? "ATS breakdown" : "Initial ATS assessment"}</h2>
-${breakdown || radar(ats.criteria)}
+${breakdown || `${radar(ats.criteria)}
 <div class="evidence-list">
 ${ats.criteria.map(({ id, result, evidence }) => {
   const name = (criterionNames as Record<string, string>)[id];
@@ -255,7 +265,7 @@ ${ats.criteria.map(({ id, result, evidence }) => {
   return evidence
     ? `<div><details><summary>${title} evidence${status}</summary><p class="copy">${escape(evidence)}</p></details></div>`
     : `<div><strong>${title}</strong>${status}</div>`;
-}).join("")}</div></section>
+}).join("")}</div>`}</section>
 <section><h2>Paper by level</h2>
 ${levels.map((level) => `<div class="metric">
 <p class="label"><span>${escape(level.level)}</span><span class="num">${escape(level.scored)} / ${escape(level.max)} · ${escape(level.percent)}%</span></p>

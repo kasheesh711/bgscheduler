@@ -56,7 +56,7 @@ describe("InterviewerBrief", () => {
     expect(wait.indexOf("Check again")).toBeLessThan(wait.indexOf("Candidate files"));
     expect(wait).not.toContain('type="radio"');
     const closed = html({ form: "closed", recommendationReady: true });
-    expect(closed).toContain("Scores are recorded. Ask admin to change them.");
+    expect(closed).toContain("Scores are recorded. Ask admin to edit scores.");
     expect(closed).not.toContain('type="radio"');
     expect(closed.indexOf("Yes, send to HR")).toBeLessThan(closed.indexOf("Candidate files"));
     expect(closed).toContain("No queues a rejection email to the candidate.");

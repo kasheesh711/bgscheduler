@@ -395,11 +395,6 @@
   min-height: calc(100dvh - 140px);
   align-content: start;
 }
-.scoreChanges a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-}
 .decisionActions {
   display: grid;
   gap: 8px;
