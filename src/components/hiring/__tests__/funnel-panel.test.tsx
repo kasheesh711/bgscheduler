@@ -42,10 +42,21 @@ describe("funnel panel", () => {
     expect(report.groups["week:2026-W47"].weeks).toBe(1);
     expect(report.groups["campaign:95633167"].weeks).toBeCloseTo(17.6 / 7, 1);
     expect(report.groups["campaign:tracker-only"].weeks).toBe(1); // 1.6 days, floored to one week
-    // A past month ends at its last day (31 Oct 10:00 to 1 Nov 00:00 Bangkok, floored); the current month runs to now.
-    expect(report.groups["month:2026-10"].weeks).toBe(1);
+    // A month is its own days in the window: all of October, and November to now.
+    expect(report.groups["month:2026-10"].weeks).toBeCloseTo(31 / 7, 1);
     expect(report.groups["month:2026-10"].reached.applied).toBe(1);
-    expect(report.groups["month:2026-11"].weeks).toBeCloseTo(7.6 / 7, 1);
+    expect(report.groups["month:2026-11"].weeks).toBeCloseTo(17 / 7, 1);
+  });
+
+  it("counts each candidate once at the furthest step, also when a step is skipped", () => {
+    // "b" has a call link (contacted). "v" has a visit booking and no form reply: the call-first flow.
+    const skipped = buildFunnel(
+      { ...data, candidates: [...data.candidates, { ...data.candidates[1], id: "v" }], bookings: [{ candidateId: "v", kind: "paper", status: "booked", startTime: day("11-20"), createdAt: day("11-17") }] },
+      NOW,
+    ).groups.all;
+    expect(skipped.reached.replied).toBeLessThan(skipped.reached.visit_booked);
+    expect(Object.values(skipped.furthest).reduce((a, b) => a + b, 0)).toBe(skipped.reached.applied);
+    expect(skipped.furthest.visit_booked).toBe(1);
   });
 
   it("names few cases and missing times", () => {

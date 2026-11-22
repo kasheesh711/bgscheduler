@@ -154,23 +154,25 @@ export function FunnelBars({ g }: { g: GroupFunnel }) {
   const applied = g.reached.applied;
   const steps = FUNNEL_STEPS.map(([step, label], i) => {
     const before = i ? g.reached[FUNNEL_STEPS[i - 1][0]] : 0;
-    const next = FUNNEL_STEPS[i + 1];
     return {
       step,
       label,
       n: g.reached[step],
       lost: i ? Math.max(0, before - g.reached[step]) : 0,
-      // A later step can count a candidate that an earlier step has no proof for, so never below zero.
-      stoppedHere: next ? Math.max(0, g.reached[step] - g.reached[next[0]]) : g.reached[step],
+      stoppedHere: g.furthest[step],
       conv: step === "applied" ? null : g.conv[step],
       time: step === "applied" ? undefined : g.stepDays[STEP_TIMING[step]],
     };
   });
+  // One flag each: the first step wins a tie.
   const mostLost = Math.max(...steps.map((s) => s.lost));
+  const worstStep = mostLost > 0 ? steps.find((s) => s.lost === mostLost)?.step : undefined;
   // A median of fewer than 5 cases moves a lot, so it is the slowest step only when no step has 5.
   const timed = steps.filter((s) => s.time);
   const steady = timed.filter((s) => s.time!.n >= 5);
-  const slowest = Math.max(0, ...(steady.length ? steady : timed).map((s) => s.time!.median));
+  const pool = steady.length ? steady : timed;
+  const slowest = Math.max(0, ...pool.map((s) => s.time!.median));
+  const slowStep = slowest > 0 ? pool.find((s) => s.time!.median === slowest)?.step : undefined;
   const longest = Math.max(0, ...timed.map((s) => s.time!.median));
   const shade = (i: number) =>
     i === steps.length - 1 ? "var(--good)" : `color-mix(in srgb, var(--primary) ${25 + i * 13}%, transparent)`;
@@ -204,8 +206,8 @@ export function FunnelBars({ g }: { g: GroupFunnel }) {
         </thead>
         <tbody>
           {steps.map((s) => {
-            const worst = s.lost > 0 && s.lost === mostLost;
-            const slow = !!s.time && slowest > 0 && s.time.median === slowest && (steady.length === 0 || s.time.n >= 5);
+            const worst = s.step === worstStep;
+            const slow = s.step === slowStep;
             return (
               <tr key={s.step}>
                 <th scope="row">
