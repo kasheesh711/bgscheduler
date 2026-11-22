@@ -1585,6 +1585,29 @@ export async function endVisit(tx: Database, rows: VisitRow[], status: "cancelle
       });
 }
 
+/**
+ * Kevin, 22 Nov 2026: a failed paper cancels the mock of the same visit, and the head hears at once. Fail closed, so a
+ * head is never sent away in error: only a counted result ("done") that is "not passed" does it. A missing pass mark, a
+ * result that still needs a check, and a mock that has started all leave the mock in place. The stage does not change:
+ * a person still sends the Reject result.
+ */
+export async function cancelMockAfterFail(db: Database, candidateId: string, subject: Subject, actor: string, now = new Date()) {
+  const { config } = await settings(db);
+  const [result] = await db.select().from(s.hiringPaperResults).where(and(
+    eq(s.hiringPaperResults.candidateId, candidateId), eq(s.hiringPaperResults.subject, subject),
+  ));
+  if (result?.status !== "done" || !result.marks || computeSheet(result.marks, passRulesFor(config, subject)).result !== "not_passed") return false;
+  return withDatabaseTransaction(db, async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"hiring-candidate:" + candidateId},0))`);
+    const mock = (await visitRows(tx, candidateId)).find((b) => b.kind === "mock" && b.subjects.includes(subject) && b.startTime > now);
+    if (!mock) return false;
+    await endVisit(tx, [mock], "cancelled", now);
+    await enqueue(tx, headNotice(mock, "cancelled"));
+    await audit(tx, actor, "mock-cancelled-after-fail", candidateId, { subject, bookingId: mock.id });
+    return true;
+  });
+}
+
 // ---- The HR pre-screen call that a candidate books (Kevin's decisions, 12 Nov 2026) ----
 
 type CallLink = { id: string; exp: number };

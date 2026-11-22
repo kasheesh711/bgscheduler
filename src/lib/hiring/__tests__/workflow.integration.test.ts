@@ -8,7 +8,7 @@ import {
   it,
   vi,
 } from "vitest";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
@@ -20,12 +20,15 @@ import { handleLineWebhookPost } from "@/lib/line/webhook";
 import { handleProgressGroupCommand } from "@/lib/line/progress-reminders";
 import { createHmac } from "node:crypto";
 import { saveBriefDecision } from "../decisions";
+import { clearResultCheck } from "../marking";
 import {
   bookInterview,
   bookContract,
   contractView,
   bookingView,
   bookVisit,
+  cancelMockAfterFail,
+  endVisit,
   briefCandidateId,
   saveBriefRubric,
   briefView,
@@ -863,6 +866,44 @@ describe("hiring workflow persistence", () => {
       const notices = await db.select().from(s.hiringRecruitmentDeliveries);
       expect(notices).toHaveLength(1);
       expect(notices[0].notice).toBe("booked");
+    });
+    it("a counted fail cancels the mock and tells the head; a pass, a missing pass mark and an unchecked result do not", async () => {
+      const marks = (score: number) => ({ comment: "", missingPages: null, questions: [
+        { id: "1", level: "IGCSE / GCSE" as const, attempted: true, readable: true, marks: score, max: 10, reason: "Marked." },
+      ] });
+      const graded = async (score: number, status: "done" | "needs_check" = "done") => {
+        const row = await invited();
+        await bookVisit(link(row), choice(), db);
+        await db.insert(s.hiringPaperResults).values({ candidateId: row.id, subject: "Mathematics", source: "person", status, marks: marks(score) });
+        return row;
+      };
+      const mockOf = async (id: string) => (await db.select().from(s.hiringBookings).where(and(eq(s.hiringBookings.candidateId, id), eq(s.hiringBookings.kind, "mock"))))[0];
+      // No pass mark saved: the result is unknown, so the mock stays.
+      const unknown = await graded(2);
+      expect(await cancelMockAfterFail(db, unknown.id, "Mathematics", "staff")).toBe(false);
+      expect((await mockOf(unknown.id)).status).toBe("confirmed");
+      await endVisit(db, (await rowsOf(unknown.id)).filter((b) => b.status === "confirmed"), "cancelled", new Date(), false);
+      await setVisit({ paperPassRules: [{ subject: "Mathematics", level: "IGCSE / GCSE", percent: 70 }] });
+      const passed = await graded(9);
+      expect(await cancelMockAfterFail(db, passed.id, "Mathematics", "staff")).toBe(false);
+      expect((await mockOf(passed.id)).status).toBe("confirmed");
+      await endVisit(db, (await rowsOf(passed.id)).filter((b) => b.status === "confirmed"), "cancelled", new Date(), false);
+      // A fail that a person has not checked yet does not count.
+      const unchecked = await graded(2, "needs_check");
+      expect(await cancelMockAfterFail(db, unchecked.id, "Mathematics", "staff")).toBe(false);
+      expect((await mockOf(unchecked.id)).status).toBe("confirmed");
+      // The person's check makes it count: the mock goes, the exam row and the stage stay.
+      const [result] = await db.select().from(s.hiringPaperResults).where(eq(s.hiringPaperResults.candidateId, unchecked.id));
+      await clearResultCheck("paper", result.id, "staff", db);
+      const mock = await mockOf(unchecked.id);
+      expect(mock.status).toBe("cancelled");
+      expect((await rowsOf(unchecked.id)).filter((b) => b.status === "confirmed").map((b) => b.kind)).toEqual(["paper"]);
+      expect((await read(unchecked.id)).stage).toBe("onsite_booked");
+      const jobs = (await jobsOf(unchecked.id)).filter((j) => j.bookingId === mock.id && j.status === "pending");
+      expect(jobs.map((j) => j.kind).sort()).toEqual(["calendar_cancel", "line"]);
+      expect(jobs.find((j) => j.kind === "line")!.payload).toEqual({ notice: "cancelled" });
+      // A second call finds no mock.
+      expect(await cancelMockAfterFail(db, unchecked.id, "Mathematics", "staff")).toBe(false);
     });
     it("sends one email holding both times", async () => {
       const row = await invited();
