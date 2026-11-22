@@ -269,12 +269,17 @@ export function topHiringSubject(subjects: Subject[], priority: HiringConfig["su
 export function supportedVisitSubjects(pre: PreScreen, answer: string | null, config: HiringConfig): Subject[] {
   return hardStops(pre, answer, normalizeSubjects(pre.subjects), config).subjects;
 }
-/** The one subject of a visit: the highest-ranked supported subject that is hiring and has a head, so a link never opens on a page with no slots. */
+/**
+ * The one subject of a visit, always supported, hiring and with a head, so a link never opens on a page with no slots.
+ * The subject the candidate chose on the form wins (Kevin, 22 Nov 2026). Without a usable choice, the highest-ranked
+ * subject is used.
+ */
 export function visitSubject(pre: PreScreen, answer: string | null, config: HiringConfig): Subject | null {
-  return topHiringSubject(
-    supportedVisitSubjects(pre, answer, config).filter((s) => config.interviewers.some((i) => i.subjects.includes(s))),
-    config.subjectPriority,
+  const usable = supportedVisitSubjects(pre, answer, config).filter(
+    (s) => config.interviewers.some((i) => i.subjects.includes(s)) && topHiringSubject([s], config.subjectPriority),
   );
+  const chosen = normalizeSubjects(pre.testSubject ?? "")[0];
+  return chosen && usable.includes(chosen) ? chosen : topHiringSubject(usable, config.subjectPriority);
 }
 
 const SUMMARY_WORDS = 25;

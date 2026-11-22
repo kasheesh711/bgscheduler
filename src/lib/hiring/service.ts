@@ -48,6 +48,7 @@ import {
   workRightsPenalty,
   supportedVisitSubjects,
   topHiringSubject,
+  visitSubject,
   workRightsAccepted,
 } from "./scoring";
 import { googleConnectionStatus, readHrBusy } from "./google";
@@ -77,7 +78,7 @@ import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
 import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
 import { checkRubric, computeSheet, passRulesFor, RUBRIC_ITEMS, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
-import { HIRING_LINE_URL, hiringEmail, mockPrep, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
+import { HIRING_LINE_URL, hiringEmail, mockPrep, stepIcon, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -343,6 +344,7 @@ export async function inviteToMock(
       to: candidate.email,
       ...hiringEmail({
         subject: "BeGifted mock teaching invitation",
+        hero: "visit",
         preheader: "Book your onsite mock teaching session.",
         title: "Book your mock teaching session",
         tone: "ink",
@@ -368,10 +370,16 @@ export async function inviteToMock(
     .set({ inviteExpiresAt: expiry, updatedAt: new Date() })
     .where(eq(s.hiringCandidates.id, candidate.id));
 }
+/**
+ * The "Next steps" email after a good R1 (Kevin, 22 Nov 2026): the form and the visit link together. The visit link
+ * opens booking only after the answers pass the usual checks; until then its page asks for the answers first.
+ * `inviteExpiresAt` holds the link's second, and `inviteToVisit` keeps it, so this same link books the visit.
+ */
 export async function inviteToPreScreen(db: Database, candidate: Candidate, now = new Date()) {
   if (!candidate.email)
     throw new HiringError(409, "A verified application email is required.");
-  return enqueue(db, {
+  const expires = new Date((Math.floor(now.getTime() / 1000) + VISIT_LINK_DAYS * 86400) * 1000);
+  const queued = await enqueue(db, {
     key: `${candidate.id}:pre-screen`,
     candidateId: candidate.id,
     kind: "email",
@@ -380,9 +388,12 @@ export async function inviteToPreScreen(db: Database, candidate: Candidate, now 
     payload: {
       to: candidate.email,
       workflowStage: "pre_screen",
-      ...preScreenEmail(candidate.name, candidate.email, false),
+      ...preScreenEmail(candidate.name, candidate.email, false, visitLink(candidate.id, expires), !!candidate.callReview?.good),
     },
   });
+  if (queued)
+    await db.update(s.hiringCandidates).set({ inviteExpiresAt: expires }).where(eq(s.hiringCandidates.id, candidate.id));
+  return queued;
 }
 /** New links book the exam and the mock together (Kevin, 22 Nov 2026). A "paper-visit" link sent earlier still books the paper only. */
 export const visitLink = (id: string, expires: Date, kind: "visit" | "paper-visit" = "visit") =>
@@ -395,23 +406,32 @@ export const callLink = (id: string, expires: Date) =>
     `/hiring/book/${bookingToken(id, "call", expires)}`,
     process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
   ).toString();
-/** The invitation to book the HR call. It holds no times: the page reads HR's calendar when it opens. */
+/**
+ * The invitation to book R1: HR Interview (Kevin, 22 Nov 2026: thank and congratulate the candidate, and show the
+ * process). It holds no times: the page reads HR's calendar when it opens.
+ */
 export const callInviteEmail = (input: { name: string; url: string }) =>
   hiringEmail({
-    subject: "BeGifted tutor application: book your call",
-    preheader: `Choose a time for a ${CALL_MINUTES}-minute phone call with our team.`,
-    title: "Book your call with BeGifted",
+    subject: "Congratulations! Book your R1: HR Interview with BeGifted",
+    preheader: `You are through to R1: a ${CALL_MINUTES}-minute Google Meet with our HR team. Choose a time.`,
+    title: "Congratulations! You are through to R1",
     name: input.name,
     paragraphs: [
-      "Thank you for your application to BeGifted. The next step is a short phone call with our HR team. Please choose a time.",
+      "Thank you for your application to become a BeGifted tutor. Congratulations: your application stood out, and we invite you to R1: HR Interview.",
+      `R1 is a ${CALL_MINUTES}-minute video call on Google Meet with our HR team. Please choose a time that suits you.`,
     ],
     details: [
-      { label: "Call", value: `${CALL_MINUTES} minutes, by phone` },
+      { label: "Interview", value: "R1: HR Interview" },
+      { label: "Format", value: `${CALL_MINUTES} minutes, Google Meet video call` },
       { label: "Times", value: "Monday to Friday, 09:00–18:00 (Bangkok time)" },
       { label: "Link closes", value: `${CALL_LINK_DAYS} days after this email` },
     ],
-    action: { label: "Book your call", url: input.url },
-    after: ["The booking page asks for your phone number. We call that number at the time that you choose."],
+    action: { label: "Book your R1 interview", url: input.url },
+    hero: "r1",
+    process: 1,
+    after: [
+      "After you book, Google Calendar sends you an invitation with the Google Meet link. The booking page also asks for a phone number, which we use only if the video call fails.",
+    ],
   });
 /**
  * Queues the call booking link, once per candidate. `workflowStage` cancels it if the candidate leaves `new` before it
@@ -434,29 +454,76 @@ export async function inviteToCall(db: Database, candidate: Candidate, now = new
     },
   });
 }
-/** The form invitation and its reminder. */
-export const preScreenEmail = (name: string, email: string, reminder: boolean) =>
-  hiringEmail({
-    subject: reminder ? "Reminder: BeGifted tutor pre-screening questionnaire" : "BeGifted tutor pre-screening questionnaire",
-    preheader: "A short questionnaire, about 5–7 minutes.",
-    title: reminder ? "Your questionnaire is still open" : "Your pre-screening questionnaire",
-    name,
-    paragraphs: [
-      reminder
-        ? "We have not yet received your pre-screening questionnaire. If you are still interested in joining BeGifted, please complete it."
-        : "Thank you for your interest in joining BeGifted. Please complete our short pre-screening questionnaire.",
-    ],
-    details: [
-      { label: "Use this email", value: email },
-      { label: "Time needed", value: "About 5–7 minutes" },
-    ],
-    action: { label: "Open the questionnaire", url: PRE_SCREEN_URL },
-    after: reminder ? [] : ["We will contact you after reviewing your response."],
-  });
+/**
+ * The form invitation and its reminder. With a visit link it is the "Next steps" email after a good R1: answer the
+ * questions, then book the visit on that link. A form sent before this change has no visit link.
+ */
+export const preScreenEmail = (name: string, email: string, reminder: boolean, visitUrl?: string, afterR1 = true) =>
+  visitUrl
+    ? hiringEmail({
+        subject: reminder
+          ? "Reminder: answer your BeGifted pre-screening questions"
+          : "Next steps: your BeGifted pre-screening questions and onsite visit",
+        preheader: "Answer a short questionnaire, then book your onsite visit.",
+        title: reminder ? "Your questions are still open" : afterR1 ? "Thank you for R1. Here are your next steps" : "Here are your next steps",
+        hero: "next",
+        // With no R1 (no call score, or a person sent the form), step 1 is not done, so the process is not shown.
+        ...(afterR1 ? { process: 2 as const } : {}),
+        name,
+        paragraphs: [
+          reminder
+            ? "We have not yet received your pre-screening answers. If you are still interested in joining BeGifted, please answer them. Then you can book your onsite visit."
+            : afterR1
+              ? "Thank you for your time at R1: HR Interview. It went well, and we invite you to the next steps."
+              : "Thank you for your interest in joining BeGifted. We invite you to the next steps.",
+        ],
+        details: [
+          { label: "Use this email", value: email },
+          { label: "Questionnaire", value: "About 5–7 minutes" },
+          { label: "Onsite visit", value: VISIT_LENGTH },
+        ],
+        stepsHeading: "Your next steps",
+        steps: [
+          {
+            heading: "Answer the pre-screening questions",
+            paragraphs: [
+              "Use this email address on the form. One question asks which subject you want to be tested on at your visit.",
+            ],
+            action: { label: "Open the questionnaire", url: PRE_SCREEN_URL },
+            icon: stepIcon(2),
+          },
+          {
+            heading: "Book your onsite visit",
+            paragraphs: [
+              "We check your answers first. When booking opens, we email you. Then choose your visit time on this link.",
+            ],
+            action: { label: "Book your onsite visit", url: visitUrl },
+            icon: stepIcon(3),
+          },
+        ],
+      })
+    : hiringEmail({
+        subject: reminder ? "Reminder: BeGifted tutor pre-screening questionnaire" : "BeGifted tutor pre-screening questionnaire",
+        preheader: "A short questionnaire, about 5–7 minutes.",
+        title: reminder ? "Your questionnaire is still open" : "Your pre-screening questionnaire",
+        name,
+        paragraphs: [
+          reminder
+            ? "We have not yet received your pre-screening questionnaire. If you are still interested in joining BeGifted, please complete it."
+            : "Thank you for your interest in joining BeGifted. Please complete our short pre-screening questionnaire.",
+        ],
+        details: [
+          { label: "Use this email", value: email },
+          { label: "Time needed", value: "About 5–7 minutes" },
+        ],
+        action: { label: "Open the questionnaire", url: PRE_SCREEN_URL },
+        after: reminder ? [] : ["We will contact you after reviewing your response."],
+      });
 /** The onsite visit invitation and its reminder. */
 export const visitInviteEmail = (input: { name: string; subject: string; url: string; location: string; expireDays?: number }) =>
   hiringEmail({
     subject: input.expireDays === undefined ? "Reminder: book your BeGifted onsite visit" : "BeGifted onsite visit invitation",
+    hero: "visit",
     preheader: `Book one onsite visit for ${input.subject}.`,
     title: input.expireDays === undefined ? "Your visit is not booked yet" : "Book your onsite visit",
     tone: "ink",
@@ -473,6 +540,7 @@ export const visitInviteEmail = (input: { name: string; subject: string; url: st
       ...(input.expireDays === undefined ? [] : [{ label: "Link closes", value: `${input.expireDays} days after this email` }]),
     ],
     action: { label: "Book your visit", url: input.url },
+    stepsHeading: "Your visit day",
     steps: VISIT_STEPS,
     list: VISIT_BRING,
     after: ["The time that you book covers the test and the mock teaching interview.", ...mockPrep(input.subject).paragraphs],
@@ -528,16 +596,22 @@ export async function inviteToVisit(
   const supported = supportedVisitSubjects(c.preScreen, c.workRightsAnswer, config);
   if (!topHiringSubject(supported, config.subjectPriority))
     throw new HiringError(409, "No supported subject is open for hiring.");
-  const subject = topHiringSubject(
-    supported.filter((v) => config.interviewers.some((i) => i.subjects.includes(v))),
-    config.subjectPriority,
-  );
+  const subject = visitSubject(c.preScreen, c.workRightsAnswer, config);
   if (!subject)
     throw new HiringError(409, `No head is set for the subject: ${supported.join(", ")}.`);
   const limit = resend ? null : blockingLimit("onsite", subject, await readLimitUsage(tx, "onsite", now), config);
   if (limit)
     throw new HiringError(409, `The onsite limit "${LIMIT_TEXT[limit]}" is full. Raise the number to send more.`);
-  const expires = new Date(
+  // The "Next steps" email already gave this candidate a visit link. Keep its second, so that link now books the visit,
+  // but only while it outlasts the whole onsite window: a shorter link would show few times and expire early.
+  const kept =
+    !resend &&
+    ["pre_screen", "no_reply"].includes(c.stage) &&
+    c.inviteExpiresAt &&
+    c.inviteExpiresAt.getTime() >= now.getTime() + config.onsiteFollowUp.expireDays * DAY
+      ? c.inviteExpiresAt
+      : null;
+  const expires = kept ?? new Date(
     (Math.floor(now.getTime() / 1000) + VISIT_LINK_DAYS * 86400) * 1000,
   );
   const revision = c.revision + 1;
@@ -1179,6 +1253,7 @@ export async function bookInterview(
           to: candidate.email,
           ...hiringEmail({
             subject: `BeGifted ${cap.kind === "mock" ? "mock teaching" : "paper assessment"} confirmed`,
+            hero: "visit",
             preheader: `Your ${cap.kind === "mock" ? "mock teaching" : "paper assessment"} appointment is confirmed.`,
             title: `Your ${cap.kind === "mock" ? "mock teaching" : "paper assessment"} is confirmed`,
             tone: "ink",
@@ -1458,16 +1533,32 @@ const examOf = (rows: VisitRow[]) => rows.find((b) => b.kind === "paper");
  * The link's expiry second must equal the row's, so a new link ends the old one. A booked link stays open until the visit
  * starts. An unbooked link closes at expireDays even when the worker is not running to mark No booking.
  */
+/**
+ * A "Next steps" link before booking opens: "answers" while the form is unanswered, "checking" while the answers wait
+ * for the checks or a person. Null for every other link.
+ */
+function answersFirst(candidate: Candidate, cap: VisitLink): "answers" | "checking" | null {
+  if (!["pre_screen", "no_reply"].includes(candidate.stage) || candidate.inviteExpiresAt?.getTime() !== cap.exp * 1000) return null;
+  return candidate.preScreen ? "checking" : "answers";
+}
+const ANSWERS_FIRST = {
+  answers: `Please answer the pre-screening questions first: ${PRE_SCREEN_URL} When booking opens, we email you, and this link lets you book.`,
+  checking: "Thank you for your answers. We have them. When booking opens, we email you, and this link lets you book. If we have a question, we contact you.",
+};
+
 async function openVisit(db: Database, cap: VisitLink, config: HiringConfig, now: Date) {
   const candidate = await candidateById(db, cap.id);
+  const first = answersFirst(candidate, cap);
+  if (first) throw new HiringError(409, ANSWERS_FIRST[first]);
   const rows = await visitRows(db, cap.id);
   let open = candidate.inviteExpiresAt?.getTime() === cap.exp * 1000 && !!candidate.visitSubject;
   if (open && candidate.stage === "onsite_booked") {
     const exam = examOf(rows);
     open = !!exam && exam.startTime > now;
   } else if (open && candidate.stage === "onsite_invited") {
-    const sentAt = await linkSentAt(db, cap.id);
-    open = !sentAt || now.getTime() - sentAt.getTime() < config.onsiteFollowUp.expireDays * DAY;
+    // A "Next steps" candidate already holds this link, so a cancelled invitation (a hold) must close it too.
+    const live = await linkSentAt(db, cap.id);
+    open = !!live && (!live.sentAt || now.getTime() - live.sentAt.getTime() < config.onsiteFollowUp.expireDays * DAY);
   } else open = false;
   if (!open) throw new HiringError(404, onLine("This booking link is no longer active."));
   return { candidate, subject: candidate.visitSubject!, rows };
@@ -1496,6 +1587,22 @@ const offeredSlots = async (db: Database, config: HiringConfig, subject: Subject
 export async function visitView(token: string, db: Database = getDb(), now = new Date()) {
   const cap = visitToken(token, now);
   const { config } = await settings(db);
+  const waiting = answersFirst(await candidateById(db, cap.id), cap);
+  if (waiting)
+    return {
+      kind: "visit" as const,
+      paired: true,
+      subject: "",
+      location: config.location,
+      enabled: false,
+      slots: [],
+      visit: null,
+      canMove: false,
+      notice: ANSWERS_FIRST[waiting],
+      checkedAt: null,
+      waiting: waiting as "answers" | "checking" | null,
+      formUrl: (waiting === "answers" ? PRE_SCREEN_URL : null) as string | null,
+    };
   const { subject, rows } = await openVisit(db, cap, config, now);
   const enabled = bookable(config, cap.id);
   const exam = examOf(rows);
@@ -1541,6 +1648,8 @@ export async function visitView(token: string, db: Database = getDb(), now = new
     notice,
     // When the times were checked against live Wise. Null means the 30-minute Wise copy was used.
     checkedAt: live?.checkedAt ?? null,
+    waiting: null as "answers" | "checking" | null,
+    formUrl: null as string | null,
   };
 }
 
@@ -1657,8 +1766,8 @@ async function openCall(db: Database, cap: CallLink, config: HiringConfig) {
   return entry.subject;
 }
 function callMoveRefusal(call: CallRow, now: Date) {
-  if (call.rescheduleOf) return onLine("This call has already moved once.");
-  if (call.startTime <= now) return onLine("This call has started and cannot move.");
+  if (call.rescheduleOf) return onLine("This R1 interview has already moved once.");
+  if (call.startTime <= now) return onLine("This R1 interview has started and cannot move.");
   return null;
 }
 type HrBusyRead = { at: number; key: string; read: ReturnType<typeof readHrBusy> };
@@ -1686,7 +1795,7 @@ async function hrBusy(db: Database, config: HiringConfig, now: Date, fresh = fal
  * A call whose time has passed with no result from HR. The candidate waits for HR: a "No answer" closes it and opens the
  * link again. Without this a link could book a new call every time the last one ended.
  */
-const CALL_PASSED = "Your call time has passed. BeGifted will contact you about a new time.";
+const CALL_PASSED = "Your R1 interview time has passed. BeGifted will contact you about a new time.";
 /**
  * Can the call page show times now? Rules and setup shows this, and no call link leaves unless it says `readable`.
  * It shares the page's 60-second read, so it reports what a candidate would get.
@@ -1729,17 +1838,18 @@ export async function callView(token: string, db: Database = getDb(), now = new 
       slots = callSlots(dates, [...busy, ...(await otherCalls(db, cap.id, now))], now).filter(
         (slot) => new Date(slot.start).getTime() < cap.exp * 1000 && slot.start !== own?.startTime.toISOString(),
       );
-      if (!slots.length) notice = onLine("There are no open call times at the moment. Please try again later.");
+      if (!slots.length) notice = onLine("There are no open R1 interview times at the moment. Please try again later.");
     } catch (error) {
       // The calendar could not be read. A time that cannot be proved free is not shown.
       if (!(error instanceof HiringError)) throw error;
-      notice = onLine("Call times cannot be shown at the moment. Please try again later.");
+      notice = onLine("R1 interview times cannot be shown at the moment. Please try again later.");
     }
   }
   // The stored phone number is never returned: the link is the only check, and a link can be forwarded.
   return {
     kind: "call" as const,
-    minutes: CALL_MINUTES,
+    // A call booked before 22 Nov 2026 lasts 15 minutes.
+    minutes: own ? Math.round((own.endTime.getTime() - own.startTime.getTime()) / 60000) : CALL_MINUTES,
     enabled,
     slots,
     call: own ? { start: own.startTime.toISOString(), end: own.endTime.toISOString() } : null,
@@ -1771,7 +1881,7 @@ export async function bookCall(token: string, value: unknown, db: Database = get
       if (passedCall(rows, now)) throw new HiringError(409, onLine(CALL_PASSED));
       return;
     }
-    if (!input.move) throw new HiringError(409, "You already have a booked call. Use Move this call to change it.");
+    if (!input.move) throw new HiringError(409, "You already have a booked R1 interview. Use Move this R1 interview to change it.");
     const refusal = callMoveRefusal(own, now);
     if (refusal) throw new HiringError(409, refusal);
   };
@@ -1779,7 +1889,7 @@ export async function bookCall(token: string, value: unknown, db: Database = get
   // One live read of HR's calendar, just before the transaction: a Google call inside it would hold HR's lock for seconds.
   const calendar = await hrBusy(db, config, now, true).catch((error) => {
     if (!(error instanceof HiringError)) throw error;
-    throw new HiringError(503, onLine("Call times cannot be checked at the moment. Please try again later."));
+    throw new HiringError(503, onLine("R1 interview times cannot be checked at the moment. Please try again later."));
   });
   return withDatabaseTransaction(db, async (tx) => {
     await tx.execute(sql`select id from hiring_candidates where id=${cap.id} for update`);
@@ -1796,7 +1906,7 @@ export async function bookCall(token: string, value: unknown, db: Database = get
     const slot = callSlots(calendar.dates, [...calendar.busy, ...(await otherCalls(tx, cap.id, now))], new Date()).find(
       (v) => new Date(v.start).getTime() === start && start < cap.exp * 1000,
     );
-    if (!slot) throw new HiringError(409, "That call time is no longer available. Choose another time.");
+    if (!slot) throw new HiringError(409, "That R1 interview time is no longer available. Choose another time.");
     const candidate = await candidateById(tx, cap.id);
     if (own) await endVisit(tx, [own], "cancelled", now, false);
     const [call] = await tx
@@ -1827,19 +1937,22 @@ export async function bookCall(token: string, value: unknown, db: Database = get
           // HR gets its own email below, with the résumé. The candidate's copy must not carry the file.
           cc: [],
           ...hiringEmail({
-            subject: `BeGifted call ${own ? "moved" : "confirmed"}`,
-            preheader: `${bangkok(call.startTime)} (Bangkok). We will call you by phone.`,
-            title: own ? "Your call has moved" : "Your call is confirmed",
+            subject: `BeGifted R1: HR Interview ${own ? "moved" : "confirmed"}`,
+            hero: "r1",
+            process: 1,
+            preheader: `${bangkok(call.startTime)} (Bangkok). Google Meet video call.`,
+            title: own ? "Your R1 interview has moved" : "Your R1 interview is confirmed",
             name: candidate.name,
-            paragraphs: [`Your call with BeGifted ${own ? "has moved. The new time is below" : "is confirmed"}.`],
+            paragraphs: [`Your R1: HR Interview with BeGifted ${own ? "has moved. The new time is below" : "is confirmed"}.`],
             details: [
               { label: "Time", value: `${bangkok(call.startTime)}–${bangkokTime(call.endTime)} (Bangkok)` },
-              { label: "We will call", value: input.phone },
+              { label: "Where", value: "Google Meet. The link is in your Google Calendar invitation." },
+              { label: "Backup phone", value: input.phone },
             ],
-            ...(own ? {} : { action: { label: "Move your call", url: callLink(cap.id, new Date(cap.exp * 1000)) } }),
+            ...(own ? {} : { action: { label: "Move your R1 interview", url: callLink(cap.id, new Date(cap.exp * 1000)) } }),
             after: [
-              own ? "This call cannot move again through the link." : "You can move this call once, before it starts.",
-              "Please keep your phone near you at this time.",
+              own ? "This interview cannot move again through the link." : "You can move this interview once, before it starts.",
+              "Please join from a quiet place, with your camera and microphone on.",
               "For other changes, message BeGifted on LINE.",
             ],
           }),
@@ -1856,16 +1969,16 @@ export async function bookCall(token: string, value: unknown, db: Database = get
         cc: [],
         attachResume: resume,
         ...hiringEmail({
-          subject: `Pre-screen call ${own ? "moved" : "booked"}: ${candidate.name}`,
-          preheader: `${bangkok(call.startTime)} (Bangkok). Call ${input.phone}.`,
-          title: `Pre-screen call ${own ? "moved" : "booked"}`,
+          subject: `R1 ${own ? "moved" : "booked"}: ${candidate.name}`,
+          preheader: `${bangkok(call.startTime)} (Bangkok). Google Meet. Backup phone ${input.phone}.`,
+          title: `R1: HR Interview ${own ? "moved" : "booked"}`,
           name: "HR team",
-          paragraphs: [`${candidate.name} ${own ? "moved" : "booked"} a pre-screen call. Call this person at the time below.`],
+          paragraphs: [`${candidate.name} ${own ? "moved" : "booked"} R1: HR Interview. Join with the Google Meet link in the calendar event. Phone the backup number only if the video call fails.`],
           details: [
             { label: "Candidate", value: candidate.name },
             { label: "Subject", value: subject },
             { label: "Time", value: `${bangkok(call.startTime)}–${bangkokTime(call.endTime)} (Bangkok)` },
-            { label: "Phone", value: input.phone },
+            { label: "Backup phone", value: input.phone },
             { label: "Email", value: candidate.email ?? "Not recorded" },
             { label: "Résumé", value: resume ? RESUME_ATTACHED : "No file stored. See the Hiring page." },
           ],
@@ -1925,6 +2038,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
         key: `booking:${paper.id}:email`, candidateId: cap.id, bookingId: paper.id, kind: "email",
         payload: { to: candidate.email, ...hiringEmail({
           subject: "BeGifted paper assessment confirmed", preheader: bangkok(paper.startTime),
+          hero: "visit",
           title: "Your paper assessment is confirmed", name: candidate.name,
           paragraphs: ["We will contact you after we grade your paper."],
           details: [
@@ -2033,6 +2147,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
           to: candidate.email,
           ...hiringEmail({
             subject: `BeGifted onsite visit ${rows.length ? "moved" : "confirmed"}`,
+            hero: "visit",
             preheader: `Test ${bangkok(exam.startTime)} (Bangkok). If you pass, mock teaching follows on the same day.`,
             title: rows.length ? "Your visit has moved" : "Your visit is confirmed",
             tone: "ink",
@@ -2047,6 +2162,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
             ...(rows.length
               ? {}
               : { action: { label: "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!, "visit") } }),
+            stepsHeading: "Your visit day",
             steps: VISIT_STEPS,
             list: VISIT_BRING,
             after: [
@@ -2447,6 +2563,7 @@ export async function bookContract(token: string, value: unknown, db: Database =
     }).returning();
     const mail = hiringEmail({
       subject: "BeGifted contract signing confirmed", preheader: bangkok(booking.startTime),
+      hero: "offer",
       title: "Your contract signing is confirmed", name: current.name,
       paragraphs: ["Please meet our HR team at the location below."],
       details: [

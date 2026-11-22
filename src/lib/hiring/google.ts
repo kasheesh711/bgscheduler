@@ -157,27 +157,29 @@ export async function deliverCalendar(
       ),
     ),
   ].map((email) => ({ email }));
-  // The HR call: the guests are HR (`interviewerEmail`) and the candidate, by the same rule as a visit.
+  // R1: HR Interview: the guests are HR (`interviewerEmail`) and the candidate, by the same rule as a visit. Google adds a
+  // Meet link (Kevin, 22 Nov 2026), and its own invitation gives the candidate the join button.
   const call = booking.kind === "call";
   const contract = booking.kind === "contract";
   const result = await calendarRequest(
     booking.calendarOwner,
-    path + "?sendUpdates=all",
+    path + "?sendUpdates=all" + (call ? "&conferenceDataVersion=1" : ""),
     {
       method: "POST",
       body: JSON.stringify({
         id,
         summary: contract ? `BeGifted contract signing: ${candidate.name}` : call
-          ? `BeGifted pre-screen call: ${candidate.name}`
+          ? `BeGifted R1: HR Interview: ${candidate.name}`
           : booking.visitId
           ? booking.kind === "mock"
             ? "BeGifted mock teaching"
             : "BeGifted exam"
           : `BeGifted ${booking.kind === "mock" ? "mock teaching" : "paper assessment"}: ${candidate.name}`,
         description: contract ? "Onsite contract signing with BeGifted HR." : call
-          ? `Candidate: ${candidate.name}\nSubject: ${booking.subjects.join(", ")}\nPhone: ${candidate.phone ?? "not recorded"}\nEmail: ${candidate.email ?? "not recorded"}\nBeGifted calls the candidate at this time.`
+          ? `R1: HR Interview, a ${Math.round((booking.endTime.getTime() - booking.startTime.getTime()) / 60000)}-minute Google Meet video call.\nJoin with the Google Meet link in this invitation.\n\nCandidate: ${candidate.name}\nSubject: ${booking.subjects.join(", ")}\nEmail: ${candidate.email ?? "not recorded"}\nPhone (backup): ${candidate.phone ?? "not recorded"}`
           : `${booking.visitId ? `Candidate: ${candidate.name}\n` : ""}Subjects: ${booking.subjects.join(", ")}\n${booking.kind === "mock" ? `${booking.visitId ? "This session takes place only if the candidate passes the paper on the day. " : ""}The candidate prepares one lesson from an international school syllabus (IGCSE, A Level or IB). The interviewer also selects a topic.` : booking.visitId ? "The 2-hour paper assessment." : "Two hours are allocated per subject."}`,
-        location: call ? "Phone call" : location,
+        location: call ? "Google Meet" : location,
+        ...(call && { conferenceData: { createRequest: { requestId: id, conferenceSolutionKey: { type: "hangoutsMeet" } } } }),
         start: { dateTime: booking.startTime.toISOString(), timeZone: ZONE },
         end: { dateTime: booking.endTime.toISOString(), timeZone: ZONE },
         attendees,
@@ -189,5 +191,8 @@ export async function deliverCalendar(
     },
     db,
   );
+  // shortcut: a missing Meet link is only logged, while emails point to the invitation; add a review flag if it happens.
+  if (call && !result?.hangoutLink)
+    console.error("R1 calendar event has no Google Meet link", { bookingId: booking.id, status: (result?.conferenceData as { createRequest?: { status?: unknown } } | undefined)?.createRequest?.status });
   return { id: String(result?.id ?? id) };
 }

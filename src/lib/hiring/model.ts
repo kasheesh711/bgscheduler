@@ -11,12 +11,13 @@ export const GOOGLE_SCOPES = [
 // Reads free and busy time on calendars the connected account can see. It is not in GOOGLE_SCOPES: visit calendar
 // delivery must keep working before the owner connects Google again. Only the HR call needs it.
 export const GOOGLE_FREEBUSY_SCOPE = "https://www.googleapis.com/auth/calendar.events.freebusy";
-// The HR pre-screen call (Kevin's decisions, 12 Nov 2026): the people@ calendar, Monday to Friday, 09:00–18:00 Bangkok,
-// 15 minutes. Fixed in code, so an older worker never meets an unknown settings key.
+// R1: HR Interview (Kevin's decisions, 12 and 22 Nov 2026): the people@ calendar, Monday to Friday, 09:00–18:00 Bangkok,
+// 30 minutes on Google Meet, starting on any quarter hour. Fixed in code, so an older worker never meets an unknown settings key.
 export const HR_CALENDAR = "people@begiftededucation.com";
 /** The `interviewer_key` of every call row, so the booking overlap trigger gives HR one call at a time. */
 export const HR_CALL_KEY = "hr-call";
-export const CALL_MINUTES = 15;
+export const CALL_MINUTES = 30;
+export const CALL_STEP_MINUTES = 15;
 export const CONTRACT_MINUTES = 30;
 export const CALL_DAY_START = 9 * 60;
 export const CALL_DAY_END = 18 * 60;
@@ -415,14 +416,19 @@ export const preScreenSchema = z
     weeklyHours: z.string().max(500),
     motivation: z.string().max(10000),
     teachingApproach: z.string().max(10000),
+    // The subject the candidate chooses to be tested on at the visit (Kevin, 22 Nov 2026). Older answers have none.
+    testSubject: z.string().max(500).optional(),
   })
   .strict();
 export type PreScreen = z.infer<typeof preScreenSchema>;
+/** The form question that sets the visit subject. The sheet column is found by this header, not by its position. */
+export const TEST_SUBJECT_QUESTION = "Which subject do you want to be tested on at your onsite visit?";
 /** The form answers in reading order, for the admin panel and the interviewer's page. */
 export const ANSWER_LABELS: [Exclude<keyof PreScreen, "sourceRow" | "submittedAt">, string][] = [
   ["degree", "Degree"],
   ["field", "Field of study"],
   ["subjects", "Subjects"],
+  ["testSubject", "Subject to be tested on"],
   ["curricula", "Curricula"],
   ["yearGroups", "Year groups"],
   ["english", "English level"],

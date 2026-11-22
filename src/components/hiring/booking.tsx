@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { BookOpen, Check, CircleCheck, Info, MapPin, Phone } from "lucide-react";
+import { BookOpen, Check, CircleCheck, Info, MapPin, Phone, Video } from "lucide-react";
 import { phoneSchema, type Subject, type Slot } from "@/lib/hiring/model";
 import type { bookingView, callView, contractView, visitView } from "@/lib/hiring/service";
 import c from "./booking.module.css";
@@ -269,6 +269,30 @@ export function VisitBooking({
       Keep my current time
     </button>
   );
+  // A "Next steps" link before booking opens: the answers come first.
+  if (view.waiting)
+    return (
+      <>
+        <div className={c.facts}>
+          <div className={c.plan}>
+            <span>
+              Test<small>2 hours</small>
+            </span>
+            <span>
+              Mock teaching<small>1 hour, if you pass</small>
+            </span>
+          </div>
+          <p className={c.note}>Your onsite visit is one day: the test, then the mock teaching interview if you pass.</p>
+        </div>
+        <VisitNotice text={view.notice ?? ""} />
+        {view.formUrl && (
+          <a className={c.button} href={view.formUrl} target="_blank" rel="noreferrer">
+            Answer the pre-screening questions
+          </a>
+        )}
+        <Help />
+      </>
+    );
   return (
     <>
       {saved && <Saved>{saved}</Saved>}
@@ -391,7 +415,7 @@ export function VisitBooking({
   );
 }
 
-/** The HR pre-screen call: one short time, and the number that HR calls. */
+/** R1: HR Interview on Google Meet (or contract signing): one time, and a backup phone number for R1. */
 export function CallBooking({ token, view, reload }: { token: string; view: CallView; reload: () => Promise<void> }) {
   const [moving, setMoving] = useState(false),
     [chosen, setStart] = useState(""),
@@ -400,7 +424,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
     [error, setError] = useState(""),
     [saved, setSaved] = useState("");
   const contract = view.kind === "contract";
-  const appointment = contract ? "contract signing" : "call";
+  const appointment = contract ? "contract signing" : "R1 interview";
   // The list reloads on its own, so a chosen time that has gone is no longer chosen.
   const slot = view.slots.find((s) => s.start === chosen);
   const start = slot?.start ?? "";
@@ -421,8 +445,8 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
       await reload();
       setSaved(
         view.call
-          ? "Your call has moved. The new time is below. A confirmation email and a calendar invitation will follow."
-          : `Your ${appointment} is confirmed. A confirmation email and a calendar invitation will follow.`,
+          ? "Your R1 interview has moved. The new time is below. A confirmation email and a calendar invitation with the Google Meet link will follow."
+          : `Your ${appointment} is confirmed. A confirmation email and a calendar invitation${contract ? "" : " with the Google Meet link"} will follow.`,
       );
       setMoving(false);
       setStart("");
@@ -457,10 +481,10 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
     <>
       {saved && <Saved>{saved}</Saved>}
       <div className={c.facts}>
-        <Fact icon={<Phone aria-hidden />} label={contract ? "Contract signing" : "Phone call"}>
-          {view.minutes} minutes with our HR team
+        <Fact icon={contract ? <Phone aria-hidden /> : <Video aria-hidden />} label={contract ? "Contract signing" : "R1: HR Interview"}>
+          {view.minutes} minutes {contract ? "with our HR team" : "on Google Meet with our HR team"}
         </Fact>
-        {view.kind === "contract" ? <Fact icon={<MapPin aria-hidden />} label="Where">{view.location}</Fact> : <p className={c.note}>We call the phone number that you give on this page. All times are Bangkok time.</p>}
+        {view.kind === "contract" ? <Fact icon={<MapPin aria-hidden />} label="Where">{view.location}</Fact> : <p className={c.note}>A video call. Google Calendar sends you an invitation with the Google Meet link. All times are Bangkok time.</p>}
       </div>
       {view.call && (
         <section>
@@ -479,7 +503,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
             <div className={c.ticketBody}>
               <span>{day(view.call.start)}</span>
               <div className={c.ticketRow}>
-                <span>{contract ? "Onsite" : "Phone call"}</span>
+                <span>{contract ? "Onsite" : "Google Meet"}</span>
                 <strong>
                   {time(view.call.start)}–{time(view.call.end)}
                 </strong>
@@ -488,9 +512,9 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
           </div>
           {view.canMove && !moving && (
             <div className={c.move}>
-              <p className={c.note}>You can move this call once, before it starts.</p>
+              <p className={c.note}>You can move this {appointment} once, before it starts.</p>
               <button type="button" className={c.ghost} disabled={busy || !view.slots.length} onClick={() => setMoving(true)}>
-                Move this call
+                Move this {appointment}
               </button>
               {!view.slots.length && <p className={c.note}>You cannot move it now, because no other time is open.</p>}
             </div>
@@ -519,7 +543,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
             tile={(s) => <span className={c.tileTime}>{time(s.start)}</span>}
           />
           {!contract && <label className={c.field}>
-            <span className={c.stepTitle}>Your phone number</span>
+            <span className={c.stepTitle}>Your phone number (backup)</span>
             <input
               className={c.input}
               type="tel"
@@ -531,7 +555,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
             />
-            <span className={c.note}>We call this number at the time that you choose. Include the country code if it is not a Thai number.</span>
+            <span className={c.note}>We use this number only if the video call fails. Include the country code if it is not a Thai number.</span>
           </label>}
           {keep}
           <VisitConfirm
@@ -579,7 +603,7 @@ export function BookingShell({ kind, children }: { kind?: "visit" | "mock" | "pa
           <p className={c.brand}>BeGifted Education</p>
           <h1 className={c.title}>
             {kind === "onboarding" ? "Tutor " : kind === "brief" ? "Interview " : "Book your "}
-            <em>{kind === "onboarding" ? "onboarding" : kind === "brief" ? "brief" : kind === "contract" ? "contract signing" : kind === "call" ? "call with BeGifted" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "assessment"}</em>
+            <em>{kind === "onboarding" ? "onboarding" : kind === "brief" ? "brief" : kind === "contract" ? "contract signing" : kind === "call" ? "R1: HR Interview" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "assessment"}</em>
           </h1>
         </div>
       </header>
