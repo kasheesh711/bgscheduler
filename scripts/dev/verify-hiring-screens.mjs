@@ -643,6 +643,13 @@ try {
     assert.deepEqual(await list.locator("tbody button").allInnerTexts(), ["Reply Passed"]);
     await list.getByText("1 shown with a visit email sent 2 Nov 2026 to 2 Nov 2026").waitFor();
     await shot(page, "prescreen-sent-date");
+    // At 800 px the date boxes go to their own line, so no chip is cut off.
+    await page.setViewportSize({ width: 800, height: 900 });
+    const chips = list.getByRole("group", { name: "Filter pre-screen responses" });
+    assert.ok(await chips.evaluate((el) => el.scrollWidth <= el.clientWidth + 1), "chips cut off at 800 px");
+    assert.ok((await list.getByLabel("Visit email sent from").boundingBox()).y > (await chips.boundingBox()).y + 10);
+    await shot(page, "prescreen-sent-date-800");
+    await page.setViewportSize({ width: 1440, height: 900 });
     await list.getByLabel("Visit email sent from").fill("2026-11-03");
     await list.getByLabel("to", { exact: true }).fill("");
     await list.getByText("No candidates match this filter.").waitFor();
