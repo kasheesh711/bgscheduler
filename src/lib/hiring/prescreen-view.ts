@@ -17,6 +17,8 @@ export type VisitEmail = {
   tone: "good" | "wait" | "bad" | "none";
   /** Any invitation has left, even if a newer row is waiting or failed. */
   sent: boolean;
+  /** Bangkok days (yyyy-MM-dd) each sent invitation left, for the date filter. */
+  sentDays: string[];
   error?: string | null;
 };
 
@@ -37,7 +39,8 @@ export function wasSentForm(c: Pick<Person, "id" | "preScreen">, outbox: OutboxR
 export function visitEmail(c: Person, outbox: OutboxRow[], threshold: number | null, hold?: string): VisitEmail {
   const rows = outbox.filter((r) => isVisitInvite(c.id, r.key));
   const sent = rows.some((r) => r.status === "sent");
-  const says = (label: string, tone: VisitEmail["tone"], error?: string | null): VisitEmail => ({ label, tone, sent, ...(error ? { error } : {}) });
+  const sentDays = rows.flatMap((r) => (r.status === "sent" && r.sentAt ? [formatInTimeZone(new Date(r.sentAt), ZONE, "yyyy-MM-dd")] : []));
+  const says = (label: string, tone: VisitEmail["tone"], error?: string | null): VisitEmail => ({ label, tone, sent, sentDays, ...(error ? { error } : {}) });
   // A cancelled new link does not undo an email that already left.
   const row = rows.find((r) => r.status !== "cancelled") ?? rows[0];
   if (row) {
@@ -79,4 +82,11 @@ export function matchesPreScreenList(c: Person, filter: PreScreenListFilter, thr
     case "Visit email sent":
       return email.sent;
   }
+}
+
+/** The "Visit email sent" date range: any sent invitation in it counts. Empty ends are open; the ends may come in either order. */
+export function sentBetween(email: Pick<VisitEmail, "sentDays">, from: string, to: string) {
+  if (!from && !to) return true;
+  const [lo, hi] = from && to && from > to ? [to, from] : [from, to];
+  return email.sentDays.some((day) => (!lo || day >= lo) && (!hi || day <= hi));
 }

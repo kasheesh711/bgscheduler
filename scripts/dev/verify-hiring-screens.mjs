@@ -637,6 +637,17 @@ try {
     await list.getByRole("button", { name: /^Below pass score/ }).click();
     assert.deepEqual(await list.locator("tbody button").allInnerTexts(), ["Reply Low"]);
     await list.getByRole("button", { name: /^All/ }).click();
+    // The sent-date range uses the Bangkok day: 03:04 UTC on 2 Nov is 2 Nov.
+    await list.getByLabel("Visit email sent from").fill("2026-11-02");
+    await list.getByLabel("to", { exact: true }).fill("2026-11-02");
+    assert.deepEqual(await list.locator("tbody button").allInnerTexts(), ["Reply Passed"]);
+    await list.getByText("1 shown with a visit email sent 2 Nov 2026 to 2 Nov 2026").waitFor();
+    await shot(page, "prescreen-sent-date");
+    await list.getByLabel("Visit email sent from").fill("2026-11-03");
+    await list.getByLabel("to", { exact: true }).fill("");
+    await list.getByText("No candidates match this filter.").waitFor();
+    await list.getByRole("button", { name: "Clear dates" }).click();
+    assert.ok((await list.locator("tbody tr").count()) > 2);
   });
   await check("the panel shows full answers, AI reasons and actions, and a score change posts only the change", async () => {
     await page.getByRole("region", { name: "Pre-screen responses" }).getByRole("button", { name: "Reply Low" }).click();
