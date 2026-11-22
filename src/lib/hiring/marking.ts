@@ -7,7 +7,7 @@ import { readAssessmentBytes } from "./assessment-files";
 import { callClaude } from "./claude";
 import { checkPaperMarks, checkRubric, LEGACY_RUBRIC_ITEMS, paperNeedsCheck, RUBRIC, RUBRIC_ITEMS, rubricNeedsCheck, type MockRubric, type PaperMarks, type StressTicks } from "./marking-sheet";
 import { HiringError, PAPER_LEVELS, runtimeWritesAllowed, type Subject } from "./model";
-import { audit, MARKING_STUCK_AFTER_MS } from "./service";
+import { audit, cancelMockAfterFail, MARKING_STUCK_AFTER_MS } from "./service";
 
 export const MARKING_PROMPT_VERSION = "hiring-marking-2026-11-20.1";
 // One deadline for the whole run, below the route's 300 seconds, so a slow run can still save its result.
@@ -117,6 +117,10 @@ function callFailureText(call: Extract<OpenRouterCallResult, { ok: false }>) {
   if (call.httpStatus === 429) return "The AI service is busy. The upload is saved. Retry in a few minutes.";
   return `The AI could not finish (${call.error}). The upload is saved. Retry.`;
 }
+
+/** A counted paper result that is a fail frees the head's mock hour. Saved marks must not be lost to an error here. */
+const cancelMockQuietly = (db: Database, candidateId: string, subject: Subject, actor: string, now: Date) =>
+  cancelMockAfterFail(db, candidateId, subject, actor, now).catch((error) => console.error("Hiring mock cancel failed", error instanceof Error ? error.name : "UnknownError"));
 
 /** A paid answer must not be lost to an audit error, so this never throws. */
 const auditQuietly = (db: Database, actor: string, action: string, candidateId: string, detail: Record<string, unknown>) =>
@@ -229,6 +233,7 @@ async function runResult<T>(table: typeof p, spec: Spec<T>, id: string, actor: s
       .returning({ id: table.id });
     if (!saved.length) return { status: "replaced" as const, error: "A newer upload replaced this file while it was being read." };
     await auditQuietly(db, actor, spec.doneAudit, claimed.candidateId, { subject: claimed.subject, status });
+    if (spec.kind === "paper") await cancelMockQuietly(db, claimed.candidateId, claimed.subject, actor, new Date());
     return { status, error: null };
   } catch (error) {
     // Only a known message reaches the screen. An unknown error could hold file text, so only its name is logged.
@@ -238,8 +243,9 @@ async function runResult<T>(table: typeof p, spec: Spec<T>, id: string, actor: s
 }
 
 /**
- * Marks one uploaded paper. The result counts at once. It changes no stage, writes no old-flow paper pass, and queues no
- * message, so an AI "Passed" can never start the old flow's mock invitation.
+ * Marks one uploaded paper. The result counts at once. It changes no stage and writes no old-flow paper pass, so an AI
+ * "Passed" can never start the old flow's mock invitation. A counted fail cancels the mock of the same visit and tells
+ * the head (`cancelMockAfterFail`).
  */
 export const markPaper = (id: string, actor: string, db: Database, callModel?: CallModel, now = new Date()) =>
   runResult(
@@ -350,6 +356,7 @@ export async function changePaperMarks(id: string, input: { updatedAt: string; m
     .returning({ id: p.id });
   if (!saved.length) throw new HiringError(409, "These marks changed while you were editing. Refresh the page.");
   await audit(db, actor, "paper-marks-changed", row.candidateId, { subject: row.subject, before: row.marks.questions.map((q) => [q.id, q.marks]), after: questions.map((q) => [q.id, q.marks]) });
+  await cancelMockQuietly(db, row.candidateId, row.subject, actor, now);
 }
 
 /** A person's change to a rubric. Same rule as marks: the AI's first read stays, and the total is calculated. */
@@ -437,4 +444,5 @@ export async function clearResultCheck(kind: "paper" | "mock", id: string, actor
     .returning();
   if (!row) throw new HiringError(409, "This result does not need a check. Refresh the page.");
   await audit(db, actor, "result-checked", row.candidateId, { kind, subject: row.subject });
+  if (kind === "paper") await cancelMockQuietly(db, row.candidateId, row.subject, actor, now);
 }
