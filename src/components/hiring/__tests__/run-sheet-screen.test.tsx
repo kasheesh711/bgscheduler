@@ -10,8 +10,8 @@ const data = {
     { id: "p2", candidateId: "c2", kind: "paper", subjects: ["English Language"], interviewerKey: null, startTime: "2026-11-19T03:00:00.000Z", status: "confirmed", visitId: null },
   ],
   candidates: [
-    { id: "c1", name: "Kim", visitSubject: "Mathematics" },
-    { id: "c2", name: "Mai", visitSubject: "English Language" },
+    { id: "c1", name: "Kim", sourceIds: [], visitSubject: "Mathematics" },
+    { id: "c2", name: "Mai", sourceIds: [], visitSubject: "English Language" },
   ],
   config: {
     interviewers: [
@@ -51,7 +51,7 @@ describe("RunSheetScreen", () => {
     const noHead = {
       ...data,
       bookings: [{ id: "p9", candidateId: "c9", kind: "paper", subjects: ["Physics"], interviewerKey: null, startTime: "2026-11-19T03:00:00.000Z", status: "confirmed", visitId: null }],
-      candidates: [{ id: "c9", name: "Oat", visitSubject: "Physics" }],
+      candidates: [{ id: "c9", name: "Oat", sourceIds: [], visitSubject: "Physics" }],
     };
     const html = renderToStaticMarkup(<RunSheetScreen data={noHead} now={now} initialTab="print" />);
     expect(html).toContain("Needs review: no head takes Physics");
@@ -75,7 +75,7 @@ describe("RunSheetScreen", () => {
     const noSubject = {
       ...data,
       bookings: [{ id: "m9", candidateId: "c9", kind: "mock", subjects: [], interviewerKey: "Peat", startTime: "2026-11-18T05:00:00.000Z", status: "confirmed", visitId: null }],
-      candidates: [{ id: "c9", name: "Oat", visitSubject: null }],
+      candidates: [{ id: "c9", name: "Oat", sourceIds: [], visitSubject: null }],
     };
     const html = renderToStaticMarkup(<RunSheetScreen data={noSubject} now={now} initialTab="heads" />);
     expect(html).toContain("Oat");

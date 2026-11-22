@@ -106,7 +106,8 @@ export async function readLimitUsage(db: Database, funnel: Funnel, now: Date): P
     .select({ id: c.id, stage: c.stage, subject: c.visitSubject, end: b.endTime })
     .from(c)
     // A past HR call stays confirmed. It is not a visit, so it must not make an invited person look booked.
-    .leftJoin(b, and(eq(b.candidateId, c.id), eq(b.status, "confirmed"), ne(b.kind, "call")))
+    .leftJoin(b, and(eq(b.candidateId, c.id), eq(b.status, "confirmed"), ne(b.kind, "call"),
+      sql`${b.evidence}->'practice' is distinct from 'true'::jsonb`))
     .where(inArray(c.stage, ["onsite_invited", "onsite_booked"]));
   for (const id of new Set(rows.map((r) => r.id))) {
     const own = rows.filter((r) => r.id === id);

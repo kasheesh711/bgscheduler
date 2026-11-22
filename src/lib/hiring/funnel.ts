@@ -6,10 +6,14 @@
  * No stage-history table exists: a step counts when an event proves it or when the current stage implies it.
  */
 
+import { practiceMarker } from "./model";
+
 type When = Date | string | null | undefined;
 export type FunnelInput = {
   candidates: {
     id: string;
+    name: string;
+    sourceIds: string[];
     stage: string;
     createdAt: When;
     seekJobId: string | null;
@@ -118,7 +122,7 @@ export type FunnelReport = {
   capped: boolean;
   /** "all", "campaign:<seekJobId or tracker-only>", "week:<ISO week>". */
   groups: Record<string, GroupFunnel>;
-  /** Every candidate in the payload, in the window or not: the stage key (a STUCK_RULES key), days in it and stuck. */
+  /** Each real candidate's stage key, days in stage and stuck status, including outside the window. */
   byCandidate: Record<string, CandidateStage>;
 };
 export type CandidateStage = { stageKey: string; daysInStage: number; stuck: boolean };
@@ -229,6 +233,7 @@ export function buildFunnel(data: FunnelInput, now: Date): FunnelReport {
   const rows: Row[] = [];
   const byCandidate: Record<string, CandidateStage> = {};
   for (const c of data.candidates) {
+    if (practiceMarker(c)) continue;
     const id = c.id;
     const created = ms(c.createdAt)!;
     const replied = ms(c.preScreenRepliedAt);

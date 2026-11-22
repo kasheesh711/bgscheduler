@@ -1,5 +1,5 @@
 import { formatInTimeZone } from "date-fns-tz";
-import { localDate, shiftDate, ZONE } from "@/lib/hiring/model";
+import { localDate, practiceMarker, shiftDate, ZONE } from "@/lib/hiring/model";
 
 // ─── Inputs: only fields already in the /api/hiring payload. Dates may arrive as JSON strings. ───
 
@@ -16,7 +16,7 @@ export interface RunSheetBooking {
 }
 export interface RunSheetInput {
   bookings: RunSheetBooking[];
-  candidates: { id: string; name: string; visitSubject: string | null; stage?: string; updatedAt?: Date | string }[];
+  candidates: { id: string; name: string; sourceIds: string[]; visitSubject: string | null; stage?: string; updatedAt?: Date | string }[];
   config: {
     interviewers: { canonicalKey: string; subjects: string[]; email: string }[];
     paperPassRules: { subject: string }[];
@@ -170,7 +170,7 @@ export function unrecordedVisits({ bookings, candidates, config, library, tutors
   const withBooking = new Set(bookings.filter((b) => (b.kind === "paper" || b.kind === "mock") && b.status === "confirmed").map((b) => b.candidateId));
   const since = at(now).getTime() - 56 * 86_400_000;
   return candidates
-    .filter((c) => c.stage && VISIT_BOOKED_STAGES.includes(c.stage) && !withBooking.has(c.id) && !(c.updatedAt && at(c.updatedAt).getTime() < since))
+    .filter((c) => !practiceMarker(c) && c.stage && VISIT_BOOKED_STAGES.includes(c.stage) && !withBooking.has(c.id) && !(c.updatedAt && at(c.updatedAt).getTime() < since))
     .map((c) => {
       const subject = c.visitSubject ?? null;
       const heads = subject ? config.interviewers.filter((h) => h.subjects.includes(subject)).map((h) => headName(h.canonicalKey, tutors)) : [];

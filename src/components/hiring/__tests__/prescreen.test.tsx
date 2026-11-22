@@ -311,8 +311,8 @@ describe("CandidateTable pipeline columns", () => {
   const iso = (daysAgo: number) => new Date(now - daysAgo * 86_400_000).toISOString();
   const funnelData = {
     candidates: [
-      { id: "a", stage: "pre_screen", createdAt: iso(20), seekJobId: null, preScreenRepliedAt: null, callReview: null },
-      { id: "b", stage: "pre_screen", createdAt: iso(3), seekJobId: null, preScreenRepliedAt: null, callReview: null },
+      { id: "a", name: "Person a", sourceIds: [], stage: "pre_screen", createdAt: iso(20), seekJobId: null, preScreenRepliedAt: null, callReview: null },
+      { id: "b", name: "Person b", sourceIds: [], stage: "pre_screen", createdAt: iso(3), seekJobId: null, preScreenRepliedAt: null, callReview: null },
     ],
     bookings: [],
     calls: [],

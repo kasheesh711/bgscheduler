@@ -201,7 +201,7 @@ export const readCalendar = async (db: Database) => {
   // An HR call is not a visit: it takes no office place and no head's hour.
   const bookings = (
     await db.select().from(s.hiringBookings).where(eq(s.hiringBookings.status, "confirmed"))
-  ).filter(isVisitBooking);
+  ).filter(isVisitBooking).filter((b) => b.evidence?.practice !== true);
   const observations = await db
     .select()
     .from(s.tutorSitInObservations)
@@ -304,7 +304,7 @@ export async function availableSlots(
  * The exam needs room (paperCapacity) and blocks no head. The mock hour needs the head to be in saved
  * office hours, free in Wise and on leave, free of sit-ins and hiring bookings, and under the weekly limit.
  * The server picks the head (fewest mocks that week, then settings order). Candidates never choose.
- * Every confirmed mock counts toward the weekly limit, old flow or new, because each one uses the head's hour.
+ * Confirmed mocks that use the head's time count toward the weekly limit.
  * `movingCandidate`'s own rows are left out: a move gives them up, so they must not block its new time.
  */
 export async function availableVisitSlots(

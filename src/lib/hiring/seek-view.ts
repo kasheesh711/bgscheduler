@@ -1,4 +1,4 @@
-import type { HiringConfig, HiringSourceSummary, Subject } from "./model";
+import { practiceMarker, type HiringConfig, type HiringSourceSummary, type Subject } from "./model";
 
 export const NOT_CONFIRMED = "Not confirmed";
 export const NO_ANSWER = "No answer on file";
@@ -29,7 +29,8 @@ type SeekPerson = {
 };
 
 /** A person who exists only in the tracker has no SEEK application, so the intake screen does not show them. */
-export const isFromSeek = (c: Pick<SeekPerson, "seekApplicationId" | "sourceIds">) => !!c.seekApplicationId || c.sourceIds.length > 0;
+export const isFromSeek = (c: Pick<SeekPerson, "name" | "seekApplicationId" | "sourceIds">) =>
+  !practiceMarker(c) && (!!c.seekApplicationId || c.sourceIds.length > 0);
 
 export const universityName = (c: Pick<SeekPerson, "universityAssessment">) => c.universityAssessment?.name ?? NOT_CONFIRMED;
 export const workRightsText = (c: Pick<SeekPerson, "workRightsAnswer">) => c.workRightsAnswer ?? NO_ANSWER;

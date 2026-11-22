@@ -1,4 +1,4 @@
-import { isDecided, SUBJECTS, type HiringConfig, type Stage, type Subject } from "./model";
+import { isDecided, practiceMarker, SUBJECTS, type HiringConfig, type Stage, type Subject } from "./model";
 import { profileScore, topHiringSubject, workRightsAccepted, workRightsPenalty, type Assessment } from "./scoring";
 import type { CallReview } from "./limits";
 
@@ -99,7 +99,7 @@ type GateConfig = Pick<
 >;
 type InsightInput = {
   config: GateConfig & Pick<HiringConfig, "interviewers">;
-  candidates: InsightCandidate[];
+  candidates: (InsightCandidate & Parameters<typeof practiceMarker>[0])[];
   bookings: {
     candidateId: string;
     kind: "paper" | "mock";
@@ -109,7 +109,7 @@ type InsightInput = {
     /** A visit is an exam row and a mock row with one id. */
     visitId?: string | null;
   }[];
-  outbox: { status: string }[];
+  outbox: { candidateId: string; status: string }[];
 };
 
 /**
@@ -186,7 +186,9 @@ export function readyToInvite(
 }
 
 export function buildInsights(input: InsightInput, now = new Date()) {
-  const { candidates, config } = input;
+  const { config } = input;
+  const practiceIds = new Set(input.candidates.filter(practiceMarker).map((c) => c.id));
+  const candidates = input.candidates.filter((c) => !practiceIds.has(c.id));
   const threshold = config.profileThreshold;
   // No reply and No booking stay in `active`: a late reply is scored and a click sends a new link. `parked` says how many they are.
   const active = candidates.filter((c) => c.stage !== "stopped" && !isDecided(c.stage));
@@ -231,7 +233,7 @@ export function buildInsights(input: InsightInput, now = new Date()) {
       .map((i) => i.canonicalKey),
   })).sort((a, b) => b.candidates - a.candidates || a.subject.localeCompare(b.subject));
 
-  const confirmed = input.bookings.filter((b) => b.status === "confirmed");
+  const confirmed = input.bookings.filter((b) => b.status === "confirmed" && !practiceIds.has(b.candidateId));
   const startOf = (b: { startTime: Date | string }) => new Date(b.startTime).getTime();
   const weekEnd = now.getTime() + 7 * 86400000;
   const upcoming = confirmed.filter((b) => startOf(b) >= now.getTime());
@@ -242,7 +244,7 @@ export function buildInsights(input: InsightInput, now = new Date()) {
       .filter((b) => startOf(b) < weekEnd)
       .map((b) => b.visitId ?? `${b.candidateId}:${b.kind}:${startOf(b)}`),
   );
-  const status = (name: string) => input.outbox.filter((j) => j.status === name).length;
+  const status = (name: string) => input.outbox.filter((j) => j.status === name && !practiceIds.has(j.candidateId)).length;
 
   return {
     total: candidates.length,

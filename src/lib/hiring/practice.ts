@@ -25,6 +25,12 @@ const d = s.hiringRecruitmentDeliveries;
 
 type PracticeOptions = { apply?: boolean; remove?: boolean; email?: string };
 type PlannedRow = { table: string; keys: object };
+type PracticeCase = {
+  name: string;
+  kind: "score" | "finished-no" | "gift" | "other";
+  head: string | null;
+  mockEnd: Date | null;
+};
 type Head = HiringConfig["interviewers"][number];
 type Slot = { startTime: Date; endTime: Date };
 
@@ -58,7 +64,7 @@ function nextMock(head: Head, now: Date, busy: Map<string, Slot[]>, maxAge: numb
   throw new Error(`No past practice mock time is available for ${head.canonicalKey}.`);
 }
 
-async function seed(db: Database, options: PracticeOptions, now: Date, plan: PlannedRow[]) {
+async function seed(db: Database, options: PracticeOptions, now: Date, plan: PlannedRow[], summary: PracticeCase[]) {
   const { config } = await settings(db);
   const heads = config.interviewers;
   if (!heads.length) throw new Error("Hiring settings have no interviewers.");
@@ -100,6 +106,7 @@ async function seed(db: Database, options: PracticeOptions, now: Date, plan: Pla
     const mockTime = nextMock(head, now, busy, kind === "score" ? DAY : 3 * DAY);
     const id = randomUUID();
     const name = PRACTICE_NAME_PREFIX + label;
+    summary.push({ name, kind, head: head.canonicalKey, mockEnd: mockTime.endTime });
     const email = practiceEmail(baseEmail, slug);
     const stage = kind === "finished-no" ? "rejected" : "mock_booked";
     const paper = {
@@ -227,17 +234,31 @@ function practicePaper(config: HiringConfig, subject: Subject): PaperMarks {
   };
 }
 
-async function remove(db: Database, apply: boolean, plan: PlannedRow[]) {
+async function remove(db: Database, apply: boolean, plan: PlannedRow[], summary: PracticeCase[]) {
   const candidates = await markedCandidates(db, apply);
   if (!candidates.length) return;
   const ids = candidates.map((row) => row.id);
   const [bookings, auditRows] = await Promise.all([
-    db.select({ id: b.id, candidateId: b.candidateId, kind: b.kind }).from(b).where(inArray(b.candidateId, ids)),
-    db.select({ id: a.id, candidateId: a.candidateId, action: a.action }).from(a).where(inArray(a.candidateId, ids)),
+    db.select({ id: b.id, candidateId: b.candidateId, kind: b.kind, status: b.status, head: b.interviewerKey, endTime: b.endTime })
+      .from(b).where(inArray(b.candidateId, ids)).orderBy(b.createdAt),
+    db.select({ id: a.id, candidateId: a.candidateId, action: a.action, detail: a.detail }).from(a).where(inArray(a.candidateId, ids)),
   ]);
   const outboxMatch = inArray(o.candidateId, ids);
-  const outboxQuery = db.select({ id: o.id, key: o.key, status: o.status }).from(o).where(outboxMatch);
+  const outboxQuery = db.select({ id: o.id, key: o.key, status: o.status, candidateId: o.candidateId, kind: o.kind }).from(o).where(outboxMatch);
   const outbox = await (apply ? outboxQuery.for("update") : outboxQuery);
+  for (const candidate of candidates) {
+    const active = bookings.find((row) => row.candidateId === candidate.id &&
+      row.status === "confirmed" && (row.kind === "contract" || row.kind === "call"));
+    if (active) throw new Error(`Cannot remove "${candidate.name}". Cancel the confirmed ${active.kind} booking in the UI first.`);
+    if (outbox.some((row) => row.candidateId === candidate.id && row.kind === "calendar" && row.status === "sent"))
+      throw new Error(`Cannot remove "${candidate.name}". A calendar event was sent. Cancel it in the UI first.`);
+    const kind = auditRows.find((row) => row.candidateId === candidate.id && row.action === "practice-created")?.detail.kind;
+    const mock = bookings.find((row) => row.candidateId === candidate.id && row.kind === "mock");
+    summary.push({
+      name: candidate.name, kind: kind === "score" || kind === "finished-no" || kind === "gift" ? kind : "other",
+      head: mock?.head ?? null, mockEnd: mock?.endTime ?? null,
+    });
+  }
   const prefix = sql<string>`split_part(${d.key}, ':', 1)`;
   const reference = sql<string>`split_part(${d.key}, ':', 2)`;
   const deliveryMatch = or(
@@ -255,9 +276,9 @@ async function remove(db: Database, apply: boolean, plan: PlannedRow[]) {
     for (const keys of rows) plan.push({ table: getTableName(table), keys });
   };
   add(d, deliveries);
-  add(o, outbox);
-  add(a, auditRows);
-  add(b, bookings);
+  add(o, outbox.map(({ id, key, status }) => ({ id, key, status })));
+  add(a, auditRows.map(({ id, candidateId, action }) => ({ id, candidateId, action })));
+  add(b, bookings.map(({ id, candidateId, kind }) => ({ id, candidateId, kind })));
   const cascades = [s.hiringPaperResults, s.hiringMockResults, s.hiringAssessmentFiles, s.hiringDecisions, s.hiringOnboarding];
   for (const table of cascades) {
     const key = "id" in table ? table.id : table.candidateId;
@@ -274,14 +295,15 @@ async function remove(db: Database, apply: boolean, plan: PlannedRow[]) {
 }
 
 export async function runHiringPractice(options: PracticeOptions, db: Database = getDb(), now = new Date()) {
-  if (options.apply || options.email !== undefined) options = { ...options, email: emailSchema.parse(options.email) };
+  if (!options.remove && (options.apply || options.email !== undefined)) options = { ...options, email: emailSchema.parse(options.email) };
   const plan: PlannedRow[] = [];
+  const summary: PracticeCase[] = [];
   const run = async (tx: Database) => {
     if (options.apply) await tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-practice'))`);
-    if (options.remove) await remove(tx, !!options.apply, plan);
-    else await seed(tx, options, now, plan);
+    if (options.remove) await remove(tx, !!options.apply, plan, summary);
+    else await seed(tx, options, now, plan, summary);
   };
   if (options.apply) await withDatabaseTransaction(db, run);
   else await run(db);
-  return plan;
+  return { rows: plan, summary };
 }

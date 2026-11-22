@@ -5,6 +5,8 @@ const NOW = new Date("2026-11-17T17:30:00Z"); // 18 Nov 00:30 Bangkok, ISO week 
 const day = (d: string) => `2026-${d}T03:00:00Z`;
 const candidate = (id: string, stage: string, created: string, patch: Partial<FunnelInput["candidates"][number]> = {}) => ({
   id,
+  name: id,
+  sourceIds: [] as string[],
   stage,
   createdAt: day(created),
   seekJobId: "95633167",

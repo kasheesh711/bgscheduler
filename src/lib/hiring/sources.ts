@@ -14,6 +14,7 @@ import {
   isDecided,
   normalizeEmail,
   normalizeSubjects,
+  practiceMarker,
   preScreenSchema,
   TRACKER_ID,
   instant,
@@ -217,10 +218,11 @@ const PHONE_STAGES_OFF = ["stopped", "hired", "rejected"];
  */
 export async function seekPhonesWanted(db: Database, config: HiringConfig, tried: ReadonlySet<string> = new Set()) {
   const rows = await db
-    .select({ id: s.hiringCandidates.id, ids: s.hiringCandidates.sourceIds })
+    .select({ id: s.hiringCandidates.id, name: s.hiringCandidates.name, sourceIds: s.hiringCandidates.sourceIds })
     .from(s.hiringCandidates)
     .where(and(isNull(s.hiringCandidates.phone), notInArray(s.hiringCandidates.stage, PHONE_STAGES_OFF as Stage[])));
-  return phoneTier(rows, new Set((await callQueue(db, config)).map((entry) => entry.id)), tried);
+  const eligible = rows.filter((row) => !practiceMarker(row)).map(({ id, sourceIds }) => ({ id, ids: sourceIds }));
+  return phoneTier(eligible, new Set((await callQueue(db, config)).map((entry) => entry.id)), tried);
 }
 
 /**

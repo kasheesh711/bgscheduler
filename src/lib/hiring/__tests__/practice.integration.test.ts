@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { eq } from "drizzle-orm";
@@ -8,19 +9,29 @@ import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { pushLineTextMessage } from "@/lib/line/client";
+import { ensureIndex } from "@/lib/search/index";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
+import { assessmentRows } from "../assessment-view";
+import { availableVisitSlots } from "../availability";
 import { saveBriefDecision } from "../decisions";
-import { finalReviewAccess, latestReviewPacket, reviewPacketValid, signOffReview } from "../final-review";
+import { finalReviewAccess, latestReviewPacket, reviewPacketDetail, reviewPacketValid, signOffReview } from "../final-review";
+import { buildFunnel } from "../funnel";
 import { deliverCalendar } from "../google";
-import { configSchema, practiceMarker } from "../model";
+import { headWeek } from "../head-schedule";
+import { buildInsights } from "../insights";
+import { CALL_MINUTES, configSchema, CONTRACT_MINUTES, HR_CALL_KEY, localDate, PRACTICE_SOURCE_PREFIX, practiceMarker } from "../model";
 import { RUBRIC_ITEMS, type MockRubric } from "../marking-sheet";
 import { runHiringPractice } from "../practice";
 import { deliverRecruitment } from "../recruitment";
 import { reviewDocument } from "../review-document";
+import { buildRunSheet } from "../run-sheet";
+import { isFromSeek } from "../seek-view";
 import { briefView, dashboard, saveBriefRubric } from "../service";
+import { seekPhonesWanted } from "../sources";
 import { deliverOutbox } from "../worker";
 
 vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
+vi.mock("@/lib/search/index", () => ({ ensureIndex: vi.fn() }));
 vi.mock("@/lib/line/client", () => ({
   pushLineTextMessage: vi.fn(async () => ({ retryKey: "key", sentMessageId: "message", response: {} })),
   LinePushError: class extends Error {},
@@ -39,7 +50,8 @@ const gift = "gift@example.test";
 const config = configSchema.parse({
   enabled: true, deliveryEnabled: true, recruitmentLineGroupId: `C${"1".repeat(32)}`,
   interviewers: [
-    { canonicalKey: "Peat", email: "peat@example.test", subjects: ["Mathematics"] },
+    { canonicalKey: "Peat", email: "peat@example.test", subjects: ["Mathematics"],
+      fallbackWeek: [null, ...Array.from({ length: 5 }, () => ({ start: "10:00", end: "16:00" })), null] },
     { canonicalKey: "Mimi", email: "mimi@example.test", subjects: ["Chemistry"] },
   ],
   paperPassRules: [{ subject: "Chemistry", level: "AS / A-Level", percent: 95 }],
@@ -72,17 +84,41 @@ it("seeds, uses and removes all three practice paths without sending during setu
   vi.stubEnv("HIRING_LINE_LOGIN_SECRET", "fake-secret");
   const sendEmail = vi.fn(async () => ({ id: "email-receipt" }));
   vi.mocked(createOutboundEmailSender).mockReturnValue({ sendEmail });
+  vi.mocked(ensureIndex).mockResolvedValue({
+    snapshotId: "practice-test", profileVersion: "practice-test", builtAt: now, byWeekday: new Map(),
+    syncedAt: now,
+    tutorGroups: [{
+      id: "peat", canonicalKey: "Peat", displayName: "Peat", supportedModes: ["onsite"],
+      qualifications: [], wiseRecords: [], availabilityWindows: [], leavesCompleteThrough: new Date("2026-12-31"),
+      leaves: [], sessionBlocks: [], dataIssues: [],
+    }],
+  });
   await db.insert(s.hiringSettings).values({ id: "default", config, updatedBy: "owner" });
-  const [unmarked] = await db.insert(s.hiringCandidates).values({
-    name: "PRACTICE – unmarked record", email: "unmarked@example.test",
-  }).returning();
+  const realSource = randomUUID();
+  const [unmarked, mixed, real] = await db.insert(s.hiringCandidates).values([
+    { name: "PRACTICE – unmarked record", email: "unmarked@example.test", sourceIds: [realSource] },
+    { name: "PRACTICE – mixed sources", email: "mixed@example.test", sourceIds: [PRACTICE_SOURCE_PREFIX + "mixed", randomUUID()] },
+    { name: "Real candidate", email: "real@example.test" },
+  ]).returning();
   const [settingsBefore] = await db.select().from(s.hiringSettings);
+  const slots = () => availableVisitSlots(db, config, "Mathematics", now);
+  const week = () => headWeek(db, config, "Peat", localDate(now), now);
+  const beforeSlots = await slots();
+  expect(beforeSlots.some((slot) => slot.date === "2026-11-25")).toBe(true);
+  const beforeWeek = await week();
+  const beforeData = await dashboard(db);
+  const beforePhones = await seekPhonesWanted(db, config);
+  expect(beforePhones.has(realSource)).toBe(true);
 
-  const dry = await runHiringPractice({ email }, db);
-  expect(dry.filter(({ table }) => table === "hiring_candidates")).toHaveLength(5);
-  expect(await db.$count(s.hiringCandidates)).toBe(1);
-  expect(await runHiringPractice({ email, apply: true }, db)).toHaveLength(dry.length);
-  expect(await runHiringPractice({ email, apply: true }, db)).toEqual([]);
+  const dry = await runHiringPractice({ email }, db, now);
+  expect(dry.rows.filter(({ table }) => table === "hiring_candidates")).toHaveLength(5);
+  expect(await db.$count(s.hiringCandidates)).toBe(3);
+  const applied = await runHiringPractice({ email, apply: true }, db, now);
+  expect(applied.rows).toHaveLength(dry.rows.length);
+  expect(applied.summary).toEqual(dry.summary);
+  expect((await runHiringPractice({ email, apply: true }, db, now)).rows).toEqual([]);
+  expect(await slots()).toEqual(beforeSlots);
+  expect(await week()).toEqual(beforeWeek);
   expect(await db.$count(s.hiringOutbox)).toBe(0);
   expect(await db.$count(s.hiringRecruitmentDeliveries)).toBe(0);
   expect(await db.$count(s.hiringAssessmentFiles)).toBe(0);
@@ -98,6 +134,18 @@ it("seeds, uses and removes all three practice paths without sending during setu
   const practice = data.candidates.filter(practiceMarker);
   expect(practice).toHaveLength(5);
   expect(new Set(practice.map((c) => c.email)).size).toBe(5);
+  expect(await seekPhonesWanted(db, config)).toEqual(beforePhones);
+  // Rows with the same update time can come back in either order.
+  const fromSeek = (rows: typeof data.candidates) => rows.filter(isFromSeek).map((c) => c.id).sort();
+  expect(fromSeek(data.candidates)).toEqual(fromSeek(beforeData.candidates));
+  expect(buildFunnel(data, now)).toEqual(buildFunnel(beforeData, now));
+  expect(buildInsights(data, now)).toEqual(buildInsights(beforeData, now));
+  const runSheet = buildRunSheet({ ...data, now });
+  const assessments = assessmentRows(data.bookings, data.papers, data.mocks, now);
+  for (const candidate of practice) {
+    expect(runSheet.some((row) => row.candidateId === candidate.id)).toBe(true);
+    expect(assessments.some((row) => row.candidateId === candidate.id)).toBe(true);
+  }
 
   const score = practice.find((c) => c.name.includes("Kru Peat: score"))!;
   for (const head of config.interviewers) {
@@ -138,9 +186,13 @@ it("seeds, uses and removes all three practice paths without sending during setu
   expect(document).toContain("Weighted points");
   expect(document).toContain("No résumé file is stored.");
   expect(document).toContain("No paper scan is stored.");
-  await db.update(s.hiringCandidates).set({ sourceIds: [] }).where(eq(s.hiringCandidates.id, final.id));
+  const finalRow = db.update(s.hiringCandidates);
+  await finalRow.set({ name: "Real candidate for packet checks", sourceIds: [] }).where(eq(s.hiringCandidates.id, final.id));
   await expect(reviewPacketValid(db, final.id, packet)).resolves.toBe(false);
-  await db.update(s.hiringCandidates).set({ sourceIds: final.sourceIds }).where(eq(s.hiringCandidates.id, final.id));
+  await expect(reviewPacketDetail(db, final.id, packet)).rejects.toThrow("The original résumé and ATS assessment are required.");
+  await finalRow.set({ resumePath: "fixture/resume.pdf", resumeSha256: "fixture-sha256" }).where(eq(s.hiringCandidates.id, final.id));
+  await expect(reviewPacketDetail(db, final.id, packet)).rejects.toThrow("The graded paper and the completed mock rubric are required.");
+  await finalRow.set({ name: final.name, sourceIds: final.sourceIds, resumePath: null, resumeSha256: null }).where(eq(s.hiringCandidates.id, final.id));
 
   const mock = data.bookings.find((b) => b.candidateId === score.id && b.kind === "mock")!;
   const token = data.briefPaths[mock.id].split("/").at(-1)!;
@@ -172,15 +224,45 @@ it("seeds, uses and removes all three practice paths without sending during setu
   }));
   expect(deliverCalendar).not.toHaveBeenCalled();
 
-  const removeDry = await runHiringPractice({ remove: true }, db);
-  expect(removeDry.filter(({ table }) => table === "hiring_candidates")).toHaveLength(5);
   expect(await db.$count(s.hiringRecruitmentDeliveries)).toBe(1);
-  expect(await runHiringPractice({ remove: true, apply: true, email }, db)).toHaveLength(removeDry.length);
-  expect(await runHiringPractice({ remove: true }, db)).toEqual([]);
-  for (const table of [s.hiringBookings, s.hiringPaperResults, s.hiringMockResults, s.hiringDecisions,
-    s.hiringAudit, s.hiringOutbox, s.hiringRecruitmentDeliveries, s.hiringAssessmentFiles, s.hiringOnboarding]) {
+  const appointment = (kind: "contract" | "call") => ({
+    kind, subjects: ["Mathematics"], calendarOwner: config.connectedEmail, interviewerKey: HR_CALL_KEY, interviewerEmail: "hr@example.test",
+    startTime: now, endTime: new Date(now.getTime() + (kind === "call" ? CALL_MINUTES : CONTRACT_MINUTES) * 60000), evidence: {},
+  });
+  const removeApply = () => runHiringPractice({ remove: true, apply: true }, db);
+  for (const kind of ["contract", "call"] as const) {
+    const [booking] = await db.insert(s.hiringBookings).values({ ...appointment(kind), candidateId: final.id }).returning();
+    await expect(runHiringPractice({ remove: true }, db)).rejects.toThrow(final.name);
+    await expect(removeApply()).rejects.toThrow(`Cancel the confirmed ${kind} booking in the UI first.`);
+    await db.update(s.hiringBookings).set({ status: "cancelled" }).where(eq(s.hiringBookings.id, booking.id));
+  }
+  const [calendar] = await db.insert(s.hiringOutbox).values({
+    key: `booking:${mock.id}:calendar`, candidateId: score.id, bookingId: mock.id, kind: "calendar", status: "sent", payload: {},
+  }).returning();
+  await expect(runHiringPractice({ remove: true }, db)).rejects.toThrow(score.name);
+  await expect(removeApply()).rejects.toThrow("A calendar event was sent. Cancel it in the UI first.");
+  await db.update(s.hiringOutbox).set({ status: "cancelled" }).where(eq(s.hiringOutbox.id, calendar.id));
+
+  const [realBooking] = await db.insert(s.hiringBookings).values({ ...appointment("call"), candidateId: real.id }).returning();
+  const [realOutbox] = await db.insert(s.hiringOutbox).values({
+    key: `booking:${realBooking.id}:calendar`, candidateId: real.id, bookingId: realBooking.id, kind: "calendar", status: "sent", payload: {},
+  }).returning();
+  const [realDelivery] = await db.insert(s.hiringRecruitmentDeliveries).values({
+    key: `booking:${realBooking.id}:booked`, bookingId: realBooking.id, groupId: config.recruitmentLineGroupId!, notice: "booked", message: "Real booking",
+  }).returning();
+  const [realAudit] = await db.insert(s.hiringAudit).values({ candidateId: real.id, actor: "owner", action: "call-booked", detail: {} }).returning();
+  const removeDry = await runHiringPractice({ remove: true }, db);
+  expect(removeDry.rows.filter(({ table }) => table === "hiring_candidates")).toHaveLength(5);
+  expect((await removeApply()).rows).toHaveLength(removeDry.rows.length);
+  expect((await runHiringPractice({ remove: true }, db)).rows).toEqual([]);
+  for (const table of [s.hiringPaperResults, s.hiringMockResults, s.hiringDecisions, s.hiringAssessmentFiles, s.hiringOnboarding]) {
     expect(await db.$count(table)).toBe(0);
   }
-  expect(await db.select().from(s.hiringCandidates)).toEqual([unmarked]);
+  expect(await db.select().from(s.hiringCandidates)).toEqual(expect.arrayContaining([unmarked, mixed, real]));
+  expect(await db.$count(s.hiringCandidates)).toBe(3);
+  expect(await db.select().from(s.hiringBookings)).toEqual([realBooking]);
+  expect(await db.select().from(s.hiringOutbox)).toEqual([realOutbox]);
+  expect(await db.select().from(s.hiringRecruitmentDeliveries)).toEqual([realDelivery]);
+  expect(await db.select().from(s.hiringAudit)).toEqual([realAudit]);
   expect(await db.select().from(s.hiringSettings)).toEqual([settingsBefore]);
 });

@@ -65,6 +65,7 @@ type BookingRow = {
   interviewerKey: string | null;
   startTime: Date;
   endTime: Date;
+  evidence?: Record<string, unknown>;
 };
 type SitIn = { observerCanonicalKey: string; startTime: Date; endTime: Date };
 type Range = { start: Date; end: Date };
@@ -90,7 +91,7 @@ const hm = (minute: number) =>
  * One head's Monday–Friday. Pure. Blocks are built from times and kind only: a Wise class never carries a
  * title or student, and a sit-in never carries its lesson. Only mock and exam blocks name the candidate.
  * A clash is a mock that overlaps a class, leave or sit-in. An exam never needs the head, so it never clashes.
- * Every confirmed mock with this head counts, old flow or new, because each one uses the head's hour.
+ * The calendar supplies confirmed mocks that use the head's time.
  */
 export function buildHeadWeek(input: {
   head: HiringConfig["interviewers"][number];
@@ -266,12 +267,12 @@ export async function headWeek(
  */
 export async function visitClashes(
   db: Database,
-  bookings: Pick<BookingRow, "candidateId" | "kind" | "status" | "interviewerKey" | "startTime" | "endTime">[],
+  bookings: Pick<BookingRow, "candidateId" | "kind" | "status" | "interviewerKey" | "startTime" | "endTime" | "evidence">[],
   now = new Date(),
 ): Promise<{ candidateIds: string[]; stale: boolean }> {
   try {
     const upcoming = bookings.filter(
-      (b) => b.status === "confirmed" && b.kind === "mock" && !!b.interviewerKey && b.endTime > now,
+      (b) => b.status === "confirmed" && b.kind === "mock" && b.evidence?.practice !== true && !!b.interviewerKey && b.endTime > now,
     );
     if (!upcoming.length) return { candidateIds: [], stale: false };
     const index = await readIndex(db);

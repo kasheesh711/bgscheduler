@@ -300,6 +300,28 @@ describe("visit slots", () => {
     expect(both.every((x) => x.interviewerKey === "Ek")).toBe(true);
   });
 
+  it("keeps the slots when practice bookings reach the mock limit or overlap an exam", async () => {
+    const cfg = {
+      interviewers: [head("Peat")],
+      onsiteLimits: { perWeek: 3, unbooked: 2, perHeadPerWeek: 1, perSubject: 2 },
+    };
+    const fixture = {
+      groups: [group("Peat")],
+      enrollments: [enrol("Peat")],
+      schedules: [schedule("Peat", week([1, 2, 3, 4, 5]))],
+    };
+    const before = await run(cfg, fixture);
+    expect(before.length).toBeGreaterThan(0);
+    const practice = { evidence: { practice: true } };
+    expect(await run(cfg, {
+      ...fixture,
+      bookings: [
+        booking("2026-11-02", "paper", 600, 720, practice),
+        booking("2026-11-03", "mock", 900, 960, practice),
+      ],
+    })).toEqual(before);
+  });
+
   it("shows each time once and assigns the head with fewer mocks", async () => {
     const f = {
       groups: [group("Peat"), group("Ek")],
