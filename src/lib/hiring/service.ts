@@ -1664,6 +1664,21 @@ const headNotice = (mock: VisitRow, notice?: "moved" | "cancelled", movedFrom?: 
   kind: "line" as const,
   payload: { ...(notice ? { notice } : {}), ...(movedFrom ? { movedFrom: movedFrom.toISOString() } : {}) },
 });
+/**
+ * Kevin, 22 Nov 2026: a test-only visit has no mock row, so no head heard of it. Each roster head of the subject gets
+ * one notice. The worker finds the head's LINE group at send time.
+ * shortcut: a later move to a paired link tells only the head of the new mock; add a notice to the others if heads ask.
+ */
+const paperHeadNotices = (paper: VisitRow, config: HiringConfig, notice?: "moved" | "cancelled", movedFrom?: Date) =>
+  config.interviewers
+    .filter((head) => paper.subjects.every((subject) => head.subjects.includes(subject)))
+    .map((head) => ({
+      key: `booking:${paper.id}:line:${head.canonicalKey}${notice === "cancelled" ? ":cancelled" : ""}`,
+      candidateId: paper.candidateId,
+      bookingId: paper.id,
+      kind: "line" as const,
+      payload: { head: head.canonicalKey, ...(notice ? { notice } : {}), ...(movedFrom ? { movedFrom: movedFrom.toISOString() } : {}) },
+    }));
 
 /** Stops a visit's rows blocking anyone. Unsent messages for them go; events still ahead are cancelled. */
 export async function endVisit(tx: Database, rows: VisitRow[], status: "cancelled" | "no_show", now: Date, notifyRecruitment = true) {
@@ -2050,6 +2065,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
         }) },
       });
       await enqueue(tx, { key: `booking:${paper.id}:calendar`, candidateId: cap.id, bookingId: paper.id, kind: "calendar", payload: {} });
+      for (const job of paperHeadNotices(paper, current, previous ? "moved" : undefined, previous?.startTime)) await enqueue(tx, job);
       await audit(tx, "candidate-link", previous ? "visit-move" : "visit-booking", cap.id, { visitId: paper.visitId, subject, examStart: slot.examStart });
       return paper;
     });
@@ -2307,6 +2323,7 @@ export async function reviewCandidate(
       await endVisit(tx, rows, input.action === "cancel_visit" ? "cancelled" : "no_show", now);
       const mock = rows.find((b) => b.kind === "mock");
       if (mock && mock.startTime > now) await enqueue(tx, headNotice(mock, "cancelled"));
+      if (!mock && exam.startTime > now) for (const job of paperHeadNotices(exam, config, "cancelled")) await enqueue(tx, job);
       await tx
         .update(s.hiringCandidates)
         .set({

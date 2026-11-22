@@ -656,36 +656,45 @@ export async function deliverOutbox(
       } else {
         if (!booking) throw new Error("Booking record is missing.");
         if (job.kind === "line") {
-          if (!booking.lineGroupId || !booking.interviewerKey)
+          // A test-only visit has no head on its row. The job names one roster head, and the group is read now.
+          const paperHead = booking.kind === "paper" ? (job.payload.head as string | undefined) : undefined;
+          const headKey = paperHead ?? booking.interviewerKey;
+          if (!headKey || (!paperHead && !booking.lineGroupId))
             throw new Error("Interviewer LINE group is missing.");
           const active = await db
             .select()
             .from(s.progressLineGroups)
             .where(
               and(
-                eq(s.progressLineGroups.canonicalKey, booking.interviewerKey),
-                eq(s.progressLineGroups.groupId, booking.lineGroupId),
+                eq(s.progressLineGroups.canonicalKey, headKey),
+                ...(paperHead ? [] : [eq(s.progressLineGroups.groupId, booking.lineGroupId!)]),
                 eq(s.progressLineGroups.enabled, true),
               ),
             );
           if (!active.length)
             throw new Error(
+              paperHead ? "The head has no enabled LINE group. Review delivery." :
               "The interviewer group registration changed. Review delivery.",
             );
           const movedFrom = job.payload.movedFrom as string | undefined;
-          const title =
-            notice === "moved"
+          const title = paperHead
+            ? notice === "moved"
+              ? `Paper test moved (test only). The old time ${movedFrom ? `${new Date(movedFrom).toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok) ` : ""}is cancelled. The new time is below. No mock teaching time is booked.`
+              : notice === "cancelled"
+                ? "Paper test cancelled (test only)"
+                : "Paper test booked (test only). No mock teaching time is booked."
+            : notice === "moved"
               ? `Mock teaching moved. The old time ${movedFrom ? `${new Date(movedFrom).toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok) ` : ""}is cancelled. The new time is below.`
               : notice === "cancelled"
                 ? "Mock teaching cancelled"
                 : "Mock teaching interview";
-          const message = `${title}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nTime: ${booking.startTime.toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok)\nPlace: ${current.config.location}\nInterviewer: ${booking.interviewerKey}${booking.kind === "mock" && notice !== "cancelled" ? `\nCandidate page (answers and résumé): ${briefLink(booking)}` : ""}`;
+          const message = `${title}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nTime: ${booking.startTime.toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok)\nPlace: ${current.config.location}\n${paperHead ? `Head: ${paperHead}` : `Interviewer: ${booking.interviewerKey}`}${booking.kind === "mock" && notice !== "cancelled" ? `\nCandidate page (answers and résumé): ${briefLink(booking)}` : ""}`;
           receipt = {
             ...(await pushLineTextMessage({
-              to: booking.lineGroupId,
+              to: paperHead ? active[0].groupId : booking.lineGroupId!,
               text: message,
               retryKey: job.id,
-              tutorBot: progressUsesTutorBot(booking.interviewerKey),
+              tutorBot: progressUsesTutorBot(headKey),
             })),
           };
         } else {

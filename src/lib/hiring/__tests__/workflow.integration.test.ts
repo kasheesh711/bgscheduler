@@ -1038,6 +1038,28 @@ describe("hiring workflow persistence", () => {
       expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: row.email }));
       expect((await read(row.id)).stage).toBe("rejected");
     });
+    it("tells each head of the subject about a test-only visit, and about its cancel", async () => {
+      // Ek's LINE group is set up for every test in this block.
+      const heads = configSchema.parse({ ...base, interviewers: [peat, ek] });
+      await setVisit(heads);
+      const row = await invited();
+      await bookVisit(bookingToken(row.id, "paper-visit", LINK), choice(), db);
+      expect((await rowsOf(row.id)).map((booking) => booking.kind)).toEqual(["paper"]);
+      const notices = async () => (await jobsOf(row.id)).filter((job) => job.kind === "line").map((job) => job.payload);
+      expect((await notices()).map((p) => p.head).sort()).toEqual(["Ek", "Peat"]);
+      await deliverOutbox(db, heads);
+      const sent = () => vi.mocked(pushLineTextMessage).mock.calls.map(([message]) => message);
+      expect(sent().map((m) => m.to).sort()).toEqual(["ek-group", "group"]);
+      for (const message of sent()) {
+        expect(message.text).toMatch(/^Paper test booked \(test only\)\. No mock teaching time is booked\.\nCandidate: /);
+        // The candidate page link belongs to a mock, so a test-only notice has none.
+        expect(message.text).not.toContain("/hiring/brief/");
+      }
+      expect(sent().map((m) => m.text.match(/\nHead: (\w+)/)![1]).sort()).toEqual(["Ek", "Peat"]);
+      await click(row.id, "cancel_visit", [], "Candidate asked on LINE");
+      await deliverOutbox(db, heads);
+      expect(sent().slice(2).map((m) => m.text.split("\n")[0])).toEqual(["Paper test cancelled (test only)", "Paper test cancelled (test only)"]);
+    });
     it("separates paper and mock, requires Gift’s latest review, and books half an hour with HR", async () => {
       vi.stubEnv("HIRING_FINAL_REVIEWER_EMAIL", "gift@example.com");
       vi.stubEnv("HIRING_HR_EMAIL", "hr@example.com");
