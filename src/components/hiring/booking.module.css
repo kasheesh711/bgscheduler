@@ -284,17 +284,15 @@
     margin-bottom: 0;
   }
 }
-.scoreRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 380px;
-}
 .scoreTiles {
   display: grid;
   grid-template-columns: repeat(4, minmax(44px, 1fr));
   gap: 6px;
-  flex: 1;
+}
+.scoreRow {
+  grid-template-columns: repeat(5, minmax(44px, 1fr));
+  gap: 4px;
+  max-width: 380px;
 }
 .scoreTile {
   position: relative;
@@ -313,41 +311,17 @@
   cursor: default;
   opacity: 0.65;
 }
-.scoreTile:has(input:checked),
-.input.otherScore[data-selected] {
+.scoreTile[data-band] {
+  border-color: var(--muted);
+}
+.scoreTile:has(input:checked) {
   border-color: var(--ink);
   background-color: var(--ink);
   color: #fff;
 }
-.input.otherScore {
-  appearance: none;
-  width: 76px;
-  min-height: 44px;
-  padding: 0 22px 0 8px;
-  border-radius: 12px;
-  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
-    linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position: right 13px center, right 8px center;
-  background-repeat: no-repeat;
-  background-size: 5px 5px;
-  font-size: 16px;
-}
 @media (max-width: 360px) {
   .hero[data-brief] + .sheet .card {
     padding-inline: 10px;
-  }
-  .scoreRow,
-  .scoreTiles {
-    gap: 4px;
-  }
-  .input.otherScore {
-    width: 72px;
-    padding-inline: 6px 19px;
-  }
-}
-@media (forced-colors: active) {
-  .input.otherScore {
-    appearance: auto;
   }
 }
 .field[data-sticky] {
@@ -992,7 +966,7 @@ textarea.input {
 .page[data-brief] .note {
   font-size: 14px;
 }
-.page[data-brief] :is(.answers dd, .criterionScore summary, .scoreHint, .ghost, .success, textarea) {
+.page[data-brief] :is(.answers dd, .criterionScore summary, .scoreHint, .ghost, .success, .alert, textarea) {
   font-size: 16px;
 }
 .page[data-brief] .briefVisit > :first-child dd {
@@ -1010,11 +984,35 @@ textarea.input {
   color: var(--ink);
   font-size: 16px;
 }
-.criterionScore input[type="checkbox"] {
+.page[data-brief] .criterionScore input[type="checkbox"] {
+  appearance: none;
+  display: grid;
+  place-content: center;
   flex: none;
   width: 24px;
   height: 24px;
-  accent-color: var(--ink);
+  border: 1px solid var(--ink);
+  border-radius: 6px;
+  background: var(--paper);
+}
+.page[data-brief] .criterionScore input[type="checkbox"]:checked {
+  background: var(--ink);
+}
+.page[data-brief] .criterionScore input[type="checkbox"]:checked::after {
+  content: "";
+  width: 7px;
+  height: 12px;
+  border: solid var(--paper);
+  border-width: 0 2px 2px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+@media (forced-colors: active) {
+  .page[data-brief] .criterionScore input[type="checkbox"] {
+    appearance: auto;
+  }
+  .page[data-brief] .criterionScore input[type="checkbox"]:checked::after {
+    content: none;
+  }
 }
 /* Leave space for the sticky Send bar when the browser scrolls a control into view. */
 .page[data-brief] :is(input, select, textarea, button, summary, .scoreRow, .scoreTile, .criterionScore) {
@@ -1026,10 +1024,4 @@ textarea.input {
 }
 .page:not([data-brief]) :is(input, select, textarea, button):focus-visible {
   scroll-margin-bottom: 200px;
-}
-
-/* The open dropdown keeps dark text even when the closed select is filled. */
-.input.otherScore option {
-  color: var(--ink);
-  background: #fff;
 }

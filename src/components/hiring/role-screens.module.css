@@ -2,7 +2,6 @@
 .screen { display: flex; flex-direction: column; gap: 20px; width: 100%; max-width: 980px; margin: 0 auto; padding: 16px 16px 48px; font-size: 15px; }
 .screen[data-heads-review] {
   --role-navy: #14213d;
-  --role-accent: #e4572e;
   --serif: var(--font-cormorant, "Cormorant Garamond"), Georgia, serif;
   font-size: 16px;
 }
@@ -57,8 +56,8 @@
 .reviewCard > .cardMain:first-child { grid-column: 1; }
 .reviewCard .actions { grid-column: 1; justify-content: flex-start; }
 .reviewCard .name { font-family: var(--serif); font-size: 25px; font-weight: 400; }
-.reviewCard .name[tabindex] { scroll-margin-top: 16px; }
-.reviewCard .name:focus { outline: 2px solid currentColor; outline-offset: 2px; }
+.cards .name[tabindex] { scroll-margin-top: 16px; }
+.cards .name:focus { outline: 2px solid currentColor; outline-offset: 2px; }
 .reviewActions, .resume { min-width: 0; }
 .resume iframe { height: 75vh; }
 .resume a { display: inline-flex; align-items: center; min-height: 44px; }
@@ -74,9 +73,9 @@
 .picker { display: flex; flex-wrap: wrap; gap: 6px; }
 .picker.picker button { min-width: 44px; min-height: 44px; max-width: 100%; padding: 6px 16px; border: 1px solid var(--line); border-radius: 999px; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
 .picker.picker button[aria-pressed="true"] { border-color: var(--role-navy); background: var(--role-navy); color: #fff; }
-.picker.picker button:focus, .headCard .big:focus { outline: 2px solid var(--role-accent); outline-offset: 2px; }
+.picker.picker button:focus, .headCard .big:focus { outline: 2px solid var(--role-navy); outline-offset: 2px; }
 .screen[data-heads-review] .big { font-size: 16px; }
-.headCard .time span { font-size: 14px; }
+.headCard .time span { font-size: 16px; }
 .headCard .big, .headCard .tag { white-space: normal; text-align: center; }
 .headCard .big[data-tone="primary"] { border-color: var(--role-navy); background: var(--role-navy); color: #fff; }
 .headCard .big[data-tone="primary"]:hover { background: #243d60; }

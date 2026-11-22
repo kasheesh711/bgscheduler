@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { RUBRIC, RUBRIC_ITEMS } from "@/lib/hiring/marking-sheet";
+import { ITEM_MAX, RUBRIC, RUBRIC_ITEMS, type MockRubric } from "@/lib/hiring/marking-sheet";
 import { ANSWER_LABELS } from "@/lib/hiring/model";
 import { BriefGone, InterviewerBrief } from "../brief";
 import { BriefDecision } from "../brief-decision";
@@ -18,8 +18,13 @@ const brief = {
   rubric: null,
   form: "open",
 } as unknown as Parameters<typeof InterviewerBrief>[0]["brief"];
-const html = (patch = {}) =>
+const html = (patch: Partial<typeof brief> = {}) =>
   renderToStaticMarkup(<InterviewerBrief brief={{ ...brief, ...patch }} resumeUrl="/api/hiring/brief/t/resume" rubricUrl="/api/hiring/brief/t/rubric" decisionUrl="/api/hiring/brief/t/decision" />);
+const rubric: MockRubric = {
+  items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 9])) as MockRubric["items"],
+  comments: "Clear lesson.",
+  checksDone: true,
+};
 
 describe("InterviewerBrief", () => {
   it("shows the visit facts, every answer with its label, and a résumé link that opens a new tab", () => {
@@ -46,24 +51,26 @@ describe("InterviewerBrief", () => {
   });
 
   it("shows the score form only after the mock ends, with score choices for each item", () => {
-    expect(html({ form: "wait" })).toContain("The score form opens when the mock lesson ends.");
-    expect(html({ form: "wait" })).not.toContain("<select");
+    const wait = html({ form: "wait" });
+    expect(wait).toContain("The score form opens when the mock lesson ends.");
+    expect(wait.indexOf("Check again")).toBeLessThan(wait.indexOf("Candidate files"));
+    expect(wait).not.toContain('type="radio"');
     const closed = html({ form: "closed", recommendationReady: true });
     expect(closed).toContain("already recorded");
-    expect(closed).not.toContain("<select");
+    expect(closed).not.toContain('type="radio"');
+    expect(closed.indexOf("Yes, send to HR")).toBeLessThan(closed.indexOf("Candidate files"));
     expect(closed).toContain("Your recommendation uses the scores on record.");
     expect(closed).not.toContain("Your recommendation uses your last sent scores.");
     const page = html();
-    expect(page.match(/<select/g)).toHaveLength(RUBRIC_ITEMS.length);
+    expect(page).not.toContain("<select");
+    expect(page).toContain(">Tap a score.</p>");
     for (const { part, items } of RUBRIC) {
       expect(page).toContain(part);
       for (const [, label] of items) {
         expect(page).toContain(`<legend>${label}</legend>`);
-        expect(page).toContain(`Other score for ${label}`);
       }
     }
-    // Four score tiles per item, plus Yes and No for the required checks.
-    expect(page.match(/type="radio"/g)).toHaveLength(4 * RUBRIC_ITEMS.length + 2);
+    expect(page.match(/type="radio"/g)).toHaveLength(ITEM_MAX * RUBRIC_ITEMS.length + 2);
     expect(page.match(/type="checkbox"/g)).toHaveLength(3);
     expect(page).toContain("Suggested score: 1");
     expect(page).toContain("School&#x27;s required checks completed");
@@ -78,16 +85,19 @@ describe("InterviewerBrief", () => {
     expect(page).not.toContain("Yes, send to HR");
   });
 
-  it("offers a reload instead of a recommendation while staff scores are being checked", () => {
-    const page = html({ form: "closed", recommendationReady: false });
-    expect(page).toContain("Scores are being checked. Check again later.");
-    expect(page).toContain(">Check again</button>");
+  it.each([
+    ["checking", "Scores are being checked. Check again later.", true],
+    ["admin", "Ask BeGifted admin to check the scores.", false],
+  ] as const)("shows the %s instruction above the files and hides the recommendation", (recommendationBlock, message, retry) => {
+    const page = html({ form: "closed", recommendationReady: false, recommendationBlock });
+    expect(page.split(message)).toHaveLength(2);
+    expect(page.indexOf(message)).toBeLessThan(page.indexOf("Candidate files"));
+    expect(page.includes(">Check again</button>")).toBe(retry);
     expect(page).not.toContain("Yes, send to HR");
     expect(page).not.toContain("No, reject");
   });
 
   it("shows a summary of the interviewer's sent scores", () => {
-    const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 9])), comments: "Clear lesson.", checksDone: true };
     const page = html({ rubric });
     expect(page).toContain("Now choose Yes or No below.");
     expect(page).toContain("Scores sent · <strong>126 / 140</strong> · 90%");
@@ -99,11 +109,11 @@ describe("InterviewerBrief", () => {
   });
 
   it("shows the saved total and locks the scores when the recommendation is recorded", () => {
-    const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 9])), comments: "Clear lesson.", checksDone: true };
-    const page = html({ form: "closed", decision: "hire", rubric });
+    const page = html({ form: "open", decision: "hire", rubric });
     expect(page).toContain("Scores sent · <strong>126 / 140</strong> · 90%");
     expect(page).toContain("Scores and recommendation are recorded. Ask BeGifted admin to change them.");
     expect(page).not.toContain("Edit scores");
+    expect(page).not.toContain("Go to mock scores");
     expect(page).toMatch(/<p role="status"[^>]*tabindex="-1">Recommendation recorded: <strong>Yes<\/strong>/i);
   });
 

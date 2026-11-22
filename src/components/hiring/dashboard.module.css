@@ -43,7 +43,10 @@
 .surface[data-heads-review] {
   --serif: var(--font-cormorant, "Cormorant Garamond"), Georgia, serif;
 }
-.surface[data-heads-review] :is(.topbar, .purpose) { font-size: 14px; }
+.surface[data-heads-review] :is(.topbar, .purpose) {
+  padding-inline: max(16px, calc((100% - 948px) / 2));
+  font-size: 14px;
+}
 
 /* Header */
 .topbar {

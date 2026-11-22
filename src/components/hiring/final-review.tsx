@@ -18,7 +18,7 @@ export function reviewBlocks(writeGate: boolean, config: Parameters<typeof contr
   const paused = !config.enabled && !config.deliveryEnabled ? "Automation and Messages are off."
     : !config.enabled ? "Automation is off." : !config.deliveryEnabled ? "Messages are off." : undefined;
   const live = writeGate ? undefined : "Sign-off works only on the live site.";
-  const instruction = paused && `${paused} Ask Kevin to turn them on.`;
+  const instruction = paused && `${paused} Ask Kevin to turn ${config.deliveryEnabled ? "it" : "them"} on.`;
   const testAllowed = contractTestAllowed(config, id);
   return { approveBlock: live ?? (testAllowed ? undefined : instruction), rejectBlock: live ?? instruction, signOffPaused: !!paused && !testAllowed };
 }
@@ -177,7 +177,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
               setOffer(current.packet.offer);
               setError({ text: "HR sent a new packet. Read it again." });
             } else {
-              setReview((previous) => previous && { ...previous, packetValid: false });
+              setReview((previous) => previous && { ...previous, packetValid: current.packet?.id === body.packetId ? current.packetValid : false });
             }
             setViewedId(undefined);
             closePacket();
@@ -276,11 +276,11 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
         ? <p className={css.inspectorMeta} role="status">Loading the review…</p>
         : <button type="button" className={css.secondary} onClick={() => void act()}>{signing ? "Check contract signing" : "Open final review"}</button>)}
       {(awaitingSignOff || stale) && packet && <>
-        {awaitingSignOff && <p className={css.reviewStatus}>{stale ? "Waiting for a new packet from HR"
+        {awaitingSignOff && review?.packetValid !== null && <p className={css.reviewStatus}>{stale ? "Waiting for a new packet from HR"
           : signOffPaused ? "Sign-off is paused" : "Waiting for your sign-off"}</p>}
         <p id={instruction} className={css.inspectorMeta} role="status" tabIndex={-1}>{stale ? (review?.packetValid === null ? "Could not check the packet just now. Check again." : "The evidence changed. Ask HR to send a new packet.")
           : sharedBlock ?? (viewed ? "Approve, or write a note and reject." : "Read the packet first.")}</p>
-        {stale && <button type="button" className={`${css.secondary} min-h-11 min-w-11`} disabled={!!busy} onClick={() => void act()}>Check again</button>}
+        {stale && <button type="button" className={`${css.primary} min-h-11 min-w-11`} disabled={!!busy} onClick={() => void act()}>Check again</button>}
       </>}
       {!signing && review && packet && (
         <div className={`${css.decisionActions} ${css.packetActions}`}>

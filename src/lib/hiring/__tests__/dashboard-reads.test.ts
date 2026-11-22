@@ -1,11 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import * as schema from "@/lib/db/schema";
 import type { Database } from "@/lib/db";
 import { DEFAULT_WEIGHTS, type HiringConfig } from "../model";
 import type { Assessment } from "../scoring";
 import { callEntries, callQueue, preScreenEntries, preScreenQueue, type FormCandidate } from "../queue";
-import { dashboard, NOT_BLANK_PATTERN } from "../service";
+import { RUBRIC_ITEMS } from "../marking-sheet";
+import { briefView, dashboard, NOT_BLANK_PATTERN } from "../service";
+import { bookingToken } from "../tokens";
 
 const assessment = (result: "met" | "partial"): Assessment => ({
   criteria: (["degree", "subject", "curriculum", "teaching", "english"] as const).map((id) => ({
@@ -111,6 +114,44 @@ describe("dashboard reads", () => {
     expect(log.find((q) => q.includes('from "hiring_audit" where') && q.includes('"action" in'))).toMatch(/"created_at" >= \$\d+/);
     // Wave 1 holds every read; visitClashes may add one more. Before the change it was about 17.
     expect(waves()).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("brief score status", () => {
+  it.each([
+    ["uploaded", false, "checking"],
+    ["marking", false, "checking"],
+    ["needs_check", false, "admin"],
+    ["failed", false, "admin"],
+    ["done", false, "admin"],
+    ["done", true, null],
+  ] as const)("reports %s with complete checks %s as %s", async (status, complete, recommendationBlock) => {
+    const id = "00000000-0000-4000-8000-000000000001";
+    const start = "2026-11-22T05:00:00Z";
+    const end = "2026-11-22T06:00:00Z";
+    const booking = { id, candidateId: id, subjects: ["Mathematics"], startTime: start, endTime: end };
+    const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((key) => [key, 8])), checksDone: complete ? true : null };
+    const result = { id, bookingId: id, source: "ai", status, rubric };
+    const driverRow = (table: typeof schema.hiringBookings | typeof schema.hiringMockResults, values: Record<string, unknown>) =>
+      Object.keys(getTableColumns(table)).map((key) => values[key] ?? null);
+    const db = drizzle(async (sql, params) => {
+      if (sql.includes('from "hiring_bookings"')) return { rows: [[...driverRow(schema.hiringBookings, booking), "mock_booked"]] };
+      if (sql.includes('from "hiring_candidates"')) return { rows: [["Sample Tutor", null, null, null]] };
+      if (sql.includes('from "hiring_mock_results"')) return {
+        rows: params.includes("done") ? (status === "done" ? [[id, rubric]] : []) : [driverRow(schema.hiringMockResults, result)],
+      };
+      return { rows: [] };
+    }, { schema }) as unknown as Database;
+
+    vi.stubEnv("AUTH_SECRET", "brief-unit-test");
+    try {
+      const token = bookingToken(id, "brief", new Date("2026-11-23T06:00:00Z"));
+      expect(await briefView(token, db, new Date(end))).toMatchObject({
+        form: "closed", recommendationReady: complete, recommendationBlock, rubric: null,
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

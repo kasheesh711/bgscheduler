@@ -184,10 +184,10 @@ function ReviewRecommendations({ data, onOpenResults, readOnly, reload, linkedRe
     <Section title="Tutor recommendations" count={waiting}>
       {!waiting && <p className={r.quiet}>No candidates are waiting for final review.</p>}
       <div className={r.cards}>
-        {(linked ? [linked, ...decisions.filter((d) => d !== linked)] : decisions).map((d) => (
+        {(linked && reload ? [linked, ...decisions.filter((d) => d !== linked)] : decisions).map((d) => (
           <article key={d.candidateId} className={reload ? `${r.card} ${r.reviewCard}` : r.card}>
             <div className={r.cardMain}>
-              {reload ? (
+              {reload || d === linked ? (
                 <h3 className={r.name} ref={d === linked ? linkedHeading : undefined} tabIndex={d === linked ? -1 : undefined}>
                   {byId.get(d.candidateId!)?.name ?? "Candidate"}
                 </h3>
@@ -259,7 +259,7 @@ export function HiringReviewScreen({ data, offers, onOpenResults, reload, linked
   );
 }
 
-export function HrScreen({ data, command, busy, onOpenResults, readOnly = false }: { data: HiringData; command: Command; busy: boolean; onOpenResults: () => void; readOnly?: boolean }) {
+export function HrScreen({ data, command, busy, onOpenResults, readOnly = false, linkedReview }: { data: HiringData; command: Command; busy: boolean; onOpenResults: () => void; readOnly?: boolean; linkedReview?: string }) {
   // A new clock for each data load keeps the booking link states current.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const now = useMemo(() => new Date(), [data]);
@@ -272,7 +272,7 @@ export function HrScreen({ data, command, busy, onOpenResults, readOnly = false 
   return (
     <div className={`${r.screen} ${r.hrScreen}`}>
       <TodayCalls data={data} command={command} busy={busy} readOnly={readOnly}>
-        <ReviewRecommendations data={data} onOpenResults={onOpenResults} readOnly={readOnly} />
+        <ReviewRecommendations data={data} onOpenResults={onOpenResults} readOnly={readOnly} linkedReview={linkedReview} />
       </TodayCalls>
 
       <Section title="To call" count={rows.length}>

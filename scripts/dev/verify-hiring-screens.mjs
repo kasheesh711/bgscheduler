@@ -15,6 +15,12 @@ import { chromium, webkit } from "playwright-core";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const OUT = process.argv[2];
 const CHROME = process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const BRIEF_STATES = [
+  ["wait", "The score form opens when the mock lesson ends.", "Check again"],
+  ["checking", "Scores are being checked. Check again later.", "Check again"],
+  ["admin", "Ask BeGifted admin to check the scores.", null],
+  ["closed", "Your recommendation uses the scores on record.", "Yes, send to HR"],
+];
 
 const ENTRY = `
 import { Suspense } from "react";
@@ -161,7 +167,7 @@ if (location.search.includes("roles=1")) {
 let reviewPacket: { id: string; behavioral: string; offer: string } | null = null;
 // ?gift=1: the final review as Gift sees it, with a packet from HR.
 const GIFT = location.search.includes("gift=1");
-if (GIFT) payload.reviewAccess = { hr: false, gift: true };
+if (GIFT) payload.reviewAccess = { hr: location.search.includes("hr=1"), gift: true };
 if (GIFT && location.hash === "#review-r1") {
   (payload.headDecisions as unknown[]).unshift({ candidateId: "r2", decision: "reject", reason: "Other application.", head: "Kru Ek", draftProblem: null });
 }
@@ -175,6 +181,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (String(input).includes("capacity=1")) return new Response(JSON.stringify({ error: "Not in this fixture." }), { status: 503 });
   const url = new URL(String(input), location.origin);
   if (url.pathname.startsWith("/api/hiring/brief/sample-token/")) {
+    if (url.pathname.endsWith("/rubric") && location.search.includes("sendFailed=1"))
+      return new Response(JSON.stringify({ error: "The scores were not saved. Try again." }), { status: 503 });
     const body = JSON.parse(String(init?.body ?? "{}"));
     (window as unknown as { posted: unknown[] }).posted.push(body);
     if (url.pathname.endsWith("/rubric")) return new Response(JSON.stringify({ total: Object.values(body.items as Record<string, number>).reduce((a, b) => a + b, 0) }));
@@ -192,9 +200,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       reviewPacket = { id: "packet", behavioral: body.behavioral, offer: body.offer };
       return new Response(JSON.stringify({ ok: true }));
     }
-    return new Response(JSON.stringify({ access: GIFT ? { hr: false, gift: true } : { hr: true, gift: false }, stage: GIFT ? "review" : "mock_booked",
+    return new Response(JSON.stringify({ access: GIFT ? payload.reviewAccess : { hr: true, gift: false }, stage: GIFT ? "review" : "mock_booked",
       callNotes: "Gave a specific example of adapting a lesson.", packet: GIFT ? { id: "packet", behavioral: "Gave a specific example of adapting a lesson.", offer: "Hourly rate 600 THB, 10 hours a week." } : reviewPacket,
-      packetValid: new URLSearchParams(location.search).get("stale") !== "1", appointment: null }));
+      packetValid: new URLSearchParams(location.search).get("stale") === "unknown" ? null : !location.search.includes("stale=1"), appointment: null }));
   }
   if (url.pathname === "/api/hiring/marking") {
     (window as unknown as { posted: unknown[] }).posted.push({ marking: JSON.parse(String(init?.body)) });
@@ -260,11 +268,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/hiring") return new Response(JSON.stringify(payload));
   return realFetch(input, init);
 }) as typeof fetch;
-// ?brief=open|wait|closed|checking: the interviewer's public page from the LINE link, with synthetic data.
-const briefState = new URLSearchParams(location.search).get("brief") as "open" | "wait" | "closed" | "checking" | null;
+// ?brief=open|wait|closed|checking|admin: the interviewer's public page from the LINE link, with synthetic data.
+const briefState = new URLSearchParams(location.search).get("brief");
+const recommendationBlock = briefState === "checking" || briefState === "admin" ? briefState : null;
 const BRIEF = { decision: null, name: "Sample Dao", subject: "Mathematics", gradedPaper: true, exam: "Sat 28 Nov, 10:00–11:30", mock: "Sat 28 Nov, 12:00–12:45",
   interviewer: "Kru Peat", location: "BeGifted, 2nd floor, Siam Square One", answers, resume: "pdf" as const,
-  rubric: null, form: briefState === "checking" ? "closed" : briefState ?? "open", recommendationReady: briefState === "closed" };
+  rubric: null, form: recommendationBlock ? "closed" : briefState ?? "open", recommendationReady: briefState === "closed", recommendationBlock };
 createRoot(document.getElementById("root")!).render(<Suspense fallback="Loading">{briefState ? <BookingShell kind="brief"><InterviewerBrief brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BookingShell> : location.search.includes("preview=1") ? <div className="flex min-h-0 flex-1 flex-col overflow-auto"><HiringStaffPreview role="hr" /></div> : <HiringDashboard />}</Suspense>);
 `;
 
@@ -373,23 +382,30 @@ function installHelpers() {
       }
       return seen.get(el);
     };
-    const texts = () => {
+    const texts = (aria = true) => {
       const out = [], walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       for (let node; (node = walker.nextNode());) {
         const text = node.nodeValue.trim(), parent = node.parentElement;
-        if (!text || !parent || /^(SCRIPT|STYLE|NOSCRIPT)$/.test(parent.tagName) || !vis(parent, true)) continue;
+        if (!text || !parent || /^(SCRIPT|STYLE|NOSCRIPT)$/.test(parent.tagName) || !vis(parent, aria)) continue;
         const range = document.createRange();
         range.selectNodeContents(node);
         const box = range.getBoundingClientRect();
         if (box.width <= 1 || box.height <= 1) continue;
-        out.push({ text, parent, px: parseFloat(getComputedStyle(parent).fontSize), bottom: box.bottom });
+        const px = parseFloat(getComputedStyle(parent).fontSize);
+        const matrix = parent instanceof SVGTextContentElement && parent.getScreenCTM();
+        out.push({ text, parent, px: matrix ? Math.round(px * Math.hypot(matrix.c, matrix.d) * 100) / 100 : px, bottom: box.bottom });
       }
       return out;
     };
     return { vis, texts };
   };
-  const hint = (el) => `${el.tagName.toLowerCase()}${el.hasAttribute("data-sticky") ? "[data-sticky]" : ""}.${String(el.className).split(" ")[0]}`;
+  const hint = (el) => `${el.tagName.toLowerCase()}${el.hasAttribute("data-sticky") ? "[data-sticky]" : ""}.${(el.getAttribute("class") ?? "").split(" ")[0]}`;
+  const fonts = (all) => ({
+    minFontPx: all.reduce((min, x) => Math.min(min, x.px), 99),
+    tinyText: all.filter((x) => x.px < 14).map((x) => ({ text: x.text.slice(0, 40), px: x.px, at: hint(x.parent) })),
+  });
   window.__m = {
+    fonts: () => fonts(tool().texts(false)),
     // How far the control is below the fold, and the visible words rendered above its top edge.
     first(el) {
       const box = el.getBoundingClientRect();
@@ -411,14 +427,14 @@ function installHelpers() {
           w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10,
           ...(el.tagName === "A" && getComputedStyle(el).display === "inline" && rest.split(/\s+/).length >= 4 ? { inline: true } : {}) });
       }
-      const tiny = all.filter((x) => x.px < 14).map((x) => ({ text: x.text.slice(0, 40), px: x.px, at: hint(x.parent) }));
+      const { minFontPx: minFont, tinyText: tiny } = fonts(all);
       const long = [];
       for (const el of document.body.querySelectorAll("*")) {
         if (![...el.childNodes].some((n) => n.nodeType === 3 && n.nodeValue.trim()) || !vis(el, true) || getComputedStyle(el).display.startsWith("inline") || ![...el.children].every((ch) => getComputedStyle(ch).display.startsWith("inline"))) continue;
         for (const sentence of el.innerText.split(/[.!?]\s+|\n+/)) if (sentence.trim().split(/\s+/).length > 20) long.push({ words: sentence.trim().split(/\s+/).length, text: sentence.trim().slice(0, 80) });
       }
       const wide = (el) => !!el && el.scrollWidth > el.clientWidth;
-      return { small, tiny, minFont: all.reduce((m, x) => Math.min(m, x.px), 99), long,
+      return { small, tiny, minFont, long,
         side: { page: wide(document.documentElement), main: wide(document.querySelector("main")), root: wide(document.querySelector("#root > div")) },
         states: [...document.querySelectorAll("[role=status],[role=alert],[aria-live]")].filter((el) => vis(el, true) && el.innerText.trim()).map((el) => `${el.getAttribute("role") || "live"}: ${el.innerText.trim().slice(0, 90)}`) };
     },
@@ -903,6 +919,13 @@ try {
     await page.evaluate(() => document.documentElement.classList.remove("dark"));
   });
   await check("the head and Gift screens render on phone and desktop", async () => {
+    const assertLeftEdge = async (...locators) => {
+      const edges = await Promise.all(locators.map((locator) => locator.evaluate((node) => node.getBoundingClientRect().x + (node.tagName === "P" ? parseFloat(getComputedStyle(node).paddingLeft) : 0))));
+      assert.ok(Math.max(...edges) - Math.min(...edges) <= 1, `Uneven left edges: ${edges.join(", ")}`);
+    };
+    const title = page.getByRole("heading", { level: 1 });
+    const headsEdge = () => assertLeftEdge(title, page.getByText("Your mock lessons and scores.", { exact: true }),
+      page.getByRole("group", { name: "Choose your name" }), page.getByRole("heading", { name: "Next mock" }), page.locator("#next-mock > :last-child"));
     // The brief page scrolls as a whole page, not inside the dashboard frame.
     // full: let the document grow for a full-page shot. Otherwise the page scrolls inside .page, as in production.
     const briefPage = async (state, width, height, full = true) => {
@@ -911,20 +934,38 @@ try {
       await page.addStyleTag({ content: full ? "#root{height:auto!important;overflow:visible!important;padding:0!important}" : "#root{padding:0!important}" });
       await page.getByRole("heading", { name: "Sample Dao" }).waitFor();
     };
-    await briefPage("closed", 390, 844);
-    assert.ok(await page.getByRole("button", { name: "Yes, send to HR" }).isVisible());
-    await shot(page, "brief-closed-phone", true);
-    await briefPage("checking", 390, 844);
-    assert.equal(await page.getByRole("button", { name: "Yes, send to HR" }).count(), 0);
-    await page.getByRole("status").filter({ hasText: "Scores are being checked. Check again later." }).waitFor();
-    await shot(page, "brief-checking-phone", true);
+    for (const [state, message, button] of BRIEF_STATES) {
+      await briefPage(state, 390, 844);
+      assert.equal(await page.getByText(message, { exact: true }).count(), 1);
+      assert.equal(await page.getByRole("button", { name: "Yes, send to HR" }).count(), state === "closed" ? 1 : 0);
+      assert.equal(await page.getByRole("button", { name: "Check again" }).count(), button === "Check again" ? 1 : 0);
+      const resume = page.getByRole("link", { name: "Open the résumé (PDF)" });
+      assert.equal(await resume.evaluate((el) => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
+      await shot(page, `brief-${state}-phone`, true);
+      if (button) {
+        await briefPage(state, 390, 844, false);
+        const action = page.getByRole("button", { name: button });
+        assert.ok(await action.evaluate((el) => el.getBoundingClientRect().bottom <= innerHeight && document.querySelector("main").scrollTop === 0));
+        assert.equal(await action.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(20, 33, 61)");
+        await shot(page, `brief-${state}-phone-fold`);
+      }
+    }
     await briefPage("open", 390, 844);
     await shot(page, "brief-open-phone", true);
     assert.deepEqual(await axeProblems(page), [], "axe on brief");
     await briefPage("open", 390, 844, false);
     await shot(page, "brief-open-phone-fold");
     // 14 score tiles, then the required Yes/No checks answer; Send scores stays disabled until both are done.
-    const tiles = page.locator("form label:has(input[type=radio][value='10'])");
+    const tiles = page.locator("form label:has(input[type=radio][value='8'])");
+    assert.equal(await tiles.count(), 14);
+    assert.equal(await page.locator("#scores select").count(), 0);
+    await page.getByText("Tap a score.", { exact: true }).waitFor();
+    const tick = page.getByRole("checkbox").first();
+    await tick.check();
+    assert.equal(await tick.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(20, 33, 61)");
+    await page.emulateMedia({ forcedColors: "active" });
+    assert.equal(await tick.evaluate((el) => getComputedStyle(el).appearance), "auto");
+    await page.emulateMedia({ forcedColors: "none" });
     for (let i = 0, n = await tiles.count(); i < n; i++) await tiles.nth(i).click();
     await page.getByRole("status").filter({ hasText: "Answer the required checks to send." }).waitFor();
     assert.equal(await page.getByRole("button", { name: "Send scores" }).isDisabled(), true);
@@ -932,10 +973,26 @@ try {
     await page.getByRole("button", { name: /Send scores/ }).click();
     await page.getByText(/Scores sent/).first().waitFor();
     await page.waitForFunction(() => document.activeElement?.matches('[role="group"][aria-labelledby$="-receipt"]'));
+    assert.equal(await page.getByRole("status").filter({ hasText: "Scores sent" }).count(), 0);
     assert.ok(await page.getByText("Now choose Yes or No below.").isVisible());
     await shot(page, "brief-sent-phone");
+    await page.getByRole("button", { name: "Edit scores" }).click();
+    const firstScore = page.locator("#scores input[type=radio]").first();
+    await page.waitForFunction(() => document.activeElement === document.querySelector("#scores input[type=radio]"));
+    await firstScore.locator("..").click();
+    await page.locator("[data-sticky]").getByRole("status").filter({ hasText: "Score changes are unsent. Send scores again." }).waitFor();
+    await page.evaluate(() => history.replaceState(null, "", "?brief=open&sendFailed=1"));
+    await page.getByRole("button", { name: "Send scores" }).click();
+    const failure = page.getByRole("alert").filter({ hasText: "The scores were not saved. Try again." });
+    assert.equal(await failure.evaluate((el) => getComputedStyle(el).fontSize), "16px");
+    await page.evaluate(() => history.replaceState(null, "", "?brief=open"));
+    await page.getByRole("button", { name: "Send scores" }).click();
+    await page.getByText("Now choose Yes or No below.", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Yes, send to HR" }).click();
     await page.getByText(/Recommendation recorded/).first().waitFor();
+    assert.equal(await page.getByRole("link", { name: "Go to mock scores" }).count(), 0);
+    await page.addStyleTag({ content: "#root{height:auto!important;overflow:visible!important}" });
+    await page.locator("main").evaluate((el) => { el.scrollTop = 0; });
     await shot(page, "brief-recommended-phone", true);
     await briefPage("open", 390, 844);
     await page.locator("summary", { hasText: "What each score means" }).first().click();
@@ -949,6 +1006,7 @@ try {
     await shot(page, "brief-jump-phone");
     await page.locator("#scores input[type=radio]").first().focus();
     await page.keyboard.press("ArrowRight");
+    assert.equal(await page.getByRole("radio", { name: "9", exact: true }).first().isChecked(), true);
     await shot(page, "brief-focus-phone");
     for (const width of [320, 390]) {
       await briefPage("open", width, 700, false);
@@ -959,22 +1017,20 @@ try {
         await shot(page, "brief-open-320", true);
       }
     }
-    await briefPage("wait", 390, 844);
-    await page.getByText("The score form opens when the mock lesson ends.").waitFor();
-    assert.ok(await page.getByRole("button", { name: "Check again" }).isVisible());
-    await shot(page, "brief-wait-phone", true);
     await briefPage("open", 1440, 900);
     await shot(page, "brief-open-desktop", true);
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`${origin}/?view=heads&roles=1`);
     await page.getByRole("button", { name: "Kru Ek" }).click();
     await page.getByRole("heading", { name: "Next mock" }).waitFor();
+    await headsEdge();
     await shot(page, "heads-desktop");
     assert.deepEqual(await axeProblems(page), [], "axe on heads");
     // Reload at phone size: a resize alone can leave a stale paint in the screenshot.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${origin}/?view=heads&roles=1`);
     await page.getByRole("heading", { name: "Next mock" }).waitFor();
+    await headsEdge();
     await shot(page, "heads-phone");
     await page.goto(`${origin}/?view=heads&roles=1&headNext=1`);
     await page.getByRole("status").filter({ hasText: /Kru Ek · next mock .*11:00/ }).waitFor();
@@ -1014,6 +1070,8 @@ try {
       await page.setViewportSize({ width, height });
       await page.goto(`${origin}/?view=review&roles=1&gift=1`);
       await page.getByRole("button", { name: "Read review packet" }).first().waitFor();
+      await assertLeftEdge(title, page.getByText("Read the packet and sign off.", { exact: true }),
+        page.getByRole("heading", { name: /Tutor recommendations/ }), page.locator("article").filter({ has: page.getByRole("heading", { name: "Reply Passed" }) }));
       assert.equal(await page.locator("header details").count(), 0);
       assert.equal(await page.getByText("Automation paused · Messages paused", { exact: true }).count(), 0);
       await page.getByText("Sign-off is paused", { exact: true }).waitFor();
@@ -1023,8 +1081,16 @@ try {
     }
     // With the switches on, Approve unlocks only after the packet is shown.
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(`${origin}/?view=hr&roles=1&gift=1&live=1#review-r1`);
+    await page.goto(`${origin}/?view=hr&roles=1&gift=1&hr=1&live=1#review-r1`);
     const linkedHeading = page.getByRole("heading", { name: "Reply Passed" });
+    await linkedHeading.waitFor();
+    await page.waitForFunction(() => document.activeElement?.textContent === "Reply Passed");
+    assert.ok(await page.getByRole("heading", { name: "Booked calls by day" }).isVisible());
+    assert.ok(await linkedHeading.evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      return box.top >= 0 && box.bottom <= innerHeight;
+    }));
+    await page.goto(`${origin}/?view=hr&roles=1&gift=1&live=1#review-r1`);
     await linkedHeading.waitFor();
     await page.waitForFunction(() => document.activeElement?.textContent === "Reply Passed");
     assert.equal(await page.getByRole("heading", { name: "Booked calls by day" }).count(), 0);
@@ -1042,6 +1108,16 @@ try {
     await page.waitForFunction(() => document.activeElement?.textContent === "Approve and send offer", null, { timeout: 3000 });
     assert.ok(await page.getByRole("button", { name: "Read packet again" }).isVisible());
     await shot(page, "gift-review-ready-phone");
+    await page.evaluate(() => {
+      const url = new URL(location.href);
+      url.searchParams.set("stale", "unknown");
+      history.replaceState(null, "", url);
+    });
+    page.once("dialog", (dialog) => dialog.accept());
+    await approve.click();
+    await page.getByText("Could not check the packet just now. Check again.", { exact: true }).waitFor();
+    assert.equal(await approve.isDisabled(), true);
+    assert.deepEqual(await page.evaluate(() => window.posted), []);
     await page.goto(`${origin}/?view=review&roles=1&gift=1&stale=1&live=1`);
     const read = page.getByRole("button", { name: "Read review packet" }).first();
     const reject = page.getByRole("button", { name: "Reject and inform candidate" }).first();
@@ -1050,6 +1126,7 @@ try {
     assert.equal(await approve.isDisabled(), true);
     assert.equal(await reject.isDisabled(), true);
     assert.equal(await read.isDisabled(), true);
+    assert.notEqual(await page.getByRole("button", { name: "Check again" }).evaluate((el) => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
     await shot(page, "gift-review-stale-phone");
     await page.evaluate(() => {
       const url = new URL(location.href);
@@ -1081,6 +1158,20 @@ try {
         await root.ownerDocument.fonts.ready;
         return root.scrollWidth <= root.clientWidth;
       }), `Gift packet iframe scrolls sideways at ${width}px`);
+      const gauges = await packetRoot.locator(".gauge").evaluateAll((nodes) => nodes.map((gauge) => {
+        const svg = gauge.querySelector("svg").getBoundingClientRect();
+        const ends = gauge.querySelector(".gauge-ends").getBoundingClientRect();
+        const [zero, hundred] = gauge.querySelectorAll(".gauge-ends span");
+        const score = gauge.querySelector(".gauge-value");
+        const value = score.getBoundingClientRect();
+        const number = score.querySelector("strong").getBoundingClientRect();
+        const text = document.createRange();
+        text.selectNodeContents(hundred);
+        return ends.top >= svg.bottom && value.top >= ends.bottom && text.getClientRects().length === 1
+          && zero.offsetTop === hundred.offsetTop && score.scrollWidth <= score.clientWidth && number.bottom <= value.bottom + 2;
+      }));
+      assert.deepEqual(gauges, [true, true, true], `Gauge labels and scores do not fit at ${width}px`);
+      assert.equal(await packetRoot.locator(".stack-ends").evaluate((el) => getComputedStyle(el).fontSize), "14px");
     };
     await assertPacketFits(390);
     await shot(page, "gift-review-packet-phone");
@@ -1165,8 +1256,8 @@ try {
           await snap();
           await axe();
           await tap(jump, "Go to mock scores");
-          const tiles = tab.locator("form label:has(input[type=radio][value='10'])");
-          for (let i = 0, n = await tiles.count(); i < n; i++) await tap(tiles.nth(i), `score 10, item ${i + 1}`);
+          const tiles = tab.locator("form label:has(input[type=radio][value='8'])");
+          for (let i = 0, n = await tiles.count(); i < n; i++) await tap(tiles.nth(i), `score 8, item ${i + 1}`);
           await snap();
           await tap(tab.locator("form label", { hasText: /^Yes$/ }), "required checks: Yes");
           await tap(tab.getByRole("button", { name: /Send scores/ }), "Send scores");
@@ -1215,6 +1306,10 @@ try {
           await tab.waitForTimeout(300);
           const frame = tab.frames().find((f) => f !== tab.mainFrame());
           m.side.packet = await frame.evaluate(async () => { await document.fonts.ready; return document.documentElement.scrollWidth > document.documentElement.clientWidth; });
+          await frame.evaluate(installHelpers);
+          m.packet = await frame.evaluate(() => window.__m.fonts());
+          assert.ok(m.packet.minFontPx >= 12, "Packet text is smaller than 12px");
+          assert.equal(m.side.packet, false, "Packet iframe scrolls sideways");
           await snap();
           await axe();
           // The sandboxed iframe does not run axe, so the same packet HTML is checked in a page of its own.
@@ -1251,6 +1346,17 @@ try {
       }
     }
     await wk.close?.();
+    await page.setViewportSize({ width: 390, height: 844 });
+    const briefStates = {};
+    for (const [state, message, button] of BRIEF_STATES) {
+      await page.goto(`${origin}/?brief=${state}`);
+      await page.addStyleTag({ content: "#root{padding:0!important}" });
+      const nextAction = button ? page.getByRole("button", { name: button }) : page.getByText(message, { exact: true });
+      briefStates[state] = { nextAction: button ?? message, belowFoldPx: await nextAction.evaluate((el) =>
+        Math.max(0, Math.ceil(el.getBoundingClientRect().bottom - innerHeight))) };
+      assert.equal(briefStates[state].belowFoldPx, 0, `${state} next action is below the fold`);
+    }
+    metrics.chromium["390x844"].briefStates = briefStates;
     if (OUT) {
       mkdirSync(OUT, { recursive: true });
       writeFileSync(path.join(OUT, "metrics.json"), JSON.stringify(metrics, null, 2));
@@ -1258,6 +1364,7 @@ try {
     for (const [name, sizes] of Object.entries(metrics)) {
       if (sizes.error) process.stdout.write(`  ${name}: ${sizes.error}\n`);
       for (const [size, tasks] of Object.entries(sizes.error ? {} : sizes)) for (const [id, r] of Object.entries(tasks)) {
+        if (id === "briefStates") continue;
         const row = [name, size, id, `taps ${r.taps}`, `scroll ${Math.round(r.scrollPx)}`, `below ${r.scrollBeforeFirstActionPx}`, `words ${r.wordsAboveFirstAction}`, `small ${r.smallTargets.filter((x) => !x.inline).length}`, `font ${r.minFontPx}`, `long ${r.longSentences.length}`, `side ${Object.values(r.sidewaysScroll).some(Boolean)}`, `axe ${r.axe.length}`, `focus ${r.focusVisible.length}/${r.focusObscured.length}`];
         process.stdout.write(`  ${row.join(" | ")}\n`);
       }

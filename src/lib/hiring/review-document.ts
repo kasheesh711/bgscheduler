@@ -24,7 +24,7 @@ function gauge(value: number, unit = " / 100", target: number | null = null, lab
   const tick = (position: number, target = false) =>
     `<line class="${target ? "target" : "scale-tick"}" x1="${target ? 104 : 107}" y1="56" x2="116" y2="56" transform="rotate(${percent(position) * 1.8 - 180} 66 56)"/>`;
   return `<div class="gauge">
-<svg viewBox="0 0 132 76" aria-hidden="true">
+<svg viewBox="0 0 132 62" aria-hidden="true">
 <path d="${arc}" class="gauge-track"/>
 ${value > 0 ? `<path d="${arc}" class="gauge-fill" pathLength="100" stroke-dasharray="${percent(value)} 100"/>` : ""}
 ${[0, 25, 50, 75, 100].map((value) => tick(value)).join("")}${target === null ? "" : tick(target, true)}
@@ -83,15 +83,14 @@ ${start > 0 ? `<path class="stack-gap" d="M${barX(start)} 2v14"/>` : ""}`;
   const netX = barX(ats.score);
   return `<div class="ats-points"><h3>Weighted points</h3>
 <p class="score"><strong>Total</strong><strong class="num">${escape(atsScore)}</strong></p>
-<svg class="stack" viewBox="0 0 320 44" aria-hidden="true">
+<svg class="stack" viewBox="0 0 320 26" aria-hidden="true">
 <defs><pattern id="lost-points" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0v6"/></pattern></defs>
 ${segments}
 ${gross < 100 ? `<rect class="stack-ghost" x="${barX(gross)}" y="2" width="${barX(100) - barX(gross)}" height="14"/>
 <rect x="${barX(gross)}" y="2" width="${barX(100) - barX(gross)}" height="14" fill="url(#lost-points)"/>
 ${gross > 0 ? `<path class="stack-gap" d="M${barX(gross)} 2v14"/>` : ""}` : ""}
-<text x="8" y="37" text-anchor="start">0</text><text x="312" y="37" text-anchor="end">100</text>
 ${penalty > 0 ? `<path class="penalty-marker" d="M${netX} 18l-5 7h10z"/>` : ""}
-</svg>
+</svg><div class="stack-ends" aria-hidden="true"><span>0</span><span>100</span></div>
 <ul class="stack-key">
 ${parts.map(({ name, earned, max }, index) => `<li><i style="background:${stackColors[index]}"></i><span>${escape(name)}</span><span class="num">${points.format(earned)} / ${points.format(max)}</span></li>`).join("")}
 ${gross < 100 ? `<li><i class="ghost-key"></i><span>Lost points</span><span class="num">${points.format(100 - gross)}</span></li>` : ""}
@@ -152,18 +151,17 @@ svg{display:block;width:100%;height:auto}
 .tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;break-inside:avoid}
 .tile{padding:10px;background:var(--surface);border:1px solid var(--line);border-radius:9px;text-align:center}
 .tile h3{font-weight:600}.tile p{margin:0}
-.gauge{position:relative;margin:0 auto;max-width:148px}
+.gauge{margin:0 auto;max-width:148px}
 .gauge-track,.gauge-fill{fill:none;stroke-width:6}
 .gauge-track{stroke:var(--line)}.gauge-fill{stroke:var(--ink)}
 .scale-tick{stroke:var(--muted);stroke-width:1}
-.stack text{fill:var(--muted);font-size:12px}
-.gauge-ends{position:absolute;inset:auto 0 0;color:var(--muted);font-size:12px;line-height:1}
-.gauge-ends span{position:absolute;bottom:0;transform:translateX(-50%)}
-.gauge-ends span:first-child{left:16%}.gauge-ends span:last-child{left:84%}
-.gauge-value{position:absolute;inset:auto 0 27%;font-size:12px;line-height:1}
+.gauge-ends,.stack-ends{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;line-height:1}
+.gauge-ends span,.stack-ends span{white-space:nowrap}
+.stack-ends{padding-inline:2.5%;margin-bottom:8px}
+.gauge-value{white-space:nowrap;font-size:12px}
 .gauge-value strong{font-size:clamp(20px,3.6vw,26px);font-weight:600;letter-spacing:-.05em}
 .band{font-size:13px;font-weight:600}
-.tile .paper-detail{margin-top:4px;font-size:12px}
+.tile .paper-detail{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:2px 6px;margin-top:4px;font-size:12px}
 .guide{display:flex;flex-wrap:wrap;gap:0 6px;color:var(--muted);font-size:12px}
 .head-tile{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
 .head-tile p{padding:5px 9px;background:#fff0e2;border-radius:8px}
@@ -214,7 +212,8 @@ a,summary{color:var(--ink);text-underline-offset:3px}a{display:inline-flex;align
 summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details p{margin:0 0 7px}
 @media screen{
   body{font-size:16px}
-  .guide,.tile .paper-detail,.chip,.axis-labels,.gauge-ends{font-size:14px}
+  .tile h3,.mock-item{font-size:16px}
+  .guide,.tile .paper-detail,.chip,.axis-labels,.gauge-ends,.gauge-value,.band,.paperNote,.stack-key,.stack-ends{font-size:14px}
   a:focus,summary:focus{outline:2px solid #14213d;outline-offset:2px}
 }
 @media screen and (width < 560px){
@@ -240,7 +239,7 @@ summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details 
 <section><h2>Assessment summary</h2><div class="tiles">
 <div class="tile"><h3>ATS</h3>${gauge(atsValue, " / 100", null, atsScore)}</div>
 <div class="tile"><h3>Paper</h3>${gauge(paperPercent, "%", paperTarget)}
-<p class="paper-detail num">${escape(sheet.total)} / ${escape(sheet.max)} · ${chip(sheet.result, levels.length > 1 ? "Passed a level" : "Pass")}</p>
+<p class="paper-detail num"><span>${escape(sheet.total)} / ${escape(sheet.max)}</span>${chip(sheet.result, levels.length > 1 ? "Passed a level" : "Pass")}</p>
 ${paperTarget === null ? "" : `<p class="paper-detail meta">Pass mark ${escape(paperTarget)}%</p>`}</div>
 <div class="tile"><h3>Mock</h3>${gauge(mockTotals.percent, "%")}<p class="paper-detail num">${escape(mockTotals.total)} / ${escape(mockTotals.max)}</p></div>
 <div class="tile head-tile"><h3>Head</h3><p><strong>Yes</strong> · ${escape(recommendation.head)}</p></div>

@@ -121,11 +121,11 @@ export function HiringDashboard() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const param = useSearchParams().get("view");
-  const hash = useSyncExternalStore(subscribeToReviewLink, () => window.location.hash, () => "");
-  const reviewLink = param === "hr" ? /^#review-(.+)$/.exec(hash)?.[1] : undefined;
+  const hash = useSyncExternalStore(subscribeToReviewLink, () => window.location.hash, () => null);
+  const reviewLink = param === "hr" && hash ? /^#review-(.+)$/.exec(hash)?.[1] : undefined;
   const giftOnly = !!data?.reviewAccess?.gift && !data.reviewAccess.hr;
-  const linkedReview = giftOnly ? reviewLink : undefined;
-  const view: HiringView = linkedReview ? "review" : param && Object.hasOwn(VIEWS, param) ? (param as HiringView) : "overview";
+  const linkedReview = data?.reviewAccess?.gift ? reviewLink : undefined;
+  const view: HiringView = giftOnly && linkedReview ? "review" : param && Object.hasOwn(VIEWS, param) ? (param as HiringView) : "overview";
   const giftReview = view === "review" && giftOnly;
   const loaded = !!data;
   // Next.js keeps useSearchParams in step with pushState, and this does not reload the page.
@@ -136,7 +136,7 @@ export function HiringDashboard() {
   };
   const role = isRoleView(view);
   useEffect(() => {
-    if (reviewLink && (!loaded || giftOnly)) return;
+    if (hash === null || (reviewLink && (!loaded || giftOnly))) return;
     if (isRoleView(param)) return remember(param);
     if (param) return;
     try {
@@ -145,7 +145,7 @@ export function HiringDashboard() {
     } catch {
       // As in remember().
     }
-  }, [param, reviewLink, loaded, giftOnly]);
+  }, [param, hash, reviewLink, loaded, giftOnly]);
   const [selected, setSelected] = useState<string | null>(null);
   const [assessmentVisit, setAssessmentVisit] = useState<string | null>(null);
   // The candidate whose résumé viewer is open. It loads the file only on request.
@@ -322,6 +322,8 @@ export function HiringDashboard() {
     !data.config.deliveryEnabled && "Messages paused",
   ].filter(Boolean).join(" · ");
 
+  if ((param === "hr" && hash === null) || (reviewLink && !loaded && !error)) return <TabSkeleton label="Loading hiring…" />;
+
   return (
     <div className={`${css.surface} ${serif.variable}`} data-heads-review={view === "heads" || view === "review" ? "" : undefined}>
       <header className={css.topbar} data-compact={view === "hr" || view === "heads" || giftReview ? "" : undefined} data-heads={view === "heads" ? "" : undefined}>
@@ -452,7 +454,7 @@ export function HiringDashboard() {
         <div hidden={view !== "prescreen"} className={css.viewPane}>
           <PreScreenScreen data={data} extras={extras} holds={holds} command={command} busy={busy} error={error} notice={notice} />
         </div>
-        {view === "hr" && <HrScreen data={data} command={command} busy={busy} onOpenResults={() => setView("assessment", true)} />}
+        {view === "hr" && <HrScreen data={data} command={command} busy={busy} linkedReview={linkedReview} onOpenResults={() => setView("assessment", true)} />}
         {view === "admin" && <AdminScreen data={data} reload={() => load(true)} onOpenResults={(id) => {
           setAssessmentVisit(id);
           setView("assessment", true);
