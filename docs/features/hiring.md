@@ -291,6 +291,8 @@ A hard stop keeps a candidate from an automatic onsite invitation at any score. 
 - An accepted SEEK work-rights answer. The accepted list starts with only "I have permanent work rights with no restrictions". Any other answer, such as "I am a long term / permanent resident with eligibility for a work permit", is not accepted. A new answer from SEEK appears in Rules and setup as not accepted. It stays that way until Kevin ticks it.
 - At least one named subject. Art & Design Technology also needs a portfolio.
 
+The visit subject is the highest-ranked subject the candidate ticked on the form that passes these stops, is open for hiring and has a head. The AI's subject check on the form is advisory only. It never removes a subject the candidate ticked. Kevin set this rule on 22 Nov 2026, after the check removed Joei's EFL/ESL and the visit went to History.
+
 ### University prestige
 
 The source is **US News Best Global Universities**, not the US-only National Universities table, QS, THE, or a subject ranking. The initial edition is 2026–27. The [US News release of 16 June 2026](https://www.prnewswire.com/news-releases/us-news-unveils-2026-2027-best-global-universities-rankings-302800745.html) supplies the initial top-ten reference entries. Their rank is a research/reputation measure, not evidence of the candidate's teaching ability.

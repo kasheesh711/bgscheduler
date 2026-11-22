@@ -262,27 +262,17 @@ export function topHiringSubject(subjects: Subject[], priority: HiringConfig["su
   const rank = (subject: Subject) => priority.findIndex((p) => p.subject === subject && p.hiring);
   return subjects.filter((s) => rank(s) >= 0).sort((a, b) => rank(a) - rank(b))[0] ?? null;
 }
-/** Subjects named on the form, not stopped and supported by the assessment. No setting can add to this list. */
-export function supportedVisitSubjects(
-  pre: PreScreen,
-  answer: string | null,
-  assessment: Pick<PreScreenAssessment, "subjects">,
-  config: HiringConfig,
-): Subject[] {
-  const supported = assessment.subjects.filter((s) => s.relevant).map((s) => s.subject);
-  return hardStops(pre, answer, normalizeSubjects(pre.subjects), config).subjects.filter((s) => supported.includes(s));
+/**
+ * Subjects the candidate ticked on the form that pass the hard stops (English level, Art portfolio).
+ * The AI's subject check does not remove a ticked subject: it stays advisory (Kevin, 22 Nov 2026). No setting can add to this list.
+ */
+export function supportedVisitSubjects(pre: PreScreen, answer: string | null, config: HiringConfig): Subject[] {
+  return hardStops(pre, answer, normalizeSubjects(pre.subjects), config).subjects;
 }
 /** The one subject of a visit: the highest-ranked supported subject that is hiring and has a head, so a link never opens on a page with no slots. */
-export function visitSubject(
-  pre: PreScreen,
-  answer: string | null,
-  assessment: Pick<PreScreenAssessment, "subjects">,
-  config: HiringConfig,
-): Subject | null {
+export function visitSubject(pre: PreScreen, answer: string | null, config: HiringConfig): Subject | null {
   return topHiringSubject(
-    supportedVisitSubjects(pre, answer, assessment, config).filter((s) =>
-      config.interviewers.some((i) => i.subjects.includes(s)),
-    ),
+    supportedVisitSubjects(pre, answer, config).filter((s) => config.interviewers.some((i) => i.subjects.includes(s))),
     config.subjectPriority,
   );
 }
