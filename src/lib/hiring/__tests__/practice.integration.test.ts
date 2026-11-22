@@ -226,7 +226,7 @@ it("seeds, uses and removes all three practice paths without sending during setu
 
   expect(await db.$count(s.hiringRecruitmentDeliveries)).toBe(1);
   const appointment = (kind: "contract" | "call") => ({
-    kind, subjects: ["Mathematics"], calendarOwner: config.connectedEmail, interviewerKey: HR_CALL_KEY, interviewerEmail: "hr@example.test",
+    kind, subjects: ["Mathematics" as const], calendarOwner: config.connectedEmail, interviewerKey: HR_CALL_KEY, interviewerEmail: "hr@example.test",
     startTime: now, endTime: new Date(now.getTime() + (kind === "call" ? CALL_MINUTES : CONTRACT_MINUTES) * 60000), evidence: {},
   });
   const removeApply = () => runHiringPractice({ remove: true, apply: true }, db);
