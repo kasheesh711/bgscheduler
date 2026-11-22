@@ -31,6 +31,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   const feedback = useRef<HTMLParagraphElement>(null);
   const summary = useRef<HTMLDivElement>(null);
   const firstScore = useRef<HTMLInputElement>(null);
+  const sendBar = useRef<HTMLDivElement>(null);
   const sentTotal = lastSent?.editCount === editCount ? lastSent.total : null;
   useEffect(() => {
     if (state !== "sent" && !error) {
@@ -39,12 +40,12 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
     }
     const message = summary.current ?? feedback.current;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    message?.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
+    message?.scrollIntoView({ block: error ? "center" : "start", behavior: error && !reducedMotion ? "smooth" : "instant" });
     message?.focus({ preventScroll: true });
   }, [state, error, editing, sentTotal]);
-  if (!decisionSent && form === "wait") return <p className={c.note}>The score form is here after the mock lesson ends. Refresh this page then.</p>;
   if (!decisionSent && form === "closed") return <p className={c.note}>Scores for this mock are already recorded. Ask BeGifted admin to change them.</p>;
   const scored = RUBRIC_ITEMS.filter((id) => items[id]).length;
+  const checksMissing = scored === RUBRIC_ITEMS.length && checksDone === null;
   const complete = scored === RUBRIC_ITEMS.length && checksDone !== null;
   const disabled = !complete || !!pending || sentTotal !== null;
   // An old 10-item send is out of 100.
@@ -81,10 +82,11 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   }
   if (decisionSent || (!editing && sentTotal !== null)) {
     return (
-      <div ref={summary} role="group" aria-label={sentMessage || undefined} className={c.scoreSummary} tabIndex={-1}>
-        {lastSent && <p aria-hidden="true">Scores sent · <strong>{lastSent.total} / {lastSent.max}</strong> · {percent(lastSent)}%</p>}
+      <div ref={summary} role="group" aria-labelledby={lastSent ? `${rubricId}-receipt` : undefined}
+        aria-describedby={decisionSent ? undefined : `${rubricId}-next`} className={c.scoreSummary} tabIndex={-1}>
+        {lastSent && <p role="status" id={`${rubricId}-receipt`}>Scores sent · <strong>{lastSent.total} / {lastSent.max}</strong> · {percent(lastSent)}%</p>}
         {decisionSent ? <p className={c.note}>Scores and recommendation are recorded. Ask BeGifted admin to change them.</p> : <div className={c.scoreActions}>
-          <a className={c.button} href="#recommendation">Go to recommendation</a>
+          <p id={`${rubricId}-next`}>Now choose Yes or No below.</p>
           <button type="button" className={c.ghost} disabled={!!pending} onClick={() => {
             setEditing(true);
             setState("idle");
@@ -99,6 +101,17 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   return (
     <form
       className={c.field}
+      onFocus={(event) => {
+        const bar = sendBar.current;
+        if (!bar || bar.contains(event.target)) return;
+        const row = event.target.closest(`.${c.scoreRow}, label`) ?? event.target;
+        const bounds = row.getBoundingClientRect();
+        const sticky = bar.getBoundingClientRect();
+        // A browser can skip its focus scroll when a control is already in the viewport.
+        if (bounds.bottom > sticky.top && bounds.top < sticky.bottom) {
+          row.scrollIntoView({ block: "center", behavior: "instant" });
+        }
+      }}
       onSubmit={(event) => {
         event.preventDefault();
         if (!disabled) void send();
@@ -220,7 +233,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       {state === "sent" && <p ref={feedback} role="status" className={c.success} tabIndex={-1}>{sentMessage}</p>}
       {saveError}
       {lastSent && sentTotal === null && <p className={c.note} role="status">Unsaved changes. Send again to update your scores.</p>}
-      <div className={c.field} data-sticky="">
+      <div ref={sendBar} className={c.field} data-sticky="">
         {sentTotal !== null ? (
           <>
             <p className={c.note}>Scores are up to date.</p>
@@ -234,7 +247,9 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
         ) : (
           <>
             <div className={c.field}>
-              <p className={c.note}>{scored} of {RUBRIC_ITEMS.length} scored{checksDone === null ? " · required checks not answered" : ""}</p>
+              <p role="status" className={checksMissing ? undefined : c.note}>{checksMissing
+                ? "Answer the required checks to send."
+                : `${scored} of ${RUBRIC_ITEMS.length} scored${checksDone === null ? " · required checks not answered" : ""}`}</p>
               <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
             </div>
             <button type="submit" className={c.button} disabled={disabled}>

@@ -117,6 +117,10 @@
 .hero[data-brief] + .sheet {
   margin-top: -40px;
 }
+.hero[data-brief] + .sheet .card {
+  /* Keep the name on an opaque surface while the brief loads. */
+  animation: none;
+}
 @media (min-width: 1024px) {
   .hero[data-brief] .heroInner,
   .hero[data-brief] + .sheet {
@@ -230,7 +234,7 @@
   min-height: 44px;
   text-decoration: none;
 }
-.preScreen > summary {
+:is(.preScreen, .criterionScore > details) > summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -238,10 +242,10 @@
   list-style: none;
   cursor: pointer;
 }
-.preScreen > summary::-webkit-details-marker {
+:is(.preScreen, .criterionScore > details) > summary::-webkit-details-marker {
   display: none;
 }
-.preScreen > summary::after {
+:is(.preScreen, .criterionScore > details) > summary::after {
   content: "";
   width: 9px;
   height: 9px;
@@ -250,10 +254,10 @@
   border-bottom: 2px solid currentColor;
   transform: rotate(45deg);
 }
-.preScreen[open] > summary {
+:is(.preScreen, .criterionScore > details)[open] > summary {
   margin-bottom: 12px;
 }
-.preScreen[open] > summary::after {
+:is(.preScreen, .criterionScore > details)[open] > summary::after {
   transform: rotate(225deg);
 }
 .facts:global(#scores) {
@@ -292,12 +296,6 @@
   gap: 6px;
   flex: 1;
 }
-@media (max-width: 340px) {
-  .scoreHint {
-    font-size: 12px;
-    letter-spacing: -0.01em;
-  }
-}
 .scoreTile {
   position: relative;
   display: grid;
@@ -332,7 +330,7 @@
   background-position: right 13px center, right 8px center;
   background-repeat: no-repeat;
   background-size: 5px 5px;
-  font-size: 14px;
+  font-size: 16px;
 }
 @media (max-width: 360px) {
   .hero[data-brief] + .sheet .card {
@@ -343,7 +341,7 @@
     gap: 4px;
   }
   .input.otherScore {
-    width: 64px;
+    width: 72px;
     padding-inline: 6px 19px;
   }
 }
@@ -395,9 +393,10 @@
   border: 1px solid var(--line);
   border-radius: 16px;
   background: var(--paper);
+  scroll-margin-top: max(4px, env(safe-area-inset-top, 0px));
 }
 .scoreSummary:focus {
-  outline: 3px solid var(--accent);
+  outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
 .scoreSummary strong {
@@ -413,10 +412,14 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-.scoreActions .button,
 .scoreActions .ghost {
   min-height: 44px;
   text-align: center;
+}
+/* Give the scroll area room to put the sent receipt at the top. */
+.facts:has(.scoreActions) + .facts {
+  min-height: calc(100dvh - 140px);
+  align-content: start;
 }
 .scoreChanges a {
   display: inline-flex;
@@ -661,13 +664,6 @@ textarea.input {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
 }
-.scoreTile:has(input:focus-visible),
-.input.otherScore:focus-visible,
-.scoreActions :is(.button, .ghost):focus-visible {
-  outline: 2px solid var(--ink);
-  outline-offset: 2px;
-}
-
 /* Confirmations */
 .checks {
   display: grid;
@@ -987,8 +983,48 @@ textarea.input {
   font: inherit;
 }
 
-/* Keyboard focus never lands under the sticky Send block. */
-.page :is(input, select, textarea, button):focus-visible {
+.page[data-brief] {
+  scroll-padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px));
+}
+.page[data-brief] .factLabel {
+  font-size: 12px;
+}
+.page[data-brief] .note {
+  font-size: 14px;
+}
+.page[data-brief] :is(.answers dd, .criterionScore summary, .scoreHint, .ghost, .success, textarea) {
+  font-size: 16px;
+}
+.page[data-brief] .briefVisit > :first-child dd {
+  font-size: 20px;
+}
+.page[data-brief] p.success {
+  display: block;
+}
+.criterionScore label:has(input[type="checkbox"]) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  color: var(--ink);
+  font-size: 16px;
+}
+.criterionScore input[type="checkbox"] {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  accent-color: var(--ink);
+}
+/* Leave space for the sticky Send bar when the browser scrolls a control into view. */
+.page[data-brief] :is(input, select, textarea, button, summary, .scoreRow, .scoreTile, .criterionScore) {
+  scroll-margin-bottom: 16px;
+}
+.page[data-brief] :is(a, button, select, textarea, summary, label):is(:focus, :has(> input:focus)) {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.page:not([data-brief]) :is(input, select, textarea, button):focus-visible {
   scroll-margin-bottom: 200px;
 }
 

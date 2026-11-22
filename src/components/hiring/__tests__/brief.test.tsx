@@ -45,10 +45,10 @@ describe("InterviewerBrief", () => {
     expect(html({ answers: null })).toContain("no pre-screen reply");
   });
 
-  it("shows the score form only after the mock ends, with one choice for each of the 10 items", () => {
-    expect(html({ form: "wait" })).toContain("after the mock lesson ends");
+  it("shows the score form only after the mock ends, with score choices for each item", () => {
+    expect(html({ form: "wait" })).toContain("The score form opens when the mock lesson ends.");
     expect(html({ form: "wait" })).not.toContain("<select");
-    const closed = html({ form: "closed" });
+    const closed = html({ form: "closed", recommendationReady: true });
     expect(closed).toContain("already recorded");
     expect(closed).not.toContain("<select");
     expect(closed).toContain("Your recommendation uses the scores on record.");
@@ -78,13 +78,20 @@ describe("InterviewerBrief", () => {
     expect(page).not.toContain("Yes, send to HR");
   });
 
+  it("offers a reload instead of a recommendation while staff scores are being checked", () => {
+    const page = html({ form: "closed", recommendationReady: false });
+    expect(page).toContain("Scores are being checked. Check again later.");
+    expect(page).toContain(">Check again</button>");
+    expect(page).not.toContain("Yes, send to HR");
+    expect(page).not.toContain("No, reject");
+  });
+
   it("shows a summary of the interviewer's sent scores", () => {
     const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 9])), comments: "Clear lesson.", checksDone: true };
     const page = html({ rubric });
-    expect(page).toContain('aria-label="Scores sent. 126/140 (90%)."');
+    expect(page).toContain("Now choose Yes or No below.");
     expect(page).toContain("Scores sent · <strong>126 / 140</strong> · 90%");
     expect(page).toContain("Edit scores");
-    expect(page).toContain('href="#recommendation"');
     expect(page).toContain('id="recommendation"');
     expect(page).toContain("Your recommendation uses your last sent scores.");
     expect(page).not.toContain("Clear lesson.");

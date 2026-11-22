@@ -28,8 +28,8 @@ function gauge(value: number, unit = " / 100", target: number | null = null, lab
 <path d="${arc}" class="gauge-track"/>
 ${value > 0 ? `<path d="${arc}" class="gauge-fill" pathLength="100" stroke-dasharray="${percent(value)} 100"/>` : ""}
 ${[0, 25, 50, 75, 100].map((value) => tick(value)).join("")}${target === null ? "" : tick(target, true)}
-<text x="21" y="72">0</text><text x="111" y="72">100</text>
-</svg><p class="gauge-value"><strong>${escape(label)}${isPercent ? "%" : ""}</strong>${isPercent ? "" : escape(unit)}</p>
+</svg><div class="gauge-ends" aria-hidden="true"><span>0</span><span>100</span></div>
+<p class="gauge-value"><strong>${escape(label)}${isPercent ? "%" : ""}</strong>${isPercent ? "" : escape(unit)}</p>
 </div><p class="band">${value >= 80 ? "Strong" : value >= 60 ? "Fair" : "Low"}</p>`;
 }
 
@@ -156,8 +156,10 @@ svg{display:block;width:100%;height:auto}
 .gauge-track,.gauge-fill{fill:none;stroke-width:6}
 .gauge-track{stroke:var(--line)}.gauge-fill{stroke:var(--ink)}
 .scale-tick{stroke:var(--muted);stroke-width:1}
-.gauge text,.stack text{fill:var(--muted);font-size:12px}
-.gauge text{text-anchor:middle}
+.stack text{fill:var(--muted);font-size:12px}
+.gauge-ends{position:absolute;inset:auto 0 0;color:var(--muted);font-size:12px;line-height:1}
+.gauge-ends span{position:absolute;bottom:0;transform:translateX(-50%)}
+.gauge-ends span:first-child{left:16%}.gauge-ends span:last-child{left:84%}
 .gauge-value{position:absolute;inset:auto 0 27%;font-size:12px;line-height:1}
 .gauge-value strong{font-size:clamp(20px,3.6vw,26px);font-weight:600;letter-spacing:-.05em}
 .band{font-size:13px;font-weight:600}
@@ -210,6 +212,11 @@ svg{display:block;width:100%;height:auto}
 .files{display:flex;flex-wrap:wrap;gap:0 8px;margin-top:7px}
 a,summary{color:var(--ink);text-underline-offset:3px}a{display:inline-flex;align-items:center;min-height:44px;padding:6px 8px}
 summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details p{margin:0 0 7px}
+@media screen{
+  body{font-size:16px}
+  .guide,.tile .paper-detail,.chip,.axis-labels,.gauge-ends{font-size:14px}
+  a:focus,summary:focus{outline:2px solid #14213d;outline-offset:2px}
+}
 @media screen and (width < 560px){
   body{padding:24px 16px 40px}.tiles,.evidence-list{grid-template-columns:repeat(2,minmax(0,1fr))}
   .ats-layout{grid-template-columns:minmax(0,1fr);gap:8px}.mock-row{gap:0 8px}

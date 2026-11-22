@@ -917,21 +917,30 @@ describe("hiring workflow persistence", () => {
       expect(Object.keys(await briefView(token, db, during))).not.toContain("replaced");
       // A change or a confirmation by a person with Hiring access, an upload, or a drafted decision closes the form:
       // the page then shows no scores, and a send changes nothing.
-      const closed = async () => {
-        expect((await briefView(token, db, during)).form).toBe("closed");
+      const closed = async (recommendationReady: boolean) => {
+        expect(await briefView(token, db, during)).toMatchObject({ form: "closed", recommendationReady });
         await expect(saveBriefRubric(token, rubric(1), db, during)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/already recorded/) });
         expect((await db.select().from(s.hiringMockResults))[0].rubric).toEqual(rubric(10));
       };
-      for (const patch of [{ changedBy: "owner" }, { checkedBy: "owner" }, { source: "ai" as const }, { bookingId: null }]) {
-        await db.update(s.hiringMockResults).set({ source: "person", bookingId: mock.id, changedBy: null, checkedBy: null, ...patch });
-        await closed();
+      const ownResult = { source: "person", status: "done", bookingId: mock.id, changedBy: null, checkedBy: null } as const;
+      for (const [patch, ready] of [
+        [{ changedBy: "owner" }, true],
+        [{ checkedBy: "owner" }, true],
+        [{ source: "ai" }, true],
+        [{ source: "ai", status: "marking" }, false],
+        [{ bookingId: null }, false],
+      ] as const) {
+        await db.update(s.hiringMockResults).set({ ...ownResult, ...patch });
+        await closed(ready);
         // Scores that are no longer the head's own are not shown.
         expect((await briefView(token, db, during)).rubric).toBeNull();
       }
-      await db.update(s.hiringMockResults).set({ source: "person", bookingId: mock.id, changedBy: null, checkedBy: null });
+      await db.update(s.hiringMockResults).set({ ...ownResult, source: "ai", rubric: { ...rubric(10), checksDone: null } });
+      expect(await briefView(token, db, during)).toMatchObject({ form: "closed", recommendationReady: false });
+      await db.update(s.hiringMockResults).set({ ...ownResult, rubric: rubric(10) });
       expect((await briefView(token, db, during)).form).toBe("open");
       await db.insert(s.hiringDecisions).values({ candidateId: row.id, decision: "hire", status: "draft", reason: "r", emailSubject: "s", emailBody: "b", decidedBy: "owner" });
-      await closed();
+      await closed(true);
       await db.delete(s.hiringDecisions);
       // A past tracker result is replaced, as an upload replaces it.
       await db.update(s.hiringMockResults).set({ source: "tracker", bookingId: null, rubric: null });

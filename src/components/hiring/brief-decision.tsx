@@ -55,7 +55,7 @@ export function BriefDecision({ sent, onSent, url, scores, unsent, pending, setP
         ? "Your recommendation uses your last sent scores."
         : "Your recommendation uses the scores on record."}</p>}
       {sent && (
-        <p ref={recorded} role="status" className={c.note} tabIndex={-1}>
+        <p ref={recorded} role="status" className={c.success} tabIndex={-1}>
           Recommendation recorded: <strong>{LABEL[sent]}</strong>. {sent === "hire" ? "HR will prepare the review for Gift." : "The candidate’s rejection email is queued."}
         </p>
       )}
