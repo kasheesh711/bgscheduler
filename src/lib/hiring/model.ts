@@ -416,14 +416,19 @@ export const preScreenSchema = z
     weeklyHours: z.string().max(500),
     motivation: z.string().max(10000),
     teachingApproach: z.string().max(10000),
+    // The subject the candidate chooses to be tested on at the visit (Kevin, 22 Nov 2026). Older answers have none.
+    testSubject: z.string().max(500).optional(),
   })
   .strict();
 export type PreScreen = z.infer<typeof preScreenSchema>;
+/** The form question that sets the visit subject. The sheet column is found by this header, not by its position. */
+export const TEST_SUBJECT_QUESTION = "Which subject do you want to be tested on at your onsite visit?";
 /** The form answers in reading order, for the admin panel and the interviewer's page. */
 export const ANSWER_LABELS: [Exclude<keyof PreScreen, "sourceRow" | "submittedAt">, string][] = [
   ["degree", "Degree"],
   ["field", "Field of study"],
   ["subjects", "Subjects"],
+  ["testSubject", "Subject to be tested on"],
   ["curricula", "Curricula"],
   ["yearGroups", "Year groups"],
   ["english", "English level"],

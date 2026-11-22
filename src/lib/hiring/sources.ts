@@ -15,6 +15,7 @@ import {
   normalizeEmail,
   normalizeSubjects,
   preScreenSchema,
+  TEST_SUBJECT_QUESTION,
   TRACKER_ID,
   instant,
   type Application,
@@ -50,6 +51,8 @@ export function preScreenRows(rows: unknown[][]) {
       "A student is bright but keeps losing motivation and their grades are slipping. How would you approach it?"
   )
     throw new Error("Pre-screen headers changed. Review the source mapping.");
+  // Kevin adds this question to the live form, so its column can be anywhere after the others.
+  const testColumn = (rows[0] ?? []).findIndex((header) => String(header ?? "").trim() === TEST_SUBJECT_QUESTION);
   const latest = new Map<
     string,
     { name: string; pre: ReturnType<typeof preScreenSchema.parse> }
@@ -75,6 +78,7 @@ export function preScreenRows(rows: unknown[][]) {
         weeklyHours: cell(row, 14),
         motivation: cell(row, 16),
         teachingApproach: cell(row, 17),
+        ...(testColumn >= 0 && cell(row, testColumn) ? { testSubject: cell(row, testColumn) } : {}),
       }),
     });
   });
@@ -368,7 +372,8 @@ export async function syncTracker(db: Database, config: HiringConfig) {
     );
   };
   const [preRows, recruit, mockRows] = await Promise.all([
-    read("Pre-screen Responses", "W"),
+    // Wider than the known columns, so the visit subject question is read wherever the form puts it.
+    read("Pre-screen Responses", "AZ"),
     read("Recruitment Sheet", "AD"),
     read("Mock Teaching Test Log", "J"),
   ]);

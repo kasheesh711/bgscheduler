@@ -12,7 +12,7 @@ import {
   updateGoogleSheetRangeValues,
 } from "@/lib/sales-dashboard/sheets";
 import { configSchema, HiringError, type HiringConfig } from "../model";
-import { bookingView, inviteToVisit, reviewCandidate, prestigeCatalogHash, sourceHash, type Candidate } from "../service";
+import { bookingView, bookVisit, inviteToVisit, reviewCandidate, prestigeCatalogHash, sourceHash, visitLink, visitView, type Candidate } from "../service";
 import { readyToInvite } from "../insights";
 import { isNewFlow, mirrorTracker, parseFormTimestamp, syncTracker } from "../sources";
 import { assessCandidates, deliverOutbox, preScreenText, runHiringCycle } from "../worker";
@@ -30,7 +30,7 @@ import {
   saveCallNotes,
 } from "../queue";
 
-vi.mock("../availability", () => ({ availableSlots: vi.fn(), verifyLiveSlot: vi.fn(), readLiveBusy: vi.fn(async () => { throw new Error("no Wise in tests"); }) }));
+vi.mock("../availability", () => ({ availableSlots: vi.fn(), availableVisitSlots: vi.fn(async () => []), verifyLiveSlot: vi.fn(), readLiveBusy: vi.fn(async () => { throw new Error("no Wise in tests"); }) }));
 vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
 // The grant cannot read HR's calendar unless a test says so, so no call booking link leaves in the other tests.
 vi.mock("../google", () => ({
@@ -854,6 +854,50 @@ describe("university result on a live reply", () => {
     const row = await scored({ profileAssessment: null });
     await assessCandidates(db, config, assess);
     expect((await candidate(row.id)).universityAssessment).toMatchObject({ name: null, fraction: 0, catalogHash: catalog });
+  });
+});
+
+describe("Next steps after a good R1 (Kevin, 22 Nov 2026)", () => {
+  it("sends the form and the visit link together; the link waits for the answers, then books on the same link", async () => {
+    const row = await seed();
+    expect((await releaseQueues(db)).preScreen).toBe(1);
+    const [form] = await forms();
+    expect(form.payload.subject).toBe("Next steps: your BeGifted pre-screening questions and onsite visit");
+    const text = String(form.payload.text);
+    expect(text).toContain("docs.google.com/forms");
+    const token = text.match(/\/hiring\/book\/([\w.-]+)/)![1];
+    // The link is the paired visit kind, and its second is the one stored on the row.
+    expect(JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString()).kind).toBe("visit");
+    const expires = (await candidate(row.id)).inviteExpiresAt;
+    expect(expires).not.toBeNull();
+    // Before the answers: the page asks for them, and a booking is refused with the same words.
+    expect(await visitView(token, db)).toMatchObject({ waiting: "answers", slots: [], formUrl: expect.stringContaining("docs.google.com/forms") });
+    await expect(bookVisit(token, { start: "2026-11-07T03:00:00.000Z", subject: "Mathematics", onsiteConfirmed: true, teachingCommitmentConfirmed: true }, db))
+      .rejects.toMatchObject({ status: 409, message: expect.stringMatching(/answer the pre-screening questions first/) });
+    // The reminder carries the same link.
+    await db.update(s.hiringOutbox).set({ status: "sent", sentAt: after(-1) }).where(eq(s.hiringOutbox.id, form.id));
+    vi.setSystemTime(after(2));
+    await runFollowUps(db);
+    const reminder = (await outbox()).find((j) => j.key.endsWith(":pre-screen-reminder"))!;
+    expect(String(reminder.payload.text)).toContain(token);
+    vi.setSystemTime(now);
+    // The answers arrive and pass: booking opens on the same link, with the usual onsite invitation as its notice.
+    tracker({ pre: [preRow(row.email!, "4/11/2026, 05:00:00")] });
+    await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
+    const opened = await candidate(row.id);
+    expect(opened).toMatchObject({ stage: "onsite_invited", visitSubject: "Mathematics" });
+    expect(opened.inviteExpiresAt?.getTime()).toBe(expires!.getTime());
+    const [invite] = await invites();
+    expect(String(invite.payload.text)).toContain(token);
+    expect((await visitView(token, db)).waiting).toBeNull();
+  });
+  it("says the answers are being checked while a person decides", async () => {
+    const expires = new Date(Math.floor(after(30).getTime() / 1000) * 1000);
+    const row = await replied({ inviteExpiresAt: expires, preScreenOverride: { score: 10 } as never });
+    await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
+    expect((await candidate(row.id)).stage).toBe("pre_screen");
+    const token = visitLink(row.id, expires).split("/hiring/book/")[1];
+    expect(await visitView(token, db)).toMatchObject({ waiting: "checking", formUrl: null });
   });
 });
 

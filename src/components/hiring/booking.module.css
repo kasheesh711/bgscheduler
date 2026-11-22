@@ -746,6 +746,7 @@ textarea.input {
   color: #fbf7ee;
   font-size: 16px;
   font-weight: 600;
+  text-decoration: none;
   cursor: pointer;
   transition:
     transform 0.15s,

@@ -269,6 +269,30 @@ export function VisitBooking({
       Keep my current time
     </button>
   );
+  // A "Next steps" link before booking opens: the answers come first.
+  if (view.waiting)
+    return (
+      <>
+        <div className={c.facts}>
+          <div className={c.plan}>
+            <span>
+              Test<small>2 hours</small>
+            </span>
+            <span>
+              Mock teaching<small>1 hour, if you pass</small>
+            </span>
+          </div>
+          <p className={c.note}>Your onsite visit is one day: the test, then the mock teaching interview if you pass.</p>
+        </div>
+        <VisitNotice text={view.notice ?? ""} />
+        {view.formUrl && (
+          <a className={c.button} href={view.formUrl} target="_blank" rel="noreferrer">
+            Answer the pre-screening questions
+          </a>
+        )}
+        <Help />
+      </>
+    );
   return (
     <>
       {saved && <Saved>{saved}</Saved>}

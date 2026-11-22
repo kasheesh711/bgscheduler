@@ -48,6 +48,7 @@ import {
   workRightsPenalty,
   supportedVisitSubjects,
   topHiringSubject,
+  visitSubject,
   workRightsAccepted,
 } from "./scoring";
 import { googleConnectionStatus, readHrBusy } from "./google";
@@ -368,10 +369,16 @@ export async function inviteToMock(
     .set({ inviteExpiresAt: expiry, updatedAt: new Date() })
     .where(eq(s.hiringCandidates.id, candidate.id));
 }
+/**
+ * The "Next steps" email after a good R1 (Kevin, 22 Nov 2026): the form and the visit link together. The visit link
+ * opens booking only after the answers pass the usual checks; until then its page asks for the answers first.
+ * `inviteExpiresAt` holds the link's second, and `inviteToVisit` keeps it, so this same link books the visit.
+ */
 export async function inviteToPreScreen(db: Database, candidate: Candidate, now = new Date()) {
   if (!candidate.email)
     throw new HiringError(409, "A verified application email is required.");
-  return enqueue(db, {
+  const expires = new Date((Math.floor(now.getTime() / 1000) + VISIT_LINK_DAYS * 86400) * 1000);
+  const queued = await enqueue(db, {
     key: `${candidate.id}:pre-screen`,
     candidateId: candidate.id,
     kind: "email",
@@ -380,9 +387,12 @@ export async function inviteToPreScreen(db: Database, candidate: Candidate, now 
     payload: {
       to: candidate.email,
       workflowStage: "pre_screen",
-      ...preScreenEmail(candidate.name, candidate.email, false),
+      ...preScreenEmail(candidate.name, candidate.email, false, visitLink(candidate.id, expires)),
     },
   });
+  if (queued)
+    await db.update(s.hiringCandidates).set({ inviteExpiresAt: expires }).where(eq(s.hiringCandidates.id, candidate.id));
+  return queued;
 }
 /** New links book the exam and the mock together (Kevin, 22 Nov 2026). A "paper-visit" link sent earlier still books the paper only. */
 export const visitLink = (id: string, expires: Date, kind: "visit" | "paper-visit" = "visit") =>
@@ -443,25 +453,65 @@ export async function inviteToCall(db: Database, candidate: Candidate, now = new
     },
   });
 }
-/** The form invitation and its reminder. */
-export const preScreenEmail = (name: string, email: string, reminder: boolean) =>
-  hiringEmail({
-    subject: reminder ? "Reminder: BeGifted tutor pre-screening questionnaire" : "BeGifted tutor pre-screening questionnaire",
-    preheader: "A short questionnaire, about 5–7 minutes.",
-    title: reminder ? "Your questionnaire is still open" : "Your pre-screening questionnaire",
-    name,
-    paragraphs: [
-      reminder
-        ? "We have not yet received your pre-screening questionnaire. If you are still interested in joining BeGifted, please complete it."
-        : "Thank you for your interest in joining BeGifted. Please complete our short pre-screening questionnaire.",
-    ],
-    details: [
-      { label: "Use this email", value: email },
-      { label: "Time needed", value: "About 5–7 minutes" },
-    ],
-    action: { label: "Open the questionnaire", url: PRE_SCREEN_URL },
-    after: reminder ? [] : ["We will contact you after reviewing your response."],
-  });
+/**
+ * The form invitation and its reminder. With a visit link it is the "Next steps" email after a good R1: answer the
+ * questions, then book the visit on that link. A form sent before this change has no visit link.
+ */
+export const preScreenEmail = (name: string, email: string, reminder: boolean, visitUrl?: string) =>
+  visitUrl
+    ? hiringEmail({
+        subject: reminder
+          ? "Reminder: answer your BeGifted pre-screening questions"
+          : "Next steps: your BeGifted pre-screening questions and onsite visit",
+        preheader: "Answer a short questionnaire, then book your onsite visit.",
+        title: reminder ? "Your questions are still open" : "Thank you for R1. Here are your next steps",
+        name,
+        paragraphs: [
+          reminder
+            ? "We have not yet received your pre-screening answers. If you are still interested in joining BeGifted, please answer them. Then you can book your onsite visit."
+            : "Thank you for your time at R1: HR Interview. It went well, and we invite you to the next steps.",
+        ],
+        details: [
+          { label: "Use this email", value: email },
+          { label: "Questionnaire", value: "About 5–7 minutes" },
+          { label: "Onsite visit", value: VISIT_LENGTH },
+        ],
+        action: { label: "Answer the pre-screening questions", url: PRE_SCREEN_URL },
+        stepsHeading: "Your next steps",
+        steps: [
+          {
+            heading: "Answer the pre-screening questions",
+            paragraphs: [
+              "Use this email address on the form. One question asks which subject you want to be tested on at your visit.",
+            ],
+            action: { label: "Open the questionnaire", url: PRE_SCREEN_URL },
+          },
+          {
+            heading: "Book your onsite visit",
+            paragraphs: [
+              "We check your answers first. When booking opens, we email you. Then choose your visit time on this link.",
+            ],
+            action: { label: "Book your onsite visit", url: visitUrl },
+          },
+        ],
+      })
+    : hiringEmail({
+        subject: reminder ? "Reminder: BeGifted tutor pre-screening questionnaire" : "BeGifted tutor pre-screening questionnaire",
+        preheader: "A short questionnaire, about 5–7 minutes.",
+        title: reminder ? "Your questionnaire is still open" : "Your pre-screening questionnaire",
+        name,
+        paragraphs: [
+          reminder
+            ? "We have not yet received your pre-screening questionnaire. If you are still interested in joining BeGifted, please complete it."
+            : "Thank you for your interest in joining BeGifted. Please complete our short pre-screening questionnaire.",
+        ],
+        details: [
+          { label: "Use this email", value: email },
+          { label: "Time needed", value: "About 5–7 minutes" },
+        ],
+        action: { label: "Open the questionnaire", url: PRE_SCREEN_URL },
+        after: reminder ? [] : ["We will contact you after reviewing your response."],
+      });
 /** The onsite visit invitation and its reminder. */
 export const visitInviteEmail = (input: { name: string; subject: string; url: string; location: string; expireDays?: number }) =>
   hiringEmail({
@@ -537,16 +587,19 @@ export async function inviteToVisit(
   const supported = supportedVisitSubjects(c.preScreen, c.workRightsAnswer, config);
   if (!topHiringSubject(supported, config.subjectPriority))
     throw new HiringError(409, "No supported subject is open for hiring.");
-  const subject = topHiringSubject(
-    supported.filter((v) => config.interviewers.some((i) => i.subjects.includes(v))),
-    config.subjectPriority,
-  );
+  const subject = visitSubject(c.preScreen, c.workRightsAnswer, config);
   if (!subject)
     throw new HiringError(409, `No head is set for the subject: ${supported.join(", ")}.`);
   const limit = resend ? null : blockingLimit("onsite", subject, await readLimitUsage(tx, "onsite", now), config);
   if (limit)
     throw new HiringError(409, `The onsite limit "${LIMIT_TEXT[limit]}" is full. Raise the number to send more.`);
-  const expires = new Date(
+  // The "Next steps" email already gave this candidate a visit link. Keep its second, so that link now books the visit,
+  // unless it ends within a day.
+  const kept =
+    !resend && ["pre_screen", "no_reply"].includes(c.stage) && c.inviteExpiresAt && c.inviteExpiresAt.getTime() > now.getTime() + DAY
+      ? c.inviteExpiresAt
+      : null;
+  const expires = kept ?? new Date(
     (Math.floor(now.getTime() / 1000) + VISIT_LINK_DAYS * 86400) * 1000,
   );
   const revision = c.revision + 1;
@@ -1467,8 +1520,23 @@ const examOf = (rows: VisitRow[]) => rows.find((b) => b.kind === "paper");
  * The link's expiry second must equal the row's, so a new link ends the old one. A booked link stays open until the visit
  * starts. An unbooked link closes at expireDays even when the worker is not running to mark No booking.
  */
+/**
+ * A "Next steps" link before booking opens: "answers" while the form is unanswered, "checking" while the answers wait
+ * for the checks or a person. Null for every other link.
+ */
+function answersFirst(candidate: Candidate, cap: VisitLink): "answers" | "checking" | null {
+  if (!["pre_screen", "no_reply"].includes(candidate.stage) || candidate.inviteExpiresAt?.getTime() !== cap.exp * 1000) return null;
+  return candidate.preScreen ? "checking" : "answers";
+}
+const ANSWERS_FIRST = {
+  answers: `Please answer the pre-screening questions first: ${PRE_SCREEN_URL} When booking opens, we email you, and this link lets you book.`,
+  checking: "Thank you for your answers. We are checking them now. When booking opens, we email you, and this link lets you book.",
+};
+
 async function openVisit(db: Database, cap: VisitLink, config: HiringConfig, now: Date) {
   const candidate = await candidateById(db, cap.id);
+  const first = answersFirst(candidate, cap);
+  if (first) throw new HiringError(409, ANSWERS_FIRST[first]);
   const rows = await visitRows(db, cap.id);
   let open = candidate.inviteExpiresAt?.getTime() === cap.exp * 1000 && !!candidate.visitSubject;
   if (open && candidate.stage === "onsite_booked") {
@@ -1505,6 +1573,22 @@ const offeredSlots = async (db: Database, config: HiringConfig, subject: Subject
 export async function visitView(token: string, db: Database = getDb(), now = new Date()) {
   const cap = visitToken(token, now);
   const { config } = await settings(db);
+  const waiting = answersFirst(await candidateById(db, cap.id), cap);
+  if (waiting)
+    return {
+      kind: "visit" as const,
+      paired: true,
+      subject: "",
+      location: config.location,
+      enabled: false,
+      slots: [],
+      visit: null,
+      canMove: false,
+      notice: ANSWERS_FIRST[waiting],
+      checkedAt: null,
+      waiting: waiting as "answers" | "checking" | null,
+      formUrl: (waiting === "answers" ? PRE_SCREEN_URL : null) as string | null,
+    };
   const { subject, rows } = await openVisit(db, cap, config, now);
   const enabled = bookable(config, cap.id);
   const exam = examOf(rows);
@@ -1550,6 +1634,8 @@ export async function visitView(token: string, db: Database = getDb(), now = new
     notice,
     // When the times were checked against live Wise. Null means the 30-minute Wise copy was used.
     checkedAt: live?.checkedAt ?? null,
+    waiting: null as "answers" | "checking" | null,
+    formUrl: null as string | null,
   };
 }
 

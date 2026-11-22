@@ -28,11 +28,24 @@ const view = (patch = {}) => ({
   canMove: false,
   notice: null,
   checkedAt: null as string | null,
+  waiting: null as "answers" | "checking" | null,
+  formUrl: null as string | null,
   ...patch,
 });
 const page = (patch = {}) => renderToStaticMarkup(<VisitBooking token="t" view={view(patch)} reload={async () => {}} />);
 
 describe("VisitBooking", () => {
+  it("asks for the answers first on a Next steps link, with the form button and no booking form", () => {
+    const html = page({ waiting: "answers", formUrl: "https://forms.gle/x", slots: [], enabled: false, subject: "", notice: "Please answer the pre-screening questions first: https://forms.gle/x When booking opens, we email you, and this link lets you book." });
+    expect(html).toContain("Please answer the pre-screening questions first");
+    expect(html).toContain('href="https://forms.gle/x"');
+    expect(html).toContain("Answer the pre-screening questions");
+    expect(html).toContain("1 hour, if you pass");
+    expect(html).not.toContain("I will attend onsite");
+    const checking = page({ waiting: "checking", formUrl: null, slots: [], enabled: false, subject: "", notice: "Thank you for your answers. We are checking them now." });
+    expect(checking).toContain("We are checking them now");
+    expect(checking).not.toContain("Answer the pre-screening questions");
+  });
   it("shows one subject, exam and mock times, and both confirmation boxes", () => {
     const html = page();
     expect(html).toContain("Mathematics");
