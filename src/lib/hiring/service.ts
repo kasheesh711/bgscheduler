@@ -77,7 +77,7 @@ import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
 import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
 import { checkRubric, computeSheet, passRulesFor, RUBRIC_ITEMS, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
-import { HIRING_LINE_URL, hiringEmail, mockPrep } from "./email";
+import { HIRING_LINE_URL, hiringEmail, mockPrep, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -384,7 +384,8 @@ export async function inviteToPreScreen(db: Database, candidate: Candidate, now 
     },
   });
 }
-export const visitLink = (id: string, expires: Date, kind: "visit" | "paper-visit" = "paper-visit") =>
+/** New links book the exam and the mock together (Kevin, 22 Nov 2026). A "paper-visit" link sent earlier still books the paper only. */
+export const visitLink = (id: string, expires: Date, kind: "visit" | "paper-visit" = "visit") =>
   new URL(
     `/hiring/book/${bookingToken(id, kind, expires)}`,
     process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
@@ -467,12 +468,15 @@ export const visitInviteEmail = (input: { name: string; subject: string; url: st
     ],
     details: [
       { label: "Subject", value: input.subject },
-      { label: "Paper assessment", value: "2 hours" },
+      { label: "Visit", value: VISIT_LENGTH },
       { label: "Location", value: input.location },
       ...(input.expireDays === undefined ? [] : [{ label: "Link closes", value: `${input.expireDays} days after this email` }]),
     ],
     action: { label: "Book your visit", url: input.url },
-    after: ["We will contact you after we grade your paper. Candidates who pass can then book mock teaching."],
+    steps: VISIT_STEPS,
+    list: VISIT_BRING,
+    after: ["The time that you book covers the test and the mock teaching interview.", ...mockPrep(input.subject).paragraphs],
+    links: mockPrep(input.subject).links,
   });
 const onLine = (text: string) => `${text} Contact BeGifted on LINE: ${HIRING_LINE_URL}`;
 const DAY = 86400000;
@@ -1498,7 +1502,7 @@ export async function visitView(token: string, db: Database = getDb(), now = new
   const mock = rows.find((b) => b.kind === "mock");
   const refusal = exam ? moveRefusal(rows, now) : null;
   const paired = cap.kind === "visit" || !!mock;
-  let slots: (Awaited<ReturnType<typeof paperVisitSlots>>[number] | (Awaited<ReturnType<typeof offeredSlots>>[number] & { examEnd: string }))[] = [];
+  let slots: (Awaited<ReturnType<typeof paperVisitSlots>>[number] | Awaited<ReturnType<typeof offeredSlots>>[number])[] = [];
   let notice: string | null = null;
   let live: LiveBusy | null = null;
   if (!enabled) notice = onLine("Booking is temporarily paused.");
@@ -1507,7 +1511,7 @@ export async function visitView(token: string, db: Database = getDb(), now = new
     try {
       if (paired) {
         live = await liveForList(db, config, [subject], now);
-        slots = (await offeredSlots(db, config, subject, cap, rows, now, db, live ?? undefined)).map((slot) => ({ ...slot, examEnd: slot.mockStart }));
+        slots = await offeredSlots(db, config, subject, cap, rows, now, db, live ?? undefined);
       } else slots = await paperVisitSlots(db, config, subject, cap, rows, now);
       if (!slots.length) notice = onLine("There are no open visit times at the moment. Please try again later.");
     } catch (error) {
@@ -1899,7 +1903,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
             { label: "Time", value: `${bangkok(paper.startTime)}–${bangkokTime(paper.endTime)} (Bangkok)` },
             { label: "Location", value: current.location },
           ],
-          ...(previous ? {} : { action: { label: "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!) } }),
+          ...(previous ? {} : { action: { label: "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!, "paper-visit") } }),
         }) },
       });
       await enqueue(tx, { key: `booking:${paper.id}:calendar`, candidateId: cap.id, bookingId: paper.id, kind: "calendar", payload: {} });
@@ -1962,7 +1966,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
       calendarOwner: latest.config.connectedEmail,
       visitId,
     };
-    const examRange = { startTime: new Date(fresh.examStart), endTime: new Date(fresh.mockStart) };
+    const examRange = { startTime: new Date(fresh.examStart), endTime: new Date(fresh.examEnd) };
     const mockRange = { startTime: new Date(fresh.mockStart), endTime: new Date(fresh.mockEnd) };
     const [exam, mock] = await tx
       .insert(s.hiringBookings)
@@ -2000,20 +2004,22 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
           to: candidate.email,
           ...hiringEmail({
             subject: `BeGifted onsite visit ${rows.length ? "moved" : "confirmed"}`,
-            preheader: `Exam ${bangkok(exam.startTime)} (Bangkok), then mock teaching with ${head.canonicalKey}.`,
+            preheader: `Test ${bangkok(exam.startTime)} (Bangkok). If you pass, mock teaching follows on the same day.`,
             title: rows.length ? "Your visit has moved" : "Your visit is confirmed",
             tone: "ink",
             name: candidate.name,
             paragraphs: [`Your onsite visit ${rows.length ? "has moved. The new times are below" : "is confirmed"}.`],
             details: [
               { label: "Subject", value: subject },
-              { label: "Exam", value: `${bangkok(exam.startTime)}–${bangkokTime(exam.endTime)} (Bangkok)` },
-              { label: "Mock teaching", value: `${bangkok(mock.startTime)}–${bangkokTime(mock.endTime)} (Bangkok), with ${head.canonicalKey}` },
+              { label: "Test", value: `${bangkok(exam.startTime)}–${bangkokTime(exam.endTime)} (Bangkok)` },
+              { label: "Mock teaching, if you pass", value: `${bangkok(mock.startTime)}–${bangkokTime(mock.endTime)} (Bangkok), with ${head.canonicalKey}` },
               { label: "Location", value: latest.config.location },
             ],
             ...(rows.length
               ? {}
               : { action: { label: "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!, "visit") } }),
+            steps: VISIT_STEPS,
+            list: VISIT_BRING,
             after: [
               rows.length
                 ? "This visit cannot move again through the link."
@@ -2033,8 +2039,9 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
         kind: "calendar",
         payload: {},
       });
-    await queueRecruitmentMock(tx, mock, rows.length ? "moved" : "booked", oldMock?.startTime);
-    await enqueue(tx, headNotice(mock, rows.length ? "moved" : undefined, oldMock?.startTime));
+    // A paper-only booking that moves to a paired link has no old mock, so its mock is new to the head.
+    await queueRecruitmentMock(tx, mock, oldMock ? "moved" : "booked", oldMock?.startTime);
+    await enqueue(tx, headNotice(mock, oldMock ? "moved" : undefined, oldMock?.startTime));
     // With a new head, the old head still needs to hear that the hour is free.
     if (oldMock && oldMock.interviewerKey !== head.canonicalKey) await enqueue(tx, headNotice(oldMock, "cancelled"));
     await audit(tx, "candidate-link", rows.length ? "visit-move" : "visit-booking", cap.id, {
