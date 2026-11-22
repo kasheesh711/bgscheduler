@@ -24,6 +24,7 @@ import {
   overlap,
   weekStart,
   HiringError,
+  VISIT_GAP_MINUTES,
   type HiringConfig,
   type InterviewKind,
   type Slot,
@@ -300,13 +301,15 @@ export async function availableSlots(
 }
 
 /**
- * One-visit times: a 2-hour exam on the hour, then a 1-hour mock with one head. Read-only.
+ * One-visit times: a 2-hour exam on the hour, a grading gap (VISIT_GAP_MINUTES), then a 1-hour mock with one head. Read-only.
  * The exam needs room (paperCapacity) and blocks no head. The mock hour needs the head to be in saved
  * office hours, free in Wise and on leave, free of sit-ins and hiring bookings, and under the weekly limit.
  * The server picks the head (fewest mocks that week, then settings order). Candidates never choose.
  * Every confirmed mock counts toward the weekly limit, old flow or new, because each one uses the head's hour.
  * `movingCandidate`'s own rows are left out: a move gives them up, so they must not block its new time.
  */
+const MOCK_START = 120 + VISIT_GAP_MINUTES;
+const MOCK_END = MOCK_START + 60;
 export async function availableVisitSlots(
   db: Database,
   config: HiringConfig,
@@ -335,7 +338,7 @@ export async function availableVisitSlots(
   for (const date of businessDates(now, config.holidays))
     for (
       let exam = Math.ceil(config.visitStartMinute / 60) * 60;
-      exam + 180 <= config.visitEndMinute;
+      exam + MOCK_END <= config.visitEndMinute;
       exam += 60
     ) {
       const examRange = { start: instant(date, exam), end: instant(date, exam + 120) };
@@ -348,7 +351,7 @@ export async function availableVisitSlots(
         ).length >= config.paperCapacity
       )
         continue;
-      const mock = { start: examRange.end, end: instant(date, exam + 180) };
+      const mock = { start: instant(date, exam + MOCK_START), end: instant(date, exam + MOCK_END) };
       const free = heads.filter((head) => {
         const group = index.tutorGroups.find(
           (g) => g.canonicalKey === head.canonicalKey,
@@ -356,8 +359,8 @@ export async function availableVisitSlots(
         return (
           !!group &&
           weekMocks(head.canonicalKey, date) < config.onsiteLimits.perHeadPerWeek &&
-          indexedSlotAvailable(group, date, exam + 120, exam + 180) &&
-          headInOffice(head, date, exam + 120, exam + 180, calendar) &&
+          indexedSlotAvailable(group, date, exam + MOCK_START, exam + MOCK_END) &&
+          headInOffice(head, date, exam + MOCK_START, exam + MOCK_END, calendar) &&
           liveFree(live, head.canonicalKey, mock) &&
           !bookings.some(
             (b) =>
@@ -375,6 +378,7 @@ export async function availableVisitSlots(
         slots.push({
           date,
           examStart: examRange.start.toISOString(),
+          examEnd: examRange.end.toISOString(),
           mockStart: mock.start.toISOString(),
           mockEnd: mock.end.toISOString(),
           interviewerKey: assignHead(

@@ -703,8 +703,9 @@ describe("hiring workflow persistence", () => {
     const LINE = "https://lin.ee/OjMHF41";
     const LINK = new Date("2026-11-30T00:00:00Z");
     const EXAM = "2026-11-02T03:00:00.000Z";
-    const MOCK = "2026-11-02T05:00:00.000Z";
-    const MOCK_END = "2026-11-02T06:00:00.000Z";
+    // The mock starts 15 minutes after the exam ends (VISIT_GAP_MINUTES).
+    const MOCK = "2026-11-02T05:15:00.000Z";
+    const MOCK_END = "2026-11-02T06:15:00.000Z";
     const EXAM_TUE = "2026-11-03T03:00:00.000Z";
     const week = [null, ...Array.from({ length: 5 }, () => ({ start: "10:00", end: "16:00" })), null];
     const peat = { canonicalKey: "Peat", email: "peat@example.com", subjects: ["Mathematics", "Physics"], fallbackWeek: week };
@@ -847,7 +848,7 @@ describe("hiring workflow persistence", () => {
       const row = await invited();
       await bookVisit(link(row), choice(), db);
       const [exam, mock] = await rowsOf(row.id);
-      expect([exam.kind, exam.startTime.toISOString(), exam.endTime.toISOString(), exam.interviewerKey]).toEqual(["paper", EXAM, MOCK, null]);
+      expect([exam.kind, exam.startTime.toISOString(), exam.endTime.toISOString(), exam.interviewerKey]).toEqual(["paper", EXAM, "2026-11-02T05:00:00.000Z", null]);
       expect([mock.kind, mock.startTime.toISOString(), mock.endTime.toISOString(), mock.interviewerKey]).toEqual(["mock", MOCK, MOCK_END, "Peat"]);
       expect(exam.visitId).toBeTruthy();
       expect(mock.visitId).toBe(exam.visitId);
@@ -870,8 +871,11 @@ describe("hiring workflow persistence", () => {
       expect(jobs.map((j) => j.kind).sort()).toEqual(["calendar", "calendar", "email", "line"]);
       const text = String(jobs.find((j) => j.kind === "email")!.payload.text);
       expect(text).toContain("10:00");
-      expect(text).toContain("12:00");
-      expect(text).toContain("13:00");
+      expect(text).toContain("12:15");
+      expect(text).toContain("13:15");
+      expect(text).toContain("Mock teaching, if you pass:");
+      expect(text).toContain("3. We grade your test");
+      expect(text).toContain("What to bring:");
       expect(text).toContain(LINE);
       // The confirmation repeats what to prepare, with the syllabus links.
       expect(text).toMatch(/prepare one lesson in \w+/);
@@ -997,6 +1001,9 @@ describe("hiring workflow persistence", () => {
       expect((await visitView(paperToken, db)).slots[0].mockStart).toBeNull();
       const paper = await bookVisit(paperToken, choice(), db);
       expect((await rowsOf(row.id)).map((booking) => booking.kind)).toEqual(["paper"]);
+      // A paper-only booking keeps a paper-only Move link, though new invitations use the paired kind.
+      const moveToken = String((await jobsOf(row.id)).find((j) => j.kind === "email" && j.bookingId)!.payload.text).match(/\/hiring\/book\/([\w.-]+)/)![1];
+      expect(JSON.parse(Buffer.from(moveToken.split(".")[0], "base64url").toString()).kind).toBe("paper-visit");
       vi.setSystemTime(paper.endTime);
       await expect(click(row.id, "paper_pass")).rejects.toThrow(/passing paper/);
       const [file] = await db.insert(s.hiringAssessmentFiles).values({ candidateId: row.id, subject: "Mathematics",
@@ -1252,11 +1259,11 @@ describe("hiring workflow persistence", () => {
       expect((await read(row.id)).stage).toBe("onsite_booked");
       await deliverOutbox(db, base);
       expect(sendEmail).toHaveBeenCalledTimes(1);
-      // The head can tell which of two mocks moved: it prints the old 12:00 and the new time.
+      // The head can tell which of two mocks moved: it prints the old 12:15 and the new time.
       const moved = vi.mocked(pushLineTextMessage).mock.calls[0][0].text;
       expect(moved).toMatch(/moved/i);
-      expect(moved).toContain("02/11/2026, 12:00");
-      expect(moved).toContain("03/11/2026, 12:00");
+      expect(moved).toContain("02/11/2026, 12:15");
+      expect(moved).toContain("03/11/2026, 12:15");
       expect(vi.mocked(deliverCalendar).mock.calls.filter((c) => c[4] === true)).toHaveLength(2);
       // The moved notice carries a new candidate page link, and the old one has ended.
       expect(briefOf(moved)).not.toBe(oldBrief);

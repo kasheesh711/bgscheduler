@@ -1,6 +1,7 @@
 import {
   renderCompanyEmail,
   type CompanyBlock,
+  type CompanySection,
   type EmailAction,
   type EmailDetail,
   type EmailResource,
@@ -109,6 +110,17 @@ export function mockPrep(subject: string): { paragraphs: string[]; links: EmailR
   };
 }
 
+export const VISIT_LENGTH = "A 2-hour test. If you pass, a 1-hour mock teaching interview on the same day";
+/** The visit day, in order (Kevin, 22 Nov 2026). The mock takes place only after a pass, on the same day. */
+export const VISIT_STEPS: CompanySection[] = [
+  { heading: "Arrive at your booked time", paragraphs: ["Please arrive 10 minutes early."] },
+  { heading: "Complete the test", paragraphs: ["The test is on paper and takes 2 hours. It is closed book: no notes and no phone."] },
+  { heading: "We grade your test", paragraphs: ["Grading takes 5 to 10 minutes. Please wait at the office."] },
+  { heading: "We tell you the result", paragraphs: ["We tell you before you leave if you passed."] },
+  { heading: "If you pass: mock teaching interview", paragraphs: ["The 1-hour mock teaching interview follows immediately, on the same day. Prepare your lesson before the visit."] },
+];
+export const VISIT_BRING = { heading: "What to bring", bullets: ["Photo ID (passport or ID card)", "Pens", "A calculator, if your subject uses one"] };
+
 /** One candidate email. The plain-text and HTML parts come from these same fields. */
 export interface HiringEmail {
   subject: string;
@@ -121,7 +133,11 @@ export interface HiringEmail {
   paragraphs: string[];
   details?: EmailDetail[];
   action?: EmailAction;
-  /** Paragraphs after the button. */
+  /** Numbered steps after the button. */
+  steps?: CompanySection[];
+  /** A short bullet list after the steps. */
+  list?: { heading: string; bullets: string[] };
+  /** Paragraphs after those. */
   after?: string[];
   /** A list of links after those paragraphs. */
   links?: EmailResource[];
@@ -152,6 +168,8 @@ export function hiringEmail(email: HiringEmail): { subject: string; text: string
   const blocks: CompanyBlock[] = [{ kind: "copy", paragraphs: [greeting, ...email.paragraphs] }];
   if (email.details?.length) blocks.push({ kind: "details", entries: email.details });
   if (email.action) blocks.push({ kind: "action", action: email.action });
+  if (email.steps?.length) blocks.push({ kind: "steps", entries: email.steps });
+  if (email.list) blocks.push({ kind: "copy", heading: email.list.heading, paragraphs: [], bullets: email.list.bullets });
   if (email.after?.length) blocks.push({ kind: "copy", paragraphs: email.after });
   if (email.links?.length) blocks.push({ kind: "resources", entries: email.links });
   const text = [
@@ -159,6 +177,8 @@ export function hiringEmail(email: HiringEmail): { subject: string; text: string
     ...email.paragraphs,
     email.details?.map((d) => `${d.label}: ${d.value}`).join("\n"),
     email.action && `${email.action.label}:\n${email.action.url}`,
+    email.steps?.map((step, i) => [`${i + 1}. ${step.heading}`, ...(step.paragraphs ?? [])].join("\n")).join("\n\n"),
+    email.list && [`${email.list.heading}:`, ...email.list.bullets.map((b) => `• ${b}`)].join("\n"),
     ...(email.after ?? []),
     ...(email.links ?? []).map((link) => `${link.title}:\n${link.url}`),
     `${FOOTER.note} ${HIRING_LINE_URL}`,

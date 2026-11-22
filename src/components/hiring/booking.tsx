@@ -285,7 +285,7 @@ export function VisitBooking({
           </span>
           {view.paired && <span>Mock teaching<small>1 hour</small></span>}
         </div>
-        <p className={c.note}>{view.paired ? "Your visit includes the exam and mock teaching." : "We will contact you after we grade your paper."} All times are Bangkok time.</p>
+        <p className={c.note}>{view.paired ? "We grade your test in 5 to 10 minutes. If you pass, the mock teaching interview follows on the same day." : "We will contact you after we grade your paper."} All times are Bangkok time.</p>
       </div>
       {view.visit && (
         <section>
