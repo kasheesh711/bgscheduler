@@ -17,6 +17,7 @@ import {
   degreeEligible,
   englishLevel,
   hardStops,
+  visitSubject,
   preScreenAssessmentSchema,
   preScreenPoints,
   profileScore,
@@ -511,6 +512,20 @@ describe("pre-screen scoring", () => {
     }
     expect(degreeEligible("Below Bachelor's")).toBe(false);
     expect(hardStops(form({ degree: "Below Bachelor's" }), answer, ["Biology"], config).stops).toHaveLength(1);
+  });
+  it("keeps every subject the candidate ticked, whatever the AI's subject check says", () => {
+    // Joei, 22 Nov 2026: ticked EFL/ESL and History; the AI marked EFL/ESL not relevant and the visit went to History.
+    const heads = configSchema.parse({
+      callThreshold: null,
+      interviewers: [{ canonicalKey: "Tito", email: "tito@example.com", subjects: ["EFL/ESL", "History"] }],
+      subjectPriority: [
+        { subject: "EFL/ESL", hiring: true },
+        { subject: "History", hiring: true },
+      ],
+    });
+    expect(visitSubject(form({ subjects: "EFL/ ESL, History", english: "Native" }), answer, heads)).toBe("EFL/ESL");
+    // The English level hard stop still removes an English subject.
+    expect(visitSubject(form({ subjects: "EFL/ ESL, History", english: "Upper-Intermediate (B2)" }), answer, heads)).toBe("History");
   });
   it("scores each real weekly-hours band", () => {
     const only = (weeklyHours: string) => availabilityFraction(form({ weeklyHours })) - 0.5;
