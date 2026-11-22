@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { format, parseISO } from "date-fns";
 import { percentile } from "@/lib/hiring/funnel";
 import { ANSWER_LABELS, isDecided } from "@/lib/hiring/model";
-import { PRE_SCREEN_FILTERS, matchesPreScreenList, preScreenFinalScore, visitEmail, wasSentForm, type PreScreenListFilter, type VisitEmail } from "@/lib/hiring/prescreen-view";
+import { PRE_SCREEN_FILTERS, matchesPreScreenList, preScreenFinalScore, sentBetween, visitEmail, wasSentForm, type PreScreenListFilter, type VisitEmail } from "@/lib/hiring/prescreen-view";
 import { preScreenNote, type CandidateExtras } from "@/lib/hiring/status";
 import { AssessmentBlock, ONSITE_STAGES, SeekApplicationReview } from "./candidate-inspector";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
@@ -11,6 +12,7 @@ import { PILL_CLASS } from "./pipeline-charts";
 import css from "./dashboard.module.css";
 
 const round = (n: number) => Math.round(n * 10) / 10;
+const day = (ymd: string) => format(parseISO(ymd), "d MMM yyyy");
 const toneClass = (tone: VisitEmail["tone"]) =>
   tone === "good" ? css.goodWord : tone === "bad" ? css.errorText : tone === "wait" ? css.warnWord : css.mutedCell;
 
@@ -215,6 +217,8 @@ export function PreScreenScreen({
 }) {
   const [filter, setFilter] = useState<PreScreenListFilter>("All");
   const [query, setQuery] = useState("");
+  const [sentFrom, setSentFrom] = useState("");
+  const [sentTo, setSentTo] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const threshold = data.config.preScreenThreshold;
 
@@ -232,10 +236,10 @@ export function PreScreenScreen({
   const waits = pool.flatMap(({ candidate: c, sentAt }) =>
     c.preScreenRepliedAt && sentAt ? [(new Date(String(c.preScreenRepliedAt)).getTime() - new Date(String(sentAt)).getTime()) / 86_400_000] : [],
   ).filter((d) => d >= 0);
-  const counts = PRE_SCREEN_FILTERS.map((name) => pool.filter((row) => matchesPreScreenList(row.candidate, name, threshold, row.email)).length);
+  const counts = PRE_SCREEN_FILTERS.map((name) => pool.filter((row) => matchesPreScreenList(row.candidate, name, threshold, row.email) && sentBetween(row.email, sentFrom, sentTo)).length);
   const needle = query.trim().toLowerCase();
   const rows = pool
-    .filter((row) => matchesPreScreenList(row.candidate, filter, threshold, row.email))
+    .filter((row) => matchesPreScreenList(row.candidate, filter, threshold, row.email) && sentBetween(row.email, sentFrom, sentTo))
     .filter((row) => !needle || `${row.candidate.name} ${row.candidate.email ?? ""}`.toLowerCase().includes(needle))
     // Replies first, by score. Then the people still waiting.
     .sort((a, b) => (preScreenFinalScore(b.candidate) ?? -1) - (preScreenFinalScore(a.candidate) ?? -1) || Number(!!b.candidate.preScreen) - Number(!!a.candidate.preScreen));
@@ -259,7 +263,23 @@ export function PreScreenScreen({
                 </button>
               ))}
             </div>
+            <label className={css.filterSelect}>
+              Visit email sent from
+              <input className={css.numberInput} type="date" value={sentFrom} max={sentTo || undefined} onChange={(e) => setSentFrom(e.target.value)} />
+            </label>
+            <label className={css.filterSelect}>
+              to
+              <input className={css.numberInput} type="date" value={sentTo} min={sentFrom || undefined} onChange={(e) => setSentTo(e.target.value)} />
+            </label>
           </div>
+          {(sentFrom || sentTo) && (
+            <p className={css.activeFilters}>
+              {rows.length} shown with a visit email sent {sentFrom && sentTo ? `${day(sentFrom)} to ${day(sentTo)}` : sentFrom ? `on or after ${day(sentFrom)}` : `on or before ${day(sentTo)}`} (Bangkok time).
+              <button type="button" className={css.inlineLink} onClick={() => { setSentFrom(""); setSentTo(""); }}>
+                Clear dates
+              </button>
+            </p>
+          )}
           {threshold === null && <p className={css.activeFilters}>No pass score is set in Rules and setup, so Passed and Below pass score stay empty.</p>}
           <div className={css.tableScroll}>
             <table className={css.table}>

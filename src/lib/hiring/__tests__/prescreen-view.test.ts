@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchesPreScreenList, preScreenFinalScore, visitEmail, wasSentForm } from "../prescreen-view";
+import { matchesPreScreenList, preScreenFinalScore, sentBetween, visitEmail, wasSentForm } from "../prescreen-view";
 
 const person = (patch = {}) => ({
   id: "a",
@@ -25,7 +25,7 @@ describe("wasSentForm", () => {
 
 describe("visitEmail", () => {
   it("reads the proof from the outbox, in Bangkok time", () => {
-    expect(visitEmail(person(), [row("sent", "a:visit-invite", { sentAt: "2026-11-02T03:04:00Z" })], 50)).toEqual({ label: "Sent 2 Nov, 10:04", tone: "good", sent: true });
+    expect(visitEmail(person(), [row("sent", "a:visit-invite", { sentAt: "2026-11-02T03:04:00Z" })], 50)).toEqual({ label: "Sent 2 Nov, 10:04", tone: "good", sent: true, sentDays: ["2026-11-02"] });
     expect(visitEmail(person(), [row("pending")], 50).label).toBe("Queued");
     expect(visitEmail(person(), [row("processing")], 50).label).toBe("Queued");
     expect(visitEmail(person(), [row("failed", "a:visit-invite", { error: "Mail down" })], 50)).toMatchObject({ tone: "bad", error: "Mail down" });
@@ -65,7 +65,7 @@ describe("visitEmail", () => {
 });
 
 describe("list filters", () => {
-  const email = { label: "", tone: "none" as const, sent: false };
+  const email = { label: "", tone: "none" as const, sent: false, sentDays: [] as string[] };
   it("uses a person's score in place of the AI's", () => {
     const changed = person({ preScreenScore: 40, preScreenOverride: { score: 70 } });
     expect(preScreenFinalScore(changed)).toBe(70);
@@ -82,5 +82,25 @@ describe("list filters", () => {
     expect(matchesPreScreenList(person({ preScreen: null }), "No reply", 50, email)).toBe(true);
     expect(matchesPreScreenList(person(), "Visit email sent", 50, { ...email, sent: true })).toBe(true);
     expect(matchesPreScreenList(person(), "Visit email sent", 50, email)).toBe(false);
+  });
+});
+
+describe("sentBetween", () => {
+  it("uses the Bangkok day each invitation left", () => {
+    // 17:30 UTC on 19 Nov is 00:30 on 20 Nov in Bangkok.
+    const rows = [row("pending", "a:visit-invite:2"), row("sent", "a:visit-invite:1", { sentAt: "2026-11-19T17:30:00Z" }), row("sent", "a:visit-invite", { sentAt: "2026-11-05T03:00:00Z" })];
+    expect(visitEmail(person(), rows, 50).sentDays).toEqual(["2026-11-20", "2026-11-05"]);
+    expect(visitEmail(person(), [row("sent")], 50).sentDays).toEqual([]);
+  });
+  it("keeps both ends, leaves empty ends open, and counts any send", () => {
+    const sent = { sentDays: ["2026-11-20"] };
+    expect(sentBetween(sent, "", "")).toBe(true);
+    expect(sentBetween({ sentDays: [] }, "", "")).toBe(true);
+    expect(sentBetween(sent, "2026-11-20", "2026-11-20")).toBe(true);
+    expect(sentBetween(sent, "2026-11-21", "")).toBe(false);
+    expect(sentBetween(sent, "", "2026-11-19")).toBe(false);
+    expect(sentBetween({ sentDays: [] }, "2026-11-01", "")).toBe(false);
+    expect(sentBetween({ sentDays: ["2026-11-20", "2026-11-05"] }, "2026-11-01", "2026-11-10")).toBe(true);
+    expect(sentBetween(sent, "2026-11-25", "2026-11-15")).toBe(true);
   });
 });
