@@ -24,7 +24,6 @@ import {
   preScreenPoints,
   profileScore,
   workRightsPenalty,
-  supportedVisitSubjects,
   visitSubject,
 } from "./scoring";
 import {
@@ -206,8 +205,6 @@ export function replyCheck(
   if (candidate.preScreenOverride) return hold("A person changed this score. A person decides.");
   const { stops } = hardStops(pre, answer, normalizeSubjects(pre.subjects), config);
   if (stops.length) return hold(stops.join(" "));
-  if (!supportedVisitSubjects(pre, answer, assessment, config).length)
-    return hold("No named subject is supported by the assessment.");
   if (!sentAt) return hold("This response has no matching form send. A person decides.");
   if (!candidate.email) return hold("There is no usable email.");
   // HR's good call is the contact, as in `profileGate`.
@@ -222,7 +219,7 @@ export function replyCheck(
   if (score < config.preScreenThreshold)
     return hold(`The pre-screen score ${score} is below the pass score ${config.preScreenThreshold}.`);
   // Opening the subject or adding a head cures this.
-  const subject = visitSubject(pre, answer, assessment, config);
+  const subject = visitSubject(pre, answer, config);
   return subject ? { kind: "ready", subject, score } : { kind: "wait" };
 }
 
