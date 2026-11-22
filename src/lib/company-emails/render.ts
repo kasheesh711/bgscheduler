@@ -67,7 +67,7 @@ function stepMark(s: CompanySection): string {
 }
 /** Steps with icons: a picture, the step number, and a real button for an action. */
 function iconSteps(entries: CompanySection[]): string {
-  return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="table-layout:fixed;">${entries.map((s,i)=>{
+  return `<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="table-layout:fixed;">${entries.map((s)=>{
     const bg = s.state === 'current' ? `background:${TINT};` : '';
     const fade = s.state === 'done' ? 'opacity:0.55;' : '';
     return `<tr><td width="72" valign="top" style="padding:18px 0 18px 12px;border-top:1px solid ${RULE};${bg}">${s.icon ? `<img src="${e(companyEmailUrl(s.icon,true))}" alt="" width="48" height="48" style="display:block;width:48px;height:48px;border:0;${fade}"/>` : ''}</td><td valign="top" style="padding:18px 12px 18px 8px;border-top:1px solid ${RULE};${bg}overflow-wrap:anywhere;word-break:break-word;">${stepMark(s)}<h3 style="margin:0 0 6px;font-size:18px;line-height:1.35;color:${s.state === 'done' ? MUTED : NAVY};">${e(s.heading)}</h3>${copy(s.paragraphs||[])}${s.bullets?.length ? `<ul style="padding-left:22px;">${s.bullets.map(b=>`<li>${e(b)}</li>`).join('')}</ul>` : ''}${s.action ? actionHtml(s.action) : ''}</td></tr>`;

@@ -91,6 +91,12 @@ describe("preScreenEmail with a visit link (Next steps)", () => {
     expect(email.html).toContain(">Done</p>");
     expect(email.html).toContain("/brand/email/hiring/v1/hero-next-steps.jpg");
   });
+  it("does not thank the candidate for R1 when there was none", () => {
+    const email = preScreenEmail("Ann", "ann@example.com", false, visit, false);
+    expect(email.text).not.toContain("R1");
+    expect(email.subject).toBe("Next steps: your BeGifted pre-screening questions and onsite visit");
+    expect(email.text).toContain(visit);
+  });
   it("keeps the visit link in the reminder, and a form sent before this change keeps the old wording", () => {
     expect(preScreenEmail("Ann", "ann@example.com", true, visit).text).toContain(visit);
     const old = preScreenEmail("Ann", "ann@example.com", false);

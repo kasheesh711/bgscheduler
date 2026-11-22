@@ -20,6 +20,7 @@ import {
   instant,
   type Application,
   type HiringConfig,
+  type PreScreen,
   type Stage,
 } from "./model";
 import { queueRecruitmentForm } from "./recruitment";
@@ -466,7 +467,7 @@ export async function syncTracker(db: Database, config: HiringConfig) {
         });
     });
   }
-  for (const [email, { name, pre }] of pres) {
+  for (const [email, { name, pre: read }] of pres) {
     await withDatabaseTransaction(db, async (tx) => {
       const [existing] = await tx
         .select()
@@ -474,16 +475,22 @@ export async function syncTracker(db: Database, config: HiringConfig) {
         .where(eq(s.hiringCandidates.email, email))
         .for("update");
       if (existing) {
+        // A stored subject choice survives a sheet read that cannot see it (the header was renamed or an older worker).
+        const pre: PreScreen =
+          existing.preScreen?.testSubject && !read.testSubject ? { ...read, testSubject: existing.preScreen.testSubject } : read;
         const repliedAt = parseFormTimestamp(pre.submittedAt);
         // Repair responses imported before Sheets date serials were supported.
         const repairTimestamp = !!existing.preScreen && !existing.preScreenRepliedAt && !!repliedAt;
         if (sourceHash(existing.preScreen) === sourceHash(pre) && !repairTimestamp) return;
         const first = !existing.preScreen;
-        // A row that only moved in the sheet is the same response.
+        // A row that only moved in the sheet is the same response. A subject choice seen for the first time (the question
+        // was added, or the worker was updated) is stored silently; only a changed choice counts as a new answer.
+        // JSON drops an undefined key, so these hashes leave out the row and the subject choice.
+        const core = (answer: PreScreen) => sourceHash({ ...answer, sourceRow: 0, testSubject: undefined });
         const answered =
           first ||
-          sourceHash({ ...existing.preScreen, sourceRow: 0 }) !==
-            sourceHash({ ...pre, sourceRow: 0 });
+          core(existing.preScreen!) !== core(pre) ||
+          (!!existing.preScreen!.testSubject && existing.preScreen!.testSubject !== pre.testSubject);
         // Only a reply after a confirmed app send wakes a no_reply row. Kevin, 9 Nov 2026.
         const sentAt = answered || repairTimestamp ? await formSentAt(tx, existing.id) : null;
         await tx
@@ -519,8 +526,8 @@ export async function syncTracker(db: Database, config: HiringConfig) {
         await tx.insert(s.hiringCandidates).values({
           name,
           email,
-          preScreen: pre,
-          preScreenRepliedAt: parseFormTimestamp(pre.submittedAt),
+          preScreen: read,
+          preScreenRepliedAt: parseFormTimestamp(read.submittedAt),
           previouslyContacted: true,
           stage: "review",
           reviewNote:

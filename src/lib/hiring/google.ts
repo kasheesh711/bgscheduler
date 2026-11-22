@@ -191,5 +191,8 @@ export async function deliverCalendar(
     },
     db,
   );
+  // shortcut: a missing Meet link is only logged, while emails point to the invitation; add a review flag if it happens.
+  if (call && !result?.hangoutLink)
+    console.error("R1 calendar event has no Google Meet link", { bookingId: booking.id, status: (result?.conferenceData as { createRequest?: { status?: unknown } } | undefined)?.createRequest?.status });
   return { id: String(result?.id ?? id) };
 }

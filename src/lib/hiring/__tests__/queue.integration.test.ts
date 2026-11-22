@@ -11,7 +11,7 @@ import {
   listGoogleSheetProperties,
   updateGoogleSheetRangeValues,
 } from "@/lib/sales-dashboard/sheets";
-import { configSchema, HiringError, type HiringConfig } from "../model";
+import { configSchema, HiringError, TEST_SUBJECT_QUESTION, type HiringConfig } from "../model";
 import { bookingView, bookVisit, inviteToVisit, reviewCandidate, prestigeCatalogHash, sourceHash, visitLink, visitView, type Candidate } from "../service";
 import { readyToInvite } from "../insights";
 import { isNewFlow, mirrorTracker, parseFormTimestamp, syncTracker } from "../sources";
@@ -176,8 +176,8 @@ const invites = async () => (await outbox()).filter((j) => j.key.includes(":visi
 const forms = async () => (await outbox()).filter((j) => j.key.endsWith(":pre-screen"));
 const assessment = async (kind?: string) => (kind === "pre-screen" ? six() : five());
 
-function tracker(rows: { pre?: unknown[][]; recruit?: unknown[][]; mock?: unknown[][] } = {}) {
-  const preHead = Array.from({ length: 18 }, () => "");
+function tracker(rows: { pre?: unknown[][]; recruit?: unknown[][]; mock?: unknown[][]; preExtra?: string[] } = {}) {
+  const preHead: string[] = [...Array.from({ length: 18 }, () => ""), ...(rows.preExtra ?? [])];
   preHead[2] = "Contact Email";
   preHead[17] = "A student is bright but keeps losing motivation and their grades are slipping. How would you approach it?";
   const recruitHead = Array.from({ length: 20 }, () => "");
@@ -890,6 +890,44 @@ describe("Next steps after a good R1 (Kevin, 22 Nov 2026)", () => {
     const [invite] = await invites();
     expect(String(invite.payload.text)).toContain(token);
     expect((await visitView(token, db)).waiting).toBeNull();
+  });
+  it("gives a new link when the kept one would end inside the onsite window", async () => {
+    // Released 26 days ago: 4 days are left, less than the 7-day onsite window.
+    const short = new Date(Math.floor(after(4).getTime() / 1000) * 1000);
+    const row = await replied({ inviteExpiresAt: short });
+    await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
+    const opened = await candidate(row.id);
+    expect(opened.stage).toBe("onsite_invited");
+    expect(opened.inviteExpiresAt!.getTime()).toBeGreaterThan(after(29).getTime());
+  });
+  it("closes the link when the onsite invitation is cancelled, because the candidate already holds it", async () => {
+    const expires = new Date(Math.floor(after(30).getTime() / 1000) * 1000);
+    const row = await replied({ inviteExpiresAt: expires });
+    await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
+    const token = visitLink(row.id, expires).split("/hiring/book/")[1];
+    expect((await visitView(token, db)).waiting).toBeNull();
+    // A hold (for example a SEEK contact) cancels the waiting invitation.
+    await db.update(s.hiringOutbox).set({ status: "cancelled" }).where(sql`${s.hiringOutbox.key} like '%:visit-invite'`);
+    await expect(visitView(token, db)).rejects.toMatchObject({ status: 404 });
+  });
+  it("stores a subject choice seen for the first time without calling the answer changed, and a changed choice is a new answer", async () => {
+    const row = await seed({ stage: "pre_screen", subjects: ["Mathematics"] });
+    await formRow(row.id, { sentAt: after(-1) });
+    tracker({ pre: [preRow(row.email!, "4/11/2026, 05:00:00")] });
+    await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
+    expect((await candidate(row.id)).preScreen).not.toHaveProperty("testSubject");
+    // Kevin adds the question; the same answer now shows a subject.
+    tracker({ pre: [[...preRow(row.email!, "4/11/2026, 05:00:00"), "Mathematics"]], preExtra: [TEST_SUBJECT_QUESTION] });
+    await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
+    expect(await candidate(row.id)).toMatchObject({ preScreen: { testSubject: "Mathematics" }, preScreenResubmitted: false });
+    // A sheet read that cannot see the column keeps the stored choice and changes nothing.
+    tracker({ pre: [preRow(row.email!, "4/11/2026, 05:00:00")] });
+    await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
+    expect(await candidate(row.id)).toMatchObject({ preScreen: { testSubject: "Mathematics" }, preScreenResubmitted: false });
+    // A different choice is a changed answer.
+    tracker({ pre: [[...preRow(row.email!, "4/11/2026, 05:00:00"), "Physics"]], preExtra: [TEST_SUBJECT_QUESTION] });
+    await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
+    expect(await candidate(row.id)).toMatchObject({ preScreen: { testSubject: "Physics" }, preScreenResubmitted: true });
   });
   it("says the answers are being checked while a person decides", async () => {
     const expires = new Date(Math.floor(after(30).getTime() / 1000) * 1000);

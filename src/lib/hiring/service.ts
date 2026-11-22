@@ -388,7 +388,7 @@ export async function inviteToPreScreen(db: Database, candidate: Candidate, now 
     payload: {
       to: candidate.email,
       workflowStage: "pre_screen",
-      ...preScreenEmail(candidate.name, candidate.email, false, visitLink(candidate.id, expires)),
+      ...preScreenEmail(candidate.name, candidate.email, false, visitLink(candidate.id, expires), !!candidate.callReview?.good),
     },
   });
   if (queued)
@@ -458,21 +458,24 @@ export async function inviteToCall(db: Database, candidate: Candidate, now = new
  * The form invitation and its reminder. With a visit link it is the "Next steps" email after a good R1: answer the
  * questions, then book the visit on that link. A form sent before this change has no visit link.
  */
-export const preScreenEmail = (name: string, email: string, reminder: boolean, visitUrl?: string) =>
+export const preScreenEmail = (name: string, email: string, reminder: boolean, visitUrl?: string, afterR1 = true) =>
   visitUrl
     ? hiringEmail({
         subject: reminder
           ? "Reminder: answer your BeGifted pre-screening questions"
           : "Next steps: your BeGifted pre-screening questions and onsite visit",
         preheader: "Answer a short questionnaire, then book your onsite visit.",
-        title: reminder ? "Your questions are still open" : "Thank you for R1. Here are your next steps",
+        title: reminder ? "Your questions are still open" : afterR1 ? "Thank you for R1. Here are your next steps" : "Here are your next steps",
         hero: "next",
-        process: 2,
+        // With no R1 (no call score, or a person sent the form), step 1 is not done, so the process is not shown.
+        ...(afterR1 ? { process: 2 as const } : {}),
         name,
         paragraphs: [
           reminder
             ? "We have not yet received your pre-screening answers. If you are still interested in joining BeGifted, please answer them. Then you can book your onsite visit."
-            : "Thank you for your time at R1: HR Interview. It went well, and we invite you to the next steps.",
+            : afterR1
+              ? "Thank you for your time at R1: HR Interview. It went well, and we invite you to the next steps."
+              : "Thank you for your interest in joining BeGifted. We invite you to the next steps.",
         ],
         details: [
           { label: "Use this email", value: email },
@@ -600,9 +603,12 @@ export async function inviteToVisit(
   if (limit)
     throw new HiringError(409, `The onsite limit "${LIMIT_TEXT[limit]}" is full. Raise the number to send more.`);
   // The "Next steps" email already gave this candidate a visit link. Keep its second, so that link now books the visit,
-  // unless it ends within a day.
+  // but only while it outlasts the whole onsite window: a shorter link would show few times and expire early.
   const kept =
-    !resend && ["pre_screen", "no_reply"].includes(c.stage) && c.inviteExpiresAt && c.inviteExpiresAt.getTime() > now.getTime() + DAY
+    !resend &&
+    ["pre_screen", "no_reply"].includes(c.stage) &&
+    c.inviteExpiresAt &&
+    c.inviteExpiresAt.getTime() >= now.getTime() + config.onsiteFollowUp.expireDays * DAY
       ? c.inviteExpiresAt
       : null;
   const expires = kept ?? new Date(
@@ -1537,7 +1543,7 @@ function answersFirst(candidate: Candidate, cap: VisitLink): "answers" | "checki
 }
 const ANSWERS_FIRST = {
   answers: `Please answer the pre-screening questions first: ${PRE_SCREEN_URL} When booking opens, we email you, and this link lets you book.`,
-  checking: "Thank you for your answers. We are checking them now. When booking opens, we email you, and this link lets you book.",
+  checking: "Thank you for your answers. We have them. When booking opens, we email you, and this link lets you book. If we have a question, we contact you.",
 };
 
 async function openVisit(db: Database, cap: VisitLink, config: HiringConfig, now: Date) {
@@ -1550,8 +1556,9 @@ async function openVisit(db: Database, cap: VisitLink, config: HiringConfig, now
     const exam = examOf(rows);
     open = !!exam && exam.startTime > now;
   } else if (open && candidate.stage === "onsite_invited") {
-    const sentAt = await linkSentAt(db, cap.id);
-    open = !sentAt || now.getTime() - sentAt.getTime() < config.onsiteFollowUp.expireDays * DAY;
+    // A "Next steps" candidate already holds this link, so a cancelled invitation (a hold) must close it too.
+    const live = await linkSentAt(db, cap.id);
+    open = !!live && (!live.sentAt || now.getTime() - live.sentAt.getTime() < config.onsiteFollowUp.expireDays * DAY);
   } else open = false;
   if (!open) throw new HiringError(404, onLine("This booking link is no longer active."));
   return { candidate, subject: candidate.visitSubject!, rows };
@@ -1841,7 +1848,8 @@ export async function callView(token: string, db: Database = getDb(), now = new 
   // The stored phone number is never returned: the link is the only check, and a link can be forwarded.
   return {
     kind: "call" as const,
-    minutes: CALL_MINUTES,
+    // A call booked before 22 Nov 2026 lasts 15 minutes.
+    minutes: own ? Math.round((own.endTime.getTime() - own.startTime.getTime()) / 60000) : CALL_MINUTES,
     enabled,
     slots,
     call: own ? { start: own.startTime.toISOString(), end: own.endTime.toISOString() } : null,

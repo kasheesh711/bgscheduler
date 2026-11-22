@@ -229,7 +229,7 @@ export function hiringEmail(email: HiringEmail): { subject: string; text: string
     email.list && [`${email.list.heading}:`, ...email.list.bullets.map((b) => `• ${b}`)].join("\n"),
     ...(email.after ?? []),
     ...(email.links ?? []).map((link) => `${link.title}:\n${link.url}`),
-    process && [PROCESS_HEADING, ...process.map((step, n) => [`${n + 1}. ${step.heading}${step.state === "current" ? " (You are here)" : ""}`, ...(step.paragraphs ?? [])].join("\n"))].join("\n\n"),
+    process && [PROCESS_HEADING, ...process.map((step, n) => [`${n + 1}. ${step.heading}${step.state === "current" ? " (You are here)" : step.state === "done" ? " (Done)" : ""}`, ...(step.paragraphs ?? [])].join("\n"))].join("\n\n"),
     `${FOOTER.note} ${HIRING_LINE_URL}`,
     SIGN_OFF,
   ].filter(Boolean).join("\n\n");

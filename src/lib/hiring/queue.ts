@@ -151,7 +151,10 @@ export const inviteRows = (db: Database, candidateId: string) =>
     .from(o)
     .where(and(eq(o.candidateId, candidateId), isOnsiteInvite));
 
-/** The newest invitation's send time. A row not yet sent has no time, so no follow-up clock runs. */
+/**
+ * The newest live invitation: null when there is none (every row cancelled, for example by a hold), else its send time.
+ * A row not yet sent has no time, so no follow-up clock runs.
+ */
 export async function linkSentAt(db: Database, candidateId: string) {
   const [link] = await db
     .select({ status: o.status, sentAt: o.sentAt })
@@ -159,7 +162,7 @@ export async function linkSentAt(db: Database, candidateId: string) {
     .where(and(eq(o.candidateId, candidateId), isOnsiteInvite, ne(o.status, "cancelled")))
     .orderBy(desc(o.createdAt))
     .limit(1);
-  return link?.status === "sent" ? link.sentAt : null;
+  return link ? { sentAt: link.status === "sent" ? link.sentAt : null } : null;
 }
 
 /** The columns `replyCheck` and the onsite queue read. Never the profile text or the profile assessment. */
@@ -584,7 +587,7 @@ export async function runFollowUps(db: Database, now = new Date()) {
           payload: {
             to: row.email,
             workflowStage: "pre_screen",
-            ...preScreenEmail(row.name, row.email, true, row.inviteExpiresAt ? visitLink(id, row.inviteExpiresAt) : undefined),
+            ...preScreenEmail(row.name, row.email, true, row.inviteExpiresAt ? visitLink(id, row.inviteExpiresAt) : undefined, !!row.callReview?.good),
           },
         }))
       ) {
