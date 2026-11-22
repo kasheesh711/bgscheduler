@@ -77,7 +77,7 @@ export type HiringView = keyof typeof VIEWS;
 const STEPS = ["seek", "calls", "prescreen", "assessment", "mock", "review", "offer"] as const;
 const TOOLS = ["overview", "capacity", "visitday", "setup", "hr", "admin", "heads"] as const;
 /** One line under the tabs, so a new user can name what each tab is for. */
-const PURPOSE: Record<HiringView, string> = {
+const PURPOSE: Record<Exclude<HiringView, "hr" | "heads">, string> = {
   overview: "Where every candidate stands, and who is ready for the next step.",
   capacity: "Which subjects need new tutors first, from busy-hours use and new students.",
   seek: "Check applications from SEEK and their ATS scores.",
@@ -89,9 +89,7 @@ const PURPOSE: Record<HiringView, string> = {
   review: "HR adds the behavioral assessment and sends the packet to Gift for approval or rejection.",
   offer: "After approval, the candidate receives an offer letter and can book a 30-minute signing with HR on site.",
   setup: "Scores, limits, heads and messages. A change applies to every tab.",
-  hr: "Your calls this week, who to call next, and the decisions the heads sent.",
   admin: "Who comes when, the paper to print, and where to upload the completed paper.",
-  heads: "Your mock lessons and scores.",
 };
 /** The browser remembers a role screen, so /hiring opens on it the next time. */
 const ROLE_KEY = "hiring-role-view";
@@ -329,11 +327,11 @@ export function HiringDashboard() {
       <header className={css.topbar} data-compact={view === "hr" || view === "heads" || giftReview ? "" : undefined} data-heads={view === "heads" ? "" : undefined}>
         <div>
           <h1 className={css.title}>
-            Tutor <em>hiring</em>
+            {giftReview ? VIEWS[view] : <>Tutor <em>hiring</em></>}
           </h1>
           {/* Always one line, so the tabs below do not move down when the data arrives. */}
-          <p className={role || giftReview ? css.subtitle : `${css.subtitle} ${css.statusSubtitle}`}>
-            {role || giftReview ? (
+          {!giftReview && <p className={role ? css.subtitle : `${css.subtitle} ${css.statusSubtitle}`}>
+            {role ? (
               VIEWS[view]
             ) : data ? (
               <>
@@ -344,7 +342,7 @@ export function HiringDashboard() {
             ) : (
               "\u00a0"
             )}
-          </p>
+          </p>}
           {!role && !giftReview && paused && <p className={css.mobileStatus}>{paused}</p>}
           {view !== "heads" && data?.reviewAccess?.hr && <Link className="mt-2 inline-block text-sm underline underline-offset-4" href="/hiring/onboarding">Tutor onboarding and Experts access</Link>}
         </div>
@@ -382,7 +380,7 @@ export function HiringDashboard() {
           </>
         )}
       </header>
-      {view !== "hr" && <p className={css.purpose}>{giftReview ? "Read the packet and sign off." : PURPOSE[view]}</p>}
+      {view !== "hr" && view !== "heads" && !giftReview && <p className={css.purpose}>{PURPOSE[view]}</p>}
       {error && view !== "setup" && (
         <p role="alert" className={css.alert}>
           {error}

@@ -30,10 +30,10 @@ function ResumeButton({ open, onToggle, name, panelId }: { open: boolean; onTogg
   );
 }
 
-function Section({ title, count, children, controls, id }: { title: string; count?: number; children: ReactNode; controls?: ReactNode; id?: string }) {
+function Section({ title, count, children, controls, id, hideHeading }: { title: string; count?: number; children: ReactNode; controls?: ReactNode; id?: string; hideHeading?: boolean }) {
   return (
     <section className={r.section} id={id} tabIndex={id ? -1 : undefined}>
-      <div className={r.sectionHead}>
+      <div className={hideHeading ? "sr-only" : r.sectionHead}>
         <h2 className={r.heading}>
           {title}
           {count !== undefined && <span className={r.count}>{count}</span>}
@@ -180,8 +180,9 @@ function ReviewRecommendations({ data, onOpenResults, readOnly, reload, linkedRe
   }, [linkedId]);
   if (!decisions.length && !reload) return null;
   const waiting = decisions.filter(({ candidateId }) => candidateId && !signed.includes(candidateId)).length;
+  const giftOnly = !!data.reviewAccess?.gift && !data.reviewAccess.hr;
   return (
-    <Section title="Tutor recommendations" count={waiting}>
+    <Section title="Tutor recommendations" count={waiting} hideHeading={!!reload && giftOnly}>
       {!waiting && <p className={r.quiet}>No candidates are waiting for final review.</p>}
       <div className={r.cards}>
         {(linked && reload ? [linked, ...decisions.filter((d) => d !== linked)] : decisions).map((d) => (
@@ -202,7 +203,7 @@ function ReviewRecommendations({ data, onOpenResults, readOnly, reload, linkedRe
             </div>
             <div className={reload && d.decision === "hire" ? r.reviewActions : r.actions}>
               {!readOnly && d.decision === "hire" && d.candidateId && (data.reviewAccess?.hr || data.reviewAccess?.gift)
-                ? <FinalReview id={d.candidateId} autoLoad={data.reviewAccess?.gift && !data.reviewAccess.hr}
+                ? <FinalReview id={d.candidateId} autoLoad={giftOnly} hideHeading={!!reload && giftOnly}
                     {...reviewBlocks(data.writeGate, data.config, d.candidateId)} onChanged={reload && (async (didSign) => {
                       if (didSign && d.candidateId) {
                         const candidateId = d.candidateId;
@@ -437,6 +438,7 @@ function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisi
   const [resume, setResume] = useState(false);
   const resumeId = useId();
   const briefLabel = decision && !needsCheck && !checkingScores ? "View brief" : !due ? "Open interview brief" : scored ? "Record recommendation" : "Score and recommend";
+  const qualifier = status ?? (row.mockStart ? null : "Paper only");
   return (
     <article className={`${r.card} ${r.headCard}`}>
       <p className={r.time}>
@@ -444,9 +446,9 @@ function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisi
         <span>{shortDay(row.date)}</span>
       </p>
       <div className={r.cardMain}>
-        <p className={r.name}>{name}{due && <span className={r.due}>Due</span>}</p>
+        <p className={r.name}>{name}</p>
         <p className={r.meta}>
-          {row.subject ?? "Subject not recorded"} · {status ?? (row.mockStart ? "You run the mock" : "Paper only: no mock")}
+          {row.subject ?? "Subject not recorded"}{qualifier && ` · ${qualifier}`}
         </p>
         <p className={r.meta}>
           {scored && (
@@ -460,11 +462,11 @@ function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisi
             </span>
           )}
         </p>
-        {checkingScores ? <p className={r.meta}>Scores are being checked. Come back later to recommend.</p>
-          : needsCheck && <p className={r.meta}>Ask admin to check the scores.</p>}
+        {checkingScores ? <p className={r.meta}>Scores are being checked. Come back later.</p>
+          : needsCheck && <p className={r.meta}>Ask admin to check scores.</p>}
         {row.mockStart && !path && !status && <p className={r.meta}>{missingOutcome
           ? (scored ? "Ask admin to record the recommendation" : "Ask admin to record the outcome")
-          : "No interview brief is available."}</p>}
+          : "No brief yet."}</p>}
         {path && !active && <p className={r.meta}>The interview brief is closed.</p>}
         {candidate?.resumeState === "none" && <p className={r.meta}>No résumé file is stored.</p>}
         {candidate?.resumeState === "deleted" && <p className={r.meta}>The résumé file was deleted.</p>}
@@ -535,7 +537,7 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
             </button>
           ))}
         </div>
-        <p className={r.quiet} role="status">{head && `${headName(head.canonicalKey, data.tutors)} · ${nextMock
+        <p className="sr-only" role="status">{head && `${headName(head.canonicalKey, data.tutors)} · ${nextMock
           ? `next mock ${shortDay(nextMock.row.date)}, ${nextMock.row.mockStart}` : "no mock booked"}`}</p>
       </div>
       {head && (
@@ -544,8 +546,8 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
             {nextMock ? <HeadCard visit={nextMock} data={data} readOnly={readOnly} /> : (
               <div className={r.card}>
                 <div className={r.cardMain}>
-                  <p>No mock lessons booked for you yet.</p>
-                  <p className={r.quiet}>New bookings show here and in LINE.</p>
+                  <p>No mock booked yet.</p>
+                  <p className={r.quiet}>New bookings also come by LINE.</p>
                 </div>
               </div>
             )}

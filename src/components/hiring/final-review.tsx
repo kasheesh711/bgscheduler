@@ -42,10 +42,11 @@ function subscribeToPhoneReader(change: () => void) {
   return () => query.removeEventListener("change", change);
 }
 
-export function FinalReview({ id, signing = false, autoLoad = false, approveBlock, rejectBlock, signOffPaused, onChanged }: {
+export function FinalReview({ id, signing = false, autoLoad = false, hideHeading = false, approveBlock, rejectBlock, signOffPaused, onChanged }: {
   id: string;
   signing?: boolean;
   autoLoad?: boolean;
+  hideHeading?: boolean;
   approveBlock?: string;
   rejectBlock?: string;
   signOffPaused?: boolean;
@@ -271,14 +272,14 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
   );
   return (
     <section className={signing ? css.finalReview : `${css.inspectorSection} ${css.finalReview}`} id={`review-${id}`} aria-label={signing ? "Contract signing" : "Final hiring review"}>
-      {!signing && <h3 className={css.inspectorHeading}>Final hiring review</h3>}
+      {!signing && !hideHeading && <h3 className={css.inspectorHeading}>Final hiring review</h3>}
       {!review && !error && (autoLoad || busy
         ? <p className={css.inspectorMeta} role="status">Loading the review…</p>
         : <button type="button" className={css.secondary} onClick={() => void act()}>{signing ? "Check contract signing" : "Open final review"}</button>)}
       {(awaitingSignOff || stale) && packet && <>
         {awaitingSignOff && review?.packetValid !== null && <p className={css.reviewStatus}>{stale ? "Waiting for a new packet from HR"
           : signOffPaused ? "Sign-off is paused" : "Waiting for your sign-off"}</p>}
-        <p id={instruction} className={css.inspectorMeta} role="status" tabIndex={-1}>{stale ? (review?.packetValid === null ? "Could not check the packet just now. Check again." : "The evidence changed. Ask HR to send a new packet.")
+        <p id={instruction} className={css.inspectorMeta} role="status" tabIndex={-1}>{stale ? (review?.packetValid === null ? "Could not check the packet just now." : "The evidence changed.")
           : sharedBlock ?? (viewed ? "Approve, or write a note and reject." : "Read the packet first.")}</p>
         {stale && <button type="button" className={`${css.primary} min-h-11 min-w-11`} disabled={!!busy} onClick={() => void act()}>Check again</button>}
       </>}
@@ -308,8 +309,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
             </div>
           ))}
           {stale ? (
-            <button type="button" className={css.secondary} disabled aria-disabled="true" aria-describedby={instruction}>Download packet and files</button>
-          ) : <a className={css.secondary} href={`${url}?file=zip`}>Download packet and files</a>}
+            <button type="button" className={css.secondary} disabled aria-disabled="true" aria-label="Download files (packet and attachments)" aria-describedby={instruction}>Download files</button>
+          ) : <a className={css.secondary} href={`${url}?file=zip`} aria-label="Download files (packet and attachments)">Download files</a>}
         </div>
       )}
       {!signing && review?.access.hr && !closed && (
@@ -327,8 +328,9 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
       )}
       {awaitingSignOff && (packet ? (
         <>
-          <label className={css.fieldLabel}>Sign-off note (optional for approval)
-            <textarea className={css.textarea} aria-describedby={rejectHint} rows={2} maxLength={2000} value={reason} readOnly={busy === "sign"} onChange={(event) => setReason(event.target.value)} />
+          <label className={css.fieldLabel}>
+            <span id={rejectHint}>Note (needed to reject, 5+ characters)</span>
+            <textarea className={css.textarea} rows={2} maxLength={2000} value={reason} readOnly={busy === "sign"} onChange={(event) => setReason(event.target.value)} />
           </label>
           <div className={css.signOffActions}>
             <div>
@@ -344,7 +346,6 @@ export function FinalReview({ id, signing = false, autoLoad = false, approveBloc
                   void act({ action: "sign", packetId: packet.id, decision: "reject", reason });
               }}>Reject and inform candidate</button>
               {rejectReason && <p id={rejectReason} className={css.inspectorMeta}>{rejectBlock}</p>}
-              {rejectHint && <p id={rejectHint} className={css.inspectorMeta}>Write at least 5 characters to reject.</p>}
             </div>
           </div>
           {busy === "sign" && <p role="status" className={css.inspectorMeta}>Saving sign-off…</p>}

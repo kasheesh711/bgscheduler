@@ -35,17 +35,17 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
   const earlyRecommendation = brief.form === "closed" && brief.recommendationReady;
   const facts: [string, string][] = [
     ["Subject", brief.subject],
-    ...(brief.exam ? ([["Exam", `${brief.exam} (Bangkok)`]] as [string, string][]) : []),
+    ...(brief.exam ? ([["Exam", brief.exam]] as [string, string][]) : []),
     ["Interviewer", brief.interviewer ?? "To be confirmed"],
   ];
   const recommendation = (
     <section id="recommendation" className={c.facts} tabIndex={-1}>
-      <h2 className={c.stepTitle}>Your recommendation</h2>
+      <h2 className={decision ? "sr-only" : c.stepTitle}>Your recommendation</h2>
       <BriefDecision
         sent={decision}
         onSent={setDecision}
         url={decisionUrl}
-        scores={lastSent ? "own" : brief.form === "closed" ? "recorded" : null}
+        hasScores={lastSent !== null || brief.form === "closed"}
         unsent={lastSent !== null && lastSent.editCount !== editCount}
         pending={pending}
         setPending={setPending}
@@ -60,7 +60,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
         <dl className={`${c.answers} ${c.briefVisit}`}>
           <div>
             <dt className={c.factLabel}>Mock teaching</dt>
-            <dd>{brief.mock} (Bangkok)</dd>
+            <dd>{brief.mock}</dd>
           </div>
           <div>
             <dt className={c.factLabel}>Place</dt>
@@ -79,8 +79,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
       </section>
       {(wait || blocked) && (
         <div className={c.field}>
-          <p role="status">{wait ? "The score form opens when the mock lesson ends."
-            : brief.recommendationBlock === "checking" ? "Scores are being checked. Check again later."
+          <p role="status">{wait ? "Scores open after the mock."
+            : brief.recommendationBlock === "checking" ? "Scores are being checked."
             : "Ask BeGifted admin to check the scores."}</p>
           {(wait || brief.recommendationBlock === "checking") && (
             <button type="button" className={c.button} onClick={() => window.location.reload()}>Check again</button>
@@ -90,17 +90,15 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
       {earlyRecommendation && recommendation}
       <section className={c.facts}>
         <h2 className={c.stepTitle}>Candidate files</h2>
-        {brief.gradedPaper && <a className={`${c.ghost} ${c.jumpLink}`} href={resumeUrl.replace(/resume$/, "paper")} target="_blank" rel="noreferrer">Open the graded paper</a>}
+        {brief.gradedPaper && <a className={`${c.ghost} ${c.jumpLink}`} href={resumeUrl.replace(/resume$/, "paper")} target="_blank" rel="noreferrer" aria-label="Open the graded paper">Graded paper</a>}
         {brief.resume ? (
-          <>
-            <a className={`${c.ghost} ${c.jumpLink}`} href={resumeUrl} target="_blank" rel="noreferrer">
-              {brief.resume === "pdf" ? "Open the résumé (PDF)" : "Download the résumé (Word file)"}
-            </a>
-            <p className={c.note}>The résumé holds personal data. Do not share this page or the file.</p>
-          </>
+          <a className={`${c.ghost} ${c.jumpLink}`} href={resumeUrl} target="_blank" rel="noreferrer" aria-label={brief.resume === "pdf" ? "Open the résumé (PDF)" : undefined}>
+            {brief.resume === "pdf" ? "Résumé (PDF)" : "Download résumé (Word)"}
+          </a>
         ) : (
           <p className={c.note}>No résumé file is stored for this candidate.</p>
         )}
+        {(brief.resume || brief.gradedPaper) && <p className={c.note}>Personal data. Do not share.</p>}
       </section>
       <details className={c.preScreen}>
         <summary className={c.stepTitle}><h2 className={c.summaryHeading}>Pre-screen answers</h2></summary>

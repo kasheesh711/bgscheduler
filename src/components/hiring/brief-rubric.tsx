@@ -43,7 +43,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
     message?.scrollIntoView({ block: error ? "center" : "start", behavior: error && !reducedMotion ? "smooth" : "instant" });
     message?.focus({ preventScroll: true });
   }, [state, error, editing, sentTotal]);
-  if (!decisionSent && form === "closed") return <p className={c.note}>Scores for this mock are already recorded. Ask BeGifted admin to change them.</p>;
+  if (!decisionSent && form === "closed") return <p className={c.note}>Scores are recorded. Ask admin to change them.</p>;
   const scored = RUBRIC_ITEMS.filter((id) => items[id]).length;
   const checksMissing = scored === RUBRIC_ITEMS.length && checksDone === null;
   const complete = scored === RUBRIC_ITEMS.length && checksDone !== null;
@@ -82,11 +82,12 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   }
   if (decisionSent || (!editing && sentTotal !== null)) {
     return (
-      <div ref={summary} role="group" aria-labelledby={lastSent ? `${rubricId}-receipt` : undefined}
-        aria-describedby={decisionSent ? undefined : `${rubricId}-next`} className={c.scoreSummary} tabIndex={-1}>
-        {lastSent && <p id={`${rubricId}-receipt`}>Scores sent · <strong>{lastSent.total} / {lastSent.max}</strong> · {percent(lastSent)}%</p>}
-        {decisionSent ? <p className={c.note}>Scores and recommendation are recorded. Ask BeGifted admin to change them.</p> : <div className={c.scoreActions}>
-          <p id={`${rubricId}-next`}>Now choose Yes or No below.</p>
+      <div ref={summary} role="group" aria-labelledby={lastSent ? `${rubricId}-receipt` : undefined} className={c.scoreSummary} tabIndex={-1}>
+        {lastSent && <p id={`${rubricId}-receipt`}>
+          {decisionSent ? <span className="sr-only">Scores sent </span> : "Scores sent · "}
+          <strong>{lastSent.total}{decisionSent ? "/" : " / "}{lastSent.max}</strong> · {percent(lastSent)}%
+        </p>}
+        {decisionSent ? <p className={c.note}>Recorded. Ask admin to change them.</p> : <div className={c.scoreActions}>
           <button type="button" className={c.ghost} disabled={!!pending} onClick={() => {
             setEditing(true);
             setState("idle");
@@ -117,7 +118,6 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
         if (!disabled) void send();
       }}
     >
-      <p className={`${c.note} ${c.scoreHint}`}>Tap a score.</p>
       {RUBRIC.map(({ part, items: partItems }) => (
         <fieldset key={part} className={c.rubricPart} disabled={!!pending}>
           <legend className={c.factLabel}>{part}</legend>
@@ -128,7 +128,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
               <fieldset key={id} className={c.criterionScore}>
                 <legend>{label}</legend>
                 <details className={c.note}>
-                  <summary>What each score means</summary>
+                  <summary aria-label={`What each score means for ${label}`}>Guide</summary>
                   {RUBRIC_GUIDE[id].hint && <p><em>{RUBRIC_GUIDE[id].hint}</em></p>}
                   <dl>
                     {RUBRIC_GUIDE[id].bands.map((band, index) => (
@@ -154,7 +154,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                         {element}
                       </label>
                     ))}
-                    <p className={c.note} aria-live="polite">Suggested score: {stressSuggestion(ticks)}. You choose the score.</p>
+                    <p className={c.note} aria-live="polite">Suggested: {stressSuggestion(ticks)}</p>
                   </div>
                 )}
                 <div className={`${c.scoreRow} ${c.scoreTiles}`}>
@@ -180,7 +180,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       ))}
       <fieldset className={c.rubricPart} disabled={!!pending}>
         <legend className={c.factLabel}>School&apos;s required checks completed</legend>
-        <p className={c.note}>Not scored. The candidate cannot be hired until this is Yes.</p>
+        <p className={c.note}>Not scored. Must be Yes to hire.</p>
         <div className={c.scoreTiles}>
           {([[true, "Yes"], [false, "No"]] as const).map(([value, text]) => (
             <label key={text} className={c.scoreTile}>
@@ -219,7 +219,6 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       <div ref={sendBar} className={c.field} data-sticky="">
         {sentTotal !== null ? (
           <>
-            <p className={c.note}>Scores are up to date.</p>
             <button type="button" className={c.ghost} onClick={() => {
               setEditing(false);
               setState("sent");
@@ -233,7 +232,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
               <p role="status" className={checksMissing || lastSent ? undefined : c.note}>{checksMissing
                 ? "Answer the required checks to send."
                 : lastSent ? "Score changes are unsent. Send scores again."
-                  : `${scored} of ${RUBRIC_ITEMS.length} scored${checksDone === null ? " · required checks not answered" : ""}`}</p>
+                  : `${scored} of ${RUBRIC_ITEMS.length} scored`}</p>
               <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
             </div>
             <button type="submit" className={c.button} disabled={disabled}>

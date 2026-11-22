@@ -233,7 +233,7 @@ summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details 
 </style>
 </head><body><main>
 <header><img alt="BeGifted Education" src="data:image/png;base64,${logo}">
-<p class="eyebrow">Confidential hiring review</p>
+<p class="eyebrow">Confidential</p>
 <h1>Hiring <em>review</em></h1>
 <p class="candidate">${escape(value.name)}</p><p>${escape(value.subject)} tutor</p><p class="meta">Submitted ${date(packet.at)} by ${escape(packet.author)}</p></header>
 <section><h2>Assessment summary</h2><div class="tiles">
@@ -243,7 +243,7 @@ summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details 
 ${paperTarget === null ? "" : `<p class="paper-detail meta">Pass mark ${escape(paperTarget)}%</p>`}</div>
 <div class="tile"><h3>Mock</h3>${gauge(mockTotals.percent, "%")}<p class="paper-detail num">${escape(mockTotals.total)} / ${escape(mockTotals.max)}</p></div>
 <div class="tile head-tile"><h3>Head</h3><p><strong>Yes</strong> · ${escape(recommendation.head)}</p></div>
-</div><p class="guide"><span>Score guide</span><span>· Strong ≥80</span><span>· Fair 60 to under 80</span><span>· Low &lt;60</span></p>${recommendation.reason ? `<p class="copy">${escape(recommendation.reason)}</p>` : ""}
+</div><p class="guide"><span role="group" aria-label="Score guide">Strong ≥80 · Fair 60 to under 80 · Low &lt;60</span></p>${recommendation.reason ? `<p class="copy">${escape(recommendation.reason)}</p>` : ""}
 <div class="files"><a href="${escape(resume)}">Original résumé</a><a href="${escape(paper)}">Marked exam</a></div></section>
 <section><h2>${breakdown ? "ATS breakdown" : "Initial ATS assessment"}</h2>
 <div class="${breakdown ? "ats-layout" : ""}">${radar(ats.criteria)}${breakdown}</div>
@@ -252,8 +252,10 @@ ${ats.criteria.map(({ id, result, evidence }) => {
   const name = (criterionNames as Record<string, string>)[id];
   if (!evidence && name) return "";
   const title = escape(name ?? id.replaceAll("_", " "));
-  return `<div><strong>${title}</strong>${name ? "" : ` · ${escape(criterionResults[result] ?? result)}`}
-${evidence ? `<details><summary>${title} evidence</summary><p class="copy">${escape(evidence)}</p></details>` : ""}</div>`;
+  const status = name ? "" : ` · ${escape(criterionResults[result] ?? result)}`;
+  return evidence
+    ? `<div><details><summary>${title} evidence${status}</summary><p class="copy">${escape(evidence)}</p></details></div>`
+    : `<div><strong>${title}</strong>${status}</div>`;
 }).join("")}</div></section>
 <section><h2>Paper by level</h2>
 ${levels.map((level) => `<div class="metric">

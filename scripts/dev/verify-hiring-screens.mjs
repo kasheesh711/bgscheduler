@@ -3,6 +3,7 @@
 // No candidate data, vendor connection, production database or credentials are used: the fixture below replaces fetch.
 // Run: node scripts/dev/verify-hiring-screens.mjs [screenshot-folder]
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -16,10 +17,10 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const OUT = process.argv[2];
 const CHROME = process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const BRIEF_STATES = [
-  ["wait", "The score form opens when the mock lesson ends.", "Check again"],
-  ["checking", "Scores are being checked. Check again later.", "Check again"],
+  ["wait", "Scores open after the mock.", "Check again"],
+  ["checking", "Scores are being checked.", "Check again"],
   ["admin", "Ask BeGifted admin to check the scores.", null],
-  ["closed", "Your recommendation uses the scores on record.", "Yes, send to HR"],
+  ["closed", "Scores are recorded. Ask admin to change them.", "Yes, send to HR"],
 ];
 
 const ENTRY = `
@@ -347,15 +348,29 @@ await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 
 let browser;
+const textDumps = new Set();
 const shot = async (page, name, fullPage = false) => {
   if (!OUT) return;
   mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: path.join(OUT, `${name}.png`), fullPage, animations: "disabled" });
   // The words on the head and Gift screens, for the text-budget review. Closed <details> are left out, as on screen.
   if (/^(brief|heads|gift)-/.test(name)) {
-    const words = async (frame) => frame.evaluate(() => document.body.innerText.replace(/\n{2,}/g, "\n").trim());
+    const words = async (frame) => frame.evaluate(() => {
+      // innerText includes clipped text for screen readers. Omit it from the visible word count.
+      const style = document.createElement("style");
+      style.textContent = ".sr-only { display: none !important; }";
+      document.head.append(style);
+      try {
+        const visible = document.querySelector("dialog:modal") ?? document.body;
+        return visible.innerText.replace(/\n{2,}/g, "\n").trim();
+      } finally {
+        style.remove();
+      }
+    });
     const packet = page.frames().find((frame) => frame !== page.mainFrame() && frame.parentFrame() === page.mainFrame());
-    writeFileSync(path.join(OUT, `${name}.txt`), (await words(page)) + (packet ? "\n--- packet ---\n" + (await words(packet).catch(() => "")) : ""));
+    const dump = `${name}.txt`;
+    writeFileSync(path.join(OUT, dump), (await words(page)) + (packet ? "\n--- packet ---\n" + (await words(packet).catch(() => "")) : ""));
+    textDumps.add(dump);
   }
 };
 // Serious and critical WCAG A/AA problems on the visible page, as "rule: target" lines. The walkthrough passes `all`, more tags and `first`.
@@ -930,7 +945,7 @@ try {
       assert.ok(Math.max(...edges) - Math.min(...edges) <= 1, `Uneven left edges: ${edges.join(", ")}`);
     };
     const title = page.getByRole("heading", { level: 1 });
-    const headsEdge = () => assertLeftEdge(title, page.getByText("Your mock lessons and scores.", { exact: true }),
+    const headsEdge = () => assertLeftEdge(title,
       page.getByRole("group", { name: "Choose your name" }), page.getByRole("heading", { name: "Next mock" }), page.locator("#next-mock > :last-child"));
     // The brief page scrolls as a whole page, not inside the dashboard frame.
     // full: let the document grow for a full-page shot. Otherwise the page scrolls inside .page, as in production.
@@ -965,7 +980,7 @@ try {
     const tiles = page.locator("form label:has(input[type=radio][value='8'])");
     assert.equal(await tiles.count(), 14);
     assert.equal(await page.locator("#scores select").count(), 0);
-    await page.getByText("Tap a score.", { exact: true }).waitFor();
+    await page.getByRole("status").filter({ hasText: /^0 of 14 scored$/ }).waitFor();
     const tick = page.getByRole("checkbox").first();
     await tick.check();
     assert.equal(await tick.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(20, 33, 61)");
@@ -980,7 +995,7 @@ try {
     await page.getByText(/Scores sent/).first().waitFor();
     await page.waitForFunction(() => document.activeElement?.matches('[role="group"][aria-labelledby$="-receipt"]'));
     assert.equal(await page.getByRole("status").filter({ hasText: "Scores sent" }).count(), 0);
-    assert.ok(await page.getByText("Now choose Yes or No below.").isVisible());
+    assert.ok(await page.getByRole("button", { name: "Yes, send to HR" }).isVisible());
     await shot(page, "brief-sent-phone");
     await page.getByRole("button", { name: "Edit scores" }).click();
     const firstScore = page.locator("#scores input[type=radio]").first();
@@ -993,7 +1008,7 @@ try {
     assert.equal(await failure.evaluate((el) => getComputedStyle(el).fontSize), "16px");
     await page.evaluate(() => history.replaceState(null, "", "?brief=open"));
     await page.getByRole("button", { name: "Send scores" }).click();
-    await page.getByText("Now choose Yes or No below.", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Edit scores" }).waitFor();
     await page.getByRole("button", { name: "Yes, send to HR" }).click();
     await page.getByText(/Recommendation recorded/).first().waitFor();
     assert.equal(await page.getByRole("link", { name: "Go to mock scores" }).count(), 0);
@@ -1001,7 +1016,7 @@ try {
     await page.locator("main").evaluate((el) => { el.scrollTop = 0; });
     await shot(page, "brief-recommended-phone", true);
     await briefPage("open", 390, 844);
-    await page.locator("summary", { hasText: "What each score means" }).first().click();
+    await page.locator('summary[aria-label="What each score means for Accuracy of Information"]').click();
     await shot(page, "brief-bands-phone", true);
     await page.locator("summary", { hasText: "Interviewer guide" }).click();
     await shot(page, "brief-guide-phone", true);
@@ -1058,8 +1073,8 @@ try {
     await page.goto(`${origin}/?view=heads&roles=1`);
     const actionMocks = page.locator("section").filter({ has: page.getByRole("heading", { name: /Mocks that need action/ }) });
     for (const [name, note] of [
-      ["Sample Lek", "Scores are being checked. Come back later to recommend."],
-      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => [name, "Ask admin to check the scores."]),
+      ["Sample Lek", "Scores are being checked. Come back later."],
+      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => [name, "Ask admin to check scores."]),
     ]) {
       const card = actionMocks.getByRole("article").filter({ hasText: name });
       await card.getByText(note, { exact: true }).waitFor();
@@ -1076,8 +1091,8 @@ try {
       await page.setViewportSize({ width, height });
       await page.goto(`${origin}/?view=review&roles=1&gift=1`);
       await page.getByRole("button", { name: "Read review packet" }).first().waitFor();
-      await assertLeftEdge(title, page.getByText("Read the packet and sign off.", { exact: true }),
-        page.getByRole("heading", { name: /Tutor recommendations/ }), page.locator("article").filter({ has: page.getByRole("heading", { name: "Reply Passed" }) }));
+      assert.equal(await title.textContent(), "Final review");
+      await assertLeftEdge(title, page.locator("article").filter({ has: page.getByRole("heading", { name: "Reply Passed" }) }));
       assert.equal(await page.locator("header details").count(), 0);
       assert.equal(await page.getByText("Automation paused · Messages paused", { exact: true }).count(), 0);
       await page.getByText("Sign-off is paused", { exact: true }).waitFor();
@@ -1121,14 +1136,14 @@ try {
     });
     page.once("dialog", (dialog) => dialog.accept());
     await approve.click();
-    await page.getByText("Could not check the packet just now. Check again.", { exact: true }).waitFor();
+    await page.getByText("Could not check the packet just now.", { exact: true }).waitFor();
     assert.equal(await approve.isDisabled(), true);
     assert.deepEqual(await page.evaluate(() => window.posted), []);
     await page.goto(`${origin}/?view=review&roles=1&gift=1&stale=1&live=1`);
     const read = page.getByRole("button", { name: "Read review packet" }).first();
     const reject = page.getByRole("button", { name: "Reject and inform candidate" }).first();
-    await page.getByRole("status").filter({ hasText: "The evidence changed. Ask HR to send a new packet." }).waitFor();
-    await page.getByRole("textbox", { name: "Sign-off note (optional for approval)" }).first().fill("Reviewed the evidence.");
+    await page.getByRole("status").filter({ hasText: /^The evidence changed\.$/ }).waitFor();
+    await page.getByRole("textbox", { name: "Note (needed to reject, 5+ characters)" }).first().fill("Reviewed the evidence.");
     assert.equal(await approve.isDisabled(), true);
     assert.equal(await reject.isDisabled(), true);
     assert.equal(await read.isDisabled(), true);
@@ -1377,6 +1392,9 @@ try {
     }
   });
   await check("the page has no script errors", async () => assert.deepEqual(errors, []));
+  if (OUT && textDumps.size) {
+    writeFileSync(path.join(OUT, "words.txt"), execFileSync("wc", ["-w", ...[...textDumps].sort()], { cwd: OUT }));
+  }
 } finally {
   await browser?.close();
   server.close();
