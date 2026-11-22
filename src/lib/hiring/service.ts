@@ -1592,15 +1592,21 @@ export async function endVisit(tx: Database, rows: VisitRow[], status: "cancelle
  * a person still sends the Reject result.
  */
 export async function cancelMockAfterFail(db: Database, candidateId: string, subject: Subject, actor: string, now = new Date()) {
-  const { config } = await settings(db);
-  const [result] = await db.select().from(s.hiringPaperResults).where(and(
-    eq(s.hiringPaperResults.candidateId, candidateId), eq(s.hiringPaperResults.subject, subject),
-  ));
-  if (result?.status !== "done" || !result.marks || computeSheet(result.marks, passRulesFor(config, subject)).result !== "not_passed") return false;
   return withDatabaseTransaction(db, async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"hiring-candidate:" + candidateId},0))`);
-    const mock = (await visitRows(tx, candidateId)).find((b) => b.kind === "mock" && b.subjects.includes(subject) && b.startTime > now);
-    if (!mock) return false;
+    // Read under the lock, so a mark changed back to a pass a moment ago is seen.
+    const { config } = await settings(tx);
+    const [result] = await tx.select().from(s.hiringPaperResults).where(and(
+      eq(s.hiringPaperResults.candidateId, candidateId), eq(s.hiringPaperResults.subject, subject),
+    ));
+    // A sheet with no question tried is more likely the wrong scan than a fail, so a person decides that one.
+    if (result?.status !== "done" || !result.marks?.questions.some((q) => q.attempted) ||
+      computeSheet(result.marks, passRulesFor(config, subject)).result !== "not_passed") return false;
+    const rows = await visitRows(tx, candidateId);
+    const mock = rows.find((b) => b.kind === "mock" && b.subjects.includes(subject) && b.startTime > now);
+    // The result must be for this visit's paper: that paper has started, and a result tied to another booking is an older one.
+    const exam = mock && rows.find((b) => b.kind === "paper" && b.visitId === mock.visitId);
+    if (!mock || !exam || exam.startTime > now || (result.bookingId && result.bookingId !== exam.id)) return false;
     await endVisit(tx, [mock], "cancelled", now);
     await enqueue(tx, headNotice(mock, "cancelled"));
     await audit(tx, actor, "mock-cancelled-after-fail", candidateId, { subject, bookingId: mock.id });
