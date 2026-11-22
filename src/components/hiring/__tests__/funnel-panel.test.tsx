@@ -25,11 +25,13 @@ const report = buildFunnel(data, NOW);
 const campaigns = [{ jobId: "95633167", label: "International Curriculum Tutors" }];
 
 describe("funnel panel", () => {
-  it("lists all, each campaign and each week", () => {
+  it("lists all, each campaign, each month and each week", () => {
     expect(groupOptions(report, campaigns).map((o) => o.label)).toEqual([
       "All candidates",
       "Campaign: International Curriculum Tutors (SEEK 95633167)",
       "Campaign: Tracker only (no SEEK job)",
+      "Applied in Nov 2026",
+      "Applied in Oct 2026",
       "Applied in week 47 of 2026",
       "Applied in week 46 of 2026",
       "Applied in week 44 of 2026",
@@ -40,6 +42,21 @@ describe("funnel panel", () => {
     expect(report.groups["week:2026-W47"].weeks).toBe(1);
     expect(report.groups["campaign:95633167"].weeks).toBeCloseTo(17.6 / 7, 1);
     expect(report.groups["campaign:tracker-only"].weeks).toBe(1); // 1.6 days, floored to one week
+    // A month is its own days in the window: all of October, and November to now.
+    expect(report.groups["month:2026-10"].weeks).toBeCloseTo(31 / 7, 1);
+    expect(report.groups["month:2026-10"].reached.applied).toBe(1);
+    expect(report.groups["month:2026-11"].weeks).toBeCloseTo(17 / 7, 1);
+  });
+
+  it("counts each candidate once at the furthest step, also when a step is skipped", () => {
+    // "b" has a call link (contacted). "v" has a visit booking and no form reply: the call-first flow.
+    const skipped = buildFunnel(
+      { ...data, candidates: [...data.candidates, { ...data.candidates[1], id: "v" }], bookings: [{ candidateId: "v", kind: "paper", status: "booked", startTime: day("11-20"), createdAt: day("11-17") }] },
+      NOW,
+    ).groups.all;
+    expect(skipped.reached.replied).toBeLessThan(skipped.reached.visit_booked);
+    expect(Object.values(skipped.furthest).reduce((a, b) => a + b, 0)).toBe(skipped.reached.applied);
+    expect(skipped.furthest.visit_booked).toBe(1);
   });
 
   it("names few cases and missing times", () => {
@@ -57,6 +74,10 @@ describe("funnel panel", () => {
     expect(html).toContain("Read the record. Invite, move on or stop.");
     expect(html).toContain("Not counted"); // stopped is never stuck
     expect(html).toContain("their days are a lower bound");
+    // The bars: the furthest-step bar, and a flag on the step that loses the most candidates.
+    expect(html).toContain("Furthest step each of the 3 candidates reached");
+    expect(html).toContain("2 did not");
+    expect(html.match(/Most lost/g)).toHaveLength(1);
     // Visible table names, so the Kevin job aid can point at them.
     expect(html).toMatch(/<caption[^>]*>Funnel steps<\/caption>/);
     expect(html).toMatch(/<caption[^>]*>Candidates by current stage<\/caption>/);

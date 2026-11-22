@@ -33,7 +33,7 @@ export function daysText(stat: Stat | undefined) {
 const daysShort = (stat: Stat | undefined) =>
   stat ? `${stat.median} d · p90 ${stat.p90} d (n=${stat.n}${stat.n < 5 ? ", few" : ""})` : "No timed cases yet";
 
-/** The break-down choices: all, each campaign (most applied first), each ISO week (newest first). */
+/** The break-down choices: all, each campaign (most applied first), each month and each ISO week (newest first). */
 export function groupOptions(report: FunnelReport, campaigns: Campaign[]) {
   const keys = Object.keys(report.groups);
   const applied = (g: string) => report.groups[g].reached.applied;
@@ -48,6 +48,14 @@ export function groupOptions(report: FunnelReport, campaigns: Campaign[]) {
       .filter((g) => g.startsWith("campaign:"))
       .sort((a, b) => applied(b) - applied(a))
       .map((g) => ({ value: g, label: `Campaign: ${campaignLabel(g.slice(9))}` })),
+    ...keys
+      .filter((g) => g.startsWith("month:"))
+      .sort()
+      .reverse()
+      .map((g) => ({
+        value: g,
+        label: `Applied in ${new Date(`${g.slice(6)}-01`).toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" })}`,
+      })),
     ...keys
       .filter((g) => g.startsWith("week:"))
       .sort()
@@ -131,6 +139,117 @@ export function PipelineBoard({ g, onShowStuck }: { g: GroupFunnel; onShowStuck:
   );
 }
 
+/** One bar on its track. A share of zero draws the empty track; `flag` marks the bottleneck. */
+const Bar = ({ share, flag }: { share: number; flag?: boolean }) => (
+  <div className={css.funnelTrack} data-flag={flag || undefined}>
+    {share > 0 && <span style={{ width: `${Math.min(100, share * 100)}%` }} />}
+  </div>
+);
+
+/**
+ * The funnel as bars: one bar of the furthest step each candidate reached, then per step the volume, the
+ * conversion from the step before and the wait. The step that loses the most candidates and the slowest step get a flag.
+ */
+export function FunnelBars({ g }: { g: GroupFunnel }) {
+  const applied = g.reached.applied;
+  const steps = FUNNEL_STEPS.map(([step, label], i) => {
+    const before = i ? g.reached[FUNNEL_STEPS[i - 1][0]] : 0;
+    return {
+      step,
+      label,
+      n: g.reached[step],
+      lost: i ? Math.max(0, before - g.reached[step]) : 0,
+      stoppedHere: g.furthest[step],
+      conv: step === "applied" ? null : g.conv[step],
+      time: step === "applied" ? undefined : g.stepDays[STEP_TIMING[step]],
+    };
+  });
+  // One flag each: the first step wins a tie.
+  const mostLost = Math.max(...steps.map((s) => s.lost));
+  const worstStep = mostLost > 0 ? steps.find((s) => s.lost === mostLost)?.step : undefined;
+  // A median of fewer than 5 cases moves a lot, so it is the slowest step only when no step has 5.
+  const timed = steps.filter((s) => s.time);
+  const steady = timed.filter((s) => s.time!.n >= 5);
+  const pool = steady.length ? steady : timed;
+  const slowest = Math.max(0, ...pool.map((s) => s.time!.median));
+  const slowStep = slowest > 0 ? pool.find((s) => s.time!.median === slowest)?.step : undefined;
+  const longest = Math.max(0, ...timed.map((s) => s.time!.median));
+  const shade = (i: number) =>
+    i === steps.length - 1 ? "var(--good)" : `color-mix(in srgb, var(--primary) ${25 + i * 13}%, transparent)`;
+  return (
+    <>
+      {applied > 0 && (
+        <>
+          <p className={css.funnelNote}>Furthest step each of the {applied} candidates reached</p>
+          <div className={css.funnelStack} role="img" aria-label={steps.map((s) => `${s.label} ${s.stoppedHere}`).join(", ")}>
+            {steps.map((s, i) => s.stoppedHere > 0 && <span key={s.step} title={`${s.label}: ${s.stoppedHere}`} style={{ flexGrow: s.stoppedHere, background: shade(i) }} />)}
+          </div>
+          <ul className={css.funnelLegend} aria-hidden="true">
+            {steps.map((s, i) => (
+              <li key={s.step}>
+                <i style={{ background: shade(i) }} />
+                {s.label} {s.stoppedHere}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <table className={`${css.table} ${css.funnelBars}`}>
+        <caption className={css.tableCaption}>Funnel steps</caption>
+        <thead>
+          <tr>
+            <th scope="col">Step</th>
+            <th scope="col">Reached</th>
+            <th scope="col">From step before</th>
+            <th scope="col">Time from step before</th>
+          </tr>
+        </thead>
+        <tbody>
+          {steps.map((s) => {
+            const worst = s.step === worstStep;
+            const slow = s.step === slowStep;
+            return (
+              <tr key={s.step}>
+                <th scope="row">
+                  <span className={css.funnelCount}>{s.n}</span>
+                  {s.label}
+                </th>
+                <td>
+                  <Bar share={applied ? s.n / applied : 0} />
+                  {applied ? `${roundPct((s.n / applied) * 100)}% of applied` : "No candidates"}
+                </td>
+                <td>
+                  {s.step === "applied" ? (
+                    `${roundPct(applied / g.weeks)} a week`
+                  ) : (
+                    <>
+                      <Bar share={s.conv ?? 0} flag={worst} />
+                      {pct(s.conv)}
+                      {s.conv !== null && <span className={css.funnelRule}> {s.lost} did not</span>}
+                      {worst && <span className={css.funnelFlag}>Most lost</span>}
+                    </>
+                  )}
+                </td>
+                <td>
+                  {s.step === "applied" ? (
+                    "Start"
+                  ) : (
+                    <>
+                      <Bar share={s.time && longest ? s.time.median / longest : 0} flag={slow} />
+                      {daysShort(s.time)}
+                      {slow && <span className={css.funnelFlag}>Slowest</span>}
+                    </>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
 export function FunnelView({
   report,
   campaigns,
@@ -180,27 +299,7 @@ export function FunnelView({
       </div>
       <div className={css.funnelGrid}>
         <div className={css.tableScroll}>
-          <table className={css.table}>
-            <caption className={css.tableCaption}>Funnel steps</caption>
-            <thead>
-              <tr>
-                <th scope="col">Step</th>
-                <th scope="col">Reached</th>
-                <th scope="col">From step before</th>
-                <th scope="col">Time from step before</th>
-              </tr>
-            </thead>
-            <tbody>
-              {FUNNEL_STEPS.map(([step, label]) => (
-                <tr key={step}>
-                  <th scope="row">{label}</th>
-                  <td className={css.num}>{g.reached[step]}</td>
-                  <td className={css.num}>{step === "applied" ? `${roundPct(applied / g.weeks)} a week` : pct(g.conv[step])}</td>
-                  <td>{step === "applied" ? "Start" : daysShort(g.stepDays[STEP_TIMING[step]])}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <FunnelBars g={g} />
           <p className={css.funnelNote}>
             Applied to offer: {applied ? `${roundPct((g.reached.offer / applied) * 100)}%` : "no candidates"}. Applied to visit:{" "}
             {daysText(g.stepDays.applied_to_visit)}. The applied date is the first known event: SEEK does not give it.

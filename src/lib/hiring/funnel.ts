@@ -106,10 +106,15 @@ export type StageStat = {
 };
 export type GroupFunnel = {
   reached: Record<FunnelStep, number>;
+  /** Candidates whose last reached step is this one. The counts add up to `reached.applied`. */
+  furthest: Record<FunnelStep, number>;
   /** Share of the step before, 3 places; `null` when the step before has nobody. */
   conv: Record<Exclude<FunnelStep, "applied">, number | null>;
   stuck: number;
-  /** Weeks the group's applicants span: 1 for a week group, else from max(window start, first applicant) to now, at least 1. */
+  /**
+   * Weeks the group's applicants span: 1 for a week group; a month group is its part of the window, to now at most;
+   * else from max(window start, first applicant) to now. At least 1.
+   */
   weeks: number;
   stepDays: Partial<Record<StepName, Stat>>;
   currentStage: Record<string, StageStat>;
@@ -120,7 +125,7 @@ export type FunnelReport = {
   excludedBeforeWindow: number;
   /** True when the payload holds PAYLOAD_ROW_CAP candidates: older rows were cut, so counts can be low. */
   capped: boolean;
-  /** "all", "campaign:<seekJobId or tracker-only>", "week:<ISO week>". */
+  /** "all", "campaign:<seekJobId or tracker-only>", "month:<Bangkok month, 2026-11>", "week:<ISO week>". */
   groups: Record<string, GroupFunnel>;
   /** Each real candidate's stage key, days in stage and stuck status, including outside the window. */
   byCandidate: Record<string, CandidateStage>;
@@ -319,13 +324,20 @@ export function buildFunnel(data: FunnelInput, now: Date): FunnelReport {
 
   const keys = new Map<string, Row[]>([["all", rows]]);
   for (const row of rows)
-    for (const g of [`campaign:${row.campaign}`, `week:${row.week}`]) {
+    for (const g of [`campaign:${row.campaign}`, `month:${new Date(row.firstSeen + BANGKOK_MS).toISOString().slice(0, 7)}`, `week:${row.week}`]) {
       const list = keys.get(g) ?? [];
       list.push(row);
       keys.set(g, list);
     }
-  const weeksOf = (g: string, list: Row[]) =>
-    g.startsWith("week:") ? 1 : Math.max(1, (nowMs - Math.max(start, Math.min(...list.map((r) => r.firstSeen)))) / (7 * DAY));
+  // A month group divides by the month's own days in the window, so that months compare. Bangkok midnight of day 1.
+  const monthStart = (g: string, add: number) => Date.UTC(Number(g.slice(6, 10)), Number(g.slice(11)) - 1 + add, 1) - BANGKOK_MS;
+  const weeksOf = (g: string, list: Row[]) => {
+    if (g.startsWith("week:")) return 1;
+    const span = g.startsWith("month:")
+      ? Math.min(nowMs, monthStart(g, 1)) - Math.max(start, monthStart(g, 0))
+      : nowMs - Math.max(start, Math.min(...list.map((r) => r.firstSeen)));
+    return Math.max(1, span / (7 * DAY));
+  };
   const groups = Object.fromEntries([...keys].map(([g, list]) => [g, summarize(list, weeksOf(g, list))]));
   return {
     now: now.toISOString(),
@@ -341,6 +353,9 @@ function summarize(rows: Row[], weeks: number): GroupFunnel {
   const reached = Object.fromEntries(
     FUNNEL_STEPS.map(([step]) => [step, rows.filter((r) => r.reached[step]).length]),
   ) as Record<FunnelStep, number>;
+  // A step can be skipped (the call-first flow has no form reply), so the last reached step is counted per candidate.
+  const furthest = Object.fromEntries(FUNNEL_STEPS.map(([step]) => [step, 0])) as Record<FunnelStep, number>;
+  for (const r of rows) furthest[FUNNEL_STEPS.findLast(([step]) => r.reached[step])?.[0] ?? "applied"] += 1;
   const conv = Object.fromEntries(
     FUNNEL_STEPS.slice(1).map(([step], i) => {
       const before = reached[FUNNEL_STEPS[i][0]];
@@ -367,5 +382,5 @@ function summarize(rows: Row[], weeks: number): GroupFunnel {
       stuckIds: list.filter((r) => r.stuck).map((r) => r.id),
     };
   }
-  return { reached, conv, stuck: rows.filter((r) => r.stuck).length, weeks, stepDays, currentStage };
+  return { reached, furthest, conv, stuck: rows.filter((r) => r.stuck).length, weeks, stepDays, currentStage };
 }
