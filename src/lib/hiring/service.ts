@@ -2039,8 +2039,9 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
         kind: "calendar",
         payload: {},
       });
-    await queueRecruitmentMock(tx, mock, rows.length ? "moved" : "booked", oldMock?.startTime);
-    await enqueue(tx, headNotice(mock, rows.length ? "moved" : undefined, oldMock?.startTime));
+    // A paper-only booking that moves to a paired link has no old mock, so its mock is new to the head.
+    await queueRecruitmentMock(tx, mock, oldMock ? "moved" : "booked", oldMock?.startTime);
+    await enqueue(tx, headNotice(mock, oldMock ? "moved" : undefined, oldMock?.startTime));
     // With a new head, the old head still needs to hear that the hour is free.
     if (oldMock && oldMock.interviewerKey !== head.canonicalKey) await enqueue(tx, headNotice(oldMock, "cancelled"));
     await audit(tx, "candidate-link", rows.length ? "visit-move" : "visit-booking", cap.id, {

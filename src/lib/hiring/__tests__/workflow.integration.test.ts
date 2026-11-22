@@ -848,7 +848,7 @@ describe("hiring workflow persistence", () => {
       const row = await invited();
       await bookVisit(link(row), choice(), db);
       const [exam, mock] = await rowsOf(row.id);
-      expect([exam.kind, exam.startTime.toISOString(), exam.endTime.toISOString(), exam.interviewerKey]).toEqual(["paper", EXAM, MOCK, null]);
+      expect([exam.kind, exam.startTime.toISOString(), exam.endTime.toISOString(), exam.interviewerKey]).toEqual(["paper", EXAM, "2026-11-02T05:00:00.000Z", null]);
       expect([mock.kind, mock.startTime.toISOString(), mock.endTime.toISOString(), mock.interviewerKey]).toEqual(["mock", MOCK, MOCK_END, "Peat"]);
       expect(exam.visitId).toBeTruthy();
       expect(mock.visitId).toBe(exam.visitId);
@@ -1001,6 +1001,9 @@ describe("hiring workflow persistence", () => {
       expect((await visitView(paperToken, db)).slots[0].mockStart).toBeNull();
       const paper = await bookVisit(paperToken, choice(), db);
       expect((await rowsOf(row.id)).map((booking) => booking.kind)).toEqual(["paper"]);
+      // A paper-only booking keeps a paper-only Move link, though new invitations use the paired kind.
+      const moveToken = String((await jobsOf(row.id)).find((j) => j.kind === "email" && j.bookingId)!.payload.text).match(/\/hiring\/book\/([\w.-]+)/)![1];
+      expect(JSON.parse(Buffer.from(moveToken.split(".")[0], "base64url").toString()).kind).toBe("paper-visit");
       vi.setSystemTime(paper.endTime);
       await expect(click(row.id, "paper_pass")).rejects.toThrow(/passing paper/);
       const [file] = await db.insert(s.hiringAssessmentFiles).values({ candidateId: row.id, subject: "Mathematics",
@@ -1256,11 +1259,11 @@ describe("hiring workflow persistence", () => {
       expect((await read(row.id)).stage).toBe("onsite_booked");
       await deliverOutbox(db, base);
       expect(sendEmail).toHaveBeenCalledTimes(1);
-      // The head can tell which of two mocks moved: it prints the old 12:00 and the new time.
+      // The head can tell which of two mocks moved: it prints the old 12:15 and the new time.
       const moved = vi.mocked(pushLineTextMessage).mock.calls[0][0].text;
       expect(moved).toMatch(/moved/i);
-      expect(moved).toContain("02/11/2026, 12:00");
-      expect(moved).toContain("03/11/2026, 12:00");
+      expect(moved).toContain("02/11/2026, 12:15");
+      expect(moved).toContain("03/11/2026, 12:15");
       expect(vi.mocked(deliverCalendar).mock.calls.filter((c) => c[4] === true)).toHaveLength(2);
       // The moved notice carries a new candidate page link, and the old one has ended.
       expect(briefOf(moved)).not.toBe(oldBrief);
