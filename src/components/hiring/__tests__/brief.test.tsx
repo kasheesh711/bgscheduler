@@ -71,7 +71,7 @@ describe("InterviewerBrief", () => {
     }
     expect(page.match(/type="radio"/g)).toHaveLength(ITEM_MAX * RUBRIC_ITEMS.length + 2);
     expect(page.match(/type="checkbox"/g)).toHaveLength(3);
-    expect(page).not.toContain("Suggested:");
+    expect(page).not.toContain("Suggested score");
     expect(page).toContain("School&#x27;s required checks completed");
     expect(page).toContain("0 of 14 scored");
     expect(page).toContain("Interviewer guide");
