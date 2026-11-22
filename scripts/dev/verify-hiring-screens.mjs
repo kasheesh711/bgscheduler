@@ -1405,6 +1405,8 @@ try {
           await axe(packetTab, "packet: ");
           await packetTab.close();
           await tap(tab.getByRole("button", { name: "Close packet" }).first(), "Close packet");
+          await tab.getByText("Ready for sign-off.").first().waitFor();
+          await snap();
           await tap(tab.getByRole("button", { name: "Approve and send offer" }).first(), "Approve and send offer");
           await tab.getByRole("status").filter({ hasText: /^Offer approved\. The offer email is queued\.$/ }).waitFor();
           await snap();

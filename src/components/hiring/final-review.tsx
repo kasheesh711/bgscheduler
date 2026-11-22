@@ -59,6 +59,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   const controlId = useId();
   const readButton = useRef<HTMLButtonElement>(null);
   const approveButton = useRef<HTMLButtonElement>(null);
+  const retryButton = useRef<HTMLButtonElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const packetDialog = useRef<HTMLDialogElement>(null);
   const outcome = useRef<HTMLParagraphElement>(null);
@@ -127,8 +128,11 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
     const approve = approveButton.current;
     if (viewed && approve && !approve.disabled) {
       approve.focus();
+    } else if (readButton.current && !readButton.current.disabled) {
+      readButton.current.focus();
     } else {
-      readButton.current?.focus();
+      // A stale packet disables Read. Check again is the way on.
+      retryButton.current?.focus();
     }
   }, [openPage, viewed, refocusTick]);
 
@@ -286,7 +290,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
         <p id={ready ? undefined : instruction} className={ready ? css.reviewStatus : css.inspectorMeta} role="status">{stale ? (review?.packetValid === null ? "Could not check the packet just now." : "Evidence changed. Ask HR for a new packet.")
           : ready ? "Ready for sign-off." : sharedBlock ?? "Read the packet to unlock sign-off."}</p>
         {ready && <p id={instruction} className="sr-only">Approve, or write a note and reject.</p>}
-        {stale && <button type="button" className={`${css.primary} mt-2.5 min-h-11 min-w-11`} disabled={!!busy} onClick={() => void act()}>Check again</button>}
+        {stale && <button type="button" ref={retryButton} className={`${css.primary} mt-2.5 min-h-11 min-w-11`} disabled={!!busy} onClick={() => void act()}>Check again</button>}
       </>}
       {!signing && review && packet && (
         <div className={`${css.decisionActions} ${css.packetActions}`}>

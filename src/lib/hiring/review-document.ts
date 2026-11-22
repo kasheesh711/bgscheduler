@@ -220,6 +220,7 @@ svg{display:block;width:100%;height:auto}
 a,summary{color:var(--ink);text-underline-offset:3px}a{display:inline-flex;align-items:center;min-height:44px;padding:6px 8px}
 summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details p{margin:0 0 7px}
 @media screen{
+.stack-key summary{font-size:16px}
   body{font-size:16px}
   .tile h3,.mock-item,.rubric-group h3 span{font-size:16px}
   .guide,.tile .paper-detail,.chip,.axis-labels,.gauge-ends,.gauge-value,.band,.paperNote,.stack-key,.stack-ends{font-size:14px}
