@@ -31,6 +31,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
   const [editCount, setEditCount] = useState(0);
   const [lastSent, setLastSent] = useState(() => brief.rubric ? { total: rubricTotals(brief.rubric).total, max: rubricTotals(brief.rubric).max, editCount: 0 } : null);
   const [decision, setDecision] = useState(brief.decision);
+  const unsent = lastSent !== null && lastSent.editCount !== editCount;
+  const jumpToRecommendation = lastSent !== null && !unsent;
   const blocked = brief.form === "closed" && !brief.recommendationReady && !decision;
   const earlyRecommendation = brief.form === "closed" && brief.recommendationReady;
   const facts: [string, string][] = [
@@ -46,7 +48,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
         onSent={setDecision}
         url={decisionUrl}
         hasScores={lastSent !== null || brief.form === "closed"}
-        unsent={lastSent !== null && lastSent.editCount !== editCount}
+        unsent={unsent}
         pending={pending}
         setPending={setPending}
       />
@@ -75,7 +77,11 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
             </div>
           ))}
         </dl>
-        {brief.form === "open" && !decision && <a className={`${c.button} ${c.jumpLink}`} href="#scores">Go to mock scores</a>}
+        {brief.form === "open" && !decision && (
+          <a className={`${c.button} ${c.jumpLink}`} href={jumpToRecommendation ? "#recommendation" : "#scores"}>
+            {jumpToRecommendation ? "Go to recommendation" : "Go to mock scores"}
+          </a>
+        )}
       </section>
       {(wait || blocked) && (
         <div className={c.field}>

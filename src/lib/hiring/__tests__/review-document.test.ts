@@ -40,9 +40,10 @@ describe("review document", () => {
     expect(ats).toContain(`<strong>Total</strong><strong class="num">${packet.evidence.ats.score.toFixed(1)} / 100</strong>`);
     expect(ats.match(/<svg class="stack"/g)).toHaveLength(1);
     expect(ats).toContain('<div class="stack-ends" aria-hidden="true"><span>0</span><span>100</span></div>');
-    expect(ats.match(/<polygon class="radar-grid"/g)).toHaveLength(4);
-    expect(ats.match(/<circle class="radar-dot"/g)).toHaveLength(5);
-    expect(ats).toContain(">Partial</tspan>");
+    expect(ats).not.toContain('<svg class="radar"');
+    expect(ats).toMatch(/Degree · Met<\/span><span class="num">[\d.]+ \/ [\d.]+<\/span>/);
+    expect(ats).toMatch(/English · Partly<\/span><span class="num">[\d.]+ \/ [\d.]+<\/span>/);
+    expect(ats).toContain("<summary>English evidence</summary>");
     expect(ats).toContain('fill="url(#lost-points)"');
     expect(ats).toContain('<path class="penalty-marker"');
   });
@@ -53,8 +54,9 @@ describe("review document", () => {
     const summary = html.split("<h2>Assessment summary</h2>")[1].split("</section>")[0];
     const levels = html.split("<h2>Paper by level</h2>")[1].split("</section>")[0];
     expect(summary).toContain("<strong>45%</strong>");
-    expect(summary).toContain(">Passed a level</span>");
-    expect(summary).toContain('<span>36 / 80</span><span class="chip pass">Passed a level</span>');
+    expect(summary).toContain('<span>36 / 80</span><span class="chip pass">Level passed</span>');
+    expect(summary).toContain("<strong>84%</strong>");
+    expect(summary).not.toContain("84 / 100");
     expect(summary).toMatch(/<h3>ATS<\/h3>[^]*?<strong>79\.5<\/strong> \/ 100<\/p>\s*<\/div><p class="band">Fair<\/p>/);
     expect(summary.match(/<path [^>]*class="gauge-track"/g)).toHaveLength(3);
     expect(summary).not.toContain('class="target"');

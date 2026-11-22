@@ -82,12 +82,12 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   }
   if (decisionSent || (!editing && sentTotal !== null)) {
     return (
-      <div ref={summary} role="group" aria-labelledby={lastSent ? `${rubricId}-receipt` : undefined} className={c.scoreSummary} tabIndex={-1}>
-        {lastSent && <p id={`${rubricId}-receipt`}>
+      <div ref={summary} role="group" aria-label={sentMessage || undefined} className={c.scoreSummary} tabIndex={-1}>
+        {lastSent && <p aria-hidden="true">
           {decisionSent ? <span className="sr-only">Scores sent </span> : "Scores sent · "}
-          <strong>{lastSent.total}{decisionSent ? "/" : " / "}{lastSent.max}</strong> · {percent(lastSent)}%
+          <strong>{lastSent.total}/{lastSent.max}</strong> · {percent(lastSent)}%
         </p>}
-        {decisionSent ? <p className={c.note}>Recorded. Ask admin to change them.</p> : <div className={c.scoreActions}>
+        {decisionSent ? <p className={c.note}>Ask admin to edit scores.</p> : <div className={c.scoreActions}>
           <button type="button" className={c.ghost} disabled={!!pending} onClick={() => {
             setEditing(true);
             setState("idle");
@@ -128,7 +128,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
               <fieldset key={id} className={c.criterionScore}>
                 <legend>{label}</legend>
                 <details className={c.note}>
-                  <summary aria-label={`What each score means for ${label}`}>Guide</summary>
+                  <summary aria-label={`Guide: what each score means for ${label}`}>Guide</summary>
                   {RUBRIC_GUIDE[id].hint && <p><em>{RUBRIC_GUIDE[id].hint}</em></p>}
                   <dl>
                     {RUBRIC_GUIDE[id].bands.map((band, index) => (
@@ -154,7 +154,9 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                         {element}
                       </label>
                     ))}
-                    <p className={c.note} aria-live="polite">Suggested: {stressSuggestion(ticks)}</p>
+                    <p className={c.note} aria-live="polite">
+                      {Object.values(ticks).some(Boolean) && `Suggested: ${stressSuggestion(ticks)}`}
+                    </p>
                   </div>
                 )}
                 <div className={`${c.scoreRow} ${c.scoreTiles}`}>
@@ -231,7 +233,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
             <div className={c.field}>
               <p role="status" className={checksMissing || lastSent ? undefined : c.note}>{checksMissing
                 ? "Answer the required checks to send."
-                : lastSent ? "Score changes are unsent. Send scores again."
+                : lastSent ? "Score changes not sent."
                   : `${scored} of ${RUBRIC_ITEMS.length} scored`}</p>
               <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
             </div>

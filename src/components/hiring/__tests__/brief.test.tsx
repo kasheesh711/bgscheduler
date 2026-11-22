@@ -59,19 +59,19 @@ describe("InterviewerBrief", () => {
     expect(closed).toContain("Scores are recorded. Ask admin to change them.");
     expect(closed).not.toContain('type="radio"');
     expect(closed.indexOf("Yes, send to HR")).toBeLessThan(closed.indexOf("Candidate files"));
-    expect(closed).toContain("No sends the candidate a rejection email.");
+    expect(closed).toContain("No queues a rejection email to the candidate.");
     const page = html();
     expect(page).not.toContain("<select");
     for (const { part, items } of RUBRIC) {
       expect(page).toContain(part);
       for (const [, label] of items) {
         expect(page).toContain(`<legend>${label}</legend>`);
-        expect(page).toContain(`aria-label="What each score means for ${label}">Guide</summary>`);
+        expect(page).toContain(`aria-label="Guide: what each score means for ${label}">Guide</summary>`);
       }
     }
     expect(page.match(/type="radio"/g)).toHaveLength(ITEM_MAX * RUBRIC_ITEMS.length + 2);
     expect(page.match(/type="checkbox"/g)).toHaveLength(3);
-    expect(page).toContain("Suggested: 1");
+    expect(page).not.toContain("Suggested:");
     expect(page).toContain("School&#x27;s required checks completed");
     expect(page).toContain("0 of 14 scored");
     expect(page).toContain("Interviewer guide");
@@ -79,7 +79,7 @@ describe("InterviewerBrief", () => {
     expect(page).toContain("Send scores");
     expect(page).not.toContain("Scores sent");
     expect(page).toContain("Send your scores first.");
-    expect(page).not.toContain("Reason (needed for No, 5+ characters)");
+    expect(page).not.toContain("Reason for No (5+ characters)");
     expect(page).not.toContain("Yes, send to HR");
   });
 
@@ -97,10 +97,10 @@ describe("InterviewerBrief", () => {
 
   it("shows a summary of the interviewer's sent scores", () => {
     const page = html({ rubric });
-    expect(page).toContain("Scores sent · <strong>126 / 140</strong> · 90%");
+    expect(page).toContain("Scores sent · <strong>126/140</strong> · 90%");
     expect(page).toContain("Edit scores");
     expect(page).toContain('id="recommendation"');
-    expect(page).toContain("Reason (needed for No, 5+ characters)");
+    expect(page).toContain("Reason for No (5+ characters)");
     expect(page).not.toContain("Clear lesson.");
     expect(page).not.toContain('type="radio"');
   });
@@ -108,7 +108,7 @@ describe("InterviewerBrief", () => {
   it("shows the saved total and locks the scores when the recommendation is recorded", () => {
     const page = html({ form: "open", decision: "hire", rubric });
     expect(page).toContain("<strong>126/140</strong> · 90%");
-    expect(page).toContain("Recorded. Ask admin to change them.");
+    expect(page).toContain("Ask admin to edit scores.");
     expect(page).not.toContain("Edit scores");
     expect(page).not.toContain("Go to mock scores");
     expect(page).toMatch(/<p role="status"[^>]*tabindex="-1">Recommendation recorded: <strong>Yes<\/strong>/i);

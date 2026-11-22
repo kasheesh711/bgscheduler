@@ -438,7 +438,6 @@ function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisi
   const [resume, setResume] = useState(false);
   const resumeId = useId();
   const briefLabel = decision && !needsCheck && !checkingScores ? "View brief" : !due ? "Open interview brief" : scored ? "Record recommendation" : "Score and recommend";
-  const qualifier = status ?? (row.mockStart ? null : "Paper only");
   return (
     <article className={`${r.card} ${r.headCard}`}>
       <p className={r.time}>
@@ -448,10 +447,10 @@ function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisi
       <div className={r.cardMain}>
         <p className={r.name}>{name}</p>
         <p className={r.meta}>
-          {row.subject ?? "Subject not recorded"}{qualifier && ` · ${qualifier}`}
+          {row.subject ?? "Subject not recorded"}{status && ` · ${status}`}
         </p>
         <p className={r.meta}>
-          {scored && (
+          {scored && !decision && (
             <span className={r.tag} data-tone="hire">
               Scores sent
             </span>

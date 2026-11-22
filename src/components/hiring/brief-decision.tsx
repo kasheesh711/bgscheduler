@@ -47,7 +47,7 @@ export function BriefDecision({ sent, onSent, url, hasScores, unsent, pending, s
     <div className={c.field}>
       {!sent && unsent && (
         <p className={`${c.note} ${c.scoreChanges}`}>
-          <span role="status">Unsent changes do not count.</span>{" "}
+          <span role="status">Recommendation uses sent scores.</span>{" "}
           <a href="#scores">Go to scores</a>
         </p>
       )}
@@ -58,9 +58,9 @@ export function BriefDecision({ sent, onSent, url, hasScores, unsent, pending, s
       )}
       {!sent && (
         <>
-          <p className={c.note}>No sends the candidate a rejection email.</p>
+          <p className={c.note}>No queues a rejection email to the candidate.</p>
           <label className={c.field}>
-            <span id={reasonHintId}>Reason (needed for No, 5+ characters)</span>
+            <span id={reasonHintId}>Reason for No (5+ characters)</span>
             <textarea className={c.input} rows={2} maxLength={1000} value={reason} disabled={pending === "recommendation"} onChange={(event) => setReason(event.target.value)} />
           </label>
           <div className={c.decisionActions}>

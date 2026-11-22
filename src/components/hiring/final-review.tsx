@@ -15,10 +15,10 @@ type Review = {
 };
 
 export function reviewBlocks(writeGate: boolean, config: Parameters<typeof contractTestAllowed>[0], id: string) {
-  const paused = !config.enabled && !config.deliveryEnabled ? "Automation and Messages are off."
-    : !config.enabled ? "Automation is off." : !config.deliveryEnabled ? "Messages are off." : undefined;
+  const paused = !config.enabled && !config.deliveryEnabled ? "Automation and Messages"
+    : !config.enabled ? "Automation" : !config.deliveryEnabled ? "Messages" : undefined;
   const live = writeGate ? undefined : "Sign-off works only on the live site.";
-  const instruction = paused && `${paused} Ask Kevin to turn ${config.deliveryEnabled ? "it" : "them"} on.`;
+  const instruction = paused && `Ask Kevin to enable ${paused}.`;
   const testAllowed = contractTestAllowed(config, id);
   return { approveBlock: live ?? (testAllowed ? undefined : instruction), rejectBlock: live ?? instruction, signOffPaused: !!paused && !testAllowed };
 }
@@ -137,7 +137,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   const closePacket = useCallback(() => {
     if (!openPage) return;
     if (window.history.state?.hiringReviewPacket === controlId) {
-      // Going back to an address with #review-… makes the browser drop focus, so set it again after the step back.
+      // The step back in history makes the browser drop focus, so set it again one tick after it.
       window.addEventListener("popstate", () => window.setTimeout(() => {
         refocus.current = true;
         setRefocusTick((tick) => tick + 1);
@@ -263,6 +263,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   const rejectHint = viewed && reason.trim().length < 5 ? `${controlId}-note` : undefined;
   const signOffDisabled = !!busy || !viewed || !!error?.retry;
   const awaitingSignOff = !signing && review?.access.gift && !closed;
+  const ready = viewed && !sharedBlock;
   const packetTitle = openPage && `Review packet for ${openPage.name}`;
   const packetFrame = openPage && (
     <iframe title={packetTitle} srcDoc={openPage.html}
@@ -277,10 +278,10 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
         ? <p className={css.inspectorMeta} role="status">Loading the review…</p>
         : <button type="button" className={css.secondary} onClick={() => void act()}>{signing ? "Check contract signing" : "Open final review"}</button>)}
       {(awaitingSignOff || stale) && packet && <>
-        {awaitingSignOff && review?.packetValid !== null && <p className={css.reviewStatus}>{stale ? "Waiting for a new packet from HR"
-          : signOffPaused ? "Sign-off is paused" : "Waiting for your sign-off"}</p>}
-        <p id={instruction} className={css.inspectorMeta} role="status" tabIndex={-1}>{stale ? (review?.packetValid === null ? "Could not check the packet just now." : "The evidence changed.")
-          : sharedBlock ?? (viewed ? "Approve, or write a note and reject." : "Read the packet first.")}</p>
+        {!stale && signOffPaused && <p className={css.reviewStatus}>Sign-off is paused</p>}
+        {ready && <p className={css.reviewStatus} role="status">Ready for sign-off.</p>}
+        <p id={instruction} className={ready ? "sr-only" : css.inspectorMeta} role={ready ? undefined : "status"} tabIndex={-1}>{stale ? (review?.packetValid === null ? "Could not check the packet just now." : "Evidence changed. Ask HR for a new packet.")
+          : sharedBlock ?? (viewed ? "Approve, or write a note and reject." : "Read the packet to unlock sign-off.")}</p>
         {stale && <button type="button" className={`${css.primary} min-h-11 min-w-11`} disabled={!!busy} onClick={() => void act()}>Check again</button>}
       </>}
       {!signing && review && packet && (
@@ -296,8 +297,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
             <dialog ref={packetDialog} id={`${controlId}-packet`} aria-label={packetTitle}
               className="fixed inset-0 m-0 h-dvh max-h-none w-full max-w-none grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-0 bg-white p-0 open:grid"
               onCancel={(event) => { event.preventDefault(); closePacket(); }}>
-              <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
-                <span className="min-w-0 [overflow-wrap:anywhere]">{openPage.name}</span>
+              <div className="flex justify-end border-b px-3 py-2">
                 <button type="button" ref={closeButton} className={`${css.secondary} min-h-11 min-w-11 shrink-0`} onClick={closePacket}>Close packet</button>
               </div>
               {packetFrame}
@@ -329,7 +329,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       {awaitingSignOff && (packet ? (
         <>
           <label className={css.fieldLabel}>
-            <span id={rejectHint}>Note (needed to reject, 5+ characters)</span>
+            <span id={rejectHint}>Rejection note (5+ characters)</span>
             <textarea className={css.textarea} rows={2} maxLength={2000} value={reason} readOnly={busy === "sign"} onChange={(event) => setReason(event.target.value)} />
           </label>
           <div className={css.signOffActions}>
@@ -353,8 +353,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       ) : <p>Waiting for HR to send the packet. <button type="button" className={css.secondary} disabled={!!busy} onClick={() => void act()}>Check again</button></p>)}
       <p ref={outcome} role="status" tabIndex={-1}>{closed && (stage === "hired" ? (review?.appointment
         ? `Contract signing booked for ${new Date(review.appointment).toLocaleString("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium", timeStyle: "short" })} (Bangkok).`
-        : packet ? "Offer approved. The offer email is queued. You have no more steps." : "There is no contract booking on record.")
-        : stage === "rejected" ? "Application rejected. The email is queued. You have no more steps." : "Application stopped.")}</p>
+        : packet ? "Offer approved. The offer email is queued." : "There is no contract booking on record.")
+        : stage === "rejected" ? "Application rejected. The email is queued." : "Application stopped.")}</p>
       {saved && !signedStage && <p role="status">Saved.</p>}
       {error && !error.packetLoad && <div role="alert" className={css.errorText}>
         <p>{error.text}</p>

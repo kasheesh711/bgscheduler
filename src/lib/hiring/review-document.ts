@@ -15,7 +15,7 @@ const chip = (result: LevelResult, passLabel = "Pass") => `<span class="chip ${r
   passed: passLabel, not_passed: "Below pass", pass_mark_missing: "No pass mark", not_done: "Not done",
 }[result]}</span>`;
 const criterionNames = { degree: "Degree", subject: "Subject", curriculum: "Curriculum", teaching: "Teaching", english: "English" };
-const criterionResults = { met: "Met", partial: "Partial", not_met: "Not met", unknown: "Unknown" };
+const criterionResults = { met: "Met", partial: "Partly", not_met: "Not met", unknown: "Unknown" };
 const stackColors = ["#2a78d6", "#eb6834", "#199e70", "#c98400", "#d96a97", "#008300"];
 
 function gauge(value: number, unit = " / 100", target: number | null = null, label = String(value)) {
@@ -66,9 +66,9 @@ function atsBreakdown(ats: ReviewPacket["evidence"]["ats"], atsScore: string) {
   const parts = Object.entries(criterionNames).map(([id, name]) => {
     const max = weights[id as keyof typeof weights];
     const result = ats.criteria.find((entry) => entry.id === id)?.result ?? "unknown";
-    return { name, max, earned: max * VALUE[result] };
+    return { name, status: criterionResults[result], max, earned: max * VALUE[result] };
   });
-  parts.push({ name: "School", max: weights.prestige, earned: weights.prestige * prestige });
+  parts.push({ name: "School", status: "", max: weights.prestige, earned: weights.prestige * prestige });
   const gross = parts.reduce((sum, part) => sum + part.earned, 0);
   const barWidth = 304;
   const barX = (value: number) => 8 + barWidth * percent(value) / 100;
@@ -92,7 +92,7 @@ ${gross > 0 ? `<path class="stack-gap" d="M${barX(gross)} 2v14"/>` : ""}` : ""}
 ${penalty > 0 ? `<path class="penalty-marker" d="M${netX} 18l-5 7h10z"/>` : ""}
 </svg><div class="stack-ends" aria-hidden="true"><span>0</span><span>100</span></div>
 <ul class="stack-key">
-${parts.map(({ name, earned, max }, index) => `<li><i style="background:${stackColors[index]}"></i><span>${escape(name)}</span><span class="num">${points.format(earned)} / ${points.format(max)}</span></li>`).join("")}
+${parts.map(({ name, status, earned, max }, index) => `<li><i style="background:${stackColors[index]}"></i><span>${escape(name)}${status ? ` · ${escape(status)}` : ""}</span><span class="num">${points.format(earned)} / ${points.format(max)}</span></li>`).join("")}
 ${gross < 100 ? `<li><i class="ghost-key"></i><span>Lost points</span><span class="num">${points.format(100 - gross)}</span></li>` : ""}
 ${penalty > 0 ? `<li><i class="penalty-key"></i><span>Work-rights penalty</span><span class="num">−${points.format(penalty)}</span></li>` : ""}
 </ul></div>`;
@@ -165,14 +165,13 @@ svg{display:block;width:100%;height:auto}
 .guide{display:flex;flex-wrap:wrap;gap:0 6px;color:var(--muted);font-size:12px}
 .head-tile{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
 .head-tile p{padding:5px 9px;background:#fff0e2;border-radius:8px}
-.ats-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);align-items:start;gap:16px;break-inside:avoid}
 .radar{max-width:340px;margin:auto}
 .radar-grid{fill:none;stroke:var(--line);stroke-width:1}
 .radar-fill{fill:var(--ink);fill-opacity:.10;stroke:var(--ink);stroke-width:2;stroke-linejoin:round}
 .radar-dot{fill:var(--ink);stroke:var(--page);stroke-width:4;paint-order:stroke}
 .radar text{fill:var(--ink);font-size:14px;font-weight:600}
 .radar tspan{fill:var(--muted);font-size:13px;font-weight:400}
-.ats-points{padding:12px 14px;background:var(--surface);border:1px solid var(--line);border-radius:9px}
+.ats-points{padding:12px 14px;background:var(--surface);border:1px solid var(--line);border-radius:9px;break-inside:avoid}
 .score{display:flex;align-items:baseline;justify-content:space-between;gap:6px;flex-wrap:wrap;margin:2px 0 6px}
 .score strong:last-child{font-size:32px;font-variant-numeric:normal;font-weight:600;letter-spacing:-.04em;line-height:1.2}
 .stack-gap{stroke:var(--surface);stroke-width:2;vector-effect:non-scaling-stroke}
@@ -212,13 +211,13 @@ a,summary{color:var(--ink);text-underline-offset:3px}a{display:inline-flex;align
 summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details p{margin:0 0 7px}
 @media screen{
   body{font-size:16px}
-  .tile h3,.mock-item{font-size:16px}
+  .tile h3,.mock-item,.rubric-group h3 span{font-size:16px}
   .guide,.tile .paper-detail,.chip,.axis-labels,.gauge-ends,.gauge-value,.band,.paperNote,.stack-key,.stack-ends{font-size:14px}
   a:focus,summary:focus{outline:2px solid #14213d;outline-offset:2px}
 }
 @media screen and (width < 560px){
   body{padding:24px 16px 40px}.tiles,.evidence-list{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .ats-layout{grid-template-columns:minmax(0,1fr);gap:8px}.mock-row{gap:0 8px}
+  .mock-row{gap:0 8px}
 }
 @page{size:A4;margin:16mm}@media print{
   body{--page:#fff;background:var(--page);max-width:none;padding:0;font-size:13px;print-color-adjust:exact;-webkit-print-color-adjust:exact}
@@ -239,14 +238,14 @@ summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details 
 <section><h2>Assessment summary</h2><div class="tiles">
 <div class="tile"><h3>ATS</h3>${gauge(atsValue, " / 100", null, atsScore)}</div>
 <div class="tile"><h3>Paper</h3>${gauge(paperPercent, "%", paperTarget)}
-<p class="paper-detail num"><span>${escape(sheet.total)} / ${escape(sheet.max)}</span>${chip(sheet.result, levels.length > 1 ? "Passed a level" : "Pass")}</p>
+<p class="paper-detail num"><span>${escape(sheet.total)} / ${escape(sheet.max)}</span>${chip(sheet.result, levels.length > 1 ? "Level passed" : "Pass")}</p>
 ${paperTarget === null ? "" : `<p class="paper-detail meta">Pass mark ${escape(paperTarget)}%</p>`}</div>
-<div class="tile"><h3>Mock</h3>${gauge(mockTotals.percent, "%")}<p class="paper-detail num">${escape(mockTotals.total)} / ${escape(mockTotals.max)}</p></div>
+<div class="tile"><h3>Mock</h3>${gauge(mockTotals.percent, "%")}${mockTotals.max === 100 ? "" : `<p class="paper-detail num">${escape(mockTotals.total)} / ${escape(mockTotals.max)}</p>`}</div>
 <div class="tile head-tile"><h3>Head</h3><p><strong>Yes</strong> · ${escape(recommendation.head)}</p></div>
 </div><p class="guide"><span role="group" aria-label="Score guide">Strong ≥80 · Fair 60 to under 80 · Low &lt;60</span></p>${recommendation.reason ? `<p class="copy">${escape(recommendation.reason)}</p>` : ""}
 <div class="files"><a href="${escape(resume)}">Original résumé</a><a href="${escape(paper)}">Marked exam</a></div></section>
 <section><h2>${breakdown ? "ATS breakdown" : "Initial ATS assessment"}</h2>
-<div class="${breakdown ? "ats-layout" : ""}">${radar(ats.criteria)}${breakdown}</div>
+${breakdown || radar(ats.criteria)}
 <div class="evidence-list">
 ${ats.criteria.map(({ id, result, evidence }) => {
   const name = (criterionNames as Record<string, string>)[id];
