@@ -251,7 +251,7 @@ export function PreScreenScreen({
         <section className={css.tableSection} aria-label="Pre-screen responses">
           <div className={css.tableTools}>
             <input className={css.search} type="search" placeholder="Search name or email" aria-label="Search pre-screen responses" value={query} onChange={(e) => setQuery(e.target.value)} />
-            <div className={css.tabs} role="group" aria-label="Filter pre-screen responses">
+            <div className={`${css.tabs} ${css.tabsWrap}`} role="group" aria-label="Filter pre-screen responses">
               {PRE_SCREEN_FILTERS.map((name, index) => (
                 <button key={name} type="button" aria-pressed={filter === name} onClick={() => setFilter(name)}>
                   {name} <span className={css.tabCount}>{counts[index]}</span>
@@ -263,14 +263,16 @@ export function PreScreenScreen({
                 </button>
               ))}
             </div>
-            <label className={css.filterSelect}>
-              Visit email sent from
-              <input className={css.numberInput} type="date" value={sentFrom} max={sentTo || undefined} onChange={(e) => setSentFrom(e.target.value)} />
-            </label>
-            <label className={css.filterSelect}>
-              to
-              <input className={css.numberInput} type="date" value={sentTo} min={sentFrom || undefined} onChange={(e) => setSentTo(e.target.value)} />
-            </label>
+            <div className={css.dateRange}>
+              <label className={css.filterSelect}>
+                Visit email sent from
+                <input className={css.numberInput} type="date" value={sentFrom} max={sentTo || undefined} onChange={(e) => setSentFrom(e.target.value)} />
+              </label>
+              <label className={css.filterSelect}>
+                to
+                <input className={css.numberInput} type="date" value={sentTo} min={sentFrom || undefined} onChange={(e) => setSentTo(e.target.value)} />
+              </label>
+            </div>
           </div>
           {(sentFrom || sentTo) && (
             <p className={css.activeFilters}>

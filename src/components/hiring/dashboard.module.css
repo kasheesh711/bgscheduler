@@ -224,6 +224,10 @@
 .tableSection { display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
 .tableTools { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 24px 0; }
 .tabs { display: flex; flex: 1; min-width: 0; gap: 9px; overflow-x: auto; scrollbar-width: none; }
+/* Chips wrap instead of hiding past the edge. */
+.tabsWrap { flex-wrap: wrap; row-gap: 4px; }
+/* Its own line, so it never squeezes the chips beside it. */
+.dateRange { display: flex; flex-basis: 100%; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
 .panel > .tabs { flex: 0 0 auto; align-items: flex-start; }
 @media (max-width: 719px) { .tabs { flex-wrap: wrap; } }
 .surface .tabs button { flex-shrink: 0; padding: 4px 0 6px; border-bottom: 2px solid transparent; color: var(--muted); white-space: nowrap; transition: color 150ms; }
