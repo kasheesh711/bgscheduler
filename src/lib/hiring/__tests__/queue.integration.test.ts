@@ -773,15 +773,15 @@ describe("follow-ups", () => {
     expect(job.sentAt).not.toBeNull();
     const text = String(job.payload.text);
     expect(job.payload.workflowStage).toBe("onsite_invited");
-    expect(text).toMatch(/2 hours/);
-    expect(text).toContain("We will contact you after we grade your paper.");
+    expect(text).toMatch(/2-hour test/);
+    expect(text).toContain("5. If you pass: mock teaching interview");
     expect(text).toContain("Mathematics");
     expect(text).toContain("https://lin.ee/OjMHF41");
-    expect(text).not.toContain("prepare one lesson");
+    expect(text).toContain("prepare one lesson in Mathematics");
     // The link: a fixed 30-day life, and the same second on the row and in the token.
     const token = text.match(/\/hiring\/book\/([\w.-]+)/)![1];
     const payload = JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString());
-    expect(payload).toMatchObject({ id: invited.id, kind: "paper-visit" });
+    expect(payload).toMatchObject({ id: invited.id, kind: "visit" });
     expect(invited.inviteExpiresAt!.getTime()).toBe(payload.exp * 1000);
     expect(payload.exp * 1000).toBe(Math.floor(now.getTime() / 1000) * 1000 + 30 * DAY);
     // The old paper and mock routes do not accept it.

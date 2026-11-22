@@ -172,8 +172,8 @@ describe("visit slots", () => {
         r.filter((x) => x.date === "2026-11-02").map((x) => x.examStart),
       );
     const base = await times(group("Ek"));
-    expect(base).toHaveLength(4);
-    // The mock of the 10:00 exam is 12:00–13:00.
+    expect(base).toHaveLength(3);
+    // The mock of the 10:00 exam is 12:15–13:15.
     const withClass = await times(
       group("Ek", { sessionBlocks: [block("2026-11-02", 750, 780)] }),
     );
@@ -194,7 +194,7 @@ describe("visit slots", () => {
     // Leave coverage that stops before the mock hour is incomplete.
     expect(
       await times(
-        group("Ek", { leavesCompleteThrough: instant("2026-11-02", 780) }),
+        group("Ek", { leavesCompleteThrough: instant("2026-11-02", 795) }),
       ),
     ).toEqual([base[0]]);
   });
@@ -204,20 +204,21 @@ describe("visit slots", () => {
       { interviewers: [head("Ek")] },
       { ...ek, groups: [group("Ek", { sessionBlocks: [block("2026-11-02", 600, 720)] })] },
     );
-    // Exam 10:00–12:00 overlaps the class. Mock 12:00–13:00 does not.
+    // Exam 10:00–12:00 overlaps the class. Mock 12:15–13:15 does not.
     expect(slots.some((x) => x.date === "2026-11-02" && x.examStart === instant("2026-11-02", 600).toISOString())).toBe(true);
   });
 
-  it("starts exams on the hour from 10:00 to 13:00, with the mock right after", async () => {
+  it("starts exams on the hour from 10:00 to 12:00, with the mock 15 minutes after the exam", async () => {
     const slots = (await run({ interviewers: [head("Ek")] }, ek)).filter(
       (x) => x.date === "2026-11-02",
     );
     expect(slots).toEqual(
-      [600, 660, 720, 780].map((m) => ({
+      [600, 660, 720].map((m) => ({
         date: "2026-11-02",
         examStart: instant("2026-11-02", m).toISOString(),
-        mockStart: instant("2026-11-02", m + 120).toISOString(),
-        mockEnd: instant("2026-11-02", m + 180).toISOString(),
+        examEnd: instant("2026-11-02", m + 120).toISOString(),
+        mockStart: instant("2026-11-02", m + 135).toISOString(),
+        mockEnd: instant("2026-11-02", m + 195).toISOString(),
         interviewerKey: "Ek",
         subject: "Mathematics",
       })),
@@ -234,10 +235,10 @@ describe("visit slots", () => {
         .map((x) => x.examStart);
     const at = (...hours: number[]) =>
       hours.map((h) => instant("2026-11-02", h * 60).toISOString());
-    // End 17:00: the last exam starts 14:00, mock 16:00–17:00.
-    expect(await starts({ visitEndMinute: 1020 })).toEqual(at(10, 11, 12, 13, 14));
+    // End 17:00: the last exam starts 13:00, mock 15:15–16:15.
+    expect(await starts({ visitEndMinute: 1020 })).toEqual(at(10, 11, 12, 13));
     // Start 10:30 rounds up to 11:00.
-    expect(await starts({ visitStartMinute: 630 })).toEqual(at(11, 12, 13));
+    expect(await starts({ visitStartMinute: 630 })).toEqual(at(11, 12));
   });
 
   it("refuses when exam capacity is full", async () => {
@@ -245,15 +246,15 @@ describe("visit slots", () => {
       { interviewers: [head("Ek")], paperCapacity: 1 },
       { ...ek, bookings: [booking("2026-11-02", "paper", 600, 720)] },
     );
-    // 10:00 and 11:00 exams overlap the held exam. 12:00 and 13:00 do not.
+    // 10:00 and 11:00 exams overlap the held exam. 12:00 does not.
     expect(
       full.filter((x) => x.date === "2026-11-02").map((x) => x.examStart),
-    ).toEqual([instant("2026-11-02", 720), instant("2026-11-02", 780)].map((d) => d.toISOString()));
+    ).toEqual([instant("2026-11-02", 720).toISOString()]);
     const room = await run(
       { interviewers: [head("Ek")], paperCapacity: 2 },
       { ...ek, bookings: [booking("2026-11-02", "paper", 600, 720)] },
     );
-    expect(room.filter((x) => x.date === "2026-11-02")).toHaveLength(4);
+    expect(room.filter((x) => x.date === "2026-11-02")).toHaveLength(3);
   });
 
   it("removes a head at the weekly mock limit", async () => {

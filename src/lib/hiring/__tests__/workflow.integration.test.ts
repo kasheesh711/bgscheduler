@@ -703,8 +703,9 @@ describe("hiring workflow persistence", () => {
     const LINE = "https://lin.ee/OjMHF41";
     const LINK = new Date("2026-11-30T00:00:00Z");
     const EXAM = "2026-11-02T03:00:00.000Z";
-    const MOCK = "2026-11-02T05:00:00.000Z";
-    const MOCK_END = "2026-11-02T06:00:00.000Z";
+    // The mock starts 15 minutes after the exam ends (VISIT_GAP_MINUTES).
+    const MOCK = "2026-11-02T05:15:00.000Z";
+    const MOCK_END = "2026-11-02T06:15:00.000Z";
     const EXAM_TUE = "2026-11-03T03:00:00.000Z";
     const week = [null, ...Array.from({ length: 5 }, () => ({ start: "10:00", end: "16:00" })), null];
     const peat = { canonicalKey: "Peat", email: "peat@example.com", subjects: ["Mathematics", "Physics"], fallbackWeek: week };
@@ -870,8 +871,11 @@ describe("hiring workflow persistence", () => {
       expect(jobs.map((j) => j.kind).sort()).toEqual(["calendar", "calendar", "email", "line"]);
       const text = String(jobs.find((j) => j.kind === "email")!.payload.text);
       expect(text).toContain("10:00");
-      expect(text).toContain("12:00");
-      expect(text).toContain("13:00");
+      expect(text).toContain("12:15");
+      expect(text).toContain("13:15");
+      expect(text).toContain("Mock teaching, if you pass:");
+      expect(text).toContain("3. We grade your test");
+      expect(text).toContain("What to bring:");
       expect(text).toContain(LINE);
       // The confirmation repeats what to prepare, with the syllabus links.
       expect(text).toMatch(/prepare one lesson in \w+/);

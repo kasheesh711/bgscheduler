@@ -322,7 +322,7 @@ The DSCTE pentagon shows five corners: Degree, Subject, Curriculum, Teaching and
 3. Claude Code runs through the existing subscription-only runner, with no tools, no MCP access, no API key, a schema and a bounded call. The server validates evidence quotes and computes scores.
 4. A candidate at `new` who passes the profile gate waits in the **pre-screen queue**. A candidate at or above the HR call score waits on the **Calls** tab first, gets a link to book the HR call, and gets the form after HR records a good call (see [HR calls](#hr-calls)). The queue releases a form email only while every limit has room.
 5. When the candidate replies, the worker scores the response. A response that meets the [reply rule](#reply-rule) and the pass score enters the **onsite queue**. The queue releases a booking link only while every limit has room. The worker scores only a response that came after a form the app sent. It does not score any other response, change its stage or send it to review. A person handles those responses. Kevin set this rule on 9 Nov 2026.
-6. The candidate opens the signed link and books one visit for one subject. The server picks the head of department. A visit is a 2-hour exam, then a 1-hour mock with that head.
+6. The candidate opens the signed link and books one visit for one subject. The server picks the head of department. A visit is a 2-hour exam, a 15-minute grading gap, then a 1-hour mock with that head.
 7. A response below the pass score, or one that fails a hard stop, goes to review. A person decides. The system sends no rejection.
 
 The system never records the visit result and never makes the hiring decision. Those steps stay outside the app.
@@ -766,7 +766,9 @@ Thea also posts a short notice when a completed pre-screen response is imported 
 
 ## Paper, tutor recommendation and final review
 
-New onsite invitations book the two-hour paper only. Existing combined booking links retain their original terms. In **Admin**, upload the candidate’s scan after the assessment. In **Paper test**, check the marks and select **Confirm pass and invite to mock teaching**. The grade must meet a saved pass mark and the candidate must have an original résumé on file. The candidate waits for the mock invitation.
+From 22 November 2026 (Kevin's decision), a new onsite invitation books one visit again: the two-hour test, a 15-minute grading gap (`VISIT_GAP_MINUTES`), then a one-hour mock with the head that the server picks. With the default 10:00–16:00 window, tests start at 10:00, 11:00 and 12:00. The invitation, its reminder and the confirmation give the five steps of the day (arrive, test, grading in 5 to 10 minutes, result, mock teaching on the same day after a pass), what to bring, and the mock preparation text. The mock takes place only after a pass. A paper-only link (`paper-visit`) sent between 19 and 22 November keeps its terms: it books the paper only, and the steps below apply to it.
+
+For a paper-only booking: in **Admin**, upload the candidate’s scan after the assessment. In **Paper test**, check the marks and select **Confirm pass and invite to mock teaching**. The grade must meet a saved pass mark and the candidate must have an original résumé on file. The candidate waits for the mock invitation.
 
 After the mock booking, the assigned tutor receives an email with links to the résumé and marked exam. The links are valid for that booking. After the session ends, the tutor submits the rubric on the candidate page. **No** queues a rejection email. **Yes** goes to the HR review list.
 

@@ -176,7 +176,7 @@ export async function deliverCalendar(
           : `BeGifted ${booking.kind === "mock" ? "mock teaching" : "paper assessment"}: ${candidate.name}`,
         description: contract ? "Onsite contract signing with BeGifted HR." : call
           ? `Candidate: ${candidate.name}\nSubject: ${booking.subjects.join(", ")}\nPhone: ${candidate.phone ?? "not recorded"}\nEmail: ${candidate.email ?? "not recorded"}\nBeGifted calls the candidate at this time.`
-          : `${booking.visitId ? `Candidate: ${candidate.name}\n` : ""}Subjects: ${booking.subjects.join(", ")}\n${booking.kind === "mock" ? "The candidate prepares one lesson from an international school syllabus (IGCSE, A Level or IB). The interviewer also selects a topic." : booking.visitId ? "The 2-hour paper assessment." : "Two hours are allocated per subject."}`,
+          : `${booking.visitId ? `Candidate: ${candidate.name}\n` : ""}Subjects: ${booking.subjects.join(", ")}\n${booking.kind === "mock" ? `${booking.visitId ? "This session takes place only if the candidate passes the paper on the day. " : ""}The candidate prepares one lesson from an international school syllabus (IGCSE, A Level or IB). The interviewer also selects a topic.` : booking.visitId ? "The 2-hour paper assessment." : "Two hours are allocated per subject."}`,
         location: call ? "Phone call" : location,
         start: { dateTime: booking.startTime.toISOString(), timeZone: ZONE },
         end: { dateTime: booking.endTime.toISOString(), timeZone: ZONE },

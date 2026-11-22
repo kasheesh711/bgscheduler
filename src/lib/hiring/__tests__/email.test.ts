@@ -62,10 +62,17 @@ describe("candidate emails keep their facts", () => {
     expect(reminder.subject).toBe("Reminder: book your BeGifted onsite visit");
     expect(reminder.text).not.toContain("Link closes");
     for (const e of [invite, reminder]) {
-      expect(e.text).toContain("Paper assessment: 2 hours");
+      expect(e.text).toContain("Visit: A 2-hour test. If you pass, a 1-hour mock teaching interview on the same day");
+      expect(e.text).toContain("1. Arrive at your booked time\nPlease arrive 10 minutes early.");
+      expect(e.text).toContain("3. We grade your test\nGrading takes 5 to 10 minutes.");
+      expect(e.text).toContain("5. If you pass: mock teaching interview");
+      expect(e.text).toContain("What to bring:\n• Photo ID (passport or ID card)\n• Pens\n• A calculator, if your subject uses one");
+      expect(e.text).toContain("prepare one lesson in Physics");
+      expect(e.html).toContain("Complete the test");
+      expect(e.html).toContain("Photo ID (passport or ID card)");
       expect(e.text).toContain("Location: Gaysorn Amarin Tower");
       expect(e.text).toContain("Book your visit:\nhttps://bgscheduler.vercel.app/hiring/book/t");
-      expect(e.text).toContain("We will contact you after we grade your paper.");
+      expect(e.text).not.toContain("We will contact you after we grade your paper.");
     }
   });
 
