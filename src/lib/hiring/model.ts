@@ -117,6 +117,14 @@ export const stageSchema = z.enum([
 export const DECIDED_STAGES = ["hired", "rejected"] as const;
 export const isDecided = (stage: string) => (DECIDED_STAGES as readonly string[]).includes(stage);
 export type Stage = z.infer<typeof stageSchema>;
+export const PRACTICE_NAME_PREFIX = "PRACTICE – ";
+export const PRACTICE_SOURCE_PREFIX = "practice:hiring-onboarding:";
+export function practiceMarker(candidate: { name: string; sourceIds: string[] }) {
+  if (!candidate.name.startsWith(PRACTICE_NAME_PREFIX) || candidate.sourceIds.length !== 1) return null;
+  const [marker] = candidate.sourceIds;
+  return typeof marker === "string" && marker.startsWith(PRACTICE_SOURCE_PREFIX) ? marker : null;
+}
+
 export class HiringError extends Error {
   constructor(
     public status: number,

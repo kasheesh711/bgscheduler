@@ -192,7 +192,7 @@ export function onsiteMeters(
 
 /** Confirmed mocks per head in the Bangkok week that holds `now`. Old-flow and visit mocks both use the head's hour. */
 export function headWeekMocks(
-  bookings: { kind: string; status: string; interviewerKey: string | null; startTime: Date }[],
+  bookings: { kind: string; status: string; interviewerKey: string | null; startTime: Date; evidence?: Record<string, unknown> }[],
   now: Date,
 ): Record<string, number> {
   const start = bangkokWeekStart(now).getTime();
@@ -200,7 +200,7 @@ export function headWeekMocks(
   const counts: Record<string, number> = {};
   for (const b of bookings) {
     const at = b.startTime.getTime();
-    if (b.kind === "mock" && b.status === "confirmed" && b.interviewerKey && at >= start && at < end)
+    if (b.kind === "mock" && b.status === "confirmed" && b.evidence?.practice !== true && b.interviewerKey && at >= start && at < end)
       counts[b.interviewerKey] = (counts[b.interviewerKey] ?? 0) + 1;
   }
   return counts;
