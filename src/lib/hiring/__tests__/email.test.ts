@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { hiringEmail, hiringEmailHtmlFromText, HIRING_LINE_URL, mockPrep } from "../email";
 import { SUBJECTS } from "../model";
-import { preScreenEmail, visitInviteEmail } from "../service";
+import { callInviteEmail, preScreenEmail, visitInviteEmail } from "../service";
 
 describe("hiringEmail", () => {
   it("builds text and HTML from the same facts and escapes them", () => {
@@ -41,6 +41,23 @@ describe("hiringEmail", () => {
 });
 
 describe("candidate emails keep their facts", () => {
+  it("R1 invitation: congratulations, a 30-minute Google Meet, the booking link and the five steps", () => {
+    const email = callInviteEmail({ name: "Ann", url: "https://bgscheduler.vercel.app/hiring/book/r1" });
+    expect(email.subject).toBe("Congratulations! Book your R1: HR Interview with BeGifted");
+    for (const part of [email.text, email.html]) {
+      expect(part).toContain("Congratulations");
+      expect(part).toContain("30 minutes, Google Meet video call");
+      expect(part).toContain("Monday to Friday, 09:00–18:00 (Bangkok time)");
+      expect(part).toContain("https://bgscheduler.vercel.app/hiring/book/r1");
+      expect(part).toContain("How our process works");
+      for (const step of ["R1: HR Interview", "Pre-screening questions and visit booking", "Onsite visit: the test", "R2: Final round mock teaching", "Offer"])
+        expect(part).toContain(step);
+      expect(part).toContain("offer letter by email");
+      expect(part).toContain("contract-signing day");
+    }
+    expect(email.text).not.toMatch(/by phone|phone call/i);
+  });
+
   it("pre-screen invitation and reminder", () => {
     const invite = preScreenEmail("Ann", "ann@example.com", false);
     const reminder = preScreenEmail("Ann", "ann@example.com", true);

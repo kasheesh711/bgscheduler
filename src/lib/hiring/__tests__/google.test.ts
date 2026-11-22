@@ -103,6 +103,8 @@ it("titles a visit's two private events, and only the mock invites the head", as
   await deliverCalendar(row("mock", "00000000-0000-4000-8000-000000000003", "peat@example.com"), candidate, "BeGifted", db);
   expect(events.map((e) => e.summary)).toEqual(["BeGifted exam", "BeGifted mock teaching"]);
   expect(events.map((e) => e.visibility)).toEqual(["private", "private"]);
+  // Only R1 is on Google Meet. The visit is onsite.
+  expect(events.map((e) => e.conferenceData)).toEqual([undefined, undefined]);
   expect(events[0].attendees).toEqual([{ email: "candidate@example.com" }]);
   expect(events[1].attendees).toEqual([{ email: "peat@example.com" }, { email: "candidate@example.com" }, { email: "people@begiftededucation.com" }, { email: "admin@begiftededucation.com" }]);
   expect(String(events[1].description)).toContain("Candidate");
@@ -175,7 +177,7 @@ it("reads HR's busy time, and refuses every answer that is not complete", async 
   await expect(readHrBusy("owner@example.com", FROM, TO, withFreeBusy)).rejects.toMatchObject({ status: 502 });
 });
 
-it("puts the HR call on the calendar with the phone number, for HR and the candidate only", async () => {
+it("puts R1 on the calendar with a Google Meet link and the backup phone number, for HR and the candidate only", async () => {
   const booking = {
     id: "00000000-0000-4000-8000-000000000004",
     kind: "call",
@@ -184,24 +186,30 @@ it("puts the HR call on the calendar with the phone number, for HR and the candi
     interviewerEmail: HR_CALENDAR,
     subjects: ["Mathematics"],
     startTime: new Date("2026-11-05T02:00:00Z"),
-    endTime: new Date("2026-11-05T02:15:00Z"),
+    endTime: new Date("2026-11-05T02:30:00Z"),
   } as typeof hiringBookings.$inferSelect;
   const events: Record<string, unknown>[] = [];
+  const urls: string[] = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (_url: string, init?: RequestInit) => {
+    vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method !== "POST") return new Response(null, { status: 404 });
+      urls.push(url);
       events.push(JSON.parse(init.body as string));
       return Response.json(events.at(-1));
     }),
   );
   await deliverCalendar(booking, { name: "Candidate", email: "candidate@example.com", phone: "+66812345678" } as Candidate, "BeGifted office", grant(GOOGLE_SCOPES));
   expect(events[0]).toMatchObject({
-    summary: "BeGifted pre-screen call: Candidate",
-    location: "Phone call",
+    summary: "BeGifted R1: HR Interview: Candidate",
+    location: "Google Meet",
     visibility: "private",
     attendees: [{ email: HR_CALENDAR }, { email: "candidate@example.com" }],
+    conferenceData: { createRequest: { requestId: events[0].id, conferenceSolutionKey: { type: "hangoutsMeet" } } },
   });
-  expect(String(events[0].description)).toContain("Phone: +66812345678");
+  // Without conferenceDataVersion=1 Google ignores the create request and the event has no Meet link.
+  expect(urls[0]).toContain("conferenceDataVersion=1");
+  expect(String(events[0].description)).toContain("30-minute Google Meet video call");
+  expect(String(events[0].description)).toContain("Phone (backup): +66812345678");
   expect(String(events[0].description)).toContain("Subject: Mathematics");
 });

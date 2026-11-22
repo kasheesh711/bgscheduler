@@ -18,6 +18,7 @@ import {
   CALL_DAY_END,
   CALL_DAY_START,
   CALL_MINUTES,
+  CALL_STEP_MINUTES,
   instant,
   isVisitBooking,
   localDate,
@@ -541,7 +542,7 @@ const HR_LUNCH_END = 13 * 60 + 15;
 export function callSlots(dates: string[], busy: { start: Date; end: Date }[], now: Date, duration = CALL_MINUTES) {
   const slots: { date: string; start: string; end: string }[] = [];
   for (const date of dates)
-    for (let minute = CALL_DAY_START; minute + duration <= CALL_DAY_END; minute += CALL_MINUTES) {
+    for (let minute = CALL_DAY_START; minute + duration <= CALL_DAY_END; minute += CALL_STEP_MINUTES) {
       if (minute < HR_LUNCH_END && minute + duration > HR_LUNCH_START) continue;
       const range = { start: instant(date, minute), end: instant(date, minute + duration) };
       if (range.start > now && !busy.some((other) => overlap(range, other)))

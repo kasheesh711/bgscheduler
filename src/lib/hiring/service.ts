@@ -77,7 +77,7 @@ import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
 import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
 import { checkRubric, computeSheet, passRulesFor, RUBRIC_ITEMS, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
-import { HIRING_LINE_URL, hiringEmail, mockPrep, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
+import { HIRING_LINE_URL, HIRING_PROCESS, hiringEmail, mockPrep, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -395,23 +395,32 @@ export const callLink = (id: string, expires: Date) =>
     `/hiring/book/${bookingToken(id, "call", expires)}`,
     process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
   ).toString();
-/** The invitation to book the HR call. It holds no times: the page reads HR's calendar when it opens. */
+/**
+ * The invitation to book R1: HR Interview (Kevin, 22 Nov 2026: thank and congratulate the candidate, and show the
+ * process). It holds no times: the page reads HR's calendar when it opens.
+ */
 export const callInviteEmail = (input: { name: string; url: string }) =>
   hiringEmail({
-    subject: "BeGifted tutor application: book your call",
-    preheader: `Choose a time for a ${CALL_MINUTES}-minute phone call with our team.`,
-    title: "Book your call with BeGifted",
+    subject: "Congratulations! Book your R1: HR Interview with BeGifted",
+    preheader: `You are through to R1: a ${CALL_MINUTES}-minute Google Meet with our HR team. Choose a time.`,
+    title: "Congratulations! You are through to R1",
     name: input.name,
     paragraphs: [
-      "Thank you for your application to BeGifted. The next step is a short phone call with our HR team. Please choose a time.",
+      "Thank you for your application to become a BeGifted tutor. Congratulations: your application stood out, and we invite you to R1: HR Interview.",
+      `R1 is a ${CALL_MINUTES}-minute video call on Google Meet with our HR team. Please choose a time that suits you.`,
     ],
     details: [
-      { label: "Call", value: `${CALL_MINUTES} minutes, by phone` },
+      { label: "Interview", value: "R1: HR Interview" },
+      { label: "Format", value: `${CALL_MINUTES} minutes, Google Meet video call` },
       { label: "Times", value: "Monday to Friday, 09:00–18:00 (Bangkok time)" },
       { label: "Link closes", value: `${CALL_LINK_DAYS} days after this email` },
     ],
-    action: { label: "Book your call", url: input.url },
-    after: ["The booking page asks for your phone number. We call that number at the time that you choose."],
+    action: { label: "Book your R1 interview", url: input.url },
+    stepsHeading: "How our process works",
+    steps: HIRING_PROCESS,
+    after: [
+      "After you book, Google Calendar sends you an invitation with the Google Meet link. The booking page also asks for a phone number, which we use only if the video call fails.",
+    ],
   });
 /**
  * Queues the call booking link, once per candidate. `workflowStage` cancels it if the candidate leaves `new` before it
@@ -1657,8 +1666,8 @@ async function openCall(db: Database, cap: CallLink, config: HiringConfig) {
   return entry.subject;
 }
 function callMoveRefusal(call: CallRow, now: Date) {
-  if (call.rescheduleOf) return onLine("This call has already moved once.");
-  if (call.startTime <= now) return onLine("This call has started and cannot move.");
+  if (call.rescheduleOf) return onLine("This R1 interview has already moved once.");
+  if (call.startTime <= now) return onLine("This R1 interview has started and cannot move.");
   return null;
 }
 type HrBusyRead = { at: number; key: string; read: ReturnType<typeof readHrBusy> };
@@ -1686,7 +1695,7 @@ async function hrBusy(db: Database, config: HiringConfig, now: Date, fresh = fal
  * A call whose time has passed with no result from HR. The candidate waits for HR: a "No answer" closes it and opens the
  * link again. Without this a link could book a new call every time the last one ended.
  */
-const CALL_PASSED = "Your call time has passed. BeGifted will contact you about a new time.";
+const CALL_PASSED = "Your R1 interview time has passed. BeGifted will contact you about a new time.";
 /**
  * Can the call page show times now? Rules and setup shows this, and no call link leaves unless it says `readable`.
  * It shares the page's 60-second read, so it reports what a candidate would get.
@@ -1729,11 +1738,11 @@ export async function callView(token: string, db: Database = getDb(), now = new 
       slots = callSlots(dates, [...busy, ...(await otherCalls(db, cap.id, now))], now).filter(
         (slot) => new Date(slot.start).getTime() < cap.exp * 1000 && slot.start !== own?.startTime.toISOString(),
       );
-      if (!slots.length) notice = onLine("There are no open call times at the moment. Please try again later.");
+      if (!slots.length) notice = onLine("There are no open R1 interview times at the moment. Please try again later.");
     } catch (error) {
       // The calendar could not be read. A time that cannot be proved free is not shown.
       if (!(error instanceof HiringError)) throw error;
-      notice = onLine("Call times cannot be shown at the moment. Please try again later.");
+      notice = onLine("R1 interview times cannot be shown at the moment. Please try again later.");
     }
   }
   // The stored phone number is never returned: the link is the only check, and a link can be forwarded.
@@ -1771,7 +1780,7 @@ export async function bookCall(token: string, value: unknown, db: Database = get
       if (passedCall(rows, now)) throw new HiringError(409, onLine(CALL_PASSED));
       return;
     }
-    if (!input.move) throw new HiringError(409, "You already have a booked call. Use Move this call to change it.");
+    if (!input.move) throw new HiringError(409, "You already have a booked R1 interview. Use Move this R1 interview to change it.");
     const refusal = callMoveRefusal(own, now);
     if (refusal) throw new HiringError(409, refusal);
   };
@@ -1779,7 +1788,7 @@ export async function bookCall(token: string, value: unknown, db: Database = get
   // One live read of HR's calendar, just before the transaction: a Google call inside it would hold HR's lock for seconds.
   const calendar = await hrBusy(db, config, now, true).catch((error) => {
     if (!(error instanceof HiringError)) throw error;
-    throw new HiringError(503, onLine("Call times cannot be checked at the moment. Please try again later."));
+    throw new HiringError(503, onLine("R1 interview times cannot be checked at the moment. Please try again later."));
   });
   return withDatabaseTransaction(db, async (tx) => {
     await tx.execute(sql`select id from hiring_candidates where id=${cap.id} for update`);
@@ -1796,7 +1805,7 @@ export async function bookCall(token: string, value: unknown, db: Database = get
     const slot = callSlots(calendar.dates, [...calendar.busy, ...(await otherCalls(tx, cap.id, now))], new Date()).find(
       (v) => new Date(v.start).getTime() === start && start < cap.exp * 1000,
     );
-    if (!slot) throw new HiringError(409, "That call time is no longer available. Choose another time.");
+    if (!slot) throw new HiringError(409, "That R1 interview time is no longer available. Choose another time.");
     const candidate = await candidateById(tx, cap.id);
     if (own) await endVisit(tx, [own], "cancelled", now, false);
     const [call] = await tx
@@ -1827,19 +1836,20 @@ export async function bookCall(token: string, value: unknown, db: Database = get
           // HR gets its own email below, with the résumé. The candidate's copy must not carry the file.
           cc: [],
           ...hiringEmail({
-            subject: `BeGifted call ${own ? "moved" : "confirmed"}`,
-            preheader: `${bangkok(call.startTime)} (Bangkok). We will call you by phone.`,
-            title: own ? "Your call has moved" : "Your call is confirmed",
+            subject: `BeGifted R1: HR Interview ${own ? "moved" : "confirmed"}`,
+            preheader: `${bangkok(call.startTime)} (Bangkok). Google Meet video call.`,
+            title: own ? "Your R1 interview has moved" : "Your R1 interview is confirmed",
             name: candidate.name,
-            paragraphs: [`Your call with BeGifted ${own ? "has moved. The new time is below" : "is confirmed"}.`],
+            paragraphs: [`Your R1: HR Interview with BeGifted ${own ? "has moved. The new time is below" : "is confirmed"}.`],
             details: [
               { label: "Time", value: `${bangkok(call.startTime)}–${bangkokTime(call.endTime)} (Bangkok)` },
-              { label: "We will call", value: input.phone },
+              { label: "Where", value: "Google Meet. The link is in your Google Calendar invitation." },
+              { label: "Backup phone", value: input.phone },
             ],
-            ...(own ? {} : { action: { label: "Move your call", url: callLink(cap.id, new Date(cap.exp * 1000)) } }),
+            ...(own ? {} : { action: { label: "Move your R1 interview", url: callLink(cap.id, new Date(cap.exp * 1000)) } }),
             after: [
-              own ? "This call cannot move again through the link." : "You can move this call once, before it starts.",
-              "Please keep your phone near you at this time.",
+              own ? "This interview cannot move again through the link." : "You can move this interview once, before it starts.",
+              "Please join from a quiet place, with your camera and microphone on.",
               "For other changes, message BeGifted on LINE.",
             ],
           }),
@@ -1856,16 +1866,16 @@ export async function bookCall(token: string, value: unknown, db: Database = get
         cc: [],
         attachResume: resume,
         ...hiringEmail({
-          subject: `Pre-screen call ${own ? "moved" : "booked"}: ${candidate.name}`,
-          preheader: `${bangkok(call.startTime)} (Bangkok). Call ${input.phone}.`,
-          title: `Pre-screen call ${own ? "moved" : "booked"}`,
+          subject: `R1 ${own ? "moved" : "booked"}: ${candidate.name}`,
+          preheader: `${bangkok(call.startTime)} (Bangkok). Google Meet. Backup phone ${input.phone}.`,
+          title: `R1: HR Interview ${own ? "moved" : "booked"}`,
           name: "HR team",
-          paragraphs: [`${candidate.name} ${own ? "moved" : "booked"} a pre-screen call. Call this person at the time below.`],
+          paragraphs: [`${candidate.name} ${own ? "moved" : "booked"} R1: HR Interview. Join with the Google Meet link in the calendar event. Phone the backup number only if the video call fails.`],
           details: [
             { label: "Candidate", value: candidate.name },
             { label: "Subject", value: subject },
             { label: "Time", value: `${bangkok(call.startTime)}–${bangkokTime(call.endTime)} (Bangkok)` },
-            { label: "Phone", value: input.phone },
+            { label: "Backup phone", value: input.phone },
             { label: "Email", value: candidate.email ?? "Not recorded" },
             { label: "Résumé", value: resume ? RESUME_ATTACHED : "No file stored. See the Hiring page." },
           ],

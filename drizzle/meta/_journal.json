@@ -939,6 +939,13 @@
       "when": 1795132800000,
       "tag": "0132_hiring_experts_onboarding",
       "breakpoints": true
+    },
+    {
+      "idx": 132,
+      "version": "7",
+      "when": 1795219200000,
+      "tag": "0133_hiring_r1_thirty_minutes",
+      "breakpoints": true
     }
   ]
 }

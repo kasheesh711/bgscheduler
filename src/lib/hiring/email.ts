@@ -121,6 +121,18 @@ export const VISIT_STEPS: CompanySection[] = [
 ];
 export const VISIT_BRING = { heading: "What to bring", bullets: ["Photo ID (passport or ID card)", "Pens", "A calculator, if your subject uses one"] };
 
+/** BeGifted's hiring process, in order (Kevin, 22 Nov 2026). The candidate emails show it so each person knows what comes next. */
+export const HIRING_PROCESS: CompanySection[] = [
+  { heading: "R1: HR Interview", paragraphs: ["A 30-minute Google Meet video call with our HR team."] },
+  {
+    heading: "Pre-screening questions and visit booking",
+    paragraphs: ["If R1 goes well, we send you a short questionnaire and a link to book your onsite visit. Answer the questions first, then book your visit."],
+  },
+  { heading: "Onsite visit: the test", paragraphs: ["A 2-hour paper test at BeGifted."] },
+  { heading: "R2: Final round mock teaching", paragraphs: ["If you pass the test, a 1-hour mock teaching interview follows on the same day."] },
+  { heading: "Offer", paragraphs: ["We send the offer letter by email. Then you book your contract-signing day at BeGifted (onsite)."] },
+];
+
 /** One candidate email. The plain-text and HTML parts come from these same fields. */
 export interface HiringEmail {
   subject: string;
@@ -133,6 +145,8 @@ export interface HiringEmail {
   paragraphs: string[];
   details?: EmailDetail[];
   action?: EmailAction;
+  /** A heading above the steps. */
+  stepsHeading?: string;
   /** Numbered steps after the button. */
   steps?: CompanySection[];
   /** A short bullet list after the steps. */
@@ -168,6 +182,7 @@ export function hiringEmail(email: HiringEmail): { subject: string; text: string
   const blocks: CompanyBlock[] = [{ kind: "copy", paragraphs: [greeting, ...email.paragraphs] }];
   if (email.details?.length) blocks.push({ kind: "details", entries: email.details });
   if (email.action) blocks.push({ kind: "action", action: email.action });
+  if (email.steps?.length && email.stepsHeading) blocks.push({ kind: "copy", heading: email.stepsHeading, paragraphs: [] });
   if (email.steps?.length) blocks.push({ kind: "steps", entries: email.steps });
   if (email.list) blocks.push({ kind: "copy", heading: email.list.heading, paragraphs: [], bullets: email.list.bullets });
   if (email.after?.length) blocks.push({ kind: "copy", paragraphs: email.after });
@@ -177,6 +192,7 @@ export function hiringEmail(email: HiringEmail): { subject: string; text: string
     ...email.paragraphs,
     email.details?.map((d) => `${d.label}: ${d.value}`).join("\n"),
     email.action && `${email.action.label}:\n${email.action.url}`,
+    email.steps?.length && email.stepsHeading,
     email.steps?.map((step, i) => [`${i + 1}. ${step.heading}`, ...(step.paragraphs ?? [])].join("\n")).join("\n\n"),
     email.list && [`${email.list.heading}:`, ...email.list.bullets.map((b) => `• ${b}`)].join("\n"),
     ...(email.after ?? []),
