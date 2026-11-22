@@ -4,13 +4,13 @@
 // Run: node scripts/dev/verify-hiring-screens.mjs [screenshot-folder]
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import postcss from "postcss";
 import tailwind from "@tailwindcss/postcss";
-import { chromium } from "playwright-core";
+import { chromium, webkit } from "playwright-core";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const OUT = process.argv[2];
@@ -331,14 +331,100 @@ const shot = async (page, name, fullPage = false) => {
   mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: path.join(OUT, `${name}.png`), fullPage, animations: "disabled" });
 };
-// Serious and critical WCAG A/AA problems on the visible page, as "rule: target" lines.
-const axeProblems = async (page) => {
-  await page.addScriptTag({ content: AXE });
-  return page.evaluate(async () => {
-    const result = await window.axe.run(document, { runOnly: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"] });
-    return result.violations.filter((v) => v.impact === "serious" || v.impact === "critical").flatMap((v) => v.nodes.map((n) => `${v.id}: ${n.target.join(" ")}`));
-  });
+// Serious and critical WCAG A/AA problems on the visible page, as "rule: target" lines. The walkthrough passes `all`, more tags and `first`.
+const axeProblems = async (page, { tags = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"], all = false, first = false } = {}) => {
+  await page.evaluate(AXE); // evaluate, not a script tag, so a page with a strict policy still works
+  return page.evaluate(async (opt) => {
+    const result = await window.axe.run(document, { runOnly: opt.tags });
+    return result.violations.filter((v) => opt.all || v.impact === "serious" || v.impact === "critical").flatMap((v) => (opt.first ? v.nodes.slice(0, 1) : v.nodes).map((n) => `${v.id}: ${n.target.join(" ")}`));
+  }, { tags, all, first });
 };
+// Page-side measuring for the walkthrough. Installed before the page scripts run, so it also counts every scroll of the page.
+function installHelpers() {
+  window.__scroll = 0;
+  const last = new WeakMap();
+  document.addEventListener("scroll", (event) => {
+    const box = event.target === document ? document.scrollingElement : event.target;
+    window.__scroll += Math.abs(box.scrollTop - (last.get(box) ?? 0));
+    last.set(box, box.scrollTop);
+  }, true);
+  const tool = () => {
+    const memo = [new Map(), new Map()];
+    // Visible to the eye. With aria, an aria-hidden subtree does not count. Content of a closed <details> is hidden except its <summary>.
+    const vis = (el, aria) => {
+      if (!el) return true;
+      const seen = memo[+aria];
+      if (!seen.has(el)) {
+        const style = getComputedStyle(el), parent = el.parentElement;
+        seen.set(el, !(aria && el.getAttribute("aria-hidden") === "true") && !el.hidden && style.display !== "none" && style.visibility !== "hidden"
+          && !(parent && parent.tagName === "DETAILS" && !parent.open && el.tagName !== "SUMMARY") && vis(parent, aria));
+      }
+      return seen.get(el);
+    };
+    const texts = () => {
+      const out = [], walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let node; (node = walker.nextNode());) {
+        const text = node.nodeValue.trim(), parent = node.parentElement;
+        if (!text || !parent || /^(SCRIPT|STYLE|NOSCRIPT)$/.test(parent.tagName) || !vis(parent, true)) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const box = range.getBoundingClientRect();
+        if (box.width <= 1 || box.height <= 1) continue;
+        out.push({ text, parent, px: parseFloat(getComputedStyle(parent).fontSize), bottom: box.bottom });
+      }
+      return out;
+    };
+    return { vis, texts };
+  };
+  const hint = (el) => `${el.tagName.toLowerCase()}${el.hasAttribute("data-sticky") ? "[data-sticky]" : ""}.${String(el.className).split(" ")[0]}`;
+  window.__m = {
+    // How far the control is below the fold, and the visible words rendered above its top edge.
+    first(el) {
+      const box = el.getBoundingClientRect();
+      return { below: Math.max(0, Math.round(box.bottom - innerHeight)), words: tool().texts().filter((x) => x.bottom <= box.top + 1).reduce((n, x) => n + x.text.split(/\s+/).length, 0) };
+    },
+    snap() {
+      const { vis, texts } = tool(), all = texts();
+      const small = [], seen = new Set();
+      for (const el of document.querySelectorAll("a[href],button,select,textarea,summary,[role=button],input:not([type=hidden])")) {
+        let box = el;
+        if (el.matches("input[type=radio],input[type=checkbox]") && el.getBoundingClientRect().width <= 2) box = el.closest("label") || el;
+        if (seen.has(box) || !vis(box, false)) continue;
+        seen.add(box);
+        const r = box.getBoundingClientRect();
+        if (!r.width || !r.height || (r.width + 0.01 >= 44 && r.height + 0.01 >= 44)) continue;
+        const rest = el.parentElement ? el.parentElement.innerText.replace(el.innerText, "").trim() : "";
+        small.push({ name: (el.getAttribute("aria-label") || (el.labels && el.labels[0] && el.labels[0].textContent.trim()) || box.innerText || el.id || el.tagName).trim().slice(0, 50),
+          in: ((box.closest("fieldset") || {}).querySelector?.call(box.closest("fieldset"), "legend") || {}).textContent || undefined,
+          w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10,
+          ...(el.tagName === "A" && getComputedStyle(el).display === "inline" && rest.split(/\s+/).length >= 4 ? { inline: true } : {}) });
+      }
+      const tiny = all.filter((x) => x.px < 14).map((x) => ({ text: x.text.slice(0, 40), px: x.px, at: hint(x.parent) }));
+      const long = [];
+      for (const el of document.body.querySelectorAll("*")) {
+        if (![...el.childNodes].some((n) => n.nodeType === 3 && n.nodeValue.trim()) || !vis(el, true) || getComputedStyle(el).display.startsWith("inline") || ![...el.children].every((ch) => getComputedStyle(ch).display.startsWith("inline"))) continue;
+        for (const sentence of el.innerText.split(/[.!?]\s+|\n+/)) if (sentence.trim().split(/\s+/).length > 20) long.push({ words: sentence.trim().split(/\s+/).length, text: sentence.trim().slice(0, 80) });
+      }
+      const wide = (el) => !!el && el.scrollWidth > el.clientWidth;
+      return { small, tiny, minFont: all.reduce((m, x) => Math.min(m, x.px), 99), long,
+        side: { page: wide(document.documentElement), main: wide(document.querySelector("main")), root: wide(document.querySelector("#root > div")) },
+        states: [...document.querySelectorAll("[role=status],[role=alert],[aria-live]")].filter((el) => vis(el, true) && el.innerText.trim()).map((el) => `${el.getAttribute("role") || "live"}: ${el.innerText.trim().slice(0, 90)}`) };
+    },
+    // Keyboard-focus the control (a label focuses its input) and report its ring and any sticky or fixed bar over it.
+    probe(el) {
+      const target = el.tagName === "LABEL" ? el.querySelector("input,select,textarea") || el : el;
+      target.focus();
+      const ring = target.matches("input[type=radio],input[type=checkbox]") ? target.closest("label") || target : target;
+      const style = getComputedStyle(ring), box = ring.getBoundingClientRect();
+      const over = [...document.querySelectorAll("*")].filter((x) => {
+        const position = getComputedStyle(x).position, b = x.getBoundingClientRect();
+        return (position === "sticky" || position === "fixed") && !x.contains(target) && b.height > 0
+          && Math.min(box.right, b.right) - Math.max(box.left, b.left) > 1 && Math.min(box.bottom, b.bottom) - Math.max(box.top, b.top) > 1;
+      }).map(hint);
+      return { visible: target.matches(":focus-visible"), outline: style.outlineStyle === "none" ? 0 : parseFloat(style.outlineWidth), shadow: style.boxShadow !== "none", over };
+    },
+  };
+}
 // ONLY=<words> runs the checks whose name holds those words, such as ONLY="screen shows" for the role screens.
 const check = async (name, action) => {
   if (process.env.ONLY && !name.includes(process.env.ONLY)) return;
@@ -813,14 +899,27 @@ try {
       await page.addStyleTag({ content: full ? "#root{height:auto!important;overflow:visible!important;padding:0!important}" : "#root{padding:0!important}" });
       await page.getByRole("heading", { name: "Sample Dao" }).waitFor();
     };
+    await briefPage("closed", 390, 844);
+    await shot(page, "brief-closed-phone", true);
     await briefPage("open", 390, 844);
     await shot(page, "brief-open-phone", true);
     assert.deepEqual(await axeProblems(page), [], "axe on brief");
     await shot(page, "brief-open-phone-fold");
-    for (const select of await page.locator("form select").all()) await select.selectOption({ index: 1 });
+    // 14 score tiles, then the required Yes/No checks answer; Send scores stays disabled until both are done.
+    const tiles = page.locator("form label:has(input[type=radio][value='10'])");
+    for (let i = 0, n = await tiles.count(); i < n; i++) await tiles.nth(i).click();
+    await page.locator("form label", { hasText: /^Yes$/ }).click();
     await page.getByRole("button", { name: /Send scores/ }).click();
-    await page.getByText(/Scores sent/).waitFor();
+    await page.getByText(/Scores sent/).first().waitFor();
     await shot(page, "brief-sent-phone", true);
+    await page.getByRole("button", { name: "Yes, send to HR" }).click();
+    await page.getByText(/Recommendation recorded/).first().waitFor();
+    await shot(page, "brief-recommended-phone", true);
+    await briefPage("open", 390, 844);
+    await page.locator("summary", { hasText: "What each score means" }).first().click();
+    await shot(page, "brief-bands-phone", true);
+    await page.locator("summary", { hasText: "Interviewer guide" }).click();
+    await shot(page, "brief-guide-phone", true);
     // The jump link lands with the first score row and the Send bar on screen; keyboard focus is visible.
     await briefPage("open", 390, 844, false);
     await page.getByRole("link", { name: "Go to mock scores" }).click();
@@ -947,6 +1046,166 @@ try {
     await assertPacketFits(320);
     await shot(page, "gift-review-packet-320");
     await page.setViewportSize({ width: 1440, height: 900 });
+  });
+  await check("walkthrough", async () => {
+    // The three tasks, as a user does them, in each engine at two widths. It records numbers; the anchors are judged from metrics.json.
+    const AXE_TAGS = { tags: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"], all: true, first: true };
+    let wk;
+    try {
+      wk = await webkit.launch();
+    } catch (error) {
+      wk = { error: String(error.message).split("\n")[0] };
+    }
+    const task = async (engine, width, height, id) => {
+      const context = await engine.newContext({ viewport: { width, height } });
+      await context.route("**/*", (route) => (route.request().url().startsWith(origin) ? route.continue() : route.abort()));
+      await context.addInitScript(installHelpers);
+      const tab = await context.newPage();
+      tab.on("pageerror", (error) => errors.push(error.message));
+      const m = { taps: 0, scrollPx: 0, small: new Map(), tiny: new Map(), long: new Map(), minFont: 99, side: {}, states: new Set(), focusVisible: [], focusObscured: [], axe: new Set(), confirms: [] };
+      const drain = async () => {
+        m.scrollPx += await tab.evaluate(() => window.__scroll ?? 0);
+        await tab.evaluate(() => { window.__scroll = 0; });
+      };
+      const snap = async () => {
+        const r = await tab.evaluate(() => window.__m.snap());
+        r.small.forEach((x) => m.small.set(`${x.name}|${x.w}|${x.h}`, x));
+        r.tiny.forEach((x) => m.tiny.set(`${x.text}|${x.px}`, x));
+        r.long.forEach((x) => m.long.set(x.text, x));
+        m.minFont = Math.min(m.minFont, r.minFont);
+        for (const [key, value] of Object.entries(r.side)) m.side[key] = m.side[key] || value;
+        r.states.forEach((x) => m.states.add(x));
+      };
+      const axe = async (frame = tab, prefix = "") => {
+        if (engine === chromium || engine === browser) (await axeProblems(frame, AXE_TAGS)).forEach((x) => m.axe.add(prefix + x));
+      };
+      const open = async (query) => {
+        await drain();
+        await tab.goto(`${origin}/?${query}`);
+        await tab.addStyleTag({ content: "#root{padding:0!important}" });
+      };
+      // The first control of the task: how far below the fold, and the words above it.
+      const first = async (loc, name, key = "") => {
+        const found = await loc.evaluate((el) => window.__m.first(el));
+        m[`${key}firstAction`] = name;
+        m[`${key}scrollBeforeFirstActionPx`] = found.below;
+        m[`${key}wordsAboveFirstAction`] = found.words;
+      };
+      const tap = async (loc, name) => {
+        await tab.keyboard.press("Shift");
+        const probe = await loc.evaluate((el) => window.__m.probe(el));
+        if (!probe.visible || (probe.outline < 2 && !probe.shadow)) m.focusVisible.push({ name, outline: probe.outline, shadow: probe.shadow, focusVisible: probe.visible });
+        if (probe.over.length) m.focusObscured.push({ name, by: probe.over });
+        await loc.click();
+        m.taps++;
+      };
+      tab.on("dialog", (dialog) => {
+        m.confirms.push(dialog.message());
+        m.taps++;
+        void dialog.accept();
+      });
+      try {
+        if (id === "H1") {
+          await open("brief=open");
+          await tab.getByRole("heading", { name: "Sample Dao" }).waitFor();
+          const jump = tab.getByRole("link", { name: "Go to mock scores" });
+          await first(jump, "Go to mock scores");
+          await snap();
+          await axe();
+          await tap(jump, "Go to mock scores");
+          const tiles = tab.locator("form label:has(input[type=radio][value='10'])");
+          for (let i = 0, n = await tiles.count(); i < n; i++) await tap(tiles.nth(i), `score 10, item ${i + 1}`);
+          await snap();
+          await tap(tab.locator("form label", { hasText: /^Yes$/ }), "required checks: Yes");
+          await tap(tab.getByRole("button", { name: /Send scores/ }), "Send scores");
+          await tab.getByText(/Scores sent/).first().waitFor();
+          await snap();
+          await tap(tab.getByRole("link", { name: "Go to recommendation" }), "Go to recommendation");
+          await tap(tab.getByRole("button", { name: "Yes, send to HR" }), "Yes, send to HR");
+          await tab.getByText(/Recommendation recorded/).first().waitFor();
+          await snap();
+          await axe();
+        } else if (id === "H2") {
+          await open("view=heads&roles=1");
+          const ek = tab.getByRole("button", { name: "Kru Ek" });
+          await ek.waitFor();
+          await first(ek, "Kru Ek");
+          await snap();
+          await axe();
+          await tap(ek, "Kru Ek");
+          await tab.getByRole("heading", { name: /Coming to you/ }).waitFor();
+          await snap();
+          // Return visit: the browser remembers the head, so the next mock card should already be there.
+          await drain();
+          const firstVisit = m.scrollPx;
+          await tab.reload();
+          await tab.addStyleTag({ content: "#root{padding:0!important}" });
+          const card = tab.locator("#upcoming-mocks article").first();
+          await card.waitFor();
+          await first(card, (await card.innerText()).replace(/\s+/g, " ").slice(0, 60), "return");
+          await snap();
+          await axe();
+          m.returnVisit = { taps: 0, firstAction: m.returnfirstAction, scrollBeforeFirstActionPx: m.returnscrollBeforeFirstActionPx, wordsAboveFirstAction: m.returnwordsAboveFirstAction, firstVisitScrollPx: firstVisit };
+        } else {
+          await open("view=review&roles=1&gift=1&live=1");
+          const read = tab.getByRole("button", { name: /Read review packet/ }).first();
+          await read.waitFor();
+          await first(read, "Read review packet");
+          await snap();
+          await axe();
+          await tap(read, "Read review packet");
+          const heading = tab.frameLocator("iframe[title^='Review packet']").getByRole("heading", { name: "Hiring review" });
+          await heading.waitFor();
+          await tab.waitForTimeout(300);
+          const frame = tab.frames().find((f) => f !== tab.mainFrame());
+          m.side.packet = await frame.evaluate(async () => { await document.fonts.ready; return document.documentElement.scrollWidth > document.documentElement.clientWidth; });
+          await snap();
+          await axe();
+          // The sandboxed iframe does not run axe, so the same packet HTML is checked in a page of its own.
+          const packetTab = await context.newPage();
+          await packetTab.setContent(await tab.evaluate(() => window.realPacket));
+          await axe(packetTab, "packet: ");
+          await packetTab.close();
+          await tap(tab.getByRole("button", { name: "Close packet" }).first(), "Close packet");
+          await tap(tab.getByRole("button", { name: "Approve and send offer" }).first(), "Approve and send offer");
+          await tab.waitForTimeout(500);
+          await snap();
+        }
+        await drain();
+        const cap = (map, n) => [...map.values()].slice(0, n);
+        const { small, tiny, long, axe: found, states, minFont, ...rest } = m;
+        return { ...rest, smallTargets: cap(small, 60), minFontPx: minFont, tinyText: cap(tiny, 30), longSentences: cap(long, 20), sidewaysScroll: m.side, axe: [...found], states: [...states] };
+      } finally {
+        await context.close();
+      }
+    };
+    const metrics = {};
+    for (const [name, engine] of [["chromium", browser], ["webkit", wk]]) {
+      if (engine.error) {
+        metrics[name] = { error: engine.error };
+        continue;
+      }
+      metrics[name] = {};
+      for (const [width, height] of [[390, 844], [320, 700]]) {
+        metrics[name][`${width}x${height}`] = {};
+        for (const id of ["H1", "H2", "G1"]) {
+          process.stderr.write(`walkthrough ${name} ${width}x${height} ${id}\n`);
+          metrics[name][`${width}x${height}`][id] = await task(engine, width, height, id);
+        }
+      }
+    }
+    await wk.close?.();
+    if (OUT) {
+      mkdirSync(OUT, { recursive: true });
+      writeFileSync(path.join(OUT, "metrics.json"), JSON.stringify(metrics, null, 2));
+    }
+    for (const [name, sizes] of Object.entries(metrics)) {
+      if (sizes.error) process.stdout.write(`  ${name}: ${sizes.error}\n`);
+      for (const [size, tasks] of Object.entries(sizes.error ? {} : sizes)) for (const [id, r] of Object.entries(tasks)) {
+        const row = [name, size, id, `taps ${r.taps}`, `scroll ${Math.round(r.scrollPx)}`, `below ${r.scrollBeforeFirstActionPx}`, `words ${r.wordsAboveFirstAction}`, `small ${r.smallTargets.filter((x) => !x.inline).length}`, `font ${r.minFontPx}`, `long ${r.longSentences.length}`, `side ${Object.values(r.sidewaysScroll).some(Boolean)}`, `axe ${r.axe.length}`, `focus ${r.focusVisible.length}/${r.focusObscured.length}`];
+        process.stdout.write(`  ${row.join(" | ")}\n`);
+      }
+    }
   });
   await check("the page has no script errors", async () => assert.deepEqual(errors, []));
 } finally {
