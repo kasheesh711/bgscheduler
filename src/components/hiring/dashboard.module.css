@@ -782,6 +782,18 @@
 .funnelPanel .table tbody tr { cursor: default; }
 .funnelPanel .table tbody tr[data-stuck] th { color: var(--warn); }
 .funnelRule { color: var(--muted); }
+.funnelStack { display: flex; gap: 2px; height: 24px; margin: 4px 0 6px; }
+.funnelStack span { min-width: 3px; border-radius: 3px; }
+.funnelLegend { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-bottom: 12px; color: var(--support); font-size: 12px; font-variant-numeric: tabular-nums; list-style: none; }
+.funnelLegend i { display: inline-block; width: 10px; height: 10px; margin-right: 5px; border-radius: 2px; }
+.funnelBars { min-width: 640px; table-layout: fixed; font-variant-numeric: tabular-nums; }
+.funnelBars :is(th, td) { vertical-align: top; }
+.funnelBars :is(th, td):first-child { width: 22%; }
+.funnelCount { display: block; font-size: 16px; font-weight: 500; }
+.funnelTrack { height: 12px; margin-bottom: 3px; overflow: hidden; border-radius: 3px; background: var(--tint); }
+.funnelTrack span { display: block; min-width: 2px; height: 100%; border-radius: 0 4px 4px 0; background: var(--primary); }
+.funnelTrack[data-flag] span { background: var(--blocked); }
+.funnelFlag { margin-left: 6px; padding: 1px 6px; border: 1px solid var(--blocked); border-radius: 4px; background: color-mix(in srgb, var(--blocked) 14%, transparent); color: var(--ink); font-size: 11px; white-space: nowrap; }
 .funnelNote { margin-top: 6px; color: var(--muted); font-size: 12px; }
 @media (min-width: 1600px) { .funnelGrid { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); } }
 
