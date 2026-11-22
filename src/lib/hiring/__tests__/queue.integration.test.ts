@@ -1134,14 +1134,13 @@ describe("reply rule", () => {
     await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
     expect((await candidate(row.id)).reviewNote).toMatch(/below the pass score/);
   });
-  it("sends a candidate with no supported subject to review, not the onsite queue", async () => {
+  it("invites on a ticked subject even when the AI's subject check finds no evidence", async () => {
     const unsupported = { ...six(), subjects: [{ subject: "Mathematics", evidence: "Mathematics", relevant: false }] };
     const row = await replied({ preScreenHash: null, preScreenAssessment: null });
     await runHiringCycle(db, async () => unsupported);
     const saved = await candidate(row.id);
-    expect(saved.stage).toBe("review");
-    expect(saved.reviewNote).toMatch(/supported/);
-    expect(await invites()).toEqual([]);
+    expect(saved.stage).toBe("onsite_invited");
+    expect(saved.visitSubject).toBe("Mathematics");
   });
   it("keeps the visit subject to a subject with a head, and waits when none has one", async () => {
     await setConfig({

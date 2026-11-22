@@ -525,7 +525,7 @@ export async function inviteToVisit(
     config,
   );
   if (stops.length) throw new HiringError(409, stops.join(" "));
-  const supported = supportedVisitSubjects(c.preScreen, c.workRightsAnswer, c.preScreenAssessment, config);
+  const supported = supportedVisitSubjects(c.preScreen, c.workRightsAnswer, config);
   if (!topHiringSubject(supported, config.subjectPriority))
     throw new HiringError(409, "No supported subject is open for hiring.");
   const subject = topHiringSubject(

@@ -225,8 +225,8 @@ export function holdNote(
         long: ["No pass score is set, so no automatic onsite invitation can run. A click can still invite."],
       };
     // The queue's reply check waits here, because a setting can cure it.
-    const supported = supportedVisitSubjects(pre, answer, assessment, config);
-    if (supported.length && !visitSubject(pre, answer, assessment, config))
+    const supported = supportedVisitSubjects(pre, answer, config);
+    if (supported.length && !visitSubject(pre, answer, config))
       return topHiringSubject(supported, config.subjectPriority)
         ? {
             short: "No head for this subject",
