@@ -2,7 +2,8 @@ import { beforeEach, expect, it, vi } from "vitest";
 
 const blob = vi.hoisted(() => ({ put: vi.fn(), list: vi.fn(), get: vi.fn() }));
 vi.mock("@vercel/blob", () => blob);
-vi.mock("../service", () => ({ audit: vi.fn() }));
+vi.mock("../service", () => ({ audit: vi.fn(), candidateById: vi.fn() }));
+vi.mock("@vercel/blob/client", () => ({ handleUpload: vi.fn() }));
 
 import type { Database } from "@/lib/db";
 import { listContractTemplates, saveContractTemplate } from "../contract-templates";
@@ -38,4 +39,19 @@ it("has one standard offer letter for each contract type, with the name and the 
   expect(Object.keys(OFFER_LETTERS)).toEqual(["part_time", "full_time", "specialist"]);
   for (const [type, letter] of Object.entries(OFFER_LETTERS))
     expect(letter.text("Nicha", "Physics")).toContain(`Dear Nicha,\n\nWe are pleased to offer you the position of ${type.replace("_", "-")} Physics tutor`);
+});
+
+it("gives signed-contract access only for a hired tutor", async () => {
+  const { candidateById } = await import("../service");
+  const { readSignedContract, signedContractInfo, signedContractPath } = await import("../contract-templates");
+  const id = "11111111-1111-4111-8111-111111111111";
+  vi.mocked(candidateById).mockResolvedValue({ id, name: "Nicha Suwan / สุวรรณ", stage: "onsite_booked" } as never);
+  await expect(signedContractInfo(id, db)).rejects.toMatchObject({ status: 409 });
+  await expect(signedContractInfo("../x", db)).rejects.toMatchObject({ status: 400 });
+  vi.mocked(candidateById).mockResolvedValue({ id, name: "Nicha Suwan / สุวรรณ", stage: "hired" } as never);
+  blob.list.mockResolvedValue({ blobs: [{ pathname: `${signedContractPath(id)}.bak`, uploadedAt: new Date() }] });
+  expect(await signedContractInfo(id, db)).toEqual({ uploadedAt: null });
+  blob.get.mockResolvedValue({ statusCode: 200, stream: "bytes" });
+  expect(await readSignedContract(id, db)).toEqual({ stream: "bytes", name: "BeGifted-signed-contract-Nicha-Suwan.pdf" });
+  expect(blob.get).toHaveBeenCalledWith(`hiring-signed-contracts/${id}.pdf`, expect.objectContaining({ access: "private" }));
 });

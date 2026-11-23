@@ -403,6 +403,11 @@ export function demoFetch(input: string, init?: { method?: string; body?: unknow
       appointment: state.step > 6 ? at(new Date(), 2, 10).toISOString() : null,
     });
   }
+  if (path === "/api/hiring/contracts/signed") {
+    if (post) return json({ error: NOT_IN_DEMO }, 409);
+    if (url.searchParams.has("file")) return new Response(demoPdf("Signed tutor agreement", ["Demo file. The real file is the scan of the signed contract."]), { headers: { "Content-Type": "application/pdf" } });
+    return json({ uploadedAt: url.searchParams.get("candidateId") === DEMO_ID ? null : at(new Date(), -1, 15).toISOString() });
+  }
   if (path === "/api/hiring/contracts") {
     if (post) return json({ error: NOT_IN_DEMO }, 409);
     const type = url.searchParams.get("type");

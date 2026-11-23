@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { upload } from "@vercel/blob/client";
 import type { ContractTemplate } from "@/lib/hiring/contract-templates";
 import { OFFER_LETTERS, type OfferType } from "@/lib/hiring/offer-letters";
 import css from "./dashboard.module.css";
@@ -79,5 +80,55 @@ export function ContractTemplates() {
       })}
       <p className={r.quiet} role="status">{message || "A PDF or a Word file of up to 4 MB. An upload replaces the file of the same kind."}</p>
     </div>
+  );
+}
+
+const SIGNED = "/api/hiring/contracts/signed";
+
+/** The signed contract of one hired tutor: staff upload the scan after the signing and can download it again. */
+export function SignedContract({ candidateId, name }: { candidateId: string; name: string }) {
+  const [uploadedAt, setUploadedAt] = useState<string | null>();
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const info = `${SIGNED}?candidateId=${candidateId}`;
+
+  const load = useCallback(async () => {
+    const response = await fetch(info, { cache: "no-store" });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error ?? "Could not check the signed contract.");
+    setUploadedAt(data.uploadedAt);
+  }, [info]);
+  useEffect(() => {
+    load().catch((error: Error) => setMessage(error.message));
+  }, [load]);
+
+  async function choose(file: File | undefined) {
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) return setMessage("Choose a PDF smaller than 25 MB.");
+    if (file.type && file.type !== "application/pdf") return setMessage("Only a PDF can be used here.");
+    setBusy(true);
+    setMessage("");
+    try {
+      // Browser to private storage, because a function request body is limited to 4.5 MB.
+      await upload(`hiring-signed-contracts/${candidateId}.pdf`, file, { access: "private", handleUploadUrl: SIGNED, clientPayload: candidateId, contentType: "application/pdf" });
+      await load();
+      setMessage("Saved.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "The upload failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      {uploadedAt && <a className={css.secondary} href={`${info}&file=1`}>Signed contract ({new Date(uploadedAt).toLocaleDateString("en-GB", { timeZone: "Asia/Bangkok", day: "numeric", month: "short" })})</a>}
+      <label className={css.secondary}>
+        {busy ? "Uploading…" : uploadedAt ? "Replace signed contract" : "Upload signed contract"}
+        <input className="sr-only" type="file" accept="application/pdf" disabled={busy} aria-label={`Upload the signed contract of ${name} (PDF)`}
+          onChange={(event) => { void choose(event.target.files?.[0]); event.target.value = ""; }} />
+      </label>
+      {message && <p className={r.quiet} role="status">{message}</p>}
+    </>
   );
 }
