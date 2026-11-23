@@ -16,7 +16,8 @@ const MOCK_ID = "00000000-0000-4000-8000-00000000d003";
 const VISIT_ID = "00000000-0000-4000-8000-00000000d004";
 const RESULT_ID = "00000000-0000-4000-8000-00000000d005";
 const DECISION_ID = "00000000-0000-4000-8000-00000000d006";
-const NAME = "Demo – Nicha Suwan";
+export const DEMO_NAME = "Demo – Nicha Suwan";
+const NAME = DEMO_NAME;
 const SUBJECT: Subject = "Mathematics";
 const HEAD = "Peat";
 export const DEMO_BRIEF_PATH = "/hiring/brief/demo";
@@ -65,7 +66,7 @@ export function setDemoStep(step: number) {
     step: next,
     closed: null,
     marked: next > 4,
-    rubric: next > 5 ? fullRubric() : null,
+    rubric: next > 5 ? demoRubric() : null,
     packet: next > 6 ? { id: "demo-packet", behavioral: BEHAVIORAL, offer: OFFER, offerType: "part_time" as OfferType } : null,
   });
 }
@@ -75,7 +76,7 @@ export const markDemoPaper = () => state.step === 4 && set({ marked: true });
 
 const BEHAVIORAL = "Calm and clear on the call. Gave a specific example of how she changed a lesson for a weak student.";
 const OFFER = OFFER_LETTERS.part_time.text(NAME, "Mathematics");
-const fullRubric = (): MockRubric => ({
+export const demoRubric = (): MockRubric => ({
   items: Object.fromEntries(RUBRIC_ITEMS.map((id, index) => [id, index % 3 ? 10 : 7])) as MockRubric["items"],
   comments: "Clear explanations. Checked understanding often.",
   stressTest: { listens: true, explains: true, plan: true },
@@ -186,8 +187,8 @@ function others(now: Date) {
       result(now, id(42), id(10), id(30), "Biology", { marks: { missingPages: null, comment: "Accurate and complete.", questions: [...questions("IGCSE / GCSE", [9, 10]), ...questions("AS / A-Level", [9, 8])] }, markSchemeUsed: true }),
     ],
     mocks: [
-      result(now, id(43), id(9), id(28), "Chemistry", { source: "person", rubric: fullRubric() }),
-      result(now, id(44), id(10), id(31), "Biology", { source: "person", rubric: fullRubric() }),
+      result(now, id(43), id(9), id(28), "Chemistry", { source: "person", rubric: demoRubric() }),
+      result(now, id(44), id(10), id(31), "Biology", { source: "person", rubric: demoRubric() }),
     ],
     headDecisions: [
       { candidateId: id(9), bookingId: id(28), decision: "hire", reason: "Clear and warm lesson.", head: "Kru Mimi", draftProblem: null, at: new Date(now.getTime() - 2 * DAY + 3 * HOUR) },
@@ -427,6 +428,21 @@ export function demoFetch(input: string, init?: { method?: string; body?: unknow
 
 let installed = false;
 /** True once this page answers hiring requests itself. Only a page load ends that. */
+export const DEMO_PACKET_PATH = "/api/hiring/review/demo-packet";
+/** The body for the real-design packet, when the request is the demo candidate's packet page or HR's preview. */
+export function demoPacketRequest(input: string, init?: { method?: string; body?: unknown }) {
+  const url = new URL(input, "https://demo.invalid");
+  if (url.pathname !== `/api/hiring/review/${DEMO_ID}`) return null;
+  const rubric = state.rubric ?? demoRubric();
+  if (init?.method?.toUpperCase() === "POST") {
+    const body = typeof init.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {};
+    if (body.action !== "preview") return null;
+    const offerType = typeof body.offerType === "string" && body.offerType in OFFER_LETTERS ? (body.offerType as OfferType) : "part_time";
+    return { draft: true, behavioral: String(body.behavioral ?? ""), offer: OFFER_LETTERS[offerType].text(NAME, SUBJECT), rubric };
+  }
+  if (url.searchParams.get("file") !== "html" || !state.packet) return null;
+  return { draft: false, behavioral: state.packet.behavioral, offer: state.packet.offer, rubric };
+}
 export const demoFetchInstalled = () => installed;
 /** Puts `demoFetch` in front of `window.fetch`, once. Only the demo page calls this, and a reload removes it. */
 export function installDemoFetch() {
@@ -435,6 +451,14 @@ export function installDemoFetch() {
   const real = window.fetch.bind(window);
   window.fetch = async (input, init) => {
     const target = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    return demoFetch(new URL(target, window.location.origin).href, init as { method?: string; body?: unknown }) ?? real(input, init);
+    const href = new URL(target, window.location.origin).href;
+    const request = init as { method?: string; body?: unknown };
+    // The packet has the real design, which only the server can make. It gets made-up values and saves nothing.
+    const packet = demoPacketRequest(href, request);
+    if (packet) {
+      const response = await real(DEMO_PACKET_PATH, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(packet) }).catch(() => null);
+      if (response?.ok) return response;
+    }
+    return demoFetch(href, request) ?? real(input, init);
   };
 }

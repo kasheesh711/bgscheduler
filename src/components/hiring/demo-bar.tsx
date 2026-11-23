@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import { DEMO_BRIEF_PATH, DEMO_STEPS, demoBrief, demoFetch, demoState, markDemoPaper, resetDemo, setDemoStep, subscribeDemo } from "@/lib/hiring/demo";
+import { DEMO_BRIEF_PATH, DEMO_STEPS, demoBrief, demoState, markDemoPaper, resetDemo, setDemoStep, subscribeDemo } from "@/lib/hiring/demo";
 import { BookingShell } from "./booking";
 import { InterviewerBrief } from "./brief";
 import css from "./demo-bar.module.css";
@@ -45,7 +45,7 @@ export function DemoBar({ onStep, briefOpen, setBriefOpen }: { onStep: (view: De
         event.preventDefault();
         // The same answer a request would get: the packet page for the packet link, a demo PDF for a file.
         const tab = window.open("", "_blank");
-        void demoFetch(new URL(href, window.location.origin).href)?.blob().then((file) => tab?.location.replace(URL.createObjectURL(file)));
+        void window.fetch(new URL(href, window.location.origin).href).then((response) => response.blob()).then((file) => tab?.location.replace(URL.createObjectURL(file))).catch(() => tab?.close());
       }
     };
     document.addEventListener("click", click, true);
