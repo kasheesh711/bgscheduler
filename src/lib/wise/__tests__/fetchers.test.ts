@@ -16,6 +16,7 @@ import {
   fetchTeacherFarLeaves,
   fetchTeacherFullAvailability,
   fetchTeacherNearAvailability,
+  fetchBulkAvailability,
   resolveFarHorizonMaxAgeMinutes,
   DEFAULT_FAR_HORIZON_MAX_AGE_MINUTES,
   fetchWiseAcceptedStudents,
@@ -896,5 +897,82 @@ describe("resolveFarHorizonMaxAgeMinutes", () => {
     expect(resolveFarHorizonMaxAgeMinutes()).toBe(360);
     process.env.WISE_FAR_HORIZON_MAX_AGE_MINUTES = "";
     expect(resolveFarHorizonMaxAgeMinutes()).toBe(360);
+  });
+});
+
+describe("bulk availability (AVAIL-02)", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const FROM = new Date("2026-11-24T03:00:00.000Z");
+
+  type Row = { user: { _id: string }; workingHours: unknown; leaves?: unknown[] };
+
+  function makeBulkClient(rowsFor: (startDay: number) => Row[], totalRecords?: (rows: Row[]) => number) {
+    const calls: { path: string; params: Record<string, string>; startDay: number }[] = [];
+    const client = {
+      async get(path: string, params?: Record<string, string>) {
+        const startDay = Math.round((new Date(params!.startDate).getTime() - FROM.getTime()) / DAY_MS);
+        calls.push({ path, params: params!, startDay });
+        const teachers = rowsFor(startDay);
+        return { data: { teachers, total_records: totalRecords ? totalRecords(teachers) : teachers.length } };
+      },
+    };
+    return { client: client as unknown as WiseClient, calls };
+  }
+
+  const hours = { slots: [{ day: "Monday", startTime: "09:00", endTime: "17:00" }] };
+  const longLeave = { _id: "leave-long", startTime: "2026-11-25T00:00:00.000Z", endTime: "2026-11-29T00:00:00.000Z" };
+
+  it("covers days 0-28 in fourteen 2-day windows and merges each teacher's leaves once", async () => {
+    const { client, calls } = makeBulkClient((startDay) => [
+      {
+        user: { _id: "u-1" },
+        workingHours: startDay === 0 ? hours : { slots: [] },
+        // The long leave comes back from windows 0, 2 and 4.
+        leaves: [...(startDay <= 4 ? [longLeave] : []), ...(startDay === 10 ? [{ startTime: "a", endTime: "b" }] : [])],
+      },
+      { user: { _id: "u-2" }, workingHours: null, leaves: [] },
+    ]);
+
+    const result = await fetchBulkAvailability(client, "inst-1", FROM, 0, 28);
+
+    expect(calls.map((c) => c.startDay).sort((a, b) => a - b)).toEqual([0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26]);
+    expect(calls[0].path).toBe("/institutes/inst-1/availabilityData");
+    expect(calls[0].params).toEqual({
+      startDate: FROM.toISOString(),
+      endDate: new Date(FROM.getTime() + 2 * DAY_MS).toISOString(),
+      page_number: "1",
+      page_size: "1000",
+    });
+    expect(result.get("u-1")).toEqual({ workingHours: hours, leaves: [longLeave, { startTime: "a", endTime: "b" }] });
+    expect(result.get("u-2")).toEqual({ workingHours: undefined, leaves: [] });
+  });
+
+  it("leaves out a teacher that is missing from any window", async () => {
+    const { client } = makeBulkClient((startDay) => [
+      { user: { _id: "u-1" }, workingHours: hours, leaves: [] },
+      ...(startDay === 6 ? [] : [{ user: { _id: "u-2" }, workingHours: hours, leaves: [] }]),
+    ]);
+
+    const result = await fetchBulkAvailability(client, "inst-1", FROM, 0, 28);
+
+    expect([...result.keys()]).toEqual(["u-1"]);
+  });
+
+  it("rejects a short page, a row without leaves, and a failed window", async () => {
+    const row = { user: { _id: "u-1" }, workingHours: hours, leaves: [] };
+
+    const short = makeBulkClient(() => [row], (rows) => rows.length + 1);
+    await expect(fetchBulkAvailability(short.client, "inst-1", FROM, 0, 28)).rejects.toThrow("incomplete");
+    // The first window is awaited alone, so a hard failure costs one call.
+    expect(short.calls).toHaveLength(1);
+
+    const noLeaves = makeBulkClient(() => [{ user: { _id: "u-1" }, workingHours: hours }]);
+    await expect(fetchBulkAvailability(noLeaves.client, "inst-1", FROM, 0, 28)).rejects.toThrow("invalid teacher row");
+
+    const failing = makeBulkClient((startDay) => {
+      if (startDay === 12) throw new Error("429 RATE_LIMITED");
+      return [row];
+    });
+    await expect(fetchBulkAvailability(failing.client, "inst-1", FROM, 0, 28)).rejects.toThrow("429");
   });
 });
