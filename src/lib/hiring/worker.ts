@@ -33,7 +33,7 @@ import {
   type PreScreenAssessment,
 } from "./scoring";
 import { AWAITING_CALL, profileGate } from "./insights";
-import { audit, briefLink, candidateById, RESUME_ATTACHED, RESUME_NOT_ATTACHED, prestigeCatalogHash, settings, sourceHash } from "./service";
+import { audit, briefLink, candidateById, hasBookedCall, RESUME_ATTACHED, RESUME_NOT_ATTACHED, prestigeCatalogHash, settings, sourceHash } from "./service";
 import { callInviteSentAt, cancelOrphanCalls, formSentAt, releaseCallInvites, releaseQueues, remindCallInvites, replyCheck, runFollowUps } from "./queue";
 import { contactLines, deliverRecruitment, queueRecruitmentInvitation } from "./recruitment";
 import { deliverCalendar } from "./google";
@@ -237,6 +237,8 @@ export async function assessCandidates(
             universityAssessment: prestige,
             // A candidate who holds the app's call link stays on the Calls tab when HR writes to them on SEEK.
             callInvited: !!(await callInviteSentAt(tx, candidate.id)),
+            // The note must agree with the Calls tab while a booked call keeps the candidate there.
+            callBooked: await hasBookedCall(tx, candidate.id),
           },
           current.config,
         );

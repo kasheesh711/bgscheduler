@@ -1749,6 +1749,14 @@ const callRows = (db: Database, candidateId: string) =>
       ),
     );
 type CallRow = Awaited<ReturnType<typeof callRows>>[number];
+/** A confirmed HR call exists, ahead or started with no result yet: the `callBooked` that `profileGate` reads. */
+export const hasBookedCall = async (db: Database, candidateId: string) => (await callRows(db, candidateId)).length > 0;
+/** A booking or a good call answers the reminder, so one that still waits must not leave. */
+export const cancelCallReminder = (tx: Database, candidateId: string) =>
+  tx
+    .update(s.hiringOutbox)
+    .set({ status: "cancelled" })
+    .where(and(eq(s.hiringOutbox.key, `${candidateId}:call-invite-reminder`), inArray(s.hiringOutbox.status, ["pending", "failed"])));
 /** The candidate's call that has not ended. A call that ended with no result stays in the past and does not stop a new one. */
 const comingCall = async (db: Database, candidateId: string, now: Date) =>
   (await callRows(db, candidateId)).find((b) => b.endTime > now);
@@ -2001,6 +2009,7 @@ export async function bookCall(token: string, value: unknown, db: Database = get
     });
     // After the phone update, so the notice carries the number HR will call.
     await queueRecruitmentMock(tx, call, own ? "moved" : "booked", own?.startTime);
+    await cancelCallReminder(tx, cap.id);
     // The phone number stays out of the audit row.
     await audit(tx, "candidate", own ? "call-moved" : "call-booked", cap.id, { start: slot.start });
     return call;
@@ -2446,7 +2455,7 @@ export async function reviewCandidate(
         if (!(await inviteToPreScreen(tx, c, now)))
           throw new HiringError(409, "A pre-screen form was already queued for this candidate. No new form can be sent.");
         // Kevin's rule: a click past the call queue counts as HR's good call.
-        const skippedCall = profileGate(c, config).awaitingCall;
+        const skippedCall = profileGate({ ...c, callBooked: await hasBookedCall(tx, id) }, config).awaitingCall;
         if (skippedCall) detail = { goodCall: "manual" };
         await cancelComingCall(tx, id, now);
         await tx

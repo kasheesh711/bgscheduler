@@ -29,8 +29,10 @@ import {
 import {
   audit,
   callCalendarState,
+  cancelCallReminder,
   cancelComingCall,
   enqueue,
+  hasBookedCall,
   inviteToCall,
   inviteToPreScreen,
   inviteToVisit,
@@ -348,8 +350,10 @@ export async function recordCall(
     const review = row.callReview ?? { good: null, tries: [] };
     // After a good call HR will not make a call that is still ahead. A no answer closes the call that has started, and
     // the candidate's link then lets them book again.
-    if (result === "good") await cancelComingCall(tx, id, now);
-    else await missStartedCall(tx, id, now);
+    if (result === "good") {
+      await cancelComingCall(tx, id, now);
+      await cancelCallReminder(tx, id);
+    } else await missStartedCall(tx, id, now);
     await tx
       .update(c)
       .set({
@@ -562,7 +566,7 @@ export async function releaseQueues(db: Database, now = new Date()) {
     for (const entry of forms.release) {
       const row = await lockCandidate(tx, entry.id);
       // A person can act between the queue read and this row lock.
-      if (row.stage !== "new" || row.preScreen || !profileGate(row, config).eligible) continue;
+      if (row.stage !== "new" || row.preScreen || !profileGate({ ...row, callBooked: await hasBookedCall(tx, row.id) }, config).eligible) continue;
       if (!(await inviteToPreScreen(tx, row, now))) continue;
       const subjects = row.profileAssessment!.subjects.filter((v) => v.relevant).map((v) => v.subject);
       await tx

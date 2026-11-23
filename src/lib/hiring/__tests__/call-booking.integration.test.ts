@@ -34,7 +34,7 @@ const DAY = 86400000;
 // Wednesday 12:00 in Bangkok. The five dates on offer are Thu 5, Fri 6, Mon 9, Tue 10 and Wed 11 November.
 const now = new Date("2026-11-04T05:00:00Z");
 const after = (days: number) => new Date(now.getTime() + days * DAY);
-// Thursday 09:00, 09:15 and 09:30 in Bangkok, and Friday 09:00.
+// Thursday 14:00, 14:15, 14:30 and 15:00 in Bangkok, and Friday 14:00: inside the R1 hours. The names are from the old 09:00 times.
 const NINE = "2026-11-05T07:00:00.000Z";
 const QUARTER = "2026-11-05T07:15:00.000Z";
 const HALF = "2026-11-05T07:30:00.000Z";
@@ -484,6 +484,15 @@ describe("a call booked before the scores went up", () => {
     expect((await candidate(booked.id)).stage).toBe("pre_screen");
   });
 
+  it("counts a hand invite to the form as HR's good call", async () => {
+    const a = await seed();
+    await book(a.id);
+    await setConfig({ profileThreshold: 90, callThreshold: 90 });
+    await reviewCandidate(a.id, { revision: a.revision, action: "advance", subjects: ["Mathematics"], reason: "Sent by hand" }, hr, db);
+    expect((await candidate(a.id)).callReview?.good).toMatchObject({ manual: true });
+    expect((await callsOf(a.id)).map((row) => row.status)).toEqual(["cancelled"]);
+  });
+
   it("ends when the started call gets no answer", async () => {
     const a = await seed();
     await book(a.id);
@@ -515,6 +524,10 @@ describe("the call link reminder", () => {
     for (const row of [booked, fresh, noLink]) expect(await reminders(row.id)).toEqual([]);
     expect(await remindCallInvites(db)).toBe(0);
     expect((await db.select().from(s.hiringAudit)).filter((row) => row.action === "call-invite-reminder")).toHaveLength(1);
+    // The reminder still waits to leave when the candidate books: it must not follow the booking.
+    expect(job.status).toBe("pending");
+    await book(quiet.id, FRIDAY.replace("-06T", "-09T"));
+    expect((await reminders(quiet.id)).map((row) => row.status)).toEqual(["cancelled"]);
   });
 
   it("does not go to a candidate who left the Calls tab, and obeys the day limit", async () => {
