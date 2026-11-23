@@ -89,6 +89,17 @@ describe("profileGate with the call score", () => {
     const tried = { good: null, tries: [{ at: "2026-11-04T03:00:00.000Z", by: "hr@example.com" }] };
     expect(profileGate(candidate("a", "new", { ...at80, callReview: tried }), calls).awaitingCall).toBe(true);
   });
+  it("keeps a booked call and a good call when the scores go up after it", () => {
+    // Kevin, 24 Nov 2026: the candidate scores 80 and both scores are now 90.
+    const raised = { ...config, profileThreshold: 90, callThreshold: 90 };
+    expect(profileGate(candidate("a", "new", at80), raised).short).toEqual(["Below profile threshold"]);
+    const booked = profileGate({ ...candidate("a", "new", at80), callBooked: true }, raised);
+    expect(booked).toMatchObject({ eligible: false, awaitingCall: true, review: [] });
+    expect(booked.short).toEqual(["Waiting for a call"]);
+    expect(profileGate(candidate("a", "new", { ...at80, callReview: good }), raised)).toMatchObject({ eligible: true, awaitingCall: false });
+    // A blank call score turns calls off, so a booked call no longer holds the candidate.
+    expect(profileGate({ ...candidate("a", "new", at80), callBooked: true }, { ...raised, callThreshold: null }).short).toEqual(["Below profile threshold"]);
+  });
   it("needs no call when the call score is blank", () => {
     expect(profileGate(candidate("a", "new", at80), { ...config, callThreshold: null })).toMatchObject({ eligible: true, awaitingCall: false });
   });

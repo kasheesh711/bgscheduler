@@ -410,14 +410,18 @@ export const callLink = (id: string, expires: Date) =>
  * The invitation to book R1: HR Interview (Kevin, 22 Nov 2026: thank and congratulate the candidate, and show the
  * process). It holds no times: the page reads HR's calendar when it opens.
  */
-export const callInviteEmail = (input: { name: string; url: string }) =>
+export const callInviteEmail = (input: { name: string; url: string; reminder?: boolean }) =>
   hiringEmail({
-    subject: "Congratulations! Book your R1: HR Interview with BeGifted",
-    preheader: `You are through to R1: a ${CALL_MINUTES}-minute Google Meet with our HR team. Choose a time.`,
-    title: "Congratulations! You are through to R1",
+    subject: input.reminder ? "Reminder: book your R1: HR Interview with BeGifted" : "Congratulations! Book your R1: HR Interview with BeGifted",
+    preheader: input.reminder
+      ? `Your R1 interview is still open to book: a ${CALL_MINUTES}-minute Google Meet with our HR team.`
+      : `You are through to R1: a ${CALL_MINUTES}-minute Google Meet with our HR team. Choose a time.`,
+    title: input.reminder ? "Your R1 interview is still open to book" : "Congratulations! You are through to R1",
     name: input.name,
     paragraphs: [
-      "Thank you for your application to become a BeGifted tutor. Congratulations: your application stood out, and we invite you to R1: HR Interview.",
+      input.reminder
+        ? "We invited you to R1: HR Interview for the BeGifted tutor role, and we do not have a booking from you yet. Your place is still open."
+        : "Thank you for your application to become a BeGifted tutor. Congratulations: your application stood out, and we invite you to R1: HR Interview.",
       `R1 is a ${CALL_MINUTES}-minute video call on Google Meet with our HR team. Please choose a time that suits you.`,
     ],
     details: [
@@ -437,12 +441,13 @@ export const callInviteEmail = (input: { name: string; url: string }) =>
  * Queues the call booking link, once per candidate. `workflowStage` cancels it if the candidate leaves `new` before it
  * is sent, and a SEEK contact or a stop cancels it while it waits, like any other invitation.
  */
-export async function inviteToCall(db: Database, candidate: Candidate, now = new Date()) {
+export async function inviteToCall(db: Database, candidate: Candidate, now = new Date(), reminder = false) {
   if (!candidate.email)
     throw new HiringError(409, "A verified application email is required.");
+  // The reminder holds a new link with a full life. The first link stays valid until its own end.
   const expires = new Date((Math.floor(now.getTime() / 1000) + CALL_LINK_DAYS * 86400) * 1000);
   return enqueue(db, {
-    key: `${candidate.id}:call-invite`,
+    key: `${candidate.id}:call-invite${reminder ? "-reminder" : ""}`,
     candidateId: candidate.id,
     kind: "email",
     // The day limit reads this time, so it comes from the same clock as the limit check.
@@ -450,7 +455,7 @@ export async function inviteToCall(db: Database, candidate: Candidate, now = new
     payload: {
       to: candidate.email,
       workflowStage: "new",
-      ...callInviteEmail({ name: candidate.name, url: callLink(candidate.id, expires) }),
+      ...callInviteEmail({ name: candidate.name, url: callLink(candidate.id, expires), reminder }),
     },
   });
 }
@@ -926,6 +931,7 @@ export async function dashboard(db: Database = getDb()) {
         ),
         // The gate on the screen must agree with the worker: a sent call link lifts the earlier-contact hold.
         callInvited: inviteOutbox.some((o) => o.key === `${c.id}:call-invite` && o.status === "sent"),
+        callBooked: calls.some((call) => call.candidateId === c.id),
       };
     }),
     bookings,

@@ -34,7 +34,7 @@ import {
 } from "./scoring";
 import { AWAITING_CALL, profileGate } from "./insights";
 import { audit, briefLink, candidateById, RESUME_ATTACHED, RESUME_NOT_ATTACHED, prestigeCatalogHash, settings, sourceHash } from "./service";
-import { callInviteSentAt, cancelOrphanCalls, formSentAt, releaseCallInvites, releaseQueues, replyCheck, runFollowUps } from "./queue";
+import { callInviteSentAt, cancelOrphanCalls, formSentAt, releaseCallInvites, releaseQueues, remindCallInvites, replyCheck, runFollowUps } from "./queue";
 import { contactLines, deliverRecruitment, queueRecruitmentInvitation } from "./recruitment";
 import { deliverCalendar } from "./google";
 import { hiringEmailHtmlFromText } from "./email";
@@ -793,12 +793,13 @@ export async function runHiringCycle(db: Database, assess: Assess) {
     const released = await releaseQueues(db);
     await cancelOrphanCalls(db);
     const callInvites = await releaseCallInvites(db);
+    const callReminders = await remindCallInvites(db);
     await mirrorTracker(db, config);
     await db
       .update(s.hiringSettings)
       .set({ workerAt: new Date(), workerError: null })
       .where(eq(s.hiringSettings.id, "default"));
-    return { ...imported, calls, ...followUps, ...released, callInvites };
+    return { ...imported, calls, ...followUps, ...released, callInvites, callReminders };
   } catch (error) {
     await db
       .update(s.hiringSettings)

@@ -32,6 +32,7 @@ const row = (id: string, a: Assessment | null, createdAt: string): FormCandidate
   queueManual: null,
   callReview: null,
   callInvited: false,
+  callBooked: false,
 });
 const config = {
   callThreshold: 80,
