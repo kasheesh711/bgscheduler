@@ -543,6 +543,61 @@ describe("the call link reminder", () => {
   });
 });
 
+describe("the call-skip test", () => {
+  const routes = () => db.select().from(s.hiringCallTest);
+  it("is off without the worker setting", async () => {
+    const a = await seed();
+    expect(await releaseCallInvites(db)).toBe(1);
+    expect(await routes()).toEqual([]);
+    expect((await jobsOf(a.id)).map((job) => job.key)).toEqual([`${a.id}:call-invite`]);
+  });
+
+  it("fills both routes to the same number; the direct route gets the form at once and no call link", async () => {
+    vi.stubEnv("HIRING_CALL_TEST_PER_ARM", "2");
+    const rows = [await seed(), await seed(), await seed(), await seed(), await seed()];
+    // A draw of 0 takes the direct route while it has a place.
+    expect(await releaseCallInvites(db, now, () => 0)).toBe(5);
+    const drawn = await routes();
+    expect(drawn.filter((row) => row.arm === "direct")).toHaveLength(2);
+    expect(drawn.filter((row) => row.arm === "call")).toHaveLength(2);
+    const direct = new Set(drawn.filter((row) => row.arm === "direct").map((row) => row.candidateId));
+    for (const row of rows) {
+      const keys = (await jobsOf(row.id)).map((job) => job.key);
+      const stored = await candidate(row.id);
+      if (direct.has(row.id)) {
+        expect(keys).toEqual([`${row.id}:pre-screen`]);
+        expect(stored).toMatchObject({ stage: "pre_screen", callReview: null });
+        const [job] = await jobsOf(row.id);
+        // The link token is random letters, so it is taken out before the wording check.
+        expect(String(job.payload.text).replace(/https?:\S+/g, "")).not.toMatch(/R1|R2|HR Interview/);
+        expect(String(job.payload.text)).toContain("/hiring/book/");
+      } else {
+        expect(keys).toEqual([`${row.id}:call-invite`]);
+        expect(stored.stage).toBe("new");
+      }
+    }
+    // Nobody on the direct route stands on the Calls tab, and the routes are full: the next candidate is not in the test.
+    expect((await callQueue(db, await settingsConfig())).filter((entry) => direct.has(entry.id))).toEqual([]);
+    const late = await seed();
+    expect(await releaseCallInvites(db, now, () => 0)).toBe(1);
+    expect(await routes()).toHaveLength(4);
+    expect((await jobsOf(late.id)).map((job) => job.key)).toEqual([`${late.id}:call-invite`]);
+  });
+
+  it("shows the route nowhere: not in the audit, not in the dashboard, and the direct places use no limit", async () => {
+    vi.stubEnv("HIRING_CALL_TEST_PER_ARM", "1");
+    const a = await seed();
+    expect(await releaseCallInvites(db, now, () => 0)).toBe(1);
+    expect(await routes()).toMatchObject([{ candidateId: a.id, arm: "direct" }]);
+    const audit = await db.select().from(s.hiringAudit);
+    expect(audit.map((row) => row.action)).toEqual(["pre-screen-release"]);
+    expect(JSON.stringify(audit)).not.toMatch(/direct|arm|callTest|call_test/);
+    const screen = JSON.stringify(await dashboard(db));
+    expect(screen).not.toMatch(/"arm"|callTest|call_test|"free"/);
+    expect(await readLimitUsage(db, "pre_screen", now)).toMatchObject({ perDay: 0, perWeek: 0, waiting: 0, bySubject: {} });
+  });
+});
+
 describe("SEEK and the lists", () => {
   it("a sent call link keeps the candidate on the Calls tab; a waiting link does not; Not Suitable stops and cancels the call", async () => {
     const sent = await seed({ sourceIds: ["app-sent"] });

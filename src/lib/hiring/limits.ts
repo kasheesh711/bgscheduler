@@ -15,7 +15,15 @@ export type ManualPlace = { ahead: string[]; movedAt: string };
 /** HR's calls before the pre-screen form. Only a good call lets a candidate at or above the call score into the send queue. */
 export type CallReview = { good: { at: string; by: string; manual?: true } | null; tries: { at: string; by: string }[]; notes?: { text: string; at: string; by: string } };
 export type ScoreOverride = { score: number; reason: string; by: string; at: string };
-export type QueueEntry = { id: string; subject: Subject; score: number; createdAt: Date; manual?: ManualPlace | null };
+export type QueueEntry = {
+  id: string;
+  subject: Subject;
+  score: number;
+  createdAt: Date;
+  manual?: ManualPlace | null;
+  /** Holds a place counted apart from these limits: no limit holds the row, and it uses no place. */
+  free?: boolean;
+};
 
 /** Midnight in Bangkok for the day that holds `now`. Bangkok has no daylight saving. */
 export function bangkokDayStart(now: Date): Date {
@@ -118,6 +126,10 @@ export function releaseQueue(
   // Only the pre-screen queue can be dragged.
   const ranked = funnel === "pre_screen" ? mergeManualOrder(automatic) : automatic;
   for (const [index, row] of ranked.entries()) {
+    if (row.free) {
+      release.push(row);
+      continue;
+    }
     const limit = blockingLimit(funnel, row.subject, used, config);
     if (limit) {
       held.push({ ...row, position: index + 1, limit });

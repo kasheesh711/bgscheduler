@@ -81,11 +81,11 @@ export async function queueRecruitmentMock(db: Database, booking: typeof booking
 }
 
 /** A head's decision after a mock. HR prepares the review for a Yes recommendation. One notice for each recorded decision. */
-export async function queueRecruitmentHeadDecision(db: Database, candidate: { id: string; name: string }, input: { decision: "hire" | "reject"; reason: string; head: string; subject: string | null; key: string }) {
+export async function queueRecruitmentHeadDecision(db: Database, candidate: { id: string; name: string }, input: { decision: "hire" | "reject"; reason: string; head: string; subject: string | null; key: string; /** HR recorded a good call. Without one the head wrote the behavioural assessment. */ called?: boolean }) {
   const { config } = await settings(db);
   if (!config.recruitmentLineGroupId) return;
   await enqueue(db, `head-decision:${input.key}`, config.recruitmentLineGroupId,
-    `Head decision: ${input.decision === "hire" ? "HIRE" : "DO NOT HIRE"}\nCandidate: ${candidate.name} — ${input.subject ?? "Subject not recorded"}\nHead: ${input.head}\nReason: ${input.reason || "None given"}\n${input.decision === "hire" ? "HR: add the pre-screen call assessment and send the packet to Gift." : "The rejection email is queued."}`,
+    `Head decision: ${input.decision === "hire" ? "HIRE" : "DO NOT HIRE"}\nCandidate: ${candidate.name} — ${input.subject ?? "Subject not recorded"}\nHead: ${input.head}\nReason: ${input.reason || "None given"}\n${input.decision === "hire" ? (input.called ?? true) ? "HR: add the pre-screen call assessment and send the packet to Gift." : "HR: check the head's behavioural assessment and send the packet to Gift." : "The rejection email is queued."}`,
     null, "head_decision");
 }
 

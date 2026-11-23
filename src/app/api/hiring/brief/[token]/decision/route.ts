@@ -6,7 +6,7 @@ import { settings } from "@/lib/hiring/service";
 import { deliverOutbox } from "@/lib/hiring/worker";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
 
-const body = z.object({ decision: z.enum(["hire", "reject"]), reason: z.string().trim().max(1000) }).strict();
+const body = z.object({ decision: z.enum(["hire", "reject"]), reason: z.string().trim().max(1000), behavioral: z.string().trim().max(10000).optional() }).strict();
 
 /**
  * Public: the interviewer's link is the only access check. It records the tutor’s recommendation. A No queues a rejection email.

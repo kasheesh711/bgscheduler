@@ -49,6 +49,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
         url={decisionUrl}
         hasScores={lastSent !== null || brief.form === "closed"}
         unsent={unsent}
+        needBehavioral={brief.behavioralNeeded}
         pending={pending}
         setPending={setPending}
       />

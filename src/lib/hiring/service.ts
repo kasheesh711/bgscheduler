@@ -472,8 +472,9 @@ export const preScreenEmail = (name: string, email: string, reminder: boolean, v
         preheader: "Answer a short questionnaire, then book your onsite visit.",
         title: reminder ? "Your questions are still open" : afterR1 ? "Thank you for R1. Here are your next steps" : "Here are your next steps",
         hero: "next",
-        // With no R1 (no call score, or a person sent the form), step 1 is not done, so the process is not shown.
-        ...(afterR1 ? { process: 2 as const } : {}),
+        // With no R1 (no call for this candidate, or a person sent the form), the process is shown without that step.
+        process: 2 as const,
+        processNoR1: !afterR1,
         name,
         paragraphs: [
           reminder
@@ -1371,6 +1372,7 @@ export async function briefView(token: string, db: Database = getDb(), now = new
       preScreen: s.hiringCandidates.preScreen,
       resumePath: s.hiringCandidates.resumePath,
       resumeType: s.hiringCandidates.resumeType,
+      callReview: s.hiringCandidates.callReview,
     })
     .from(s.hiringCandidates)
     .where(eq(s.hiringCandidates.id, mock.candidateId));
@@ -1415,6 +1417,8 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     rubric: own.rubric,
     form: own.form,
     recommendationReady,
+    // HR did not call this candidate, so a Yes needs the head's behavioural assessment.
+    behavioralNeeded: !candidate.callReview?.good,
     recommendationBlock: own.form !== "closed" || recommendationReady ? null : checking ? ("checking" as const) : ("admin" as const),
   };
 }

@@ -142,7 +142,9 @@ export async function queueFinalResult(tx: Database, candidate: Awaited<ReturnTy
   return outboxKey;
 }
 
-export async function saveBriefDecision(token: string, input: { decision: Decision; reason: string }, db: Database, now = new Date()) {
+/** The shortest behavioural assessment a head may send with a Yes for a candidate HR did not call. */
+export const BEHAVIORAL_MIN = 20;
+export async function saveBriefDecision(token: string, input: { decision: Decision; reason: string; behavioral?: string }, db: Database, now = new Date()) {
   if (!runtimeWritesAllowed()) throw new HiringError(503, "A recommendation can be saved only on the live site.");
   const booking = await briefMock(token, db, now);
   const reason = input.reason.trim();
@@ -155,6 +157,12 @@ export async function saveBriefDecision(token: string, input: { decision: Decisi
     const result = await completedBriefResult(tx, mock);
     if (!result)
       throw new HiringError(409, "Send the completed rubric for this mock first.");
+    // Kevin, 24 Nov 2026: with no HR call there are no call notes, so the head writes the behavioural assessment from the
+    // mock lesson. The final review starts from it.
+    const called = !!candidate.callReview?.good;
+    const behavioral = (input.behavioral ?? "").trim();
+    if (input.decision === "hire" && !called && behavioral.length < BEHAVIORAL_MIN)
+      throw new HiringError(400, `Write the behavioural assessment (${BEHAVIORAL_MIN}+ characters).`);
     const last = await headRecommendation(tx, candidate.id);
     if (last?.detail.bookingId === mock.id) {
       if (last.detail.decision === input.decision && last.detail.reason === reason) return { queued: null };
@@ -163,11 +171,11 @@ export async function saveBriefDecision(token: string, input: { decision: Decisi
     const head = mock.interviewerKey ?? "Interviewer";
     const actor = `interviewer:${head}`;
     const [row] = await tx.insert(s.hiringAudit).values({ actor, action: HEAD_DECISION, candidateId: candidate.id,
-      detail: { decision: input.decision, reason, head, bookingId: mock.id, mockResultId: result.id },
+      detail: { decision: input.decision, reason, head, bookingId: mock.id, mockResultId: result.id, ...(input.decision === "hire" && !called ? { behavioral } : {}) },
     }).returning({ id: s.hiringAudit.id });
     const queued = input.decision === "reject" ? await queueFinalResult(tx, candidate, "reject", reason, actor, null, now) : null;
     await queueRecruitmentHeadDecision(tx, candidate, { decision: input.decision, reason, head,
-      subject: mock.subjects[0] ?? null, key: row.id });
+      subject: mock.subjects[0] ?? null, key: row.id, called });
     return { queued };
   });
 }

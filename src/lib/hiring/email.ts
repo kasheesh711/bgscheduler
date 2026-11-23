@@ -134,10 +134,21 @@ export const HIRING_PROCESS: CompanySection[] = [
   { heading: "R2: Final round mock teaching", paragraphs: ["If you pass the test, a 1-hour mock teaching interview follows on the same day."] },
   { heading: "Offer", paragraphs: ["We send the offer letter by email. Then you book your contract-signing day at BeGifted (onsite)."] },
 ];
+/**
+ * The same process for a candidate who had no R1 (Kevin, 24 Nov 2026): each email must describe the candidate's own route.
+ * It has no R1 step, no "If R1 goes well" and no "R2" name, and it reads as the normal process.
+ */
+const NO_R1_PROCESS: CompanySection[] = [
+  { heading: "Pre-screening questions and visit booking", paragraphs: ["We send you a short questionnaire and a link to book your onsite visit. Answer the questions first, then book your visit."] },
+  HIRING_PROCESS[2],
+  { heading: "Mock teaching interview", paragraphs: HIRING_PROCESS[3].paragraphs },
+  HIRING_PROCESS[4],
+];
 const PROCESS_ICONS = ["step-r1-interview.png", "step-form-booking.png", "step-exam.png", "step-mock-teaching.png", "step-offer.png"] as const;
 /** The five steps with their icons. `current` (1 to 5) marks the reader's step; earlier steps show as done. */
-export const processSteps = (current?: number): CompanySection[] =>
-  HIRING_PROCESS.map((step, i) => ({
+export const processSteps = (current?: number, noR1 = false): CompanySection[] =>
+  // `current` keeps the five-step numbering in both lists, so step 2 is the questions with or without R1.
+  (noR1 ? NO_R1_PROCESS.map((step, i) => [step, i + 1] as const) : HIRING_PROCESS.map((step, i) => [step, i] as const)).map(([step, i]) => ({
     ...step,
     icon: asset(PROCESS_ICONS[i]),
     ...(current && i + 1 < current ? { state: "done" as const } : current === i + 1 ? { state: "current" as const } : {}),
@@ -174,6 +185,8 @@ export interface HiringEmail {
   hero?: HiringHero;
   /** Shows BeGifted's five steps at the end, with this step (1 to 5) marked "You are here". */
   process?: 1 | 2 | 3 | 4 | 5;
+  /** The candidate had no R1: the process is shown without that step. */
+  processNoR1?: boolean;
   /** A short bullet list after the steps. */
   list?: { heading: string; bullets: string[] };
   /** Paragraphs after those. */
@@ -213,7 +226,7 @@ export function hiringEmail(email: HiringEmail): { subject: string; text: string
   if (email.list) blocks.push({ kind: "copy", heading: email.list.heading, paragraphs: [], bullets: email.list.bullets });
   if (email.after?.length) blocks.push({ kind: "copy", paragraphs: email.after });
   if (email.links?.length) blocks.push({ kind: "resources", entries: email.links });
-  const process = email.process ? processSteps(email.process) : null;
+  const process = email.process ? processSteps(email.process, email.processNoR1) : null;
   if (process) blocks.push({ kind: "steps", heading: PROCESS_HEADING, entries: process });
   const text = [
     greeting,
