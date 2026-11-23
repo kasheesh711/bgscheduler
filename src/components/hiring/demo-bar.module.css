@@ -1,0 +1,155 @@
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: grid;
+  gap: 8px;
+  padding: 10px 16px 12px;
+  background: #0f2d4a;
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.bar p {
+  margin: 0;
+}
+.bar button,
+.bar a {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid rgb(255 255 255 / 0.35);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.bar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.bar button:focus-visible,
+.bar a:focus-visible,
+.briefNote button:focus-visible {
+  outline: 3px solid #ffd166;
+  outline-offset: 2px;
+}
+.top,
+.now {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+.flag strong,
+.briefNote strong {
+  margin-right: 8px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #ffd166;
+  color: #0f2d4a;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 12px;
+}
+.tools,
+.moves {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+.steps {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+}
+.steps button {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.steps span {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 0.18);
+  font-size: 12px;
+}
+.steps button[data-done] {
+  border-color: rgb(255 255 255 / 0.15);
+  opacity: 0.75;
+}
+.steps button[aria-current] {
+  border-color: #38bdf8;
+  background: #38bdf8;
+  color: #0f2d4a;
+  font-weight: 600;
+}
+.steps button[aria-current] span {
+  background: #0f2d4a;
+  color: #fff;
+}
+.who {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9fd8fb;
+}
+.act {
+  color: #ffd166;
+}
+.moves button[data-primary] {
+  border-color: #ffd166;
+  background: #ffd166;
+  color: #0f2d4a;
+  font-weight: 600;
+}
+.brief {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  overflow-y: auto;
+  background: #fff;
+}
+.briefNote {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  padding: 8px 16px;
+  background: #0f2d4a;
+  color: #fff;
+  font-size: 14px;
+}
+.briefNote button {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid #ffd166;
+  border-radius: 8px;
+  background: #ffd166;
+  color: #0f2d4a;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+@media (width < 720px) {
+  .now {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .moves button {
+    flex: 1;
+  }
+}

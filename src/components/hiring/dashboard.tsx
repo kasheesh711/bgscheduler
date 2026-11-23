@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 
-import { startTransition, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useSearchParams } from "next/navigation";
 import { Instrument_Serif } from "next/font/google";
 import { signIn } from "next-auth/react";
@@ -24,6 +24,9 @@ import { PreScreenScreen } from "./prescreen-screen";
 import { CallsScreen } from "./calls-screen";
 import { CapacityScreen } from "./capacity-screen";
 import { FunnelPanel } from "./funnel-panel";
+import { DemoBar, useDemoState, type DemoView } from "./demo-bar";
+import { installDemoFetch } from "@/lib/hiring/demo";
+import { PipelineBoardPanel } from "./pipeline-board";
 import { RunSheetScreen } from "./run-sheet-screen";
 import { SeekScreen } from "./seek-screen";
 import { SetupPanel } from "./setup-panel";
@@ -118,7 +121,14 @@ export function HiringDashboard() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
-  const param = useSearchParams().get("view");
+  const search = useSearchParams();
+  const param = search.get("view");
+  // Demo mode (?demo=1): a made-up candidate, and every hiring request is answered in the browser. See demo.ts.
+  const demo = search.get("demo") === "1";
+  // Before any child effect can send a request. The call does nothing after the first time.
+  if (demo) installDemoFetch();
+  const demoStep = useDemoState();
+  const [briefOpen, setBriefOpen] = useState(false);
   const hash = useSyncExternalStore(subscribeToReviewLink, () => window.location.hash, () => null);
   const reviewLink = param === "hr" && hash ? /^#review-(.+)$/.exec(hash)?.[1] : undefined;
   const giftOnly = !!data?.reviewAccess?.gift && !data.reviewAccess.hr;
@@ -129,12 +139,13 @@ export function HiringDashboard() {
   // Next.js keeps useSearchParams in step with pushState, and this does not reload the page.
   const setView = (name: HiringView, keepRole = false) => {
     // Leaving a role screen for the full dashboard forgets it. Opening one remembers it.
-    if (!keepRole) remember(isRoleView(name) ? name : null);
-    if (name !== view) window.history.pushState(null, "", `?view=${name}`);
+    if (!keepRole && !demo) remember(isRoleView(name) ? name : null);
+    if (name !== view) window.history.pushState(null, "", `?view=${name}${demo ? "&demo=1" : ""}`);
   };
   const role = isRoleView(view);
   useEffect(() => {
-    if (hash === null || (reviewLink && (!loaded || giftOnly))) return;
+    // The demo must not change the screen that the real /hiring opens on.
+    if (demo || hash === null || (reviewLink && (!loaded || giftOnly))) return;
     if (isRoleView(param)) return remember(param);
     if (param) return;
     try {
@@ -143,7 +154,7 @@ export function HiringDashboard() {
     } catch {
       // As in remember().
     }
-  }, [param, hash, reviewLink, loaded, giftOnly]);
+  }, [demo, param, hash, reviewLink, loaded, giftOnly]);
   const [selected, setSelected] = useState<string | null>(null);
   const [assessmentVisit, setAssessmentVisit] = useState<string | null>(null);
   // The candidate whose résumé viewer is open. It loads the file only on request.
@@ -152,22 +163,25 @@ export function HiringDashboard() {
   // Head ticks not saved yet. They live here, not in the setup panel, so a tab switch does not drop them.
   const [dayDrafts, setDayDrafts] = useState<Record<string, boolean[]>>({});
 
+  const configLoaded = useRef(false);
   async function load(keepConfig = false) {
     const response = await fetch("/api/hiring", { cache: "no-store" });
     const value = await response.json();
     if (!response.ok) throw new Error(value.error);
     setData(value);
     // A candidate decision must not discard setup edits that are not yet saved.
-    if (!keepConfig) {
+    if (!keepConfig || !configLoaded.current) {
+      configLoaded.current = true;
       // The server refuses a subject listed twice, so the draft drops the repeat and a save can repair it.
       setConfig({ ...value.config, subjectPriority: dedupePriority(value.config.subjectPriority) });
       // A save must carry the revision these edits started from, so a stale save gets a 409.
       setConfigRevision(value.revision);
     }
   }
+  // In demo mode a new step is a new payload.
   useEffect(() => {
-    load().catch((e) => setError(e.message));
-  }, []);
+    load(true).catch((e) => setError(e.message));
+  }, [demoStep]);
   const command: Command = async (body) => {
     setBusy(true);
     setError("");
@@ -299,6 +313,8 @@ export function HiringDashboard() {
             {VIEWS[name]}
           </button>
         ))}
+        {/* A full page load, so the demo starts clean and the real data is gone from the screen. */}
+        {!demo && <button type="button" onClick={() => window.location.assign("/hiring?demo=1")}>Demo</button>}
       </nav>
       <nav className={nav.workflow} aria-label="Hiring steps">
         <ol className={nav.steps} role="list">
@@ -324,6 +340,7 @@ export function HiringDashboard() {
 
   return (
     <div className={`${css.surface} ${serif.variable}`} data-heads-review={view === "heads" || view === "review" ? "" : undefined}>
+      {demo && <DemoBar onStep={(name: DemoView) => setView(name, true)} briefOpen={briefOpen} setBriefOpen={setBriefOpen} />}
       <header className={css.topbar} data-compact={view === "hr" || view === "heads" || giftReview ? "" : undefined} data-heads={view === "heads" ? "" : undefined}>
         <div>
           <h1 className={css.title}>
@@ -484,6 +501,7 @@ export function HiringDashboard() {
               threshold={data.config.profileThreshold}
               onShowReady={() => setFilter({ ...NO_FILTER, stage: "ready" })}
             />
+            <PipelineBoardPanel data={data} onOpenRecord={openRecord} />
             <FunnelPanel
               data={data}
               campaigns={data.config.seekJobs}
