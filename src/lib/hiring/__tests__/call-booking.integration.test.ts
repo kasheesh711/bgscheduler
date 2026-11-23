@@ -6,7 +6,7 @@ import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { configSchema, HiringError, HR_CALENDAR, HR_CALL_KEY, RESUME_TYPES, type HiringConfig } from "../model";
 import { bookCall, bookingView, briefCandidateId, briefView, callCalendarState, callView, dashboard, reviewCandidate, visitView } from "../service";
-import { callQueue, cancelOrphanCalls, readLimitUsage, recordCall, releaseCallInvites, releaseQueues } from "../queue";
+import { callQueue, cancelOrphanCalls, readLimitUsage, recordCall, releaseCallInvites, releaseQueues, remindCallInvites } from "../queue";
 import { observeSeekState } from "../sources";
 import { googleConnectionStatus, readHrBusy } from "../google";
 import { bookingToken } from "../tokens";
@@ -34,12 +34,12 @@ const DAY = 86400000;
 // Wednesday 12:00 in Bangkok. The five dates on offer are Thu 5, Fri 6, Mon 9, Tue 10 and Wed 11 November.
 const now = new Date("2026-11-04T05:00:00Z");
 const after = (days: number) => new Date(now.getTime() + days * DAY);
-// Thursday 09:00, 09:15 and 09:30 in Bangkok, and Friday 09:00.
-const NINE = "2026-11-05T02:00:00.000Z";
-const QUARTER = "2026-11-05T02:15:00.000Z";
-const HALF = "2026-11-05T02:30:00.000Z";
-const TEN = "2026-11-05T03:00:00.000Z";
-const FRIDAY = "2026-11-06T02:00:00.000Z";
+// Thursday 14:00, 14:15, 14:30 and 15:00 in Bangkok, and Friday 14:00: inside the R1 hours. The names are from the old 09:00 times.
+const NINE = "2026-11-05T07:00:00.000Z";
+const QUARTER = "2026-11-05T07:15:00.000Z";
+const HALF = "2026-11-05T07:30:00.000Z";
+const TEN = "2026-11-05T08:00:00.000Z";
+const FRIDAY = "2026-11-06T07:00:00.000Z";
 const LINK = after(14);
 const hr = "hr@example.com";
 const config = configSchema.parse({
@@ -165,13 +165,13 @@ describe("the call booking link", () => {
 
   it("shows only the times that HR's calendar and other calls leave free, and none when the calendar cannot be read", async () => {
     const [a, b] = [await seed(), await seed()];
-    vi.mocked(readHrBusy).mockResolvedValue([{ start: new Date(NINE), end: new Date("2026-11-05T02:20:00.000Z") }]);
+    vi.mocked(readHrBusy).mockResolvedValue([{ start: new Date(NINE), end: new Date("2026-11-05T07:20:00.000Z") }]);
     await book(b.id, HALF);
     const view = await callView(link(a.id), db);
     // 29 thirty-minute times outside lunch on each day, less 09:00 and 09:15 (the calendar) and 09:30 and 09:45 (the
     // other candidate's 09:30–10:00).
     expect(view.slots).toHaveLength(29 * 5 - 4);
-    expect(view.slots[0]).toEqual({ date: "2026-11-05", start: TEN, end: "2026-11-05T03:30:00.000Z" });
+    expect(view.slots[0]).toEqual({ date: "2026-11-05", start: TEN, end: "2026-11-05T08:30:00.000Z" });
     expect(view.slots.at(-1)!.end).toBe("2026-11-11T11:00:00.000Z");
     expect(view).toMatchObject({ kind: "call", minutes: 30, enabled: true, call: null, canMove: false, notice: null });
     expect(vi.mocked(readHrBusy).mock.calls.at(-1)!.slice(1, 3)).toEqual([new Date(NINE), new Date("2026-11-11T11:00:00.000Z")]);
@@ -367,7 +367,7 @@ describe("booking a call", () => {
     await expect(bookCall(link(a.id), { start: NINE, phone: "call me" }, db)).rejects.toBeInstanceOf(ZodError);
     await expect(bookCall(link(a.id), { start: NINE }, db)).rejects.toBeInstanceOf(ZodError);
     // Saturday, 18:00, off the quarter hour, and 12:00 even when the calendar is free.
-    for (const start of ["2026-11-07T02:00:00.000Z", "2026-11-05T11:00:00.000Z", "2026-11-05T02:05:00.000Z", "2026-11-05T05:00:00.000Z"])
+    for (const start of ["2026-11-07T02:00:00.000Z", "2026-11-05T11:00:00.000Z", "2026-11-05T07:05:00.000Z", "2026-11-05T05:00:00.000Z"])
       await expect(book(a.id, start)).rejects.toMatchObject({ status: 409 });
     for (const token of [bookingToken(a.id, "visit", LINK), bookingToken(a.id, "call", after(-1)), bookingToken(a.id, "brief", LINK)])
       await expect(bookCall(token, { start: NINE, phone: "+66812345678" }, db)).rejects.toMatchObject({ status: 404 });
@@ -395,12 +395,12 @@ describe("call results with a booked call", () => {
     await book(a.id);
     await book(b.id, HALF);
     // Thursday 09:31 in Bangkok: both calls have started.
-    vi.setSystemTime(new Date("2026-11-05T02:31:00.000Z"));
+    vi.setSystemTime(new Date("2026-11-05T07:31:00.000Z"));
     await recordCall(a.id, "good", hr, db);
     expect((await callsOf(a.id)).map((row) => row.status)).toEqual(["confirmed"]);
     expect((await jobsOf(a.id)).filter((job) => job.kind === "calendar_cancel")).toEqual([]);
     // 10:01: the second call ended and HR has recorded nothing. The candidate cannot book again until HR does.
-    vi.setSystemTime(new Date("2026-11-05T03:01:00.000Z"));
+    vi.setSystemTime(new Date("2026-11-05T08:01:00.000Z"));
     expect(await callView(link(b.id), db)).toMatchObject({ call: null, slots: [], notice: expect.stringMatching(/time has passed/) });
     await expect(bookCall(link(b.id), { start: FRIDAY, phone: "0812345678" }, db)).rejects.toMatchObject({
       status: 409,
@@ -459,10 +459,87 @@ describe("a call whose candidate left the Calls tab", () => {
   it("is left in place when it has started", async () => {
     const a = await seed();
     await book(a.id);
-    vi.setSystemTime(new Date("2026-11-05T02:05:00.000Z"));
+    vi.setSystemTime(new Date("2026-11-05T07:05:00.000Z"));
     await db.update(s.hiringCandidates).set({ stage: "review" }).where(eq(s.hiringCandidates.id, a.id));
     expect(await cancelOrphanCalls(db)).toBe(0);
     expect((await callsOf(a.id)).map((row) => row.status)).toEqual(["confirmed"]);
+  });
+});
+
+describe("a call booked before the scores went up", () => {
+  it("stays booked, takes a result, and a good call still sends the form", async () => {
+    const [booked, linkOnly] = [await seed(), await seed()];
+    await inviteRow(linkOnly.id);
+    await book(booked.id);
+    // The candidates score 80.
+    await setConfig({ profileThreshold: 90, callThreshold: 90 });
+    expect(await cancelOrphanCalls(db)).toBe(0);
+    expect((await callsOf(booked.id)).map((row) => row.status)).toEqual(["confirmed"]);
+    expect((await callQueue(db, await settingsConfig())).map((entry) => entry.id)).toEqual([booked.id]);
+    // A link with no booking gives no place.
+    await expect(book(linkOnly.id, HALF)).rejects.toMatchObject({ status: 404 });
+    expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+    await recordCall(booked.id, "good", hr, db);
+    expect(await releaseQueues(db)).toEqual({ preScreen: 1, onsite: 0 });
+    expect((await candidate(booked.id)).stage).toBe("pre_screen");
+  });
+
+  it("counts a hand invite to the form as HR's good call", async () => {
+    const a = await seed();
+    await book(a.id);
+    await setConfig({ profileThreshold: 90, callThreshold: 90 });
+    await reviewCandidate(a.id, { revision: a.revision, action: "advance", subjects: ["Mathematics"], reason: "Sent by hand" }, hr, db);
+    expect((await candidate(a.id)).callReview?.good).toMatchObject({ manual: true });
+    expect((await callsOf(a.id)).map((row) => row.status)).toEqual(["cancelled"]);
+  });
+
+  it("ends when the started call gets no answer", async () => {
+    const a = await seed();
+    await book(a.id);
+    await setConfig({ profileThreshold: 90, callThreshold: 90 });
+    vi.setSystemTime(new Date("2026-11-05T07:05:00.000Z"));
+    await recordCall(a.id, "no_answer", hr, db);
+    expect((await callsOf(a.id)).map((row) => row.status)).toEqual(["no_show"]);
+    expect(await callQueue(db, await settingsConfig())).toEqual([]);
+  });
+});
+
+describe("the call link reminder", () => {
+  const reminders = async (id: string) => (await jobsOf(id)).filter((job) => job.key === `${id}:call-invite-reminder`);
+  it("goes once, after the reminder days, only for a link that brought no booking", async () => {
+    const [quiet, booked, fresh, noLink] = [await seed(), await seed(), await seed(), await seed()];
+    for (const row of [quiet, booked, fresh]) await inviteRow(row.id);
+    await db.update(s.hiringOutbox).set({ sentAt: after(2) }).where(eq(s.hiringOutbox.candidateId, fresh.id));
+    await book(booked.id);
+    expect(await remindCallInvites(db)).toBe(0);
+    vi.setSystemTime(after((await settingsConfig()).preScreenFollowUp.remindDays));
+    // HR's calendar cannot be read: the link would open a page with no times.
+    connection(false);
+    expect(await remindCallInvites(db)).toBe(0);
+    connection(true);
+    expect(await remindCallInvites(db)).toBe(1);
+    const [job] = await reminders(quiet.id);
+    expect(job.payload).toMatchObject({ to: quiet.email, workflowStage: "new" });
+    expect(String(job.payload.subject)).toMatch(/^Reminder: book your R1/);
+    for (const row of [booked, fresh, noLink]) expect(await reminders(row.id)).toEqual([]);
+    expect(await remindCallInvites(db)).toBe(0);
+    expect((await db.select().from(s.hiringAudit)).filter((row) => row.action === "call-invite-reminder")).toHaveLength(1);
+    // The reminder still waits to leave when the candidate books: it must not follow the booking.
+    expect(job.status).toBe("pending");
+    await book(quiet.id, FRIDAY.replace("-06T", "-09T"));
+    expect((await reminders(quiet.id)).map((row) => row.status)).toEqual(["cancelled"]);
+  });
+
+  it("does not go to a candidate who left the Calls tab, and obeys the day limit", async () => {
+    const [gone, a, b] = [await seed(), await seed(), await seed()];
+    for (const row of [gone, a, b]) await inviteRow(row.id);
+    await db.update(s.hiringCandidates).set({ stage: "review" }).where(eq(s.hiringCandidates.id, gone.id));
+    await setConfig({ preScreenLimits: { ...config.preScreenLimits, perDay: 1 } });
+    vi.setSystemTime(after(5));
+    expect(await remindCallInvites(db)).toBe(1);
+    expect(await remindCallInvites(db)).toBe(0);
+    expect(await reminders(gone.id)).toEqual([]);
+    expect([...(await reminders(a.id)), ...(await reminders(b.id))]).toHaveLength(1);
   });
 });
 

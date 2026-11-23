@@ -33,8 +33,8 @@ import {
   type PreScreenAssessment,
 } from "./scoring";
 import { AWAITING_CALL, profileGate } from "./insights";
-import { audit, briefLink, candidateById, RESUME_ATTACHED, RESUME_NOT_ATTACHED, prestigeCatalogHash, settings, sourceHash } from "./service";
-import { callInviteSentAt, cancelOrphanCalls, formSentAt, releaseCallInvites, releaseQueues, replyCheck, runFollowUps } from "./queue";
+import { audit, briefLink, candidateById, hasBookedCall, RESUME_ATTACHED, RESUME_NOT_ATTACHED, prestigeCatalogHash, settings, sourceHash } from "./service";
+import { callInviteSentAt, cancelOrphanCalls, formSentAt, releaseCallInvites, releaseQueues, remindCallInvites, replyCheck, runFollowUps } from "./queue";
 import { contactLines, deliverRecruitment, queueRecruitmentInvitation } from "./recruitment";
 import { deliverCalendar } from "./google";
 import { hiringEmailHtmlFromText } from "./email";
@@ -237,6 +237,8 @@ export async function assessCandidates(
             universityAssessment: prestige,
             // A candidate who holds the app's call link stays on the Calls tab when HR writes to them on SEEK.
             callInvited: !!(await callInviteSentAt(tx, candidate.id)),
+            // The note must agree with the Calls tab while a booked call keeps the candidate there.
+            callBooked: await hasBookedCall(tx, candidate.id),
           },
           current.config,
         );
@@ -793,12 +795,13 @@ export async function runHiringCycle(db: Database, assess: Assess) {
     const released = await releaseQueues(db);
     await cancelOrphanCalls(db);
     const callInvites = await releaseCallInvites(db);
+    const callReminders = await remindCallInvites(db);
     await mirrorTracker(db, config);
     await db
       .update(s.hiringSettings)
       .set({ workerAt: new Date(), workerError: null })
       .where(eq(s.hiringSettings.id, "default"));
-    return { ...imported, calls, ...followUps, ...released, callInvites };
+    return { ...imported, calls, ...followUps, ...released, callInvites, callReminders };
   } catch (error) {
     await db
       .update(s.hiringSettings)

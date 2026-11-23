@@ -124,7 +124,13 @@ export function profileGate(
   candidate: Pick<
     InsightCandidate,
     "email" | "previouslyContacted" | "workRightsAnswer" | "profileAssessment" | "universityAssessment"
-  > & { callReview?: CallReview | null; /** The app's call booking link reached the candidate. */ callInvited?: boolean },
+  > & {
+    callReview?: CallReview | null;
+    /** The app's call booking link reached the candidate. */
+    callInvited?: boolean;
+    /** A confirmed HR call exists, ahead or started with no result yet. */
+    callBooked?: boolean;
+  },
   config: GateConfig,
 ): {
   eligible: boolean;
@@ -132,7 +138,7 @@ export function profileGate(
   short: string[];
   review: string[];
   subject: Subject | null;
-  /** The score is at or above the call score and HR has not recorded a good call. */
+  /** HR has not recorded a good call, and the score is at or above the call score or a call is booked. */
   awaitingCall: boolean;
 } {
   const reasons: string[] = [];
@@ -155,8 +161,11 @@ export function profileGate(
   if (!assessment) add("The profile is not scored.", "Not scored");
   else {
     const score = profileScore(assessment, config.profileWeights, candidate.universityAssessment?.fraction ?? 0, workRightsPenalty(candidate.workRightsAnswer, config));
-    if (score < config.profileThreshold) add("The profile score is below the threshold.", "Below profile threshold");
-    awaitingCall = config.callThreshold !== null && score >= config.callThreshold && !called;
+    // Kevin, 24 Nov 2026: a raised score does not undo a call that is booked or done. The booked call stays on the Calls
+    // tab, and a good call still sends the form. A blank call score turns calls off and ends a booked call, as before.
+    const booked = !!candidate.callBooked && config.callThreshold !== null;
+    if (score < config.profileThreshold && !called && !booked) add("The profile score is below the threshold.", "Below profile threshold");
+    awaitingCall = !called && ((config.callThreshold !== null && score >= config.callThreshold) || booked);
     if (assessment.criteria.some((c) => c.id === "degree" && c.result === "not_met"))
       final("The degree criterion is not met.", "Degree not met");
     if (!relevant.length) final("The profile supports no subject.", "No supported subject");

@@ -29,8 +29,10 @@ import {
 import {
   audit,
   callCalendarState,
+  cancelCallReminder,
   cancelComingCall,
   enqueue,
+  hasBookedCall,
   inviteToCall,
   inviteToPreScreen,
   inviteToVisit,
@@ -48,6 +50,7 @@ const c = s.hiringCandidates,
 const DAY = 86400000;
 const isForm = sql`${o.key} = ${o.candidateId}::text || ':pre-screen'`;
 const isCallInvite = sql`${o.key} = ${o.candidateId}::text || ':call-invite'`;
+const isCallReminder = sql`${o.key} = ${o.candidateId}::text || ':call-invite-reminder'`;
 // A reminder carries the same stage so that a stage change cancels it, but it is not a new invitation.
 const isOnsiteInvite = sql`${o.payload}->>'workflowStage' = 'onsite_invited' and ${o.key} not like '%:visit-reminder:%'`;
 /** Every release, click and follow-up takes this one lock, so they cannot share out the same place. */
@@ -252,6 +255,13 @@ export const formCandidates = (db: Database, id?: string) =>
           .from(o)
           .where(and(eq(o.candidateId, c.id), isCallInvite, eq(o.status, "sent"))),
       )}`,
+      // No time test: a call that has started stays here until HR records its result.
+      callBooked: sql<boolean>`${exists(
+        db
+          .select({ id: b.id })
+          .from(b)
+          .where(and(eq(b.candidateId, c.id), eq(b.kind, "call"), eq(b.status, "confirmed"))),
+      )}`,
     })
     .from(c)
     .where(
@@ -340,8 +350,10 @@ export async function recordCall(
     const review = row.callReview ?? { good: null, tries: [] };
     // After a good call HR will not make a call that is still ahead. A no answer closes the call that has started, and
     // the candidate's link then lets them book again.
-    if (result === "good") await cancelComingCall(tx, id, now);
-    else await missStartedCall(tx, id, now);
+    if (result === "good") {
+      await cancelComingCall(tx, id, now);
+      await cancelCallReminder(tx, id);
+    } else await missStartedCall(tx, id, now);
     await tx
       .update(c)
       .set({
@@ -396,6 +408,49 @@ export async function releaseCallInvites(db: Database, now = new Date()) {
       if (!(await callQueue(tx, config, entry.id)).length) continue;
       if (!(await inviteToCall(tx, row, now))) continue;
       await audit(tx, "hiring-queue", "call-invite-release", row.id, { subject: entry.subject, score: entry.score });
+      room--;
+      sent++;
+    }
+    return sent;
+  });
+}
+
+/**
+ * One reminder for a call link that brought no booking (Kevin, 24 Nov 2026). It goes `preScreenFollowUp.remindDays` after
+ * the link was sent, only while the candidate is still on the Calls tab and has never held a call booking of any status:
+ * a candidate who missed a call can book again on the link they have. The day's number is the pre-screen per-day limit,
+ * counted apart from the first links. Like the first link, nothing goes unless HR's calendar can be read now.
+ */
+export async function remindCallInvites(db: Database, now = new Date()) {
+  const before = await settings(db);
+  if (!allowed(before.config) || (await callCalendarState(db, before.config, now)) !== "readable") return 0;
+  return withDatabaseTransaction(db, async (tx) => {
+    await lockQueue(tx);
+    const { config } = await settings(tx);
+    if (!allowed(config)) return 0;
+    const links = await tx.select({ candidateId: o.candidateId, sentAt: o.sentAt }).from(o).where(and(isCallInvite, eq(o.status, "sent")));
+    const due = new Set(
+      links
+        .filter((row) => row.sentAt && now.getTime() - row.sentAt.getTime() >= config.preScreenFollowUp.remindDays * DAY)
+        .map((row) => row.candidateId),
+    );
+    // One reminder per candidate, ever: any earlier row, even a cancelled one, keeps a candidate out.
+    const earlier = await tx.select({ candidateId: o.candidateId, status: o.status, createdAt: o.createdAt }).from(o).where(isCallReminder);
+    const reminded = new Set(earlier.map((row) => row.candidateId));
+    const booked = new Set((await tx.select({ candidateId: b.candidateId }).from(b).where(eq(b.kind, "call"))).map((row) => row.candidateId));
+    const dayStart = bangkokDayStart(now);
+    let room = config.preScreenLimits.perDay - earlier.filter((row) => row.status !== "cancelled" && row.createdAt >= dayStart).length;
+    let sent = 0;
+    for (const entry of await callQueue(tx, config)) {
+      if (room <= 0) break;
+      if (!due.has(entry.id) || reminded.has(entry.id) || booked.has(entry.id)) continue;
+      const row = await lockCandidate(tx, entry.id);
+      // A person, a SEEK read or a booking can act between the queue read and this row lock.
+      if (!(await callQueue(tx, config, entry.id)).length) continue;
+      const [call] = await tx.select({ id: b.id }).from(b).where(and(eq(b.candidateId, entry.id), eq(b.kind, "call"))).limit(1);
+      if (call) continue;
+      if (!(await inviteToCall(tx, row, now, true))) continue;
+      await audit(tx, "hiring-follow-up", "call-invite-reminder", row.id, { subject: entry.subject, score: entry.score });
       room--;
       sent++;
     }
@@ -511,7 +566,7 @@ export async function releaseQueues(db: Database, now = new Date()) {
     for (const entry of forms.release) {
       const row = await lockCandidate(tx, entry.id);
       // A person can act between the queue read and this row lock.
-      if (row.stage !== "new" || row.preScreen || !profileGate(row, config).eligible) continue;
+      if (row.stage !== "new" || row.preScreen || !profileGate({ ...row, callBooked: await hasBookedCall(tx, row.id) }, config).eligible) continue;
       if (!(await inviteToPreScreen(tx, row, now))) continue;
       const subjects = row.profileAssessment!.subjects.filter((v) => v.relevant).map((v) => v.subject);
       await tx
