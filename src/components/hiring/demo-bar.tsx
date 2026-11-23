@@ -45,7 +45,7 @@ export function DemoBar({ onStep, briefOpen, setBriefOpen }: { onStep: (view: De
         event.preventDefault();
         // The same answer a request would get: the packet page for the packet link, a demo PDF for a file.
         const tab = window.open("", "_blank");
-        void window.fetch(new URL(href, window.location.origin).href).then((response) => response.blob()).then((file) => tab?.location.replace(URL.createObjectURL(file)));
+        void window.fetch(new URL(href, window.location.origin).href).then((response) => response.blob()).then((file) => tab?.location.replace(URL.createObjectURL(file))).catch(() => tab?.close());
       }
     };
     document.addEventListener("click", click, true);
