@@ -245,7 +245,7 @@ summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details 
 <header><img alt="BeGifted Education" src="data:image/png;base64,${logo}">
 <p class="eyebrow">Confidential</p>
 <h1>Hiring <em>review</em></h1>
-<p class="candidate">${escape(value.name)}</p><p>${escape(value.subject)} tutor</p><p class="meta">Submitted ${date(packet.at)} by ${escape(packet.author)}</p></header>
+<p class="candidate">${escape(value.name)}</p><p>${escape(value.subject)} tutor</p><p class="meta">${packet.id === "draft" ? "Preview. Not sent to Gift." : `Submitted ${date(packet.at)} by ${escape(packet.author)}`}</p></header>
 <section><h2>Assessment summary</h2><div class="tiles">
 <div class="tile"><h3>ATS</h3>${gauge(atsValue, " / 100", null, atsScore)}</div>
 <div class="tile"><h3>Paper</h3>${gauge(paperPercent, "%", paperTarget)}

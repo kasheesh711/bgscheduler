@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { contractTestAllowed } from "@/lib/hiring/model";
+import { OFFER_LETTERS, type OfferType } from "@/lib/hiring/offer-letters";
 import css from "./dashboard.module.css";
 
 type Review = {
@@ -9,7 +10,7 @@ type Review = {
   stage: string;
   callNotes: string;
   appointment: string | null;
-  packet: { id: string; behavioral: string; offer: string } | null;
+  packet: { id: string; behavioral: string; offer: string; offerType?: OfferType | null } | null;
   /** null: the server could not check the packet just now. */
   packetValid: boolean | null;
 };
@@ -26,7 +27,7 @@ export function reviewBlocks(writeGate: boolean, config: Parameters<typeof contr
   return { approveBlock: live ?? (testAllowed ? undefined : instruction), rejectBlock: live ?? instruction, pausedStatus };
 }
 
-type ReviewAction = { action: "submit"; behavioral: string; offer: string }
+type ReviewAction = { action: "submit"; behavioral: string; offerType: OfferType }
   | { action: "sign"; packetId: string; decision: "hire" | "reject"; reason: string };
 
 async function fetchReview(url: string) {
@@ -66,7 +67,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   const phone = useSyncExternalStore(subscribeToPhoneReader, () => window.matchMedia(phoneReader).matches, () => false);
   const [review, setReview] = useState<Review>();
   const [behavioral, setBehavioral] = useState("");
-  const [offer, setOffer] = useState("");
+  const [offerType, setOfferType] = useState<OfferType | "">("");
+  const [draftHtml, setDraftHtml] = useState<string>();
   const [reason, setReason] = useState("");
   const [packetPage, setPacketPage] = useState<{ id: string; html: string; name: string }>();
   const [viewedId, setViewedId] = useState<string>();
@@ -91,7 +93,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       setViewedId((id) => data.packetValid && id === data.packet?.id ? id : undefined);
       if (!previousPacket || previousPacket !== data.packet?.id) {
         setBehavioral(data.packet?.behavioral ?? data.callNotes ?? "");
-        setOffer(data.packet?.offer ?? "");
+        setOfferType(data.packet?.offerType ?? "");
       }
       return data;
     } catch (error) {
@@ -192,7 +194,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
             if (current.packet && current.packetValid === true) {
               setReview(current);
               setBehavioral(current.packet.behavioral);
-              setOffer(current.packet.offer);
+              setOfferType(current.packet.offerType ?? "");
               setError({ text: "HR sent a new packet. Read it again." });
             } else {
               setReview((previous) => previous && { ...previous, packetValid: current.packet?.id === body.packetId ? current.packetValid : false });
@@ -260,6 +262,23 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
     }
   }
 
+  /** HR sees the packet with the draft text before Gift does. Nothing is saved. */
+  async function previewDraft() {
+    if (!offerType) return;
+    setBusy("packet");
+    setError(undefined);
+    try {
+      const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "preview", behavioral, offerType }) });
+      if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? "Could not open the preview. Try again.");
+      // Without the tag, a file link opens inside the preview frame.
+      setDraftHtml((await response.text()).replace(/<head\b[^>]*>/i, '$&<base target="_blank">'));
+    } catch (error) {
+      setError({ text: (error instanceof Error && error.message) || "Could not open the preview. Try again." });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function checkPacket(packetId: string) {
     if (busy || stale) return;
     setBusy("review");
@@ -278,6 +297,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   const closed = stage === "hired" || stage === "rejected" || stage === "stopped";
   const rejectReason = !sharedBlock && rejectBlock ? `${controlId}-reject` : undefined;
   const rejectHint = viewed && reason.trim().length < 5 ? `${controlId}-note` : undefined;
+  const draftDisabled = behavioral.trim().length < 10 || !offerType;
   const signOffDisabled = !!busy || !viewed || !!error?.retry;
   const awaitingSignOff = !signing && review?.access.gift && !closed;
   // Announce readiness when the phone dialog closes and the page is no longer inert.
@@ -337,11 +357,23 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
             <textarea className={css.textarea} rows={5} maxLength={10000} value={behavioral} onChange={(event) => setBehavioral(event.target.value)} />
           </label>
           <label className={css.fieldLabel}>Offer letter
-            <textarea className={css.textarea} rows={6} maxLength={10000} value={offer} onChange={(event) => setOffer(event.target.value)} />
+            <select className={css.textarea} value={offerType} onChange={(event) => { setOfferType(event.target.value as OfferType | ""); setDraftHtml(undefined); }}>
+              <option value="">Select a standard letter</option>
+              {Object.entries(OFFER_LETTERS).map(([type, { label }]) => <option key={type} value={type}>{label}</option>)}
+            </select>
           </label>
-          <p className={css.inspectorMeta}>Enter the offer terms. Scheduling adds the contract booking link after approval.</p>
-          <button type="button" className={awaitingSignOff && packet && !stale ? css.secondary : css.primary} disabled={!!busy || behavioral.trim().length < 10 || offer.trim().length < 10}
-            onClick={() => void act({ action: "submit", behavioral, offer })}>Send to Gift</button>
+          <p className={css.inspectorMeta}>Preview the packet to read the letter. Scheduling adds the contract booking link after approval.</p>
+          <div className={`${css.decisionActions} mt-2`}>
+            <button type="button" className={css.secondary} disabled={!!busy || draftDisabled} onClick={() => void previewDraft()}>Preview packet</button>
+            <button type="button" className={awaitingSignOff && packet && !stale ? css.secondary : css.primary} disabled={!!busy || draftDisabled}
+              onClick={() => { if (offerType) void act({ action: "submit", behavioral, offerType }); }}>Send to Gift</button>
+          </div>
+          {draftHtml && (
+            <div className={css.packetPanel}>
+              <button type="button" className={css.secondary} onClick={() => setDraftHtml(undefined)}>Close preview</button>
+              <iframe title="Packet preview" srcDoc={draftHtml} sandbox="allow-popups allow-popups-to-escape-sandbox" />
+            </div>
+          )}
         </>
       )}
       {awaitingSignOff && (packet ? (

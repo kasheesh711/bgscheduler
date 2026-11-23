@@ -6,6 +6,7 @@ import * as s from "@/lib/db/schema";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { headRecommendation, queueFinalResult, sendRefusal, type Decision } from "./decisions";
 import { computeSheet, passRulesFor, rubricTotals } from "./marking-sheet";
+import { OFFER_LETTERS, type OfferType } from "./offer-letters";
 import { contractTestAllowed, HiringError, HR_CALENDAR, normalizeEmail, runtimeWritesAllowed, type HiringConfig } from "./model";
 import { profileScore, workRightsPenalty, type Assessment } from "./scoring";
 import { callCalendarState, candidateById, enqueue, settings } from "./service";
@@ -60,7 +61,9 @@ async function evidence(db: Database, id: string, lock = true) {
 }
 
 type Evidence = Awaited<ReturnType<typeof evidence>>;
-type Packet = { evidence: Evidence; behavioral: string; offer: string; fingerprint: string };
+/** `offerType` is absent on packets saved before the standard letters. */
+type Packet = { evidence: Evidence; behavioral: string; offer: string; offerType?: OfferType; fingerprint: string };
+type ReviewInput = { behavioral: string; offerType: OfferType };
 // Keep the checksum stable for packets saved before the chart fields were added.
 const comparableEvidence = (value: Evidence) => ({ ...value, ats: { score: value.ats.score, criteria: value.ats.criteria } });
 const fingerprint = (value: Evidence) => createHash("sha256")
@@ -90,7 +93,18 @@ export async function reviewPacketValid(db: Database, id: string, packet: Review
   return packetMatches(packet, currentEvidence);
 }
 
-export async function submitReview(db: Database, id: string, actor: string, input: { behavioral: string; offer: string }) {
+/** The packet as it would be saved now. Nothing is written. HR only. */
+export async function draftReviewPacket(db: Database, id: string, actor: string, input?: ReviewInput): Promise<ReviewPacket> {
+  if (!finalReviewAccess(actor).hr) throw new HiringError(403, "HR prepares the review packet.");
+  const material = await evidence(db, id, false);
+  return {
+    id: "draft", author: actor, at: new Date(), evidence: material, fingerprint: fingerprint(material),
+    behavioral: input?.behavioral ?? "", offerType: input?.offerType,
+    offer: input ? OFFER_LETTERS[input.offerType].text(material.name, material.subject) : "",
+  };
+}
+
+export async function submitReview(db: Database, id: string, actor: string, { behavioral, offerType }: ReviewInput) {
   if (!finalReviewAccess(actor).hr) throw new HiringError(403, "HR prepares the review packet.");
   if (!runtimeWritesAllowed()) throw new HiringError(503, "Review packets can be saved only on the live site.");
   const reviewer = normalizeEmail(process.env.HIRING_FINAL_REVIEWER_EMAIL);
@@ -100,6 +114,7 @@ export async function submitReview(db: Database, id: string, actor: string, inpu
     const candidate = await candidateById(tx, id);
     if (["stopped", "hired", "rejected"].includes(candidate.stage)) throw new HiringError(409, "This application is closed.");
     const material = await evidence(tx, id);
+    const input = { behavioral, offerType, offer: OFFER_LETTERS[offerType].text(material.name, material.subject) };
     const detail = { evidence: material, fingerprint: fingerprint(material), ...input };
     const previous = await latestReviewPacket(tx, id);
     if (previous?.fingerprint === detail.fingerprint && (previous.evidence.ats.weights

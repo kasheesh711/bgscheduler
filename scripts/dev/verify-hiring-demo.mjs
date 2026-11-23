@@ -134,9 +134,12 @@ try {
     const card = page.locator("article", { hasText: NAME }).first();
     await card.waitFor();
     await shot("review-hr");
-    const open = card.getByRole("button", { name: /review/i }).first();
+    const open = card.getByRole("button", { name: /Open final review/ });
     if (await open.count()) await open.click();
-    await card.getByRole("textbox").nth(1).fill("Part-time Mathematics tutor. 600 THB for each hour.");
+    await card.getByLabel("Offer letter").selectOption("part_time");
+    await card.getByRole("button", { name: "Preview packet" }).click();
+    await card.frameLocator('iframe[title="Packet preview"]').getByText("part-time Mathematics tutor").waitFor();
+    await shot("review-hr-preview");
     await card.getByRole("button", { name: /Send to Gift/ }).click();
     await bar.getByText("This is Gift’s screen now.").waitFor();
     await shot("review-gift");

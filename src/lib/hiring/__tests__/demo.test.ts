@@ -47,7 +47,7 @@ describe("hiring demo mode", () => {
     await post("/api/hiring/brief/demo/rubric", { items: { accuracy: 10 }, comments: "" }).json();
     post("/api/hiring/brief/demo/decision", { decision: "hire", reason: "" });
     expect(demoState().step).toBe(6);
-    post(`/api/hiring/review/${DEMO_ID}`, { action: "submit", behavioral: "Calm.", offer: "600 THB" });
+    post(`/api/hiring/review/${DEMO_ID}`, { action: "submit", behavioral: "Calm.", offerType: "part_time" });
     expect(demoPayload(now).reviewAccess).toEqual({ hr: false, gift: true });
     post(`/api/hiring/review/${DEMO_ID}`, { action: "sign", packetId: "x", decision: "hire", reason: "" });
     expect(demoState().step).toBe(7);
@@ -81,4 +81,13 @@ describe("hiring demo mode", () => {
     const xref = Number(/startxref\n(\d+)/.exec(text)![1]);
     expect(text.slice(xref, xref + 4)).toBe("xref");
   });
+});
+
+it("previews the packet with the selected standard letter and saves nothing", async () => {
+  const response = demoFetch(`/api/hiring/review/${DEMO_ID}`, { method: "POST", body: JSON.stringify({ action: "preview", behavioral: "Calm and clear.", offerType: "full_time" }) })!;
+  const html = await response.text();
+  expect(html).toContain("full-time Mathematics tutor");
+  expect(html).toContain("Calm and clear.");
+  const review = await demoFetch(`/api/hiring/review/${DEMO_ID}`)!.json();
+  expect(review.packet?.offerType ?? null).not.toBe("full_time");
 });
