@@ -16,6 +16,7 @@ import {
 import {
   fetchAllTeachers,
   fetchAllFutureSessions,
+  fetchBulkAvailability,
   fetchTeacherFarLeaves,
   fetchTeacherNearAvailability,
   NEAR_HORIZON_DAYS,
@@ -209,6 +210,31 @@ export async function runFullSync(
         .filter((userId): userId is string => Boolean(userId)),
     );
     const farCacheUpserts: FarLeaveCacheUpsert[] = [];
+
+    // ── AVAIL-02 bulk availability ──
+    // One bulk read covers every teacher (14 Wise calls for the near tier). It
+    // is an optimisation only: if it fails, or a teacher is not in it, that
+    // teacher goes through the per-teacher fetchers below exactly as before.
+    const fetchBulkTier = async (tier: string, startDay: number, endDay: number) => {
+      try {
+        return await fetchBulkAvailability(client, instituteId, leaveFetchNow, startDay, endDay);
+      } catch (err) {
+        console.error(
+          `[sync] bulk ${tier} availability failed; using per-teacher calls:`,
+          err instanceof Error ? err.message : String(err),
+        );
+        return null;
+      }
+    };
+    const bulkObservedAt = new Date().toISOString();
+    const bulkNear = await fetchBulkTier("near", 0, nearHorizonDays);
+    const anyFarStale = wiseTeachers.some((teacher) => {
+      const userId = getWiseTeacherUserId(teacher);
+      return Boolean(userId) && !isFarCacheFresh(farLeaveCache.get(userId!), leaveFetchNow, farMaxAgeMinutes, farCacheShape);
+    });
+    const bulkFar = bulkNear && anyFarStale
+      ? await fetchBulkTier("far", nearHorizonDays, farHorizonDays)
+      : null;
     let farTierFetched = 0;
     let farTierCacheHits = 0;
 
@@ -251,8 +277,9 @@ export async function runFullSync(
       }
 
       try {
-        const availabilityObservedAt = new Date().toISOString();
-        const near = await fetchTeacherNearAvailability(
+        // Bulk data was read before this loop, so it keeps that earlier time.
+        const availabilityObservedAt = bulkNear?.has(teacherUserId) ? bulkObservedAt : new Date().toISOString();
+        const near = bulkNear?.get(teacherUserId) ?? await fetchTeacherNearAvailability(
           client,
           instituteId,
           teacherUserId,
@@ -273,7 +300,7 @@ export async function runFullSync(
           farFetchedAt = cachedFar!.fetchedAt;
           farTierCacheHits += 1;
         } else {
-          const far = await fetchTeacherFarLeaves(
+          const far = bulkFar?.get(teacherUserId) ?? await fetchTeacherFarLeaves(
             client,
             instituteId,
             teacherUserId,
@@ -682,6 +709,7 @@ export async function runFullSync(
       // is the Wise-call cost the cache did NOT avoid this run.
       farTierFetched,
       farTierCacheHits,
+      bulkAvailability: { near: Boolean(bulkNear), far: Boolean(bulkFar) },
       nearHorizonDays,
       farHorizonDays,
     };

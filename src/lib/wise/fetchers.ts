@@ -5,6 +5,8 @@ import {
   WiseSession,
   WiseTeachersResponse,
   WiseAvailabilityEnvelope,
+  WiseBulkAvailabilityResponse,
+  WiseLeave,
   WiseSessionsResponse,
   WiseLocationsResponse,
   WiseSessionUpdateResponse,
@@ -269,6 +271,124 @@ export async function fetchTeacherFullAvailability(
   );
 
   return { workingHours: near.workingHours, leaves: [...near.leaves, ...far.leaves] };
+}
+
+// ── AVAIL-02 bulk availability ───────────────────────────────────────────
+//
+// `GET /institutes/{id}/availabilityData` returns workingHours and leaves for
+// EVERY teacher in one call, at 1 rate-limit point, against 1 call (3 points)
+// per teacher per window on the per-teacher endpoint. Wise caps its span at 2
+// days (HTTP 400 "Time range cannot be more than 2 days.", probed 2026-11-23),
+// so days 0..28 cost 14 calls in place of about 4 per teacher.
+//
+// Probed against the per-teacher endpoint (2026-11-23): `workingHours.slots` and
+// `leaves` were identical after normalization for 40 teachers with leave. A
+// leave longer than the window comes back whole (not cut to the window), and a
+// leave already in progress is returned, as on the per-teacher endpoint. The
+// bulk `sessions` arrays also carry CANCELLED rows — they are not read here,
+// and must be filtered by anyone who does.
+
+export const BULK_AVAILABILITY_WINDOW_DAYS = 2;
+const BULK_AVAILABILITY_PAGE_SIZE = 1000;
+
+export interface BulkTeacherAvailability {
+  workingHours: WiseAvailabilityResponse["workingHours"];
+  leaves: WiseLeave[];
+}
+
+async function fetchBulkAvailabilityWindow(
+  client: WiseClient,
+  instituteId: string,
+  start: Date,
+  end: Date
+): Promise<Map<string, BulkTeacherAvailability>> {
+  const res = await client.get<WiseBulkAvailabilityResponse>(
+    `/institutes/${instituteId}/availabilityData`,
+    {
+      startDate: start.toISOString(),
+      endDate: end.toISOString(),
+      page_number: "1",
+      page_size: String(BULK_AVAILABILITY_PAGE_SIZE),
+    }
+  );
+
+  const teachers = res.data?.teachers;
+  // Strict on purpose: a short page would read downstream as "no leave" for
+  // the teachers it lacks, so it rejects the whole fetch and the caller falls
+  // back to the per-teacher endpoint.
+  if (!Array.isArray(teachers) || res.data?.total_records !== teachers.length) {
+    throw new Error("Wise bulk availability returned an incomplete or invalid teacher page");
+  }
+
+  // Keep only what the sync reads — each response is about 1 MB of sessions.
+  // A row that cannot be trusted (no leave array, or a user id that appears
+  // twice) is left out, so that one teacher falls back to the per-teacher
+  // endpoint. Throwing here would turn the bulk read off for every teacher.
+  const window = new Map<string, BulkTeacherAvailability>();
+  const untrusted = new Set<string>();
+  for (const teacher of teachers) {
+    const userId = teacher?.user?._id;
+    if (typeof userId !== "string" || !userId.trim()) continue;
+    if (!Array.isArray(teacher.leaves) || window.has(userId)) {
+      untrusted.add(userId);
+      continue;
+    }
+    window.set(userId, { workingHours: teacher.workingHours ?? undefined, leaves: teacher.leaves });
+  }
+  for (const userId of untrusted) window.delete(userId);
+  return window;
+}
+
+/**
+ * workingHours plus every leave in days [startDay, endDay) for all teachers,
+ * keyed by Wise teacher user id, from 2-day bulk windows.
+ *
+ * Fail-closed rules (AVAIL-01 still applies):
+ *   - `Promise.all` is load-bearing: one failed window rejects the whole fetch.
+ *   - A teacher missing from ANY window is left out of the result, so the
+ *     caller fetches that teacher per-teacher and never assumes "no leave".
+ *
+ * The first window is awaited before the rest so a hard failure (auth, 404,
+ * 429) costs one Wise call. workingHours come from that first window.
+ */
+export async function fetchBulkAvailability(
+  client: WiseClient,
+  instituteId: string,
+  from: Date,
+  startDay: number,
+  endDay: number
+): Promise<Map<string, BulkTeacherAvailability>> {
+  const starts: number[] = [];
+  for (let day = startDay; day < endDay; day += BULK_AVAILABILITY_WINDOW_DAYS) starts.push(day);
+  if (starts.length === 0) return new Map();
+
+  const fetchWindow = (day: number) =>
+    fetchBulkAvailabilityWindow(
+      client,
+      instituteId,
+      addDays(from, day),
+      addDays(from, day + BULK_AVAILABILITY_WINDOW_DAYS)
+    );
+
+  const first = await fetchWindow(starts[0]);
+  const rest = await Promise.all(starts.slice(1).map(fetchWindow));
+
+  const result = new Map<string, BulkTeacherAvailability>();
+  for (const [userId, firstWindow] of first) {
+    if (!rest.every((window) => window.has(userId))) continue;
+
+    // A leave that spans a window boundary comes back once per window.
+    const leaves = new Map<string, WiseLeave>();
+    for (const window of [first, ...rest]) {
+      for (const leave of window.get(userId)!.leaves) {
+        // Keyed on the times too: two rows that share an id but not a time
+        // range are both kept, and normalizeLeaves merges them.
+        leaves.set(`${leave._id}|${leave.startTime}|${leave.endTime}`, leave);
+      }
+    }
+    result.set(userId, { workingHours: firstWindow.workingHours, leaves: [...leaves.values()] });
+  }
+  return result;
 }
 
 /**

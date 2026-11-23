@@ -149,6 +149,23 @@ export interface WiseAvailabilityEnvelope {
   [key: string]: unknown;
 }
 
+/** One teacher row of `GET /institutes/{id}/availabilityData` (AVAIL-02). */
+export interface WiseBulkAvailabilityTeacher {
+  user?: { _id?: string; [key: string]: unknown };
+  workingHours?: WiseAvailabilityResponse["workingHours"] | null;
+  leaves?: WiseLeave[];
+  [key: string]: unknown;
+}
+
+export interface WiseBulkAvailabilityResponse {
+  data?: {
+    teachers?: WiseBulkAvailabilityTeacher[];
+    total_records?: number;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
 export interface WiseSessionsResponse {
   data?: {
     sessions?: WiseSession[];

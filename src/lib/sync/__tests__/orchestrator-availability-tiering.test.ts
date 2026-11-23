@@ -142,8 +142,12 @@ interface AvailabilityCall {
  * teacher whose far tier was skipped is distinguishable from one whose far tier
  * was fetched.
  */
-function makeTieringWiseClient(options: { rejectFarForUserId?: string } = {}) {
+function makeTieringWiseClient(
+  options: { rejectFarForUserId?: string; bulkUserIds?: string[]; rejectBulkFar?: boolean } = {},
+) {
   const availabilityCalls: AvailabilityCall[] = [];
+  const bulkStartDays: number[] = [];
+  let bulkOrigin: number | null = null;
   const origins = new Map<string, number>();
 
   const client = {
@@ -162,6 +166,31 @@ function makeTieringWiseClient(options: { rejectFarForUserId?: string } = {}) {
 
       if (path.endsWith("/sessions")) {
         return { data: { sessions: [], page_count: 1, page_number: 1 } };
+      }
+
+      // AVAIL-02: the bulk endpoint exists only when a test opts in. Without
+      // `bulkUserIds` it is an unmocked path, so every other test in this file
+      // also proves the fall-back to the per-teacher calls.
+      if (path.endsWith("/availabilityData") && options.bulkUserIds) {
+        const start = new Date(params!.startDate).getTime();
+        if (bulkOrigin === null) bulkOrigin = start;
+        const startDay = Math.round((start - bulkOrigin) / DAY_MS);
+        bulkStartDays.push(startDay);
+        if (startDay >= 28 && options.rejectBulkFar) throw new Error("429 RATE_LIMITED");
+        const leaveAt = (id: string, day: number) => ({
+          _id: id,
+          startTime: new Date(bulkOrigin! + day * DAY_MS).toISOString(),
+          endTime: new Date(bulkOrigin! + day * DAY_MS + 2 * 60 * 60 * 1000).toISOString(),
+        });
+        const teachers = options.bulkUserIds.map((userId) => ({
+          user: { _id: userId },
+          workingHours: { slots: [{ day: 1, startTime: "10:00", endTime: "12:00" }] },
+          leaves: [
+            ...(startDay === 2 ? [leaveAt(`near-${userId}`, 3)] : []),
+            ...(startDay === 40 ? [leaveAt(`far-${userId}`, 40)] : []),
+          ],
+        }));
+        return { data: { teachers, total_records: teachers.length } };
       }
 
       const match = path.match(/\/teachers\/([^/]+)\/availability$/);
@@ -208,7 +237,7 @@ function makeTieringWiseClient(options: { rejectFarForUserId?: string } = {}) {
     },
   };
 
-  return { client, availabilityCalls };
+  return { client, availabilityCalls, bulkStartDays };
 }
 
 function callsFor(calls: AvailabilityCall[], userId: string): AvailabilityCall[] {
@@ -405,3 +434,89 @@ vi.mock("@/lib/tutor-onboarding/planner", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/tutor-onboarding/planner")>(),
   onboardingEnabled: () => false,
 }));
+
+describe("runFullSync — AVAIL-02 bulk availability", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("reads both tiers from the bulk endpoint and makes no per-teacher call", async () => {
+    const handle = makeFakeDb([]);
+    const { client, availabilityCalls, bulkStartDays } = makeTieringWiseClient({
+      bulkUserIds: TEACHERS.map((t) => t.userId),
+    });
+
+    const result = await runFullSync(handle.db, client as never, instituteId);
+    expect(result.success).toBe(true);
+
+    expect(availabilityCalls).toHaveLength(0);
+    // 14 near windows (days 0..28) + 76 far windows (days 28..180).
+    expect(bulkStartDays.filter((day) => day < 28)).toHaveLength(14);
+    expect(bulkStartDays.filter((day) => day >= 28)).toHaveLength(76);
+    expect(successMetadata(handle).bulkAvailability).toEqual({ near: true, far: true });
+
+    // Same snapshot content as the per-teacher path: the day-3 and day-40 leaves.
+    const byTeacher = leaveRowsByTeacher(handle);
+    for (const teacher of TEACHERS) {
+      expect(byTeacher.get(teacher.teacherId) ?? []).toHaveLength(2);
+    }
+    expect(handle.insertedRows.get(schema.recurringAvailabilityWindows)).toHaveLength(TEACHERS.length);
+    expect(handle.cacheUpserts.map((r) => r.teacherUserId).sort()).toEqual(
+      TEACHERS.map((t) => t.userId).sort(),
+    );
+  });
+
+  it("fetches a teacher that the bulk data does not contain through the per-teacher calls", async () => {
+    const handle = makeFakeDb([]);
+    const { client, availabilityCalls } = makeTieringWiseClient({
+      bulkUserIds: [TEACHERS[0].userId],
+    });
+
+    const result = await runFullSync(handle.db, client as never, instituteId);
+    expect(result.success).toBe(true);
+
+    expect(callsFor(availabilityCalls, TEACHERS[0].userId)).toHaveLength(0);
+    expect(callsFor(availabilityCalls, TEACHERS[1].userId)).toHaveLength(26);
+    const byTeacher = leaveRowsByTeacher(handle);
+    for (const teacher of TEACHERS) {
+      expect(byTeacher.get(teacher.teacherId) ?? []).toHaveLength(2);
+    }
+  });
+
+  it("uses the per-teacher far calls when only the bulk far read fails", async () => {
+    const handle = makeFakeDb([]);
+    const { client, availabilityCalls, bulkStartDays } = makeTieringWiseClient({
+      bulkUserIds: TEACHERS.map((t) => t.userId),
+      rejectBulkFar: true,
+    });
+
+    const result = await runFullSync(handle.db, client as never, instituteId);
+    expect(result.success).toBe(true);
+
+    // The failed far read costs one call; the near tier still comes from bulk.
+    expect(bulkStartDays.filter((day) => day >= 28)).toHaveLength(1);
+    expect(successMetadata(handle).bulkAvailability).toEqual({ near: true, far: false });
+    const byTeacher = leaveRowsByTeacher(handle);
+    for (const teacher of TEACHERS) {
+      const calls = callsFor(availabilityCalls, teacher.userId);
+      // 22 far windows and no near window. The fake counts days from each
+      // teacher's first per-teacher call, so its leave days shift here; what
+      // matters is that the bulk near leave and the live far leaves both land.
+      expect(calls).toHaveLength(22);
+      expect((byTeacher.get(teacher.teacherId) ?? []).length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it("skips the bulk far read when every far cache row is fresh", async () => {
+    const handle = makeFakeDb(TEACHERS.map((t) => cacheRow(t.userId)));
+    const { client, bulkStartDays } = makeTieringWiseClient({
+      bulkUserIds: TEACHERS.map((t) => t.userId),
+    });
+
+    const result = await runFullSync(handle.db, client as never, instituteId);
+    expect(result.success).toBe(true);
+
+    expect(bulkStartDays).toHaveLength(14);
+    expect(successMetadata(handle).bulkAvailability).toEqual({ near: true, far: false });
+  });
+});
