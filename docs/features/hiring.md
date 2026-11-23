@@ -544,6 +544,16 @@ A stored setting that breaks a rule stops the worker with a message. The page st
 - **Open decision: links inside a PDF.** A crafted link in an applicant's PDF can replace the whole browser tab with another site after one click. Script does not run. The panel shows a warning line for now. The other options are to open a PDF in a new tab, or to render PDFs with pdf.js (a new dependency). Kevin has not decided. He must decide before go-live.
 - The files hold phone numbers, birth dates and photos. Access control, `no-store` and retention are the controls.
 
+## Demo mode and the pipeline board
+
+Kevin asked for both on 23 November 2026, to present the process to the heads, Gift and admin.
+
+- **Pipeline board.** The Overview shows `Pipeline from the HR call` above the funnel: one column for each step from the HR call (HR call booked, Form and visit link, Visit booked, Marking and mock scores, Final review, Offer and signing), one card for each candidate, the days in the step and a `Stuck` mark. The column with the most stuck candidates has the `Bottleneck` mark. Rules: `src/lib/hiring/pipeline-board.ts`; days and stuck limits come from `funnel.ts`. The offer column lists every hired candidate with a sent offer, because the payload has no contract booking.
+- **Demo mode.** `/hiring?demo=1` (the `Demo` button in the tools row) shows one made-up candidate, `Demo – Nicha Suwan`, and made-up `Sample` candidates. The bar at the top gives eight steps, what to say and what to select. Back, Next and the step buttons move the candidate; Good call, the head's Yes and Gift's Approve move it too. `Exit demo` reloads the real page.
+- **Nothing is saved or sent.** `installDemoFetch` (`src/lib/hiring/demo.ts`) answers every `/api/hiring` request in the browser. Two read-only requests go to the server: the Capacity tab and the PDF viewer's script files. The upload button marks the demo paper and opens no file dialog. A file link opens a demo PDF. The head's candidate page opens over the screen with the real score form.
+- **Not in the demo.** The candidate's own pages (call booking, the form, visit booking, signing booking), emails, LINE notices, Rules and setup saves, and head schedules.
+- **Check.** `node scripts/dev/verify-hiring-demo.mjs [folder]` (Node 24) runs all eight steps in Chrome with no server data and fails if a hiring request leaves the browser.
+
 ## Role screens
 
 Kevin's decision, 18 November 2026: the full dashboard stays for the owner. HR, Admin and the heads each get one simple screen in `/hiring`, built from the same `GET /api/hiring` payload (`src/components/hiring/role-screens.tsx`, helpers in `src/lib/hiring/role-views.ts`).
