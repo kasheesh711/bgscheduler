@@ -119,24 +119,23 @@ export function buildPipelineBoard(data: PipelineBoardInput, now: Date): Pipelin
         place = { column: "marking", exact: f.daysInStage, stuck: f.stuck, note: `Visited ${dayOnly(new Date(last))}. No head decision.`, owner: headKey ?? "Head" };
       } else
         place = { column: stage === "paper_passed" ? "marking" : "visit", exact: f.daysInStage, stuck: f.stuck, note: NEEDS_REVIEW, owner: "HR" };
-    } else if (stage === "onsite_invited") {
+    } else if (stage === "onsite_invited" || stage === "paper_invited") {
       place = { column: "form", exact: f.daysInStage, stuck: f.stuck, note: "Waits for a visit booking", owner: "Candidate" };
+    } else if (stage === "pre_screen") {
+      // With or without a call: a score below the call score gets the form with no HR call.
+      place = c.preScreenRepliedAt
+        ? { column: "form", exact: f.daysInStage, stuck: f.stuck, note: "Form is in. Waits for a visit place.", owner: "Kevin" }
+        : { column: "form", exact: f.daysInStage, stuck: f.stuck, note: "Waits for the form", owner: "Candidate" };
     } else if (good) {
-      if (stage === "pre_screen")
-        place = c.preScreenRepliedAt
-          ? { column: "form", exact: f.daysInStage, stuck: f.stuck, note: "Form is in. Waits for a visit place.", owner: "Kevin" }
-          : { column: "form", exact: f.daysInStage, stuck: f.stuck, note: "Waits for the form", owner: "Candidate" };
-      else {
-        // The funnel clock for these stages starts at the application, so this column counts from the good call.
-        const exact = daysSince(good.at);
-        place = {
-          column: "form",
-          exact,
-          stuck: after(exact, stuckAfter("pre_screen")),
-          note: stage === "new" ? "Next steps email not sent yet" : NEEDS_REVIEW,
-          owner: "HR",
-        };
-      }
+      // The funnel clock for these stages starts at the application, so this column counts from the good call.
+      const exact = daysSince(good.at);
+      place = {
+        column: "form",
+        exact,
+        stuck: after(exact, stuckAfter("pre_screen")),
+        note: stage === "new" ? "Next steps email not sent yet" : NEEDS_REVIEW,
+        owner: "HR",
+      };
     } else if (f.stageKey === "new (call booked)") {
       const at = callAt.get(id)!;
       place = {

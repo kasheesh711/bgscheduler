@@ -132,6 +132,13 @@ describe("buildPipelineBoard", () => {
     expect(offer.bare.note).toBe(NEEDS_REVIEW);
   });
 
+  it("keeps a form or old-flow invitation with no HR call on the board", () => {
+    // A score below the call score gets the form with no call.
+    const board = build({ candidates: [candidate("form", "pre_screen"), candidate("old", "paper_invited")] });
+    expect(where(board, "form")).toBe("form");
+    expect(where(board, "old")).toBe("form");
+  });
+
   it("leaves closed and parked candidates out", () => {
     const board = build({
       candidates: ["rejected", "stopped", "no_reply", "no_booking"].map((stage) => candidate(stage, stage, good("05"))),

@@ -66,6 +66,8 @@ describe("hiring demo mode", () => {
     expect(demoFetch("/api/search")).toBeNull();
     expect(demoFetch("/api/hiring?capacity=1")).toBeNull();
     expect(demoFetch("/api/hiring/pdf-runtime/pdf.worker.mjs")).toBeNull();
+    // Only a read goes through: a write to the same address is answered here.
+    expect(post("/api/hiring?capacity=1", {})).not.toBeNull();
     for (const path of ["/api/hiring", "/api/hiring?head=Peat", "/api/hiring/onboarding", "/api/hiring/uploads", "/api/hiring/book/x", "/api/hiring/resume/1"])
       expect(demoFetch(path), path).not.toBeNull();
     // An upload cannot start: the server step that would give the browser a storage address is refused.

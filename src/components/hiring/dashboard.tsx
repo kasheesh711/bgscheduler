@@ -25,7 +25,7 @@ import { CallsScreen } from "./calls-screen";
 import { CapacityScreen } from "./capacity-screen";
 import { FunnelPanel } from "./funnel-panel";
 import { DemoBar, useDemoState, type DemoView } from "./demo-bar";
-import { installDemoFetch } from "@/lib/hiring/demo";
+import { demoFetchInstalled, installDemoFetch } from "@/lib/hiring/demo";
 import { PipelineBoardPanel } from "./pipeline-board";
 import { RunSheetScreen } from "./run-sheet-screen";
 import { SeekScreen } from "./seek-screen";
@@ -127,6 +127,10 @@ export function HiringDashboard() {
   const demo = search.get("demo") === "1";
   // Before any child effect can send a request. The call does nothing after the first time.
   if (demo) installDemoFetch();
+  // A menu link can leave demo mode with no page load. The real page must never read demo answers, so load it again.
+  useEffect(() => {
+    if (!demo && demoFetchInstalled()) window.location.reload();
+  }, [demo]);
   const demoStep = useDemoState();
   const [briefOpen, setBriefOpen] = useState(false);
   const hash = useSyncExternalStore(subscribeToReviewLink, () => window.location.hash, () => null);
@@ -231,6 +235,8 @@ export function HiringDashboard() {
     }
   };
   async function connect() {
+    // The Google sign-in leaves the page, so demo mode does not start it.
+    if (demo) return setNotice("This part is not in the demo.");
     setBusy(true);
     setError("");
     try {

@@ -348,8 +348,8 @@ export function demoFetch(input: string, init?: { method?: string; body?: unknow
   const url = new URL(input, "https://demo.invalid");
   const path = url.pathname;
   if (!path.startsWith("/api/hiring")) return null;
-  if (path.startsWith("/api/hiring/pdf-runtime/") || (path === "/api/hiring" && url.searchParams.has("capacity"))) return null;
-  const post = init?.method === "POST";
+  const post = init?.method?.toUpperCase() === "POST";
+  if (!post && (path.startsWith("/api/hiring/pdf-runtime/") || (path === "/api/hiring" && url.searchParams.has("capacity")))) return null;
   const body = post && typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {};
   const mine = body.id === DEMO_ID || body.candidateId === DEMO_ID;
 
@@ -411,6 +411,8 @@ export function demoFetch(input: string, init?: { method?: string; body?: unknow
 }
 
 let installed = false;
+/** True once this page answers hiring requests itself. Only a page load ends that. */
+export const demoFetchInstalled = () => installed;
 /** Puts `demoFetch` in front of `window.fetch`, once. Only the demo page calls this, and a reload removes it. */
 export function installDemoFetch() {
   if (installed || typeof window === "undefined") return;
