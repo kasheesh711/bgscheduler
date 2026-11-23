@@ -37,4 +37,3 @@ export function demoReviewDocument(input: { draft: boolean; behavioral: string; 
   // Full addresses, because the demo opens HR's packet link from a blob page, where a path has no site.
   return reviewDocument(packet, `${origin}/api/hiring/review/demo-packet?file=resume`, `${origin}/api/hiring/review/demo-packet?file=paper`);
 }
-
