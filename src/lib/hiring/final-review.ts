@@ -6,11 +6,11 @@ import * as s from "@/lib/db/schema";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { headRecommendation, queueFinalResult, sendRefusal, type Decision } from "./decisions";
 import { computeSheet, passRulesFor, rubricTotals } from "./marking-sheet";
-import { contractTestAllowed, HiringError, HR_CALENDAR, normalizeEmail, runtimeWritesAllowed, type HiringConfig } from "./model";
+import { contractTestAllowed, HiringError, HR_CALENDAR, normalizeEmail, practiceMarker, runtimeWritesAllowed, type HiringConfig } from "./model";
 import { profileScore, workRightsPenalty, type Assessment } from "./scoring";
 import { callCalendarState, candidateById, enqueue, settings } from "./service";
 
-const PACKET = "final-review-packet";
+export const FINAL_REVIEW_PACKET = "final-review-packet";
 
 export function finalReviewAccess(actor: string) {
   return {
@@ -24,7 +24,8 @@ async function evidence(db: Database, id: string, lock = true) {
   const recommendation = await headRecommendation(db, id);
   if (recommendation?.detail.decision !== "hire") throw new HiringError(409, "The tutor must recommend Yes first.");
   const subject = candidate.visitSubject ?? candidate.subjects[0];
-  if (!candidate.resumeSha256 || !candidate.resumePath || !candidate.profileAssessment)
+  const practice = !!practiceMarker(candidate);
+  if (!candidate.profileAssessment || (!practice && (!candidate.resumeSha256 || !candidate.resumePath)))
     throw new HiringError(409, "The original résumé and ATS assessment are required.");
   const { config } = await settings(db);
   const paperQuery = db.select().from(s.hiringPaperResults).where(and(eq(s.hiringPaperResults.candidateId, id),
@@ -33,7 +34,7 @@ async function evidence(db: Database, id: string, lock = true) {
   const mockQuery = db.select().from(s.hiringMockResults).where(and(eq(s.hiringMockResults.candidateId, id),
     eq(s.hiringMockResults.subject, subject), eq(s.hiringMockResults.status, "done")));
   const [mock] = await (lock ? mockQuery.for("share") : mockQuery);
-  if (!paper?.marks || !paper.fileId || !mock?.rubric || mock.source === "tracker" || !rubricTotals(mock.rubric).complete ||
+  if (!paper?.marks || (!practice && !paper.fileId) || !mock?.rubric || mock.source === "tracker" || !rubricTotals(mock.rubric).complete ||
       (recommendation.detail.mockResultId && recommendation.detail.mockResultId !== mock.id))
     throw new HiringError(409, "The graded paper and the completed mock rubric are required.");
   const prestige = candidate.universityAssessment?.fraction ?? 0;
@@ -70,8 +71,13 @@ const fingerprint = (value: Evidence) => createHash("sha256")
 const packetMatches = (packet: Pick<Packet, "evidence" | "fingerprint">, current: Evidence) =>
   packet.fingerprint === fingerprint(current) && (!packet.evidence.ats.weights || isDeepStrictEqual(packet.evidence, current));
 
+export async function reviewPacketDetail(db: Database, id: string, input: Pick<Packet, "behavioral" | "offer">): Promise<Packet> {
+  const material = await evidence(db, id);
+  return { evidence: material, fingerprint: fingerprint(material), ...input };
+}
+
 export async function latestReviewPacket(db: Database, id: string) {
-  const [row] = await db.select().from(s.hiringAudit).where(and(eq(s.hiringAudit.candidateId, id), eq(s.hiringAudit.action, PACKET)))
+  const [row] = await db.select().from(s.hiringAudit).where(and(eq(s.hiringAudit.candidateId, id), eq(s.hiringAudit.action, FINAL_REVIEW_PACKET)))
     .orderBy(desc(s.hiringAudit.createdAt)).limit(1);
   return row ? { id: row.id, author: row.actor, at: row.createdAt, ...(row.detail as unknown as Packet) } : null;
 }
@@ -99,15 +105,14 @@ export async function submitReview(db: Database, id: string, actor: string, inpu
     await tx.execute(sql`select id from hiring_candidates where id=${id} for no key update`);
     const candidate = await candidateById(tx, id);
     if (["stopped", "hired", "rejected"].includes(candidate.stage)) throw new HiringError(409, "This application is closed.");
-    const material = await evidence(tx, id);
-    const detail = { evidence: material, fingerprint: fingerprint(material), ...input };
+    const detail = await reviewPacketDetail(tx, id, input);
     const previous = await latestReviewPacket(tx, id);
     if (previous?.fingerprint === detail.fingerprint && (previous.evidence.ats.weights
-      ? isDeepStrictEqual(previous.evidence, material)
-      : isDeepStrictEqual(comparableEvidence(previous.evidence), comparableEvidence(material))) &&
+      ? isDeepStrictEqual(previous.evidence, detail.evidence)
+      : isDeepStrictEqual(comparableEvidence(previous.evidence), comparableEvidence(detail.evidence))) &&
         previous.behavioral === input.behavioral && previous.offer === input.offer)
       return `${id}:final-review:${previous.id}`;
-    const [row] = await tx.insert(s.hiringAudit).values({ action: PACKET, actor, candidateId: id, detail }).returning({ id: s.hiringAudit.id });
+    const [row] = await tx.insert(s.hiringAudit).values({ action: FINAL_REVIEW_PACKET, actor, candidateId: id, detail }).returning({ id: s.hiringAudit.id });
     const link = new URL(`/hiring?view=hr#review-${id}`, process.env.APP_BASE_URL || "https://bgscheduler.vercel.app");
     const key = `${id}:final-review:${row.id}`;
     await enqueue(tx, { key, candidateId: id, kind: "email",

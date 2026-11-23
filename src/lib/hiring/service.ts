@@ -172,7 +172,7 @@ async function visitsOnRemovedDays(db: Database, key: string, before: Week | nul
   const removed = [1, 2, 3, 4, 5].filter((i) => before?.[i] && !after[i]);
   if (!removed.length) return 0;
   const rows = await db
-    .select({ startTime: s.hiringBookings.startTime })
+    .select({ startTime: s.hiringBookings.startTime, evidence: s.hiringBookings.evidence })
     .from(s.hiringBookings)
     .where(
       and(
@@ -182,7 +182,7 @@ async function visitsOnRemovedDays(db: Database, key: string, before: Week | nul
         sql`${s.hiringBookings.startTime} >= ${from.toISOString()}::timestamptz`,
       ),
     );
-  return rows.filter((r) => removed.includes(Number(formatInTimeZone(r.startTime, ZONE, "i")))).length;
+  return rows.filter((r) => r.evidence?.practice !== true && removed.includes(Number(formatInTimeZone(r.startTime, ZONE, "i")))).length;
 }
 /**
  * The count runs after the change is saved, so a failure here must not report an error for a change that saved.
@@ -1319,10 +1319,11 @@ export async function bookInterview(
   });
 }
 const BRIEF_DAYS = 7;
+export const briefExpiresAt = (mockEnd: Date) => new Date(mockEnd.getTime() + BRIEF_DAYS * 86400000);
 /** The interviewer's page for one mock: the form answers and the résumé. The link ends BRIEF_DAYS after the mock. */
 export const briefLink = (mock: { id: string; endTime: Date }) =>
   new URL(
-    `/hiring/brief/${bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + BRIEF_DAYS * 86400000))}`,
+    `/hiring/brief/${bookingToken(mock.id, "brief", briefExpiresAt(mock.endTime))}`,
     process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
   ).toString();
 /** The résumé file alone, for the recruitment group's call notice. It ends BRIEF_DAYS after the call, or when the call does. */

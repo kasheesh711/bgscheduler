@@ -35,9 +35,9 @@ const booking = (over: Partial<RunSheetBooking>): RunSheetBooking => ({
 const base: RunSheetInput = {
   bookings: [],
   candidates: [
-    { id: "c1", name: "Kim", visitSubject: null },
-    { id: "c2", name: "Mai", visitSubject: "English Language" },
-    { id: "c3", name: "Nat", visitSubject: null },
+    { id: "c1", name: "Kim", sourceIds: [], visitSubject: null },
+    { id: "c2", name: "Mai", sourceIds: [], visitSubject: "English Language" },
+    { id: "c3", name: "Nat", sourceIds: [], visitSubject: null },
   ],
   config: {
     interviewers: [
@@ -251,7 +251,7 @@ describe("review fixes", () => {
 describe("booked-stage candidates with no booking row", () => {
   const stageIn = (stage: string, updatedAt = "2026-11-10T00:00:00Z") => ({
     ...base,
-    candidates: [{ id: "c1", name: "Kim", visitSubject: "Mathematics", stage, updatedAt }],
+    candidates: [{ id: "c1", name: "Kim", sourceIds: [], visitSubject: "Mathematics", stage, updatedAt }],
   });
   it.each(["onsite_booked", "paper_booked", "mock_booked"])("lists %s in unrecordedVisits, never as a dated row", (stage) => {
     const input = stageIn(stage);

@@ -19,6 +19,8 @@ const assessment = (
 });
 const candidate = (id: string, stage: Stage, overrides = {}) => ({
   id,
+  name: id,
+  sourceIds: [] as string[],
   stage,
   email: `${id}@example.com`,
   preScreen: null as unknown,
@@ -188,7 +190,7 @@ describe("buildInsights", () => {
         bookings,
         // c holds a paper booking only, so its mock stage has no reservation.
         candidates: [candidate("a", "mock_booked"), candidate("b", "paper_booked"), candidate("c", "mock_booked")],
-        outbox: [{ status: "sent" }, { status: "failed" }, { status: "uncertain" }, { status: "pending" }],
+        outbox: ["sent", "failed", "uncertain", "pending"].map((status) => ({ candidateId: "a", status })),
       },
       now,
     );

@@ -11,9 +11,9 @@ const NOW = new Date("2026-11-17T17:30:00Z");
 const day = (d: string) => `2026-${d}T03:00:00Z`;
 const data: FunnelInput = {
   candidates: [
-    { id: "a", stage: "review", createdAt: day("10-31"), seekJobId: "95633167", preScreenRepliedAt: null, callReview: null },
-    { id: "b", stage: "new", createdAt: day("11-16"), seekJobId: null, preScreenRepliedAt: null, callReview: null },
-    { id: "c", stage: "stopped", createdAt: day("11-10"), seekJobId: "95633167", preScreenRepliedAt: null, callReview: null },
+    { id: "a", name: "A", sourceIds: [], stage: "review", createdAt: day("10-31"), seekJobId: "95633167", preScreenRepliedAt: null, callReview: null },
+    { id: "b", name: "B", sourceIds: [], stage: "new", createdAt: day("11-16"), seekJobId: null, preScreenRepliedAt: null, callReview: null },
+    { id: "c", name: "C", sourceIds: [], stage: "stopped", createdAt: day("11-10"), seekJobId: "95633167", preScreenRepliedAt: null, callReview: null },
   ],
   bookings: [],
   calls: [],

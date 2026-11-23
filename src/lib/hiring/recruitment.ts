@@ -133,7 +133,8 @@ export async function queueRecruitmentWeekly(db: Database, now = new Date()) {
         gte(outbox.sentAt, week.previous), lt(outbox.sentAt, week.start))).orderBy(asc(outbox.sentAt), asc(candidates.name));
     const mocks = await tx.select({ name: candidates.name, booking: bookings }).from(bookings)
       .innerJoin(candidates, eq(bookings.candidateId, candidates.id))
-      .where(and(eq(bookings.kind, "mock"), eq(bookings.status, "confirmed"), gte(bookings.startTime, week.start), lt(bookings.startTime, week.end)))
+      .where(and(eq(bookings.kind, "mock"), eq(bookings.status, "confirmed"),
+        sql`${bookings.evidence}->'practice' is distinct from 'true'::jsonb`, gte(bookings.startTime, week.start), lt(bookings.startTime, week.end)))
       .orderBy(asc(bookings.startTime));
     const seen = new Set<string>();
     const sentLines = sent.filter(row => { if (seen.has(row.id)) return false; seen.add(row.id); return true; })

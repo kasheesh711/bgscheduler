@@ -7,7 +7,7 @@ import { useSearchParams } from "next/navigation";
 import { Instrument_Serif } from "next/font/google";
 import { signIn } from "next-auth/react";
 import { isRoleView } from "@/lib/hiring/role-views";
-import { GOOGLE_FREEBUSY_SCOPE, GOOGLE_SCOPES, type HiringConfig, type Stage, type Subject } from "@/lib/hiring/model";
+import { GOOGLE_FREEBUSY_SCOPE, GOOGLE_SCOPES, practiceMarker, type HiringConfig, type Stage, type Subject } from "@/lib/hiring/model";
 import { assessmentRows } from "@/lib/hiring/assessment-view";
 import { buildInsights, readyToInvite } from "@/lib/hiring/insights";
 import { dedupePriority, headDaysNotice } from "@/lib/hiring/rules";
@@ -544,7 +544,7 @@ export function HiringDashboard() {
               />
               <EvidenceChart insights={insights} />
               <SubjectChart insights={insights} filter={filter} setFilter={setFilter} />
-              <AveragePentagon candidates={shown} />
+              <AveragePentagon candidates={shown.filter((c) => !practiceMarker(c))} />
             </div>
           </div>
           {candidate ? (

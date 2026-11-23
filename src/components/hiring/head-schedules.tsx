@@ -133,7 +133,7 @@ export function HeadCalendar({ week, onOpen }: { week: HeadWeek; onOpen: (candid
   );
 }
 
-type Booking = { kind: string; status: string; interviewerKey: string | null; startTime: unknown };
+type Booking = { kind: string; status: string; interviewerKey: string | null; startTime: unknown; evidence?: Record<string, unknown> };
 
 /** The Head schedules view: a head switch, a week switch that cannot go back, and the head's visits. */
 export function HeadSchedules({
@@ -175,6 +175,7 @@ export function HeadSchedules({
       (b) =>
         b.status === "confirmed" &&
         b.kind === "mock" &&
+        b.evidence?.practice !== true &&
         b.interviewerKey === head &&
         weekStart(localDate(new Date(String(b.startTime)))) === start,
     ).length;

@@ -3,7 +3,7 @@
 import { useDeferredValue, useMemo, useState } from "react";
 import { buildFunnel, STUCK_RULES, type FunnelInput } from "@/lib/hiring/funnel";
 import { ACTIVE_STAGES, CRITERIA, RESULTS, STAGE_LABELS } from "@/lib/hiring/insights";
-import type { HiringConfig, Stage } from "@/lib/hiring/model";
+import { practiceMarker, type HiringConfig, type Stage } from "@/lib/hiring/model";
 import { preScreenNote, visitText, type CandidateExtras } from "@/lib/hiring/status";
 import { NO_FILTER, type CandidateFilter, type HiringCandidate, type PreScreenFilter } from "./dashboard";
 import { CRITERION_LABELS, PILL_CLASS, RESULT_CLASS, RESULT_LABELS, type Insights } from "./pipeline-charts";
@@ -114,12 +114,14 @@ export function CandidateTable({
     });
   }, [candidates, ready, extras, filter, deferred, sort, pipeline]);
 
+  // The figures leave practice candidates out, but the table lists them, so the tab counts add them back.
+  const practiceIn = (stage?: Stage) => candidates.filter((c) => practiceMarker(c) && (!stage || c.stage === stage)).length;
   const tabs: [CandidateFilter["stage"], string, number][] = [
-    ["all", "All", insights.total],
+    ["all", "All", insights.total + practiceIn()],
     ["ready", "Ready", insights.ready],
     // No reply and No booking are stages too, so they filter like the rest.
-    ...STAGE_ORDER.filter((s) => s !== "stopped").map((s): [Stage, string, number] => [s, STAGE_LABELS[s], insights.byStage[s]]),
-    ["stopped", STAGE_LABELS.stopped, insights.stopped],
+    ...STAGE_ORDER.filter((s) => s !== "stopped").map((s): [Stage, string, number] => [s, STAGE_LABELS[s], insights.byStage[s] + practiceIn(s)]),
+    ["stopped", STAGE_LABELS.stopped, insights.stopped + practiceIn("stopped")],
   ];
   const preCounts = PRE_SCREEN_FILTERS.map(
     (value) => candidates.filter((c) => matchesPreScreen(extras.get(c.id), value)).length,
