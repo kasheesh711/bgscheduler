@@ -61,6 +61,7 @@ import {
   linkSentAt,
   lockQueue,
   callEntries,
+  callInviteSentAt,
   callQueue,
   formCandidates,
   onsiteEntries,
@@ -2455,7 +2456,7 @@ export async function reviewCandidate(
         if (!(await inviteToPreScreen(tx, c, now)))
           throw new HiringError(409, "A pre-screen form was already queued for this candidate. No new form can be sent.");
         // Kevin's rule: a click past the call queue counts as HR's good call.
-        const skippedCall = profileGate({ ...c, callBooked: await hasBookedCall(tx, id) }, config).awaitingCall;
+        const skippedCall = profileGate({ ...c, callBooked: await hasBookedCall(tx, id), callInvited: !!(await callInviteSentAt(tx, id)) }, config).awaitingCall;
         if (skippedCall) detail = { goodCall: "manual" };
         await cancelComingCall(tx, id, now);
         await tx
