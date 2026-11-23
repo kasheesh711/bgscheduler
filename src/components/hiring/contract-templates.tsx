@@ -27,6 +27,8 @@ export function ContractTemplates() {
 
   async function upload(type: OfferType, file: File | undefined) {
     if (!file) return;
+    // A larger body never reaches the server, so its message would not show.
+    if (file.size > 4 * 1024 * 1024) return setMessage("Choose a file smaller than 4 MB.");
     setBusy(type);
     setMessage("");
     try {
@@ -57,12 +59,13 @@ export function ContractTemplates() {
             <div className={r.cardMain}>
               <p className={r.name}>{label} contract</p>
               <p className={r.meta}>{!templates ? "Loading…" : files.length
-                ? `Updated ${new Date(Math.max(...files.map(({ file }) => Date.parse(file.uploadedAt)))).toLocaleDateString("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium" })}`
+                // One date for each file: a new PDF does not make an old Word file current.
+                ? files.map(({ name, file }) => `${name}: ${new Date(file.uploadedAt).toLocaleDateString("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium" })}`).join(" · ")
                 : "No template uploaded."}</p>
             </div>
             <div className={r.actions}>
               {files.map(({ format, name }) => (
-                <a key={format} className={css.secondary} href={`${URL}?type=${type}&format=${format}`} download>Download {name}</a>
+                <a key={format} className={css.secondary} href={`${URL}?type=${type}&format=${format}`}>Download {name}</a>
               ))}
               <label className={css.secondary}>
                 {busy === type ? "Uploading…" : files.length ? "Replace" : "Upload"}
