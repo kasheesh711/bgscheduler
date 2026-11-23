@@ -695,6 +695,7 @@ export async function deliverOutbox(
             current.config.location,
             db,
             job.kind === "calendar_cancel",
+            current.config.interviewers.map((head) => head.email),
           );
           // Another delivery can run the cancel while this event is being created, and find nothing to cancel yet.
           if (job.kind === "calendar") {

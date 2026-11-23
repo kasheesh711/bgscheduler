@@ -60,6 +60,7 @@ it("creates one calendar event with both attendees and recovers it by identity o
     { email: "candidate@example.com" },
     { email: "people@begiftededucation.com" },
     { email: "admin@begiftededucation.com" },
+    { email: "kevhsh7@gmail.com" },
   ]);
   event = Object.assign({}, event, {
     extendedProperties: { private: { hiringBookingId: "another-booking" } },
@@ -99,14 +100,20 @@ it("titles a visit's two private events, and only the mock invites the head", as
       return Response.json(events.at(-1));
     }),
   );
-  await deliverCalendar(row("paper", "00000000-0000-4000-8000-000000000002", null), candidate, "BeGifted", db);
-  await deliverCalendar(row("mock", "00000000-0000-4000-8000-000000000003", "peat@example.com"), candidate, "BeGifted", db);
+  const heads = ["Peat@example.com", "gift@example.com"];
+  await deliverCalendar(row("paper", "00000000-0000-4000-8000-000000000002", null), candidate, "BeGifted", db, false, heads);
+  await deliverCalendar(row("mock", "00000000-0000-4000-8000-000000000003", "peat@example.com"), candidate, "BeGifted", db, false, heads);
   expect(events.map((e) => e.summary)).toEqual(["BeGifted exam", "BeGifted mock teaching"]);
   expect(events.map((e) => e.visibility)).toEqual(["private", "private"]);
   // Only R1 is on Google Meet. The visit is onsite.
   expect(events.map((e) => e.conferenceData)).toEqual([undefined, undefined]);
-  expect(events[0].attendees).toEqual([{ email: "candidate@example.com" }]);
-  expect(events[1].attendees).toEqual([{ email: "peat@example.com" }, { email: "candidate@example.com" }, { email: "people@begiftededucation.com" }, { email: "admin@begiftededucation.com" }]);
+  // Kevin, 23 Nov 2026: HR, Admin, Kevin and every head are guests on both visit events, once each.
+  const staff = ["people@begiftededucation.com", "admin@begiftededucation.com", "kevhsh7@gmail.com", "peat@example.com", "gift@example.com"].map((email) => ({ email }));
+  expect(events[0].attendees).toEqual([{ email: "candidate@example.com" }, ...staff]);
+  expect(events[1].attendees).toEqual([{ email: "peat@example.com" }, { email: "candidate@example.com" }, ...staff.filter((g) => g.email !== "peat@example.com")]);
+  // A paper row outside a visit (old flow, delivery test) keeps no staff guests.
+  await deliverCalendar({ ...row("paper", "00000000-0000-4000-8000-000000000004", null), visitId: null }, candidate, "BeGifted", db, false, heads);
+  expect(events[2].attendees).toEqual([{ email: "candidate@example.com" }]);
   expect(String(events[1].description)).toContain("Candidate");
 });
 
