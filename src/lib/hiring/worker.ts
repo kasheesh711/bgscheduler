@@ -695,7 +695,7 @@ export async function deliverOutbox(
             current.config.location,
             db,
             job.kind === "calendar_cancel",
-            current.config.interviewers.map((head) => head.email),
+            await visitHead(db, booking, current.config.interviewers),
           );
           // Another delivery can run the cancel while this event is being created, and find nothing to cancel yet.
           if (job.kind === "calendar") {
@@ -740,6 +740,19 @@ export async function deliverOutbox(
     }
   }
   return sent;
+}
+
+/**
+ * The head who must hear about a visit's test (Kevin, 23 Nov 2026: only the relevant head, never every head). A paired
+ * visit names its mock's head. A test-only visit has no head yet, so it goes to the roster heads of its subject. A mock
+ * already invites its own head.
+ */
+export async function visitHead(db: Database, booking: typeof s.hiringBookings.$inferSelect, interviewers: { email: string; subjects: string[] }[]) {
+  if (booking.kind !== "paper" || !booking.visitId) return [];
+  const [mock] = await db.select({ email: s.hiringBookings.interviewerEmail }).from(s.hiringBookings)
+    .where(and(eq(s.hiringBookings.visitId, booking.visitId), eq(s.hiringBookings.kind, "mock")));
+  if (mock?.email) return [mock.email];
+  return interviewers.filter((head) => booking.subjects.some((subject) => head.subjects.includes(subject))).map((head) => head.email);
 }
 
 /** Booking and final review messages can leave without the Mac. The cron retries failures. */

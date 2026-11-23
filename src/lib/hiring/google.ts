@@ -110,8 +110,8 @@ export async function deliverCalendar(
     {},
     db,
   );
-  // Kevin, 23 Nov 2026: every visit event (test and mock) goes to HR, Admin, Kevin and all heads. A paper row with no
-  // visitId is the old flow or the delivery test, which stay as they were.
+  // Kevin, 23 Nov 2026: every visit event (test and mock) goes to HR, Admin, Kevin and the visit's own head (`heads`).
+  // A paper row with no visitId is the old flow or the delivery test, which stay as they were.
   const staff = booking.kind === "mock" || (booking.kind === "paper" && booking.visitId)
     ? [...new Set([...VISIT_STAFF, ...heads.map((email) => email.toLowerCase())])] : [];
   if (existing) {
