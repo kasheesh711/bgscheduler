@@ -113,8 +113,9 @@ export function SignedContract({ candidateId, name }: { candidateId: string; nam
       await upload(`hiring-signed-contracts/${candidateId}.pdf`, file, { access: "private", handleUploadUrl: SIGNED, clientPayload: candidateId, contentType: "application/pdf" });
       await load();
       setMessage("Saved.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "The upload failed.");
+    } catch {
+      // The storage library hides the server's reason, so its own text does not help staff.
+      setMessage("The upload failed. Refresh the page and try again.");
     } finally {
       setBusy(false);
     }
