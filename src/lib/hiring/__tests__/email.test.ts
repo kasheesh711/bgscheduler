@@ -47,7 +47,7 @@ describe("candidate emails keep their facts", () => {
     for (const part of [email.text, email.html]) {
       expect(part).toContain("Congratulations");
       expect(part).toContain("30 minutes, Google Meet video call");
-      expect(part).toContain("Monday to Friday, 09:00–18:00 (Bangkok time)");
+      expect(part).toContain("Monday to Friday, 13:15–18:00 (Bangkok time)");
       expect(part).toContain("https://bgscheduler.vercel.app/hiring/book/r1");
       expect(part).toContain("How our process works");
       for (const step of ["R1: HR Interview", "Pre-screening questions and visit booking", "Onsite visit: the test", "R2: Final round mock teaching", "Offer"])
