@@ -56,7 +56,8 @@ const leaked = [];
 const server = createServer((request, response) => {
   const url = new URL(request.url, "http://localhost");
   // The Capacity tab reads its own endpoint, which demo mode lets through on purpose (read-only).
-  if (url.pathname !== "/hiring" && url.pathname !== "/favicon.ico" && request.url !== "/api/hiring?capacity=1") leaked.push(`${request.method} ${request.url}`);
+  // The packet in the real design comes from a demo-only endpoint that reads and saves nothing. Here it is absent, so the page uses its plain packet.
+  if (url.pathname !== "/hiring" && url.pathname !== "/favicon.ico" && request.url !== "/api/hiring?capacity=1" && url.pathname !== "/api/hiring/review/demo-packet") leaked.push(`${request.method} ${request.url}`);
   response.writeHead(url.pathname === "/hiring" ? 200 : 404, { "Content-Type": "text/html" });
   response.end(url.pathname === "/hiring" ? html : "");
 });

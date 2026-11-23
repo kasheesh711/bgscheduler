@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { DEMO_ID, DEMO_STEPS, demoFetch, demoPayload, demoPdf, demoState, markDemoPaper, resetDemo, setDemoStep } from "../demo";
+import { DEMO_ID, DEMO_STEPS, demoFetch, demoPacketRequest, demoPayload, demoPdf, demoRubric, demoState, markDemoPaper, resetDemo, setDemoStep } from "../demo";
 import { buildFunnel } from "../funnel";
 import { buildPipelineBoard } from "../pipeline-board";
 import { buildRunSheet } from "../run-sheet";
@@ -90,4 +90,31 @@ it("previews the packet with the selected standard letter and saves nothing", as
   expect(html).toContain("Calm and clear.");
   const review = await demoFetch(`/api/hiring/review/${DEMO_ID}`)!.json();
   expect(review.packet?.offerType ?? null).not.toBe("full_time");
+});
+
+describe("the demo packet in the real design", () => {
+  beforeEach(resetDemo);
+  const url = `/api/hiring/review/${DEMO_ID}`;
+
+  it("asks the server for HR's preview and for the sent packet, and for nothing else", () => {
+    expect(demoPacketRequest(url, { method: "POST", body: JSON.stringify({ action: "preview", behavioral: "Calm and clear.", offerType: "specialist" }) }))
+      .toMatchObject({ draft: true, behavioral: "Calm and clear.", offer: expect.stringContaining("specialist Mathematics tutor") });
+    expect(demoPacketRequest(`${url}?file=html`)).toBeNull(); // no packet sent yet
+    expect(demoPacketRequest(url, { method: "POST", body: JSON.stringify({ action: "submit", behavioral: "Calm and clear.", offerType: "part_time" }) })).toBeNull();
+    post(url, { action: "submit", behavioral: "Calm and clear.", offerType: "part_time" });
+    expect(demoPacketRequest(`${url}?file=html`)).toMatchObject({ draft: false, behavioral: "Calm and clear." });
+    expect(demoPacketRequest(`${url}?file=resume`)).toBeNull();
+    expect(demoPacketRequest("/api/hiring/review/00000000-0000-4000-8000-000000000010?file=html")).toBeNull();
+  });
+
+  it("renders the real packet document with the demo values", async () => {
+    const { demoReviewDocument } = await import("../demo-packet");
+    const html = await demoReviewDocument({ draft: true, behavioral: "Calm <b>and</b> clear.", offer: "Dear Nicha", rubric: demoRubric() }, "https://example.test");
+    expect(html).toContain("<title>Hiring review | Demo – Nicha Suwan</title>");
+    expect(html).toContain("Preview. Not sent to Gift.");
+    expect(html).toContain("ATS breakdown");
+    expect(html).toContain("53 / 60");
+    expect(html).toContain("Calm &lt;b&gt;and&lt;/b&gt; clear.");
+    expect(html).toContain("https://example.test/api/hiring/review/demo-packet?file=resume");
+  });
 });
