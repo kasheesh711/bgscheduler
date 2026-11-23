@@ -1,4 +1,4 @@
-/** The standard offer letters. HR selects one; nobody types offer terms (Kevin, 23 Nov 2026). */
+/** The standard offer letters, one for each contract type. HR selects one; nobody types offer terms (Kevin, 23 Nov 2026). */
 const letter = (role: string, terms: string) => (name: string, subject: string) => `Dear ${name},
 
 We are pleased to offer you the position of ${role} ${subject} tutor at BeGifted Education.
@@ -19,6 +19,10 @@ export const OFFER_LETTERS = {
   full_time: {
     label: "Full-time tutor",
     text: letter("full-time", "As a full-time tutor, you work at BeGifted on a regular weekly schedule. We pay you a monthly salary. Your contract shows your salary, your working hours and the full terms."),
+  },
+  specialist: {
+    label: "Specialist tutor",
+    text: letter("specialist", "As a specialist tutor, you teach your specialist subject to particular students when we offer you an assignment and you accept it. We pay you for each hour that you teach. Your contract shows your hourly rate and the full terms."),
   },
 } as const;
 

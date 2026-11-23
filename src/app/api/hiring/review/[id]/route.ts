@@ -53,7 +53,9 @@ export async function GET(request: Request, { params }: Context) {
       }, { headers });
     }
     // The file links in HR's preview: the current evidence, not the last sent packet.
-    const packet = new URL(request.url).searchParams.has("draft") ? await draftReviewPacket(db, id, actor) : saved;
+    const draft = new URL(request.url).searchParams.has("draft");
+    if (draft && file !== "resume" && file !== "paper") throw new HiringError(404, "File unavailable.");
+    const packet = draft ? await draftReviewPacket(db, id, actor) : saved;
     if (!packet) throw new HiringError(404, "HR has not submitted this review.");
     const [paper] = await db.select().from(p).where(and(eq(p.id, packet.evidence.paper.id), eq(p.candidateId, id)));
     if (!paper || paper.updatedAt.toISOString() !== packet.evidence.paper.updatedAt ||

@@ -220,6 +220,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
           throw new Error(text);
         }
         setSaved(true);
+        setDraftHtml(undefined);
         if (body.action === "sign") setSignedStage(body.decision === "hire" ? "hired" : "rejected");
       }
       await load(!!body);
@@ -354,7 +355,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       {!signing && review?.access.hr && !closed && (
         <>
           <label className={css.fieldLabel}>Behavioral assessment from the pre-screen call
-            <textarea className={css.textarea} rows={5} maxLength={10000} value={behavioral} onChange={(event) => setBehavioral(event.target.value)} />
+            <textarea className={css.textarea} rows={5} maxLength={10000} value={behavioral} onChange={(event) => { setBehavioral(event.target.value); setDraftHtml(undefined); }} />
           </label>
           <label className={css.fieldLabel}>Offer letter
             <select className={css.textarea} value={offerType} onChange={(event) => { setOfferType(event.target.value as OfferType | ""); setDraftHtml(undefined); }}>

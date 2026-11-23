@@ -7,6 +7,7 @@ import { isDecided, localDate, shiftDate, ZONE, type Subject } from "@/lib/hirin
 import { buildRunSheet, headName, headVisits, pastVisits, upcoming, type RunSheetRow } from "@/lib/hiring/run-sheet";
 import { dayTitle, openHeadDecisions, weekCalls } from "@/lib/hiring/role-views";
 import { universityName } from "@/lib/hiring/seek-view";
+import { ContractTemplates } from "./contract-templates";
 import { FinalReview, reviewBlocks } from "./final-review";
 import { resultEmailState, ResultUpload } from "./assessment-screen";
 import { callCommand, callState, callSubjects, triesText } from "./calls-screen";
@@ -256,6 +257,7 @@ export function HiringReviewScreen({ data, offers, onOpenResults, reload, linked
           })}
         </div>
       </Section>
+      <Section title="Contract templates"><ContractTemplates /></Section>
     </div>
   );
 }

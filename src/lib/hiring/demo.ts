@@ -386,7 +386,7 @@ export function demoFetch(input: string, init?: { method?: string; body?: unknow
   }
   if (path === `/api/hiring/review/${DEMO_ID}`) {
     if (post) {
-      const offerType: OfferType = body.offerType === "full_time" ? "full_time" : "part_time";
+      const offerType: OfferType = typeof body.offerType === "string" && body.offerType in OFFER_LETTERS ? (body.offerType as OfferType) : "part_time";
       const draft = { id: `demo-packet-${Date.now()}`, behavioral: String(body.behavioral ?? ""), offer: OFFER_LETTERS[offerType].text(NAME, "Mathematics"), offerType };
       if (body.action === "preview") return new Response(packetHtml(draft), { headers: { "Content-Type": "text/html; charset=utf-8" } });
       if (body.action === "submit") set({ packet: draft });
@@ -402,6 +402,12 @@ export function demoFetch(input: string, init?: { method?: string; body?: unknow
       packet: state.packet, packetValid: state.packet ? true : null,
       appointment: state.step > 6 ? at(new Date(), 2, 10).toISOString() : null,
     });
+  }
+  if (path === "/api/hiring/contracts") {
+    if (post) return json({ error: NOT_IN_DEMO }, 409);
+    const type = url.searchParams.get("type");
+    if (type) return new Response(demoPdf(`${type.replace("_", "-")} tutor agreement`, ["Demo template. The real file is the blank contract."]), { headers: { "Content-Type": "application/pdf" } });
+    return json({ templates: Object.keys(OFFER_LETTERS).map((type) => ({ type, format: "pdf", size: 1000, uploadedAt: new Date().toISOString() })) });
   }
   if (path.startsWith("/api/hiring/review/")) {
     if (post) return json({ error: "The demo signs off only the demo candidate." }, 409);
