@@ -7,6 +7,7 @@
  * build here. demo.test.ts runs every step through the screens' own builders; upgrade to a typed fixture if it drifts.
  */
 import { baseConfigSchema, type Subject } from "./model";
+import { OFFER_LETTERS, type OfferType } from "./offer-letters";
 import { ITEM_MAX, RUBRIC_ITEMS, type MockRubric } from "./marking-sheet";
 
 export const DEMO_ID = "00000000-0000-4000-8000-00000000d001";
@@ -30,7 +31,7 @@ export const DEMO_STEPS = [
   { key: "prepare", title: "Admin prepares the paper test", view: "admin", who: "Admin", say: "The visit is booked for tomorrow. Admin sees who comes, at what time, and prints the paper.", act: "Show the visit card. Then select Next: it is now the visit day." },
   { key: "paper", title: "Paper test", view: "admin", who: "Admin", say: "The candidate did the paper. Admin scans it and uploads the PDF. The system marks it in 5 to 10 minutes.", act: "Select Upload the completed paper and choose a PDF, or select Next." },
   { key: "mock", title: "Mock teaching", view: "heads", who: "Head teacher", say: "The candidate passed, so the mock lesson took place. The head opens the candidate page, gives the scores and says Yes or No.", act: "Choose Kru Peat. Open the candidate page, send the scores, then select Yes." },
-  { key: "review", title: "Final review", view: "review", who: "HR, then Gift", say: "HR writes the behaviour notes and the offer, then sends the packet to Gift. Gift reads the packet and approves or rejects.", act: "Select Open final review. Write the offer, then select Send to Gift." },
+  { key: "review", title: "Final review", view: "review", who: "HR, then Gift", say: "HR writes the behaviour notes and selects the standard offer letter, then sends the packet to Gift. Gift reads the packet and approves or rejects.", act: "Select Open final review. Select the offer letter, preview the packet, then select Send to Gift." },
   { key: "offer", title: "Offer and signing", view: "offer", who: "Candidate and HR", say: "The offer email went to the candidate with a link to book a 30-minute signing at the school.", act: "Show the approved offer. The demo ends here." },
 ] as const;
 
@@ -38,7 +39,7 @@ type DemoState = {
   step: number;
   marked: boolean;
   rubric: MockRubric | null;
-  packet: { id: string; behavioral: string; offer: string } | null;
+  packet: { id: string; behavioral: string; offer: string; offerType?: OfferType } | null;
   notes: { text: string; at: string; by: string } | null;
   closed: "rejected" | "stopped" | null;
   /** The head's reason, when one was typed. */
@@ -65,7 +66,7 @@ export function setDemoStep(step: number) {
     closed: null,
     marked: next > 4,
     rubric: next > 5 ? fullRubric() : null,
-    packet: next > 6 ? { id: "demo-packet", behavioral: BEHAVIORAL, offer: OFFER } : null,
+    packet: next > 6 ? { id: "demo-packet", behavioral: BEHAVIORAL, offer: OFFER, offerType: "part_time" as OfferType } : null,
   });
 }
 export const resetDemo = () => set(START);
@@ -73,7 +74,7 @@ export const resetDemo = () => set(START);
 export const markDemoPaper = () => state.step === 4 && set({ marked: true });
 
 const BEHAVIORAL = "Calm and clear on the call. Gave a specific example of how she changed a lesson for a weak student.";
-const OFFER = "Part-time Mathematics tutor. 600 THB for each hour. 10 hours each week to start. Start date 1 December 2026.";
+const OFFER = OFFER_LETTERS.part_time.text(NAME, "Mathematics");
 const fullRubric = (): MockRubric => ({
   items: Object.fromEntries(RUBRIC_ITEMS.map((id, index) => [id, index % 3 ? 10 : 7])) as MockRubric["items"],
   comments: "Clear explanations. Checked understanding often.",
@@ -326,12 +327,12 @@ export const demoFile = (path: string) =>
     ? demoPdf("Nicha Suwan - Mathematics tutor", ["BSc Mathematics, Chulalongkorn University", "3 years: IGCSE and A-Level Mathematics tutor", "IELTS 7.5", "Available: weekday evenings and weekends"])
     : demoPdf("Mathematics paper test", ["Section A: IGCSE", "Section B: AS and A-Level", "Time allowed: 2 hours"]);
 
-const packetHtml = () => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Hiring review | ${NAME}</title>
+const packetHtml = (packet = state.packet) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Hiring review | ${NAME}</title>
 <style>body{font:16px/1.5 system-ui,sans-serif;margin:32px auto;max-width:720px;color:#1c2a3a}h1{font-size:28px}h2{font-size:18px;margin-top:28px;border-bottom:1px solid #cfe0f0;padding-bottom:4px}dt{color:#5b6b7b;font-size:13px}dd{margin:0 0 10px}</style></head>
 <body><h1>${NAME}</h1><p>Mathematics · Demo packet. Every value is made up.</p>
 <h2>Scores</h2><dl><dt>ATS (application)</dt><dd>88 / 100</dd><dt>Paper test</dt><dd>53 / 60 (88%). Pass mark 80%.</dd><dt>Mock teaching (Kru Peat)</dt><dd>${state.rubric ? Object.values(state.rubric.items).reduce<number>((sum, value) => sum + (value ?? 0), 0) : 0} / ${RUBRIC_ITEMS.length * ITEM_MAX}. Recommendation: Yes.</dd></dl>
-<h2>HR behavioural assessment</h2><p>${escapeHtml(state.packet?.behavioral ?? "")}</p>
-<h2>Proposed offer</h2><p>${escapeHtml(state.packet?.offer ?? "")}</p>
+<h2>HR behavioural assessment</h2><p>${escapeHtml(packet?.behavioral ?? "")}</p>
+<h2>Proposed offer</h2><p style="white-space:pre-wrap">${escapeHtml(packet?.offer ?? "")}</p>
 <h2>Files</h2><p>The real packet holds the original résumé and the marked paper.</p></body></html>`;
 const escapeHtml = (text: string) => text.replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]!);
 
@@ -385,7 +386,10 @@ export function demoFetch(input: string, init?: { method?: string; body?: unknow
   }
   if (path === `/api/hiring/review/${DEMO_ID}`) {
     if (post) {
-      if (body.action === "submit") set({ packet: { id: `demo-packet-${Date.now()}`, behavioral: String(body.behavioral ?? ""), offer: String(body.offer ?? "") } });
+      const offerType: OfferType = typeof body.offerType === "string" && body.offerType in OFFER_LETTERS ? (body.offerType as OfferType) : "part_time";
+      const draft = { id: `demo-packet-${Date.now()}`, behavioral: String(body.behavioral ?? ""), offer: OFFER_LETTERS[offerType].text(NAME, "Mathematics"), offerType };
+      if (body.action === "preview") return new Response(packetHtml(draft), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      if (body.action === "submit") set({ packet: draft });
       else if (body.decision === "hire") set({ step: 7 });
       else set({ closed: "rejected" });
       return json({ ok: true });
@@ -398,6 +402,17 @@ export function demoFetch(input: string, init?: { method?: string; body?: unknow
       packet: state.packet, packetValid: state.packet ? true : null,
       appointment: state.step > 6 ? at(new Date(), 2, 10).toISOString() : null,
     });
+  }
+  if (path === "/api/hiring/contracts/signed") {
+    if (post) return json({ error: NOT_IN_DEMO }, 409);
+    if (url.searchParams.has("file")) return new Response(demoPdf("Signed tutor agreement", ["Demo file. The real file is the scan of the signed contract."]), { headers: { "Content-Type": "application/pdf" } });
+    return json({ uploadedAt: url.searchParams.get("candidateId") === DEMO_ID ? null : at(new Date(), -1, 15).toISOString() });
+  }
+  if (path === "/api/hiring/contracts") {
+    if (post) return json({ error: NOT_IN_DEMO }, 409);
+    const type = url.searchParams.get("type");
+    if (type) return new Response(demoPdf(`${type.replace("_", "-")} tutor agreement`, ["Demo template. The real file is the blank contract."]), { headers: { "Content-Type": "application/pdf" } });
+    return json({ templates: Object.keys(OFFER_LETTERS).map((type) => ({ type, format: "pdf", size: 1000, uploadedAt: new Date().toISOString() })) });
   }
   if (path.startsWith("/api/hiring/review/")) {
     if (post) return json({ error: "The demo signs off only the demo candidate." }, 409);

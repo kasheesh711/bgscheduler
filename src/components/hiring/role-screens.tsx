@@ -7,6 +7,7 @@ import { isDecided, localDate, shiftDate, ZONE, type Subject } from "@/lib/hirin
 import { buildRunSheet, headName, headVisits, pastVisits, upcoming, type RunSheetRow } from "@/lib/hiring/run-sheet";
 import { dayTitle, openHeadDecisions, weekCalls } from "@/lib/hiring/role-views";
 import { universityName } from "@/lib/hiring/seek-view";
+import { ContractTemplates, SignedContract } from "./contract-templates";
 import { FinalReview, reviewBlocks } from "./final-review";
 import { resultEmailState, ResultUpload } from "./assessment-screen";
 import { callCommand, callState, callSubjects, triesText } from "./calls-screen";
@@ -248,14 +249,16 @@ export function HiringReviewScreen({ data, offers, onOpenResults, reload, linked
                   <p className={r.name}>{candidates.get(decision.candidateId)?.name}</p>
                   <p className={r.meta}>Offer email <strong>{email.label}</strong></p>
                 </div>
-                {(data.reviewAccess?.hr || data.reviewAccess?.gift) && (
-                  <div className={r.actions}><FinalReview id={decision.candidateId} signing /></div>
-                )}
+                <div className={r.actions}>
+                  <SignedContract candidateId={decision.candidateId} name={candidates.get(decision.candidateId)?.name ?? "the tutor"} />
+                  {(data.reviewAccess?.hr || data.reviewAccess?.gift) && <FinalReview id={decision.candidateId} signing />}
+                </div>
               </article>
             );
           })}
         </div>
       </Section>
+      <Section title="Contract templates"><ContractTemplates /></Section>
     </div>
   );
 }
