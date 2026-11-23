@@ -146,9 +146,12 @@ export async function deliverCalendar(
       );
     const attendees = (existing.attendees ?? []) as Array<{ email: string; [key: string]: unknown }>;
     const missing = staff.filter(email => !attendees.some(a => a.email?.toLowerCase() === email));
-    if (missing.length) {
-      await calendarRequest(booking.calendarOwner, path + "/" + id + "?sendUpdates=all", {
-        method: "PATCH", headers: typeof existing.etag === "string" ? { "If-Match": existing.etag } : {}, body: JSON.stringify({ attendees: [...attendees, ...missing.map(email => ({ email }))] }),
+    // Kevin, 23 Nov 2026: a visit event is free time. Its staff guests must not lose R1 call times on HR's calendar.
+    const free = staff.length > 0 && existing.transparency !== "transparent";
+    if (missing.length || free) {
+      await calendarRequest(booking.calendarOwner, path + "/" + id + "?sendUpdates=" + (missing.length ? "all" : "none"), {
+        method: "PATCH", headers: typeof existing.etag === "string" ? { "If-Match": existing.etag } : {},
+        body: JSON.stringify({ ...(missing.length && { attendees: [...attendees, ...missing.map(email => ({ email }))] }), ...(free && { transparency: "transparent" }) }),
       }, db);
     }
     return { id, recovered: true };
@@ -187,6 +190,8 @@ export async function deliverCalendar(
         start: { dateTime: booking.startTime.toISOString(), timeZone: ZONE },
         end: { dateTime: booking.endTime.toISOString(), timeZone: ZONE },
         attendees,
+        // A visit event is free time: HR is a guest, and a busy event would hide R1 call times (readHrBusy).
+        ...(staff.length > 0 && { transparency: "transparent" }),
         visibility: "private",
         guestsCanModify: false,
         guestsCanInviteOthers: false,
