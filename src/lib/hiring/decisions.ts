@@ -8,7 +8,7 @@ import { hiringEmailHtmlFromText } from "./email";
 import { bookingToken } from "./tokens";
 import { hiringOrigin, onboardingEnabled } from "./onboarding-config";
 import { queueRecruitmentHeadDecision } from "./recruitment";
-import { audit, briefMock, candidateById, completedBriefResult, endVisit, enqueue, settings } from "./service";
+import { audit, briefMock, candidateById, completedBriefResult, endVisit, enqueue, hadCall, settings } from "./service";
 
 export type Decision = "hire" | "reject";
 const d = s.hiringDecisions;
@@ -159,15 +159,16 @@ export async function saveBriefDecision(token: string, input: { decision: Decisi
       throw new HiringError(409, "Send the completed rubric for this mock first.");
     // Kevin, 24 Nov 2026: with no HR call there are no call notes, so the head writes the behavioural assessment from the
     // mock lesson. The final review starts from it.
-    const called = !!candidate.callReview?.good;
+    const called = hadCall(candidate.callReview);
     const behavioral = (input.behavioral ?? "").trim();
-    if (input.decision === "hire" && !called && behavioral.length < BEHAVIORAL_MIN)
-      throw new HiringError(400, `Write the behavioural assessment (${BEHAVIORAL_MIN}+ characters).`);
     const last = await headRecommendation(tx, candidate.id);
     if (last?.detail.bookingId === mock.id) {
-      if (last.detail.decision === input.decision && last.detail.reason === reason) return { queued: null };
+      // A repeat of the same recommendation changes nothing, with or without the behavioural text.
+      if (last.detail.decision === input.decision && last.detail.reason === reason && (!behavioral || (last.detail.behavioral ?? behavioral) === behavioral)) return { queued: null };
       throw new HiringError(409, "Your recommendation is already recorded. Contact HR if it needs a correction.");
     }
+    if (input.decision === "hire" && !called && behavioral.length < BEHAVIORAL_MIN)
+      throw new HiringError(400, `Write the behavioural assessment (${BEHAVIORAL_MIN}+ characters).`);
     const head = mock.interviewerKey ?? "Interviewer";
     const actor = `interviewer:${head}`;
     const [row] = await tx.insert(s.hiringAudit).values({ actor, action: HEAD_DECISION, candidateId: candidate.id,

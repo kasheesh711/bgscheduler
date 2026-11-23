@@ -14,7 +14,7 @@ import { markedFile } from "@/lib/hiring/marked-file";
 import { HiringError } from "@/lib/hiring/model";
 import { resumeAttachment } from "@/lib/hiring/resume-files";
 import { reviewDocument } from "@/lib/hiring/review-document";
-import { candidateById, settings } from "@/lib/hiring/service";
+import { candidateById, hadCall, settings } from "@/lib/hiring/service";
 import { deliverOutbox } from "@/lib/hiring/worker";
 
 export const maxDuration = 120;
@@ -48,7 +48,7 @@ export async function GET(request: Request, { params }: Context) {
         ? await db.select({ start: b.startTime }).from(b).where(and(eq(b.candidateId, id), eq(b.kind, "contract"), eq(b.status, "confirmed")))
         : [];
       // With no HR call, the head's behavioural assessment from the mock lesson is the starting text (Kevin, 24 Nov 2026).
-      const called = !!candidate.callReview?.good;
+      const called = hadCall(candidate.callReview);
       const fromHead = called ? "" : String((await headRecommendation(db, id))?.detail.behavioral ?? "");
       return NextResponse.json({
         access, stage: candidate.stage, callNotes: access.hr ? candidate.callReview?.notes?.text || fromHead : "", behavioralFrom: called ? "call" : "head", appointment: appointment?.start ?? null,

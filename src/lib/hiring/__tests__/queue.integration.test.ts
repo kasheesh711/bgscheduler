@@ -759,6 +759,17 @@ describe("follow-ups", () => {
     await runFollowUps(db);
     expect((await candidate(unsent.id)).stage).toBe("onsite_invited");
   });
+  it("invites a candidate whose place is counted apart when the onsite limits are full, and the cycle does not fail", async () => {
+    await setConfig({ onsiteLimits: { perWeek: 1, unbooked: 1, perHeadPerWeek: 2, perSubject: 1 } });
+    const [normal, apart, held] = [await replied(), await replied(), await replied()];
+    await db.insert(s.hiringCallTest).values({ candidateId: apart.id, arm: "direct" });
+    expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 2 });
+    const stages = await Promise.all([normal, apart, held].map(async (row) => (await candidate(row.id)).stage));
+    expect(stages[1]).toBe("onsite_invited");
+    expect(stages.filter((stage) => stage === "onsite_invited")).toHaveLength(2);
+    // The place counted apart is not in the usage, and a person's click for it still obeys the limits.
+    expect(await readLimitUsage(db, "onsite", now)).toMatchObject({ perWeek: 1, unbooked: 1 });
+  });
   it("frees the place when the onsite link expires and clears the link", async () => {
     await setConfig({ onsiteLimits: { perWeek: 3, unbooked: 1, perHeadPerWeek: 2, perSubject: 2 } });
     const row = await replied();

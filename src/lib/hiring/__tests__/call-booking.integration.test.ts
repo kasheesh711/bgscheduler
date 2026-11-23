@@ -555,8 +555,8 @@ describe("the call-skip test", () => {
   it("fills both routes to the same number; the direct route gets the form at once and no call link", async () => {
     vi.stubEnv("HIRING_CALL_TEST_PER_ARM", "2");
     const rows = [await seed(), await seed(), await seed(), await seed(), await seed()];
-    // A draw of 0 takes the direct route while it has a place.
-    expect(await releaseCallInvites(db, now, () => 0)).toBe(5);
+    // A draw of 0 takes the direct route while it has a place. The count is the call links: two in the test, one outside it.
+    expect(await releaseCallInvites(db, now, () => 0)).toBe(3);
     const drawn = await routes();
     expect(drawn.filter((row) => row.arm === "direct")).toHaveLength(2);
     expect(drawn.filter((row) => row.arm === "call")).toHaveLength(2);
@@ -584,10 +584,27 @@ describe("the call-skip test", () => {
     expect((await jobsOf(late.id)).map((job) => job.key)).toEqual([`${late.id}:call-invite`]);
   });
 
+  it("draws the route when the day has no room for a call link: the direct form still goes, and the call link goes later", async () => {
+    vi.stubEnv("HIRING_CALL_TEST_PER_ARM", "1");
+    await setConfig({ preScreenLimits: { ...config.preScreenLimits, perDay: 0 } });
+    const [a, b] = [await seed(), await seed()];
+    expect(await releaseCallInvites(db, now, () => 0)).toBe(0);
+    const drawn = await routes();
+    expect(drawn.map((row) => row.arm).sort()).toEqual(["call", "direct"]);
+    const onCall = drawn.find((row) => row.arm === "call")!.candidateId;
+    const onDirect = [a, b].find((row) => row.id !== onCall)!;
+    expect((await jobsOf(onDirect.id)).map((job) => job.key)).toEqual([`${onDirect.id}:pre-screen`]);
+    expect(await jobsOf(onCall)).toEqual([]);
+    await setConfig({});
+    expect(await releaseCallInvites(db, now, () => 0)).toBe(1);
+    expect((await jobsOf(onCall)).map((job) => job.key)).toEqual([`${onCall}:call-invite`]);
+    expect(await routes()).toHaveLength(2);
+  });
+
   it("shows the route nowhere: not in the audit, not in the dashboard, and the direct places use no limit", async () => {
     vi.stubEnv("HIRING_CALL_TEST_PER_ARM", "1");
     const a = await seed();
-    expect(await releaseCallInvites(db, now, () => 0)).toBe(1);
+    expect(await releaseCallInvites(db, now, () => 0)).toBe(0);
     expect(await routes()).toMatchObject([{ candidateId: a.id, arm: "direct" }]);
     const audit = await db.select().from(s.hiringAudit);
     expect(audit.map((row) => row.action)).toEqual(["pre-screen-release"]);

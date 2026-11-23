@@ -422,23 +422,34 @@ export async function releaseCallInvites(db: Database, now = new Date(), draw: (
       direct: Math.max(0, perArm - drawn.filter((row) => row.arm === "direct").length),
     };
     for (const entry of await callQueue(tx, config)) {
-      if (room <= 0) break;
+      // The route is drawn before the day's room is looked at, so a candidate who will take the direct route never waits
+      // on the Calls tab for room. Direct forms use no room: only call links do.
+      const open = !inTest.has(entry.id) && left.call + left.direct > 0;
+      if (room <= 0 && !open) {
+        if (left.call + left.direct === 0) break;
+        continue;
+      }
       if (invited.has(entry.id)) continue;
       const row = await lockCandidate(tx, entry.id);
       // A person or a SEEK read can act between the queue read and this row lock.
       if (!(await callQueue(tx, config, entry.id)).length) continue;
-      const arm = !inTest.has(entry.id) && left.call + left.direct > 0 ? (draw(left.call + left.direct) < left.direct ? "direct" : "call") : null;
+      const arm = open ? (draw(left.call + left.direct) < left.direct ? "direct" : "call") : null;
       if (arm === "direct") {
-        // The form goes now, in this lock, so the candidate never stands on the Calls tab. It looks like any form send.
+        // The form goes now, in this lock. It looks like any form send.
         if (!(await sendForm(tx, row, entry, now))) continue;
-      } else {
-        if (!(await inviteToCall(tx, row, now))) continue;
-        await audit(tx, "hiring-queue", "call-invite-release", row.id, { subject: entry.subject, score: entry.score });
+        await tx.insert(t).values({ candidateId: row.id, arm, assignedAt: now });
+        left.direct--;
+        continue;
       }
       if (arm) {
+        // Written at once, also when the day has no room: the link then goes on a later cycle and the route stays.
         await tx.insert(t).values({ candidateId: row.id, arm, assignedAt: now });
-        left[arm]--;
+        inTest.add(row.id);
+        left.call--;
       }
+      if (room <= 0) continue;
+      if (!(await inviteToCall(tx, row, now))) continue;
+      await audit(tx, "hiring-queue", "call-invite-release", row.id, { subject: entry.subject, score: entry.score });
       room--;
       sent++;
     }
@@ -628,7 +639,7 @@ export async function releaseQueues(db: Database, now = new Date()) {
     for (const entry of visits.release) {
       const row = await lockCandidate(tx, entry.id);
       if (!autoInviteEligible(row, await formSentAt(tx, row.id), config)) continue;
-      const subject = await inviteToVisit(tx, row, config, `${row.id}:visit-invite`, now);
+      const subject = await inviteToVisit(tx, row, config, `${row.id}:visit-invite`, now, false, !!entry.free);
       await audit(tx, "hiring-queue", "onsite-release", row.id, { subject, score: entry.score });
       onsite++;
     }

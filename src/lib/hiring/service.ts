@@ -578,6 +578,8 @@ export async function inviteToVisit(
   now = new Date(),
   // A repeat to someone already invited. They hold a place already, so the limits do not stop it.
   resend = false,
+  // The queue released this row past the limits because its place is counted apart. A person's click still obeys them.
+  free = false,
 ) {
   await lockQueue(tx);
   const [c] = await tx
@@ -605,7 +607,7 @@ export async function inviteToVisit(
   const subject = visitSubject(c.preScreen, c.workRightsAnswer, config);
   if (!subject)
     throw new HiringError(409, `No head is set for the subject: ${supported.join(", ")}.`);
-  const limit = resend ? null : blockingLimit("onsite", subject, await readLimitUsage(tx, "onsite", now), config);
+  const limit = resend || free ? null : blockingLimit("onsite", subject, await readLimitUsage(tx, "onsite", now), config);
   if (limit)
     throw new HiringError(409, `The onsite limit "${LIMIT_TEXT[limit]}" is full. Raise the number to send more.`);
   // The "Next steps" email already gave this candidate a visit link. Keep its second, so that link now books the visit,
@@ -1418,7 +1420,8 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     form: own.form,
     recommendationReady,
     // HR did not call this candidate, so a Yes needs the head's behavioural assessment.
-    behavioralNeeded: !candidate.callReview?.good,
+    // A hand invite past the call queue is stored as a good call, but nobody spoke to the candidate.
+    behavioralNeeded: !hadCall(candidate.callReview),
     recommendationBlock: own.form !== "closed" || recommendationReady ? null : checking ? ("checking" as const) : ("admin" as const),
   };
 }
@@ -1752,6 +1755,8 @@ const callRows = (db: Database, candidateId: string) =>
         eq(s.hiringBookings.status, "confirmed"),
       ),
     );
+/** HR spoke to the candidate. A hand invite past the call queue is stored as a good call, but it is not a call. */
+export const hadCall = (review: { good: { manual?: true } | null } | null | undefined) => !!review?.good && !review.good.manual;
 type CallRow = Awaited<ReturnType<typeof callRows>>[number];
 /** A confirmed HR call exists, ahead or started with no result yet: the `callBooked` that `profileGate` reads. */
 export const hasBookedCall = async (db: Database, candidateId: string) => (await callRows(db, candidateId)).length > 0;
