@@ -108,7 +108,7 @@ export function CallsScreen({
           <p className={css.activeFilters}>
             {threshold === null
               ? "Calls are off. Set an HR call score in Rules and setup to use this list."
-              : `${rows.length} to call${oldestDays === null ? "" : ` · longest unchanged ${oldestDays} d`}. Booked calls first, by time; then the highest SEEK score. A candidate at or above ${threshold} gets the pre-screen form only after a good call.`}
+              : `${rows.length} to call${oldestDays === null ? "" : ` · longest unchanged ${oldestDays} d`}. Booked calls first, by time; then the highest SEEK score. A candidate at or above ${threshold}, or one who already has the call link, gets the pre-screen form only after a good call.`}
           </p>
           {rows.length > 0 && (
             <div className={css.tableTools}>

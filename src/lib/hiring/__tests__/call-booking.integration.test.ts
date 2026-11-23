@@ -468,16 +468,19 @@ describe("a call whose candidate left the Calls tab", () => {
 
 describe("a call booked before the scores went up", () => {
   it("stays booked, takes a result, and a good call still sends the form", async () => {
-    const [booked, linkOnly] = [await seed(), await seed()];
+    const [booked, linkOnly, noLink] = [await seed(), await seed(), await seed()];
     await inviteRow(linkOnly.id);
     await book(booked.id);
     // The candidates score 80.
     await setConfig({ profileThreshold: 90, callThreshold: 90 });
     expect(await cancelOrphanCalls(db)).toBe(0);
     expect((await callsOf(booked.id)).map((row) => row.status)).toEqual(["confirmed"]);
-    expect((await callQueue(db, await settingsConfig())).map((entry) => entry.id)).toEqual([booked.id]);
-    // A link with no booking gives no place.
-    await expect(book(linkOnly.id, HALF)).rejects.toMatchObject({ status: 404 });
+    // Kevin, 24 Nov 2026: a sent link also stays open, so both candidates are still on the Calls tab.
+    expect((await callQueue(db, await settingsConfig())).map((entry) => entry.id).sort()).toEqual([booked.id, linkOnly.id].sort());
+    // A candidate who never got the link has no place at the higher score.
+    await expect(book(noLink.id, HALF)).rejects.toMatchObject({ status: 404 });
+    await book(linkOnly.id, HALF);
+    expect((await callsOf(linkOnly.id)).map((row) => row.status)).toEqual(["confirmed"]);
     expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
     await recordCall(booked.id, "good", hr, db);
     expect(await releaseQueues(db)).toEqual({ preScreen: 1, onsite: 0 });
@@ -528,6 +531,16 @@ describe("the call link reminder", () => {
     expect(job.status).toBe("pending");
     await book(quiet.id, FRIDAY.replace("-06T", "-09T"));
     expect((await reminders(quiet.id)).map((row) => row.status)).toEqual(["cancelled"]);
+  });
+
+  it("does not go to a candidate below a raised call score, whose link still works", async () => {
+    const a = await seed();
+    await inviteRow(a.id);
+    await setConfig({ profileThreshold: 90, callThreshold: 90 });
+    vi.setSystemTime(after(5));
+    expect(await remindCallInvites(db)).toBe(0);
+    expect(await reminders(a.id)).toEqual([]);
+    expect((await callQueue(db, await settingsConfig())).map((entry) => entry.id)).toEqual([a.id]);
   });
 
   it("does not go to a candidate who left the Calls tab, and obeys the day limit", async () => {

@@ -96,6 +96,11 @@ describe("profileGate with the call score", () => {
     const booked = profileGate({ ...candidate("a", "new", at80), callBooked: true }, raised);
     expect(booked).toMatchObject({ eligible: false, awaitingCall: true, review: [] });
     expect(booked.short).toEqual(["Waiting for a call"]);
+    // A sent call link holds the candidate in the same way, so the link still books.
+    const invited = profileGate({ ...candidate("a", "new", at80), callInvited: true }, raised);
+    expect(invited).toMatchObject({ eligible: false, awaitingCall: true, review: [] });
+    expect(invited.short).toEqual(["Waiting for a call"]);
+    expect(profileGate({ ...candidate("a", "new", at80), callInvited: true }, { ...raised, callThreshold: null }).short).toEqual(["Below profile threshold"]);
     expect(profileGate(candidate("a", "new", { ...at80, callReview: good }), raised)).toMatchObject({ eligible: true, awaitingCall: false });
     // A blank call score turns calls off, so a booked call no longer holds the candidate.
     expect(profileGate({ ...candidate("a", "new", at80), callBooked: true }, { ...raised, callThreshold: null }).short).toEqual(["Below profile threshold"]);

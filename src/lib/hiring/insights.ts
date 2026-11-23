@@ -138,7 +138,7 @@ export function profileGate(
   short: string[];
   review: string[];
   subject: Subject | null;
-  /** HR has not recorded a good call, and the score is at or above the call score or a call is booked. */
+  /** HR has not recorded a good call, and the score is at or above the call score, or a call is booked or its link is sent. */
   awaitingCall: boolean;
 } {
   const reasons: string[] = [];
@@ -161,9 +161,10 @@ export function profileGate(
   if (!assessment) add("The profile is not scored.", "Not scored");
   else {
     const score = profileScore(assessment, config.profileWeights, candidate.universityAssessment?.fraction ?? 0, workRightsPenalty(candidate.workRightsAnswer, config));
-    // Kevin, 24 Nov 2026: a raised score does not undo a call that is booked or done. The booked call stays on the Calls
-    // tab, and a good call still sends the form. A blank call score turns calls off and ends a booked call, as before.
-    const booked = !!candidate.callBooked && config.callThreshold !== null;
+    // Kevin, 24 Nov 2026: a raised score does not undo a call that is booked or done, or a call link that is sent. The
+    // candidate stays on the Calls tab, the sent link still books, and a good call still sends the form. A blank call
+    // score turns calls off and ends a booked call, as before.
+    const booked = (!!candidate.callBooked || !!candidate.callInvited) && config.callThreshold !== null;
     if (score < config.profileThreshold && !called && !booked) add("The profile score is below the threshold.", "Below profile threshold");
     awaitingCall = !called && ((config.callThreshold !== null && score >= config.callThreshold) || booked);
     if (assessment.criteria.some((c) => c.id === "degree" && c.result === "not_met"))

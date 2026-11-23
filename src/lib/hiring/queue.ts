@@ -443,6 +443,8 @@ export async function remindCallInvites(db: Database, now = new Date()) {
     let sent = 0;
     for (const entry of await callQueue(tx, config)) {
       if (room <= 0) break;
+      // A candidate below a raised call score keeps the sent link, but gets no reminder.
+      if (config.callThreshold === null || entry.score < config.callThreshold) continue;
       if (!due.has(entry.id) || reminded.has(entry.id) || booked.has(entry.id)) continue;
       const row = await lockCandidate(tx, entry.id);
       // A person, a SEEK read or a booking can act between the queue read and this row lock.
@@ -566,7 +568,7 @@ export async function releaseQueues(db: Database, now = new Date()) {
     for (const entry of forms.release) {
       const row = await lockCandidate(tx, entry.id);
       // A person can act between the queue read and this row lock.
-      if (row.stage !== "new" || row.preScreen || !profileGate({ ...row, callBooked: await hasBookedCall(tx, row.id) }, config).eligible) continue;
+      if (row.stage !== "new" || row.preScreen || !profileGate({ ...row, callBooked: await hasBookedCall(tx, row.id), callInvited: !!(await callInviteSentAt(tx, row.id)) }, config).eligible) continue;
       if (!(await inviteToPreScreen(tx, row, now))) continue;
       const subjects = row.profileAssessment!.subjects.filter((v) => v.relevant).map((v) => v.subject);
       await tx
