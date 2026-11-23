@@ -91,12 +91,14 @@ async function calendarRequest(
     ? null
     : ((await response.json()) as Record<string, unknown>);
 }
+export const VISIT_STAFF = ["people@begiftededucation.com", "admin@begiftededucation.com", "kevhsh7@gmail.com"];
 export async function deliverCalendar(
   booking: typeof hiringBookings.$inferSelect,
   candidate: Candidate,
   location: string,
   db: Database,
   cancel = false,
+  heads: string[] = [],
 ) {
   const id = createHash("sha256")
     .update("hiring:" + booking.id)
@@ -108,8 +110,10 @@ export async function deliverCalendar(
     {},
     db,
   );
-  const staff = booking.kind === "mock"
-    ? ["people@begiftededucation.com", "admin@begiftededucation.com"] : [];
+  // Kevin, 23 Nov 2026: every visit event (test and mock) goes to HR, Admin, Kevin and the visit's own head (`heads`).
+  // A paper row with no visitId is the old flow or the delivery test, which stay as they were.
+  const staff = booking.kind === "mock" || (booking.kind === "paper" && booking.visitId)
+    ? [...new Set([...VISIT_STAFF, ...heads.map((email) => email.toLowerCase())])] : [];
   if (existing) {
     const properties = existing.extendedProperties as
       | { private?: { hiringBookingId?: string } }
