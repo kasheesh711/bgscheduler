@@ -401,8 +401,9 @@ export function demoFetch(input: string, init?: { method?: string; body?: unknow
   }
   if (path.startsWith("/api/hiring/review/")) {
     if (post) return json({ error: "The demo signs off only the demo candidate." }, 409);
-    const hired = demoPayload().candidates.some((candidate) => candidate.id === path.split("/").pop() && candidate.stage === "hired");
-    return json({ access: { hr: true, gift: false }, stage: hired ? "hired" : "onsite_booked", callNotes: "", packet: null, packetValid: null, appointment: hired ? at(new Date(), 3, 14).toISOString() : null });
+    const payload = demoPayload();
+    const hired = payload.candidates.some((candidate) => candidate.id === path.split("/").pop() && candidate.stage === "hired");
+    return json({ access: payload.reviewAccess, stage: hired ? "hired" : "onsite_booked", callNotes: "", packet: null, packetValid: null, appointment: hired ? at(new Date(), 3, 14).toISOString() : null });
   }
   if (/^\/api\/hiring\/(resume|file|marked)\/|^\/api\/hiring\/brief\/demo\/(resume|paper)$/.test(path))
     return new Response(demoFile(path), { headers: { "Content-Type": "application/pdf" } });
