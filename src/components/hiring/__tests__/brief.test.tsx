@@ -123,6 +123,17 @@ describe("InterviewerBrief", () => {
     expect(page).toMatch(/<textarea[^>]*\bdisabled=""/);
   });
 
+  it("asks for behaviour notes with a Yes only when HR did not call, and holds Yes until they are written", () => {
+    const render = (needBehavioral: boolean) => renderToStaticMarkup(
+      <BriefDecision sent={null} onSent={() => {}} url="/api/hiring/brief/t/decision" hasScores
+        unsent={false} pending={null} setPending={() => {}} needBehavioral={needBehavioral} />,
+    );
+    expect(render(false)).not.toContain("Behaviour notes");
+    expect(render(false)).not.toMatch(/<button[^>]*disabled=""[^>]*>Yes, send to HR/);
+    expect(render(true)).toContain("Behaviour notes for Yes (20+ characters)");
+    expect(render(true)).toMatch(/<button[^>]*disabled=""[^>]*>Yes, send to HR/);
+  });
+
   it("gives one message for a dead link", () => {
     expect(renderToStaticMarkup(<BriefGone />)).toContain("invalid or has expired");
   });

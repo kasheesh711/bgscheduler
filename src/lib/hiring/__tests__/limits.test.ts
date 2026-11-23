@@ -97,6 +97,12 @@ describe("manual queue order", () => {
     expect(ids(release)).toEqual(["c03", "c00"]);
     expect(order).toEqual(["c03", "c00", "c01", "c02"]);
   });
+  it("releases a free row past every limit, and it uses no place", () => {
+    const config = cfg({ onsiteLimits: { perWeek: 1, unbooked: 1, perSubject: 1, perHeadPerWeek: 1 } });
+    const { release, held } = releaseQueue("onsite", [{ ...c0, free: true }, { ...c1, free: true }, c2, c3], usage(), config);
+    expect(ids(release)).toEqual(["c00", "c01", "c02"]);
+    expect(ids(held)).toEqual(["c03"]);
+  });
   it("skips a dragged person whose subject is full, and the next person goes", () => {
     const config = cfg({ preScreenLimits: { perDay: 1, ...wide, perSubject: 1 } });
     const physics = entry("p", "Physics", 1);

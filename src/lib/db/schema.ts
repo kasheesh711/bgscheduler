@@ -178,6 +178,16 @@ export const hiringOutbox = pgTable(
   },
   (t) => [index("hiring_outbox_work").on(t.status, t.nextAttemptAt)],
 );
+/**
+ * The call-skip test (Kevin, 24 Nov 2026): which route a new qualified applicant got. `call` is the HR call first;
+ * `direct` is the form and the visit with no call. Only the queue and the report script read it. It must never be
+ * joined into a screen payload, an audit row or an email: Hiring staff must not see the route.
+ */
+export const hiringCallTest = pgTable("hiring_call_test", {
+  candidateId: uuid("candidate_id").primaryKey().references(() => hiringCandidates.id, { onDelete: "cascade" }),
+  arm: text("arm").$type<"call" | "direct">().notNull(),
+  assignedAt: timestamp("assigned_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [check("hiring_call_test_arm", sql`${t.arm} in ('call','direct')`)]);
 export const hiringRecruitmentDeliveries = pgTable("hiring_recruitment_deliveries", {
   id: uuid("id").primaryKey().defaultRandom(),
   key: text("key").notNull().unique(),

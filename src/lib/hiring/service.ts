@@ -472,8 +472,9 @@ export const preScreenEmail = (name: string, email: string, reminder: boolean, v
         preheader: "Answer a short questionnaire, then book your onsite visit.",
         title: reminder ? "Your questions are still open" : afterR1 ? "Thank you for R1. Here are your next steps" : "Here are your next steps",
         hero: "next",
-        // With no R1 (no call score, or a person sent the form), step 1 is not done, so the process is not shown.
-        ...(afterR1 ? { process: 2 as const } : {}),
+        // With no R1 (no call for this candidate, or a person sent the form), the process is shown without that step.
+        process: 2 as const,
+        processNoR1: !afterR1,
         name,
         paragraphs: [
           reminder
@@ -577,6 +578,8 @@ export async function inviteToVisit(
   now = new Date(),
   // A repeat to someone already invited. They hold a place already, so the limits do not stop it.
   resend = false,
+  // The queue released this row past the limits because its place is counted apart. A person's click still obeys them.
+  free = false,
 ) {
   await lockQueue(tx);
   const [c] = await tx
@@ -604,7 +607,7 @@ export async function inviteToVisit(
   const subject = visitSubject(c.preScreen, c.workRightsAnswer, config);
   if (!subject)
     throw new HiringError(409, `No head is set for the subject: ${supported.join(", ")}.`);
-  const limit = resend ? null : blockingLimit("onsite", subject, await readLimitUsage(tx, "onsite", now), config);
+  const limit = resend || free ? null : blockingLimit("onsite", subject, await readLimitUsage(tx, "onsite", now), config);
   if (limit)
     throw new HiringError(409, `The onsite limit "${LIMIT_TEXT[limit]}" is full. Raise the number to send more.`);
   // The "Next steps" email already gave this candidate a visit link. Keep its second, so that link now books the visit,
@@ -1371,6 +1374,7 @@ export async function briefView(token: string, db: Database = getDb(), now = new
       preScreen: s.hiringCandidates.preScreen,
       resumePath: s.hiringCandidates.resumePath,
       resumeType: s.hiringCandidates.resumeType,
+      callReview: s.hiringCandidates.callReview,
     })
     .from(s.hiringCandidates)
     .where(eq(s.hiringCandidates.id, mock.candidateId));
@@ -1415,6 +1419,9 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     rubric: own.rubric,
     form: own.form,
     recommendationReady,
+    // HR did not call this candidate, so a Yes needs the head's behavioural assessment.
+    // A hand invite past the call queue is stored as a good call, but nobody spoke to the candidate.
+    behavioralNeeded: !hadCall(candidate.callReview),
     recommendationBlock: own.form !== "closed" || recommendationReady ? null : checking ? ("checking" as const) : ("admin" as const),
   };
 }
@@ -1748,6 +1755,8 @@ const callRows = (db: Database, candidateId: string) =>
         eq(s.hiringBookings.status, "confirmed"),
       ),
     );
+/** HR spoke to the candidate. A hand invite past the call queue is stored as a good call, but it is not a call. */
+export const hadCall = (review: { good: { manual?: true } | null } | null | undefined) => !!review?.good && !review.good.manual;
 type CallRow = Awaited<ReturnType<typeof callRows>>[number];
 /** A confirmed HR call exists, ahead or started with no result yet: the `callBooked` that `profileGate` reads. */
 export const hasBookedCall = async (db: Database, candidateId: string) => (await callRows(db, candidateId)).length > 0;

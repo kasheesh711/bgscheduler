@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { and, asc, desc, eq, exists, inArray, isNotNull, isNull, ne, notExists, or, sql } from "drizzle-orm";
 import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
@@ -49,6 +50,15 @@ const c = s.hiringCandidates,
   b = s.hiringBookings;
 const DAY = 86400000;
 const isForm = sql`${o.key} = ${o.candidateId}::text || ':pre-screen'`;
+// The call-skip test. Its `direct` places are counted apart: they use no place in the limits, and no limit holds them.
+const t = s.hiringCallTest;
+const direct = (db: Database, candidateId: typeof c.id | typeof o.candidateId) =>
+  exists(db.select({ id: t.candidateId }).from(t).where(and(eq(t.candidateId, candidateId), eq(t.arm, "direct"))));
+/** Places for each route. Set only on the worker; unset or 0 means no new candidate enters the test. */
+const callTestPerArm = () => {
+  const n = Number(process.env.HIRING_CALL_TEST_PER_ARM);
+  return Number.isInteger(n) && n > 0 ? n : 0;
+};
 const isCallInvite = sql`${o.key} = ${o.candidateId}::text || ':call-invite'`;
 const isCallReminder = sql`${o.key} = ${o.candidateId}::text || ':call-invite-reminder'`;
 // A reminder carries the same stage so that a stage change cancels it, but it is not a new invitation.
@@ -77,6 +87,7 @@ export async function readLimitUsage(db: Database, funnel: Funnel, now: Date): P
         funnel === "pre_screen" ? isForm : isOnsiteInvite,
         // A resend goes to someone who already holds a place.
         sql`coalesce(${o.payload}->>'resend', '') <> 'true'`,
+        sql`not ${direct(db, o.candidateId)}`,
       ),
     );
   const usage: LimitUsage = { ...sends, waiting: 0, unbooked: 0, bySubject: {} };
@@ -97,6 +108,7 @@ export async function readLimitUsage(db: Database, funnel: Funnel, now: Date): P
               .from(o)
               .where(and(eq(o.candidateId, c.id), isForm, ne(o.status, "cancelled"))),
           ),
+          sql`not ${direct(db, c.id)}`,
         ),
       );
     usage.waiting = open.length;
@@ -109,7 +121,7 @@ export async function readLimitUsage(db: Database, funnel: Funnel, now: Date): P
     .from(c)
     // A past HR call stays confirmed. It is not a visit, so it must not make an invited person look booked.
     .leftJoin(b, and(eq(b.candidateId, c.id), eq(b.status, "confirmed"), ne(b.kind, "call")))
-    .where(inArray(c.stage, ["onsite_invited", "onsite_booked"]));
+    .where(and(inArray(c.stage, ["onsite_invited", "onsite_booked"]), sql`not ${direct(db, c.id)}`));
   for (const id of new Set(rows.map((r) => r.id))) {
     const own = rows.filter((r) => r.id === id);
     const invited = own[0].stage === "onsite_invited";
@@ -387,7 +399,7 @@ export async function saveCallNotes(id: string, text: string, expected: string |
  * apart from the forms, so a go-live cannot become a mass email. Nothing goes unless HR's calendar can be read now:
  * the link would open a page with no times. That check is a real read, made before the queue lock is taken.
  */
-export async function releaseCallInvites(db: Database, now = new Date()) {
+export async function releaseCallInvites(db: Database, now = new Date(), draw: (max: number) => number = randomInt) {
   const before = await settings(db);
   if (!allowed(before.config) || (await callCalendarState(db, before.config, now)) !== "readable") return 0;
   return withDatabaseTransaction(db, async (tx) => {
@@ -400,12 +412,42 @@ export async function releaseCallInvites(db: Database, now = new Date()) {
     // Every status but `cancelled` counts as used, as for the form limits.
     let room = config.preScreenLimits.perDay - earlier.filter((row) => row.status !== "cancelled" && row.createdAt >= dayStart).length;
     let sent = 0;
+    // The call-skip test (Kevin, 24 Nov 2026). Each new candidate here draws a route from the places still open, so the
+    // routes fill to the same number. Only a candidate with no call link enters; the route is written once and never changes.
+    const perArm = callTestPerArm();
+    const drawn = perArm ? await tx.select({ candidateId: t.candidateId, arm: t.arm }).from(t) : [];
+    const inTest = new Set(drawn.map((row) => row.candidateId));
+    const left = {
+      call: Math.max(0, perArm - drawn.filter((row) => row.arm === "call").length),
+      direct: Math.max(0, perArm - drawn.filter((row) => row.arm === "direct").length),
+    };
     for (const entry of await callQueue(tx, config)) {
-      if (room <= 0) break;
+      // The route is drawn before the day's room is looked at, so a candidate who will take the direct route never waits
+      // on the Calls tab for room. Direct forms use no room: only call links do.
+      const open = !inTest.has(entry.id) && left.call + left.direct > 0;
+      if (room <= 0 && !open) {
+        if (left.call + left.direct === 0) break;
+        continue;
+      }
       if (invited.has(entry.id)) continue;
       const row = await lockCandidate(tx, entry.id);
       // A person or a SEEK read can act between the queue read and this row lock.
       if (!(await callQueue(tx, config, entry.id)).length) continue;
+      const arm = open ? (draw(left.call + left.direct) < left.direct ? "direct" : "call") : null;
+      if (arm === "direct") {
+        // The form goes now, in this lock. It looks like any form send.
+        if (!(await sendForm(tx, row, entry, now))) continue;
+        await tx.insert(t).values({ candidateId: row.id, arm, assignedAt: now });
+        left.direct--;
+        continue;
+      }
+      if (arm) {
+        // Written at once, also when the day has no room: the link then goes on a later cycle and the route stays.
+        await tx.insert(t).values({ candidateId: row.id, arm, assignedAt: now });
+        inTest.add(row.id);
+        left.call--;
+      }
+      if (room <= 0) continue;
       if (!(await inviteToCall(tx, row, now))) continue;
       await audit(tx, "hiring-queue", "call-invite-release", row.id, { subject: entry.subject, score: entry.score });
       room--;
@@ -513,7 +555,7 @@ export async function resetQueueOrder(actor: string, db: Database) {
 /** The onsite queue's reads. They need no config, so the dashboard starts them with its other reads. */
 export async function onsiteRows(db: Database) {
   const rows = await db
-    .select(replyColumns)
+    .select({ ...replyColumns, free: sql<boolean>`${direct(db, c.id)}` })
     .from(c)
     .where(
       and(
@@ -539,7 +581,7 @@ export function onsiteEntries({ rows, forms }: Awaited<ReturnType<typeof onsiteR
   for (const row of rows) {
     const check = replyCheck(row, sentAt.get(`${row.id}:pre-screen`) ?? null, config);
     if (check.kind === "ready")
-      entries.push({ id: row.id, subject: check.subject, score: check.score, createdAt: row.createdAt });
+      entries.push({ id: row.id, subject: check.subject, score: check.score, createdAt: row.createdAt, free: row.free });
   }
   return entries;
 }
@@ -550,6 +592,24 @@ const lockCandidate = async (tx: Database, id: string) =>
   (await tx.select().from(c).where(eq(c.id, id)).for("update"))[0];
 
 /** The one path by which the worker sends a first invitation. It sends nothing itself: delivery reads the outbox. */
+/** Sends the form to a locked `new` row and moves it to `pre_screen`. False when a form row already exists. */
+async function sendForm(tx: Database, row: Candidate, entry: Pick<QueueEntry, "subject" | "score" | "manual">, now: Date) {
+  if (!(await inviteToPreScreen(tx, row, now))) return false;
+  const subjects = row.profileAssessment!.subjects.filter((v) => v.relevant).map((v) => v.subject);
+  await tx
+    .update(c)
+    .set({
+      stage: "pre_screen",
+      subjects: [entry.subject, ...subjects.filter((v) => v !== entry.subject)],
+      queueManual: null,
+      revision: row.revision + 1,
+      updatedAt: now,
+    })
+    .where(eq(c.id, row.id));
+  await audit(tx, "hiring-queue", "pre-screen-release", row.id, { subject: entry.subject, score: entry.score, manual: !!entry.manual });
+  return true;
+}
+
 export async function releaseQueues(db: Database, now = new Date()) {
   return withDatabaseTransaction(db, async (tx) => {
     await lockQueue(tx);
@@ -567,19 +627,7 @@ export async function releaseQueues(db: Database, now = new Date()) {
       const row = await lockCandidate(tx, entry.id);
       // A person can act between the queue read and this row lock.
       if (row.stage !== "new" || row.preScreen || !profileGate({ ...row, callBooked: await hasBookedCall(tx, row.id) }, config).eligible) continue;
-      if (!(await inviteToPreScreen(tx, row, now))) continue;
-      const subjects = row.profileAssessment!.subjects.filter((v) => v.relevant).map((v) => v.subject);
-      await tx
-        .update(c)
-        .set({
-          stage: "pre_screen",
-          subjects: [entry.subject, ...subjects.filter((v) => v !== entry.subject)],
-          queueManual: null,
-          revision: row.revision + 1,
-          updatedAt: now,
-        })
-        .where(eq(c.id, row.id));
-      await audit(tx, "hiring-queue", "pre-screen-release", row.id, { subject: entry.subject, score: entry.score, manual: !!entry.manual });
+      if (!(await sendForm(tx, row, entry, now))) continue;
       preScreen++;
     }
     const visits = releaseQueue(
@@ -591,7 +639,7 @@ export async function releaseQueues(db: Database, now = new Date()) {
     for (const entry of visits.release) {
       const row = await lockCandidate(tx, entry.id);
       if (!autoInviteEligible(row, await formSentAt(tx, row.id), config)) continue;
-      const subject = await inviteToVisit(tx, row, config, `${row.id}:visit-invite`, now);
+      const subject = await inviteToVisit(tx, row, config, `${row.id}:visit-invite`, now, false, !!entry.free);
       await audit(tx, "hiring-queue", "onsite-release", row.id, { subject, score: entry.score });
       onsite++;
     }

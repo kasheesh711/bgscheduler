@@ -286,7 +286,7 @@ ${items.map(([id, label]) => `<div class="mock-row mock-item">
 ${mockUsed.has("hygiene") ? `<p class="meta">Stress Test ticks: ${escape(STRESS_ELEMENTS.filter(({ key }) => mock.rubric.stressTest?.[key]).map(({ label }) => label).join("; ") || "none")}</p>
 <p class="meta">School's required checks completed: ${mock.rubric.checksDone === true ? "Yes" : mock.rubric.checksDone === false ? "No" : "Not recorded"}</p>` : ""}
 <p class="copy">${escape(mock.rubric.comments)}</p></section>
-<section><h2>Pre-screen call</h2><p class="meta">${value.call ? `Call result recorded ${date(value.call)}` : "Call notes supplied by HR"}</p>
+<section><h2>${value.call ? "Pre-screen call" : "Behavioral assessment"}</h2><p class="meta">${value.call ? `Call result recorded ${date(value.call)}` : "From the head's mock lesson assessment, checked by HR"}</p>
 <p class="copy">${escape(packet.behavioral)}</p></section>
 <section><h2>Proposed offer letter</h2><p class="copy">${escape(packet.offer)}</p></section>
 </main></body></html>`;

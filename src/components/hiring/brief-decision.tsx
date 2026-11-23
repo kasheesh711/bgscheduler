@@ -8,7 +8,9 @@ type Decision = "hire" | "reject";
 const LABEL: Record<Decision, string> = { hire: "Yes", reject: "No" };
 
 /** The tutor recommends Yes for HR review or No to queue a rejection. */
-export function BriefDecision({ sent, onSent, url, hasScores, unsent, pending, setPending }: {
+export function BriefDecision({ sent, onSent, url, hasScores, unsent, pending, setPending, needBehavioral = false }: {
+  /** HR did not call this candidate: a Yes needs the tutor's behavioural assessment. */
+  needBehavioral?: boolean;
   sent: Decision | null;
   onSent: (decision: Decision) => void;
   url: string;
@@ -23,6 +25,9 @@ export function BriefDecision({ sent, onSent, url, hasScores, unsent, pending, s
   const recorded = useRef<HTMLParagraphElement>(null);
   const sentHere = useRef(false);
   const reasonTooShort = reason.trim().length < 5;
+  const [behavioral, setBehavioral] = useState("");
+  const behavioralHintId = useId();
+  const behavioralTooShort = needBehavioral && behavioral.trim().length < 20;
   useEffect(() => {
     if (sent && sentHere.current) recorded.current?.focus();
   }, [sent]);
@@ -30,7 +35,7 @@ export function BriefDecision({ sent, onSent, url, hasScores, unsent, pending, s
     setPending("recommendation");
     setError("");
     try {
-      const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision, reason }) });
+      const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision, reason, ...(needBehavioral && decision === "hire" ? { behavioral } : {}) }) });
       const body = (await response.json().catch(() => ({}))) as { error?: string };
       if (response.ok) {
         sentHere.current = true;
@@ -60,8 +65,14 @@ export function BriefDecision({ sent, onSent, url, hasScores, unsent, pending, s
             <span id={reasonHintId}>Reason for No (5+ characters)</span>
             <textarea className={c.input} rows={2} maxLength={1000} value={reason} disabled={pending === "recommendation"} onChange={(event) => setReason(event.target.value)} />
           </label>
+          {needBehavioral && (
+            <label className={c.field}>
+              <span id={behavioralHintId}>Behaviour notes for Yes (20+ characters): communication, attitude, professionalism</span>
+              <textarea className={c.input} rows={3} maxLength={10000} value={behavioral} disabled={pending === "recommendation"} onChange={(event) => setBehavioral(event.target.value)} />
+            </label>
+          )}
           <div className={c.decisionActions}>
-            <button type="button" className={c.button} disabled={!!pending} onClick={() => void send("hire")}>
+            <button type="button" className={c.button} disabled={!!pending || behavioralTooShort} aria-describedby={behavioralTooShort ? behavioralHintId : undefined} onClick={() => void send("hire")}>
               Yes, send to HR
             </button>
             <button type="button" className={`${c.ghost} ${c.reject}`} disabled={!!pending || reasonTooShort} aria-describedby={reasonTooShort ? reasonHintId : undefined} onClick={() => void send("reject")}>

@@ -295,7 +295,7 @@ export function demoBrief(now = new Date()) {
     exam: `${day}, ${clock(paperStart)}–${clock(new Date(paperStart.getTime() + 2 * HOUR))}`,
     mock: `${day}, ${clock(mockStart)}–${clock(new Date(mockStart.getTime() + HOUR))}`,
     interviewer: HEAD, location: "BeGifted Education", answers: { ...answers, sourceRow: 0, submittedAt: "" }, resume: "pdf" as const,
-    rubric: state.rubric, form: "open" as const, recommendationReady: !!state.rubric, recommendationBlock: null,
+    rubric: state.rubric, form: "open" as const, recommendationReady: !!state.rubric, behavioralNeeded: false, recommendationBlock: null,
   };
 }
 

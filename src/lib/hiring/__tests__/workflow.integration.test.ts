@@ -19,7 +19,7 @@ import { deliverExpertsAlerts, recordExpertsEvent, updateExperts } from "../expe
 import { handleLineWebhookPost } from "@/lib/line/webhook";
 import { handleProgressGroupCommand } from "@/lib/line/progress-reminders";
 import { createHmac } from "node:crypto";
-import { saveBriefDecision } from "../decisions";
+import { headRecommendation, saveBriefDecision } from "../decisions";
 import { clearResultCheck } from "../marking";
 import {
   bookInterview,
@@ -1010,13 +1010,18 @@ describe("hiring workflow persistence", () => {
       await bookVisit(link(row), choice(), db);
       const [, mock] = await rowsOf(row.id);
       const token = bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + 86400000));
-      const yes = { decision: "hire" as const, reason: "" };
+      // HR did not call this candidate, so a Yes carries the head's behavioural assessment.
+      const yes = { decision: "hire" as const, reason: "", behavioral: "Clear, calm and well prepared in the lesson." };
       const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 7])), comments: "", stressTest: TICKS, checksDone: true } as MockRubric;
       await expect(saveBriefDecision(token, yes, db, mock.startTime)).rejects.toMatchObject({ status: 409 });
       await expect(saveBriefDecision(token, yes, db, mock.endTime)).rejects.toThrow(/completed rubric/);
       await saveBriefRubric(token, rubric, db, mock.endTime);
       const queued = (await jobsOf(row.id)).length;
+      expect(await briefView(token, db, mock.endTime)).toMatchObject({ behavioralNeeded: true });
+      await expect(saveBriefDecision(token, { decision: "hire", reason: "" }, db, mock.endTime)).rejects.toMatchObject({ status: 400 });
       expect(await saveBriefDecision(token, yes, db, mock.endTime)).toEqual({ queued: null });
+      expect((await headRecommendation(db, row.id))?.detail).toMatchObject({ behavioral: yes.behavioral });
+      // The notice goes only when a recruitment group is set, so its wording is checked in recruitment.integration.test.ts.
       expect(await saveBriefDecision(token, yes, db, mock.endTime)).toEqual({ queued: null });
       await expect(saveBriefDecision(token, { decision: "reject", reason: "Second choice" }, db, mock.endTime)).rejects.toThrow(/already recorded/);
       expect((await dashboard(db)).headDecisions.filter((rec) => rec.candidateId === row.id)).toMatchObject([{ decision: "hire", head: "Peat" }]);
@@ -1078,7 +1083,7 @@ describe("hiring workflow persistence", () => {
       vi.setSystemTime(mock.endTime);
       const brief = bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + 86400000));
       await saveBriefRubric(brief, { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 8])), comments: "Clear examples.", stressTest: TICKS, checksDone: true } as MockRubric, db);
-      await saveBriefDecision(brief, { decision: "hire", reason: "Clear examples." }, db);
+      await saveBriefDecision(brief, { decision: "hire", reason: "Clear examples.", behavioral: "Clear, calm and well prepared in the lesson." }, db);
       const offerType = "part_time";
       const offer = `Dear ${row.name},\n\nWe are pleased to offer you the position of part-time Mathematics tutor`;
       // The preview has the letter and saves nothing.

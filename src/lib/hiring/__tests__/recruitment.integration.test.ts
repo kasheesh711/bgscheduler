@@ -8,7 +8,7 @@ import { deliverRecruitment, queueRecruitmentDailyCalls, queueRecruitmentForm, q
 import { fetchLineGroupSummary, pushLineTextMessage, replyLineMessage } from "@/lib/line/client";
 import { deliverOutbox } from "../worker";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
-import { queueRecruitmentInvitation } from "../recruitment";
+import { queueRecruitmentHeadDecision, queueRecruitmentInvitation } from "../recruitment";
 import { endVisit } from "../service";
 
 vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
@@ -156,6 +156,17 @@ it("announces an invitation only after Gmail accepts it, once across delivery re
   expect(notices[0].message).toContain("Email: candidate@example.com");
   expect((await db.select().from(s.hiringOutbox))[0].status).toBe("sent");
   expect(send).toHaveBeenCalledTimes(2);
+});
+it("asks HR for the call assessment after a call, and to check the head's assessment when there was none", async () => {
+  const [called, uncalled] = [await candidate("Called"), await candidate("Uncalled")];
+  const input = { decision: "hire" as const, reason: "", head: "Peat", subject: "Mathematics" };
+  await queueRecruitmentHeadDecision(db, called, { ...input, key: "a", called: true });
+  await queueRecruitmentHeadDecision(db, uncalled, { ...input, key: "b", called: false });
+  const messages = (await db.select().from(s.hiringRecruitmentDeliveries)).map(row => row.message);
+  expect(messages.find(m => m.includes("Called —"))).toContain("HR: add the pre-screen call assessment and send the packet to Gift.");
+  const other = messages.find(m => m.includes("Uncalled —"))!;
+  expect(other).toContain("HR: check the head's behavioural assessment and send the packet to Gift.");
+  expect(other).not.toContain("pre-screen call");
 });
 it("puts the email and the phone in the form notice, or says that none is recorded", async () => {
   const withPhone = await candidate("With");

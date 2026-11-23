@@ -6,6 +6,7 @@ import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { hiringBookings as b, hiringPaperResults as p } from "@/lib/db/schema";
 import { requireHiringAdmin } from "@/lib/hiring/access";
+import { headRecommendation } from "@/lib/hiring/decisions";
 import { draftReviewPacket, finalReviewAccess, latestReviewPacket, reviewPacketValid, signOffReview, submitReview } from "@/lib/hiring/final-review";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
 import { OFFER_TYPES } from "@/lib/hiring/offer-letters";
@@ -13,7 +14,7 @@ import { markedFile } from "@/lib/hiring/marked-file";
 import { HiringError } from "@/lib/hiring/model";
 import { resumeAttachment } from "@/lib/hiring/resume-files";
 import { reviewDocument } from "@/lib/hiring/review-document";
-import { candidateById, settings } from "@/lib/hiring/service";
+import { candidateById, hadCall, settings } from "@/lib/hiring/service";
 import { deliverOutbox } from "@/lib/hiring/worker";
 
 export const maxDuration = 120;
@@ -46,8 +47,11 @@ export async function GET(request: Request, { params }: Context) {
       const [appointment] = candidate.stage === "hired"
         ? await db.select({ start: b.startTime }).from(b).where(and(eq(b.candidateId, id), eq(b.kind, "contract"), eq(b.status, "confirmed")))
         : [];
+      // With no HR call, the head's behavioural assessment from the mock lesson is the starting text (Kevin, 24 Nov 2026).
+      const called = hadCall(candidate.callReview);
+      const fromHead = called ? "" : String((await headRecommendation(db, id))?.detail.behavioral ?? "");
       return NextResponse.json({
-        access, stage: candidate.stage, callNotes: access.hr ? candidate.callReview?.notes?.text ?? "" : "", appointment: appointment?.start ?? null,
+        access, stage: candidate.stage, callNotes: access.hr ? candidate.callReview?.notes?.text || fromHead : "", behavioralFrom: called ? "call" : "head", appointment: appointment?.start ?? null,
         packet: saved && { id: saved.id, behavioral: saved.behavioral, offer: saved.offer, offerType: saved.offerType ?? null },
         packetValid: await reviewPacketValid(db, id, saved),
       }, { headers });

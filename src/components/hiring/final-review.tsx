@@ -9,6 +9,8 @@ type Review = {
   access: { hr: boolean; gift: boolean };
   stage: string;
   callNotes: string;
+  /** `head`: HR did not call, so the text starts from the head's mock lesson assessment. */
+  behavioralFrom?: "call" | "head";
   appointment: string | null;
   packet: { id: string; behavioral: string; offer: string; offerType?: OfferType | null } | null;
   /** null: the server could not check the packet just now. */
@@ -354,7 +356,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       )}
       {!signing && review?.access.hr && !closed && (
         <>
-          <label className={css.fieldLabel}>Behavioral assessment from the pre-screen call
+          <label className={css.fieldLabel}>{review.behavioralFrom === "head" ? "Behavioral assessment from the head's mock lesson" : "Behavioral assessment from the pre-screen call"}
             <textarea className={css.textarea} rows={5} maxLength={10000} value={behavioral} onChange={(event) => { setBehavioral(event.target.value); setDraftHtml(undefined); }} />
           </label>
           <label className={css.fieldLabel}>Offer letter
