@@ -7,7 +7,7 @@ import { and, asc, desc, eq, getTableColumns, gte, inArray, isNotNull, like, ne,
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
-import { availableSlots, availableVisitSlots, callSlots, readLiveBusy, verifyLiveSlot, type LiveBusy } from "./availability";
+import { availableSlots, availableVisitSlots, callSlots, r1Slots, readLiveBusy, verifyLiveSlot, type LiveBusy } from "./availability";
 import {
   baseConfigSchema,
   withSeekJobs,
@@ -423,7 +423,7 @@ export const callInviteEmail = (input: { name: string; url: string }) =>
     details: [
       { label: "Interview", value: "R1: HR Interview" },
       { label: "Format", value: `${CALL_MINUTES} minutes, Google Meet video call` },
-      { label: "Times", value: "Monday to Friday, 09:00–18:00 (Bangkok time)" },
+      { label: "Times", value: "Monday to Friday, 13:15–18:00 (Bangkok time)" },
       { label: "Link closes", value: `${CALL_LINK_DAYS} days after this email` },
     ],
     action: { label: "Book your R1 interview", url: input.url },
@@ -1835,7 +1835,7 @@ export async function callView(token: string, db: Database = getDb(), now = new 
   else {
     try {
       const { dates, busy } = await hrBusy(db, config, now);
-      slots = callSlots(dates, [...busy, ...(await otherCalls(db, cap.id, now))], now).filter(
+      slots = r1Slots(dates, [...busy, ...(await otherCalls(db, cap.id, now))], now).filter(
         (slot) => new Date(slot.start).getTime() < cap.exp * 1000 && slot.start !== own?.startTime.toISOString(),
       );
       if (!slots.length) notice = onLine("There are no open R1 interview times at the moment. Please try again later.");
@@ -1903,7 +1903,7 @@ export async function bookCall(token: string, value: unknown, db: Database = get
     const own = rows.find((b) => b.endTime > now);
     if (own?.startTime.getTime() === start) return own;
     refuseChange(own, rows);
-    const slot = callSlots(calendar.dates, [...calendar.busy, ...(await otherCalls(tx, cap.id, now))], new Date()).find(
+    const slot = r1Slots(calendar.dates, [...calendar.busy, ...(await otherCalls(tx, cap.id, now))], new Date()).find(
       (v) => new Date(v.start).getTime() === start && start < cap.exp * 1000,
     );
     if (!slot) throw new HiringError(409, "That R1 interview time is no longer available. Choose another time.");

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { callSlots } from "../availability";
+import { callSlots, r1Slots } from "../availability";
 import { businessDates, CALL_MINUTES, callBookingSchema, CONTRACT_MINUTES, phoneSchema } from "../model";
 
 // Wednesday 12:00 in Bangkok.
@@ -50,6 +50,15 @@ describe("callSlots", () => {
     const dates = businessDates(now, ["2026-11-06"]);
     expect(dates).toEqual(["2026-11-05", "2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12"]);
     expect(new Set(callSlots(dates, [], now).map((slot) => slot.date))).toEqual(new Set(dates));
+  });
+});
+
+describe("r1Slots", () => {
+  it("offers R1 times only from 13:15 to 17:30", () => {
+    const slots = r1Slots(["2026-11-05"], [], now);
+    expect(slots).toHaveLength(18);
+    expect(slots[0].start).toBe("2026-11-05T06:15:00.000Z");
+    expect(slots.at(-1)!.start).toBe("2026-11-05T10:30:00.000Z");
   });
 });
 

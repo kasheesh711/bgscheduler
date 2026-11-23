@@ -11,7 +11,7 @@ export const GOOGLE_SCOPES = [
 // Reads free and busy time on calendars the connected account can see. It is not in GOOGLE_SCOPES: visit calendar
 // delivery must keep working before the owner connects Google again. Only the HR call needs it.
 export const GOOGLE_FREEBUSY_SCOPE = "https://www.googleapis.com/auth/calendar.events.freebusy";
-// R1: HR Interview (Kevin's decisions, 12 and 22 Nov 2026): the people@ calendar, Monday to Friday, 09:00–18:00 Bangkok,
+// R1: HR Interview (Kevin's decisions, 12 and 22 Nov 2026): the people@ calendar, Monday to Friday, 13:15–18:00 Bangkok (R1_DAY_START),
 // 30 minutes on Google Meet, starting on any quarter hour. Fixed in code, so an older worker never meets an unknown settings key.
 export const HR_CALENDAR = "people@begiftededucation.com";
 /** The `interviewer_key` of every call row, so the booking overlap trigger gives HR one call at a time. */
@@ -21,6 +21,8 @@ export const CALL_STEP_MINUTES = 15;
 export const CONTRACT_MINUTES = 30;
 export const CALL_DAY_START = 9 * 60;
 export const CALL_DAY_END = 18 * 60;
+// Kevin, 23 Nov 2026: HR takes R1 interviews only after lunch. Contract signings keep the whole day.
+export const R1_DAY_START = 13 * 60 + 15;
 export const CALL_LINK_DAYS = 14;
 export const subscriptionAuthSchema = z.object({
   loggedIn: z.literal(true),
