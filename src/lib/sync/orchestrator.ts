@@ -226,6 +226,7 @@ export async function runFullSync(
         return null;
       }
     };
+    const bulkObservedAt = new Date().toISOString();
     const bulkNear = await fetchBulkTier("near", 0, nearHorizonDays);
     const anyFarStale = wiseTeachers.some((teacher) => {
       const userId = getWiseTeacherUserId(teacher);
@@ -276,7 +277,8 @@ export async function runFullSync(
       }
 
       try {
-        const availabilityObservedAt = new Date().toISOString();
+        // Bulk data was read before this loop, so it keeps that earlier time.
+        const availabilityObservedAt = bulkNear?.has(teacherUserId) ? bulkObservedAt : new Date().toISOString();
         const near = bulkNear?.get(teacherUserId) ?? await fetchTeacherNearAvailability(
           client,
           instituteId,

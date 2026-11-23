@@ -143,7 +143,7 @@ interface AvailabilityCall {
  * was fetched.
  */
 function makeTieringWiseClient(
-  options: { rejectFarForUserId?: string; bulkUserIds?: string[] } = {},
+  options: { rejectFarForUserId?: string; bulkUserIds?: string[]; rejectBulkFar?: boolean } = {},
 ) {
   const availabilityCalls: AvailabilityCall[] = [];
   const bulkStartDays: number[] = [];
@@ -176,6 +176,7 @@ function makeTieringWiseClient(
         if (bulkOrigin === null) bulkOrigin = start;
         const startDay = Math.round((start - bulkOrigin) / DAY_MS);
         bulkStartDays.push(startDay);
+        if (startDay >= 28 && options.rejectBulkFar) throw new Error("429 RATE_LIMITED");
         const leaveAt = (id: string, day: number) => ({
           _id: id,
           startTime: new Date(bulkOrigin! + day * DAY_MS).toISOString(),
@@ -479,6 +480,30 @@ describe("runFullSync — AVAIL-02 bulk availability", () => {
     const byTeacher = leaveRowsByTeacher(handle);
     for (const teacher of TEACHERS) {
       expect(byTeacher.get(teacher.teacherId) ?? []).toHaveLength(2);
+    }
+  });
+
+  it("uses the per-teacher far calls when only the bulk far read fails", async () => {
+    const handle = makeFakeDb([]);
+    const { client, availabilityCalls, bulkStartDays } = makeTieringWiseClient({
+      bulkUserIds: TEACHERS.map((t) => t.userId),
+      rejectBulkFar: true,
+    });
+
+    const result = await runFullSync(handle.db, client as never, instituteId);
+    expect(result.success).toBe(true);
+
+    // The failed far read costs one call; the near tier still comes from bulk.
+    expect(bulkStartDays.filter((day) => day >= 28)).toHaveLength(1);
+    expect(successMetadata(handle).bulkAvailability).toEqual({ near: true, far: false });
+    const byTeacher = leaveRowsByTeacher(handle);
+    for (const teacher of TEACHERS) {
+      const calls = callsFor(availabilityCalls, teacher.userId);
+      // 22 far windows and no near window. The fake counts days from each
+      // teacher's first per-teacher call, so its leave days shift here; what
+      // matters is that the bulk near leave and the live far leaves both land.
+      expect(calls).toHaveLength(22);
+      expect((byTeacher.get(teacher.teacherId) ?? []).length).toBeGreaterThanOrEqual(2);
     }
   });
 

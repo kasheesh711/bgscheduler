@@ -281,9 +281,12 @@ export async function fetchTeacherFullAvailability(
 // days (HTTP 400 "Time range cannot be more than 2 days.", probed 2026-11-23),
 // so days 0..28 cost 14 calls in place of about 4 per teacher.
 //
-// Probed against the per-teacher endpoint on 14 teachers: `workingHours.slots`
-// and `leaves` were identical. The bulk `sessions` arrays also carry CANCELLED
-// rows — they are not read here, and must be filtered by anyone who does.
+// Probed against the per-teacher endpoint (2026-11-23): `workingHours.slots` and
+// `leaves` were identical after normalization for 40 teachers with leave. A
+// leave longer than the window comes back whole (not cut to the window), and a
+// leave already in progress is returned, as on the per-teacher endpoint. The
+// bulk `sessions` arrays also carry CANCELLED rows — they are not read here,
+// and must be filtered by anyone who does.
 
 export const BULK_AVAILABILITY_WINDOW_DAYS = 2;
 const BULK_AVAILABILITY_PAGE_SIZE = 1000;
@@ -310,22 +313,29 @@ async function fetchBulkAvailabilityWindow(
   );
 
   const teachers = res.data?.teachers;
-  // Strict on purpose: a short page or a row without a leave array would read
-  // downstream as "no leave", so anything unprovable rejects the whole fetch
-  // and the caller falls back to the per-teacher endpoint.
+  // Strict on purpose: a short page would read downstream as "no leave" for
+  // the teachers it lacks, so it rejects the whole fetch and the caller falls
+  // back to the per-teacher endpoint.
   if (!Array.isArray(teachers) || res.data?.total_records !== teachers.length) {
     throw new Error("Wise bulk availability returned an incomplete or invalid teacher page");
   }
 
   // Keep only what the sync reads — each response is about 1 MB of sessions.
+  // A row that cannot be trusted (no leave array, or a user id that appears
+  // twice) is left out, so that one teacher falls back to the per-teacher
+  // endpoint. Throwing here would turn the bulk read off for every teacher.
   const window = new Map<string, BulkTeacherAvailability>();
+  const untrusted = new Set<string>();
   for (const teacher of teachers) {
     const userId = teacher?.user?._id;
-    if (typeof userId !== "string" || !userId.trim() || !Array.isArray(teacher.leaves) || window.has(userId)) {
-      throw new Error("Wise bulk availability returned an invalid teacher row");
+    if (typeof userId !== "string" || !userId.trim()) continue;
+    if (!Array.isArray(teacher.leaves) || window.has(userId)) {
+      untrusted.add(userId);
+      continue;
     }
     window.set(userId, { workingHours: teacher.workingHours ?? undefined, leaves: teacher.leaves });
   }
+  for (const userId of untrusted) window.delete(userId);
   return window;
 }
 
@@ -371,7 +381,9 @@ export async function fetchBulkAvailability(
     const leaves = new Map<string, WiseLeave>();
     for (const window of [first, ...rest]) {
       for (const leave of window.get(userId)!.leaves) {
-        leaves.set(leave._id ?? `${leave.startTime}|${leave.endTime}`, leave);
+        // Keyed on the times too: two rows that share an id but not a time
+        // range are both kept, and normalizeLeaves merges them.
+        leaves.set(`${leave._id}|${leave.startTime}|${leave.endTime}`, leave);
       }
     }
     result.set(userId, { workingHours: firstWindow.workingHours, leaves: [...leaves.values()] });

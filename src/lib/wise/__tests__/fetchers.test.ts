@@ -958,16 +958,47 @@ describe("bulk availability (AVAIL-02)", () => {
     expect([...result.keys()]).toEqual(["u-1"]);
   });
 
-  it("rejects a short page, a row without leaves, and a failed window", async () => {
+  it("leaves out only the teacher whose row cannot be trusted", async () => {
+    const good = { user: { _id: "u-1" }, workingHours: hours, leaves: [] };
+    const { client } = makeBulkClient((startDay) => [
+      good,
+      // No leave array in one window; a user id that appears twice in another.
+      startDay === 4 ? { user: { _id: "u-2" }, workingHours: hours } : { user: { _id: "u-2" }, workingHours: hours, leaves: [] },
+      { user: { _id: "u-3" }, workingHours: hours, leaves: [] },
+      ...(startDay === 8 ? [{ user: { _id: "u-3" }, workingHours: hours, leaves: [] }] : []),
+    ]);
+
+    const result = await fetchBulkAvailability(client, "inst-1", FROM, 0, 28);
+
+    expect([...result.keys()]).toEqual(["u-1"]);
+  });
+
+  it("keeps both rows when one leave id comes back with two time ranges", async () => {
+    const { client } = makeBulkClient((startDay) => [
+      {
+        user: { _id: "u-1" },
+        workingHours: hours,
+        leaves: startDay <= 2
+          ? [{ _id: "leave-1", startTime: `day-${startDay}`, endTime: `day-${startDay + 2}` }]
+          : [],
+      },
+    ]);
+
+    const result = await fetchBulkAvailability(client, "inst-1", FROM, 0, 28);
+
+    expect(result.get("u-1")!.leaves).toEqual([
+      { _id: "leave-1", startTime: "day-0", endTime: "day-2" },
+      { _id: "leave-1", startTime: "day-2", endTime: "day-4" },
+    ]);
+  });
+
+  it("rejects a short page and a failed window", async () => {
     const row = { user: { _id: "u-1" }, workingHours: hours, leaves: [] };
 
     const short = makeBulkClient(() => [row], (rows) => rows.length + 1);
     await expect(fetchBulkAvailability(short.client, "inst-1", FROM, 0, 28)).rejects.toThrow("incomplete");
     // The first window is awaited alone, so a hard failure costs one call.
     expect(short.calls).toHaveLength(1);
-
-    const noLeaves = makeBulkClient(() => [{ user: { _id: "u-1" }, workingHours: hours }]);
-    await expect(fetchBulkAvailability(noLeaves.client, "inst-1", FROM, 0, 28)).rejects.toThrow("invalid teacher row");
 
     const failing = makeBulkClient((startDay) => {
       if (startDay === 12) throw new Error("429 RATE_LIMITED");
