@@ -461,6 +461,8 @@ interface HeadItem {
   /** The brief or the paper check, opened at the part that needs the head. */
   href: string | null;
   task: string;
+  /** The job in words on the row (Re-mark paper, Score mock…), for a row that needs the head now. */
+  action?: string;
   /** Needs the head now: a paper to re-mark, a mock to score, a packet to sign. The first one is open on arrival. */
   urgent?: boolean;
   /** A final review: Gift's packet, opened in the pane, not as a page. */
@@ -483,10 +485,10 @@ function visitItem(visit: ReturnType<typeof headVisit>, today: string): HeadItem
       ...(scored && !decision && !due ? [{ text: "Scores sent", tone: "hire" as const }] : []),
       ...(decision ? [{ text: `Recommendation: ${decision.decision === "hire" ? "Yes" : "No"}`, tone: decision.decision }] : []),
     ],
-    note: due && open ? (scored ? "Recommend: Yes or No" : "Score the mock")
-      : checkingScores ? "Admin is checking the scores"
-      : needsCheck ? "Ask admin: check the scores"
-      : mock && !path && !status ? (missingOutcome ? (scored ? "Ask admin to record the recommendation" : "Ask admin to record the outcome") : "No brief yet.")
+    action: due && open ? (scored ? "Recommend Yes or No" : "Score mock") : undefined,
+    note: checkingScores ? "Admin checking scores"
+      : needsCheck ? "Ask admin to check"
+      : mock && !path && !status ? (missingOutcome ? "Ask admin to record" : "No brief yet.")
       : path && !active ? "The interview brief is closed."
       : candidate?.resumeState === "none" ? "No résumé file is stored."
       : candidate?.resumeState === "deleted" ? "The résumé file was deleted."
@@ -514,6 +516,7 @@ function ItemLink({ item, selected, onSelect, wide, readOnly, paneId }: { item: 
       <span className={r.itemMain}>
         <span className={r.itemName}>{item.name}</span>
         <span className={r.itemDetail}>{item.detail}</span>
+        {item.action && <span className={r.itemAction}>{item.action}</span>}
         {(item.tags.length > 0 || item.note) && (
           <span className={r.itemNotes}>
             {item.tags.map((tag) => <span key={tag.text} className={r.tag} data-tone={tag.tone}>{tag.text}</span>)}
@@ -554,6 +557,7 @@ function ItemPane({ item, data, readOnly, reload }: { item: HeadItem; data: Hiri
             <span className={r.tag} data-tone={item.review.decision}>{item.review.decision === "hire" ? "Yes" : "No"}</span>
             {item.review.head} · {item.review.reason || "No reason given"}
           </p>
+          {item.review.draftProblem && <p className={r.warn}>No email draft yet: {item.review.draftProblem}</p>}
           <FinalReview id={item.review.candidateId!} autoLoad hideHeading {...reviewBlocks(data.writeGate, data.config, item.review.candidateId!)}
             onChanged={reload && (async () => reload())} />
         </div>
@@ -652,8 +656,11 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   ].sort((a, b) => (a.row.date + clock(a.row)).localeCompare(b.row.date + clock(b.row))) : [];
   const nextMock = visits.find((visit) => !visit.ended && visit.row.mockStart);
   const clockNow = formatInTimeZone(now, ZONE, "HH:mm");
-  const coming = visits.filter((visit) => !visit.ended && visit !== nextMock
-    && (!!visit.row.mockStart || visit.row.date > today || (visit.row.paperStart ?? "") > clockNow));
+  const upcomingVisits = visits.filter((visit) => !visit.ended && visit !== nextMock);
+  const coming = upcomingVisits.filter((visit) => !!visit.row.mockStart);
+  // Paper tests in the head's subjects need nothing from them, so they sit apart and closed (24 Nov 2026).
+  const paperTests = upcomingVisits.filter((visit) => !visit.row.mockStart && (visit.row.date > today || (visit.row.paperStart ?? "") > clockNow));
+  const mockNow = !!nextMock && nextMock.row.date === today && (nextMock.row.mockStart ?? "") <= clockNow;
   const since = shiftDate(today, -56);
   const ended = visits.filter(({ row, ended, missingOutcome, due, scored }) =>
     ended && (row.date >= since || missingOutcome || (due && scored))).reverse();
@@ -661,7 +668,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     const candidate = data.candidates.find((c) => c.id === check.candidateId);
     return { id: check.resultId, name: candidate?.name ?? "Needs review: candidate record not found", candidate, time: `${check.percent}%`, day: "AI score",
       detail: `${check.subject} · Paper check`, tags: [], note: null,
-      href: check.path, task: "Check paper", urgent: !!check.path };
+      href: check.path, task: "Check paper", action: "Re-mark paper", urgent: !!check.path };
   }) : [];
   // Gift's final reviews: each newest Yes from a head that no sent result has closed. A ready packet comes first.
   const byId = new Map(data.candidates.map((candidate) => [candidate.id, candidate]));
@@ -673,25 +680,33 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
       const ready = packets.has(d.candidateId!);
       return { id: `review-${d.candidateId}`, name: candidate?.name ?? "Candidate", candidate, time: ready ? "Review" : "Waiting",
         day: ready ? "packet ready" : "no packet yet", detail: `${candidate?.visitSubject ?? candidate?.subjects[0] ?? "Subject not recorded"} · Yes from ${d.head}`,
-        tags: [], note: d.draftProblem && `No email draft yet: ${d.draftProblem}`, href: null, task: "Final review", urgent: ready, review: d };
+        tags: [], note: d.draftProblem && "No email draft yet", href: null, task: "Final review",
+        action: ready ? "Final review" : undefined, urgent: ready, review: d };
     })
     : [];
   // One To do list in the order of the work: papers to re-mark, mocks to score, packets to sign (Sol review, 24 Nov 2026).
+  const actionVisits = ended.filter((visit) => visit.needsAction && !visit.checkingScores).map((visit) => visitItem(visit, today));
+  const checking = ended.filter((visit) => visit.needsAction && visit.checkingScores).map((visit) => visitItem(visit, today));
+  const nextItem = nextMock ? visitItem(nextMock, today) : undefined;
   const groups = [
-    { title: "To do", items: [...checks, ...ended.filter((visit) => visit.needsAction).map((visit) => visitItem(visit, today)), ...reviews.filter((item) => item.urgent)]
+    { title: "To do", items: [...checks, ...actionVisits, ...reviews.filter((item) => item.urgent)]
       .sort((a, b) => Number(!!b.urgent) - Number(!!a.urgent)) },
-    { title: "Next mock", items: nextMock ? [visitItem(nextMock, today)] : [] },
+    { title: mockNow ? "Mock now" : "Next mock", items: nextItem ? [nextItem] : [] },
     { title: "Coming up", items: coming.map((visit) => visitItem(visit, today)) },
-    { title: "Waiting for the packet", items: reviews.filter((item) => !item.urgent) },
+    // Rows where the head can only wait: admin is checking the scores, or the packet is not ready.
+    { title: "Waiting", items: [...checking, ...reviews.filter((item) => !item.urgent)] },
   ];
+  const papers = paperTests.map((visit) => visitItem(visit, today));
+  const reviewer = !!key && key === data.finalReviewer;
   const past = ended.filter((visit) => !visit.needsAction).slice(0, 6).map((visit) => visitItem(visit, today));
-  const all = [...groups.flatMap((group) => group.items), ...past];
+  const all = [...groups.flatMap((group) => group.items), ...papers, ...past];
   // The most urgent page is already open: a paper to re-mark or a mock to score, else the next mock.
   // A save can take the open row off the list. Its page stays open, with its confirmation, until another row is chosen.
   const [shown, setShown] = useState<HeadItem | null>(null);
   const found = picked ? all.find((item) => item.id === picked) : undefined;
   const keep = shown && (!picked || picked === shown.id) ? all.find((item) => item.id === shown.id) ?? shown : undefined;
-  const selected = found ?? keep ?? (wide ? all.find((item) => item.urgent) ?? all[0] : undefined);
+  // On arrival: the first job that needs the head, else the next mock, else the first row.
+  const selected = found ?? keep ?? (wide ? all.find((item) => item.urgent) ?? nextItem ?? all[0] : undefined);
   if ((selected?.id ?? null) !== (shown?.id ?? null)) setShown(selected ?? null);
   const paneId = useId();
   const name = key ? headName(key, data.tutors) : null;
@@ -701,10 +716,10 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     <ul className={r.items}>
       {items.map((item) => (
         <li key={item.id}>
-          <ItemLink item={item} wide={wide} readOnly={readOnly} paneId={paneId} selected={selected?.id === item.id}
+          <ItemLink item={item} wide={wide} readOnly={readOnly} paneId={`${paneId}-${item.id}`} selected={selected?.id === item.id}
             onSelect={() => setPicked(!wide && picked === item.id ? null : item.id)} />
           {!wide && picked === item.id && (!item.href || readOnly) && (
-            <div id={paneId} className={r.inlinePane} role="region" aria-label={item.name}>
+            <div id={`${paneId}-${item.id}`} className={r.inlinePane} role="region" aria-label={item.name}>
               <ItemPane item={item} data={data} readOnly={readOnly} reload={reload} />
             </div>
           )}
@@ -726,6 +741,12 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
         {wide && selected && <a className={r.skip} href="#open-item">Skip to the open page</a>}
         <p className="sr-only" role="status">{name && `${name} · ${nextMock
           ? `next mock ${shortDay(nextMock.row.date)}, ${nextMock.row.mockStart}` : "no mock booked"}`}</p>
+        {reviewer && !reviews.length && (
+          <section className={r.group}>
+            <h2 className={r.groupTitle}>Final review</h2>
+            <p className={r.quiet}>No hires waiting for your sign-off.</p>
+          </section>
+        )}
         {groups.map((group) => (group.items.length > 0 || (group.title === "Next mock" && givesMocks)) && (
           <section key={group.title} className={r.group} data-tone={group.title === "To do" ? "todo" : undefined}>
             <h2 className={r.groupTitle}>
@@ -737,6 +758,12 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
         ))}
         {!heads.length ? <p className={r.quiet}>No heads are set up. Add interviewers in Rules and setup.</p>
           : !all.length && !givesMocks && <p className={r.quiet}>Nothing to do. New papers to check also come by LINE.</p>}
+        {papers.length > 0 && (
+          <details className={r.group}>
+            <summary className={r.groupTitle}>Paper tests, no action <span className={r.count}>{papers.length}</span></summary>
+            {list(papers)}
+          </details>
+        )}
         {past.length > 0 && (
           <details className={r.group}>
             <summary className={r.groupTitle}>Past mocks <span className={r.count}>{past.length}</span></summary>
@@ -747,7 +774,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
       {wide && (
         <section id="open-item" tabIndex={-1} className={r.pane} aria-label={selected ? `${selected.task}: ${selected.name}` : "Nothing open"}>
           {selected ? <ItemPane key={selected.id} item={selected} data={data} readOnly={readOnly} reload={reload} />
-            : <p className={r.quiet}>Nothing to do. New bookings also come by LINE.</p>}
+            : <p className={r.quiet}>Nothing to do.</p>}
         </section>
       )}
     </div>

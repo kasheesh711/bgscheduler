@@ -226,6 +226,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init.body));
     (window as unknown as { posted: unknown[] }).posted.push(body);
     const total = Object.values(body.marks as Record<string, number>).reduce((a, b) => a + b, 0);
+    try { localStorage.setItem("fixture:paper-sent", "1"); } catch {}
     return new Response(JSON.stringify({ outcome: total >= 28 ? "passed" : "rejected" }));
   }
   if (url.pathname === "/api/hiring/review/offer") {
@@ -305,7 +306,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return new Response(JSON.stringify({ id: url.searchParams.get("candidateId"), profileText: "Extracted resume text for the fixture." }));
   if (url.pathname === "/api/hiring" && url.searchParams.get("head"))
     return new Response(JSON.stringify({ name: "Kru Peat", subjects: ["Mathematics"], days: [0, 1, 2, 3, 4].map((i) => ({ date: "2026-11-0" + (2 + i), office: { start: "09:00", end: "18:00" }, blocks: [] })), visits: [], mocks: 0, limit: 2, stale: false, staleReason: null, weekStart: "2026-11-02", head: "Peat" }));
-  if (url.pathname === "/api/hiring") return new Response(JSON.stringify(payload));
+  if (url.pathname === "/api/hiring") {
+    // A paper sent in the open page (another frame) is done: the list drops it, as /api/hiring would.
+    let sent = false;
+    try { sent = localStorage.getItem("fixture:paper-sent") === "1"; } catch {}
+    if (sent) (payload.paperChecks as { done: unknown }[]).forEach((check) => { check.done = { passed: true }; });
+    return new Response(JSON.stringify(payload));
+  }
   return realFetch(input, init);
 }) as typeof fetch;
 // ?brief=open|wait|closed|checking|admin: the interviewer's public page from the LINE link, with synthetic data.
@@ -313,6 +320,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 const briefState = new URLSearchParams(location.search).get("brief") ?? (location.pathname.startsWith("/hiring/brief/") ? "open" : null);
 const paperCheck = location.pathname.startsWith("/hiring/paper-check/");
 const embed = location.search.includes("embed=1");
+// A new page load of the list starts the fixture fresh.
+if (!embed) { try { localStorage.removeItem("fixture:paper-sent"); } catch {} }
 const PAPER_VIEW = { id: "pc1", name: "Sample Joy", subject: "Physics", head: "Kru Ek", aiPercent: 67.5, passMark: 70, mock: null, updatedAt: "2026-11-24T03:00:00.000Z", done: null, open: true,
   comment: "Good mechanics. Lost marks on units.", questions: [1, 2, 3, 4].map((n) => ({ id: "q" + n, level: "IGCSE / GCSE", max: 10, marks: n === 4 ? 6 : 7, reason: n === 4 ? "Wrong units in the final answer." : "Method and answer correct." })) };
 const recommendationBlock = briefState === "checking" || briefState === "admin" ? briefState : null;
@@ -320,7 +329,7 @@ const briefFor = new URLSearchParams(location.search);
 const BRIEF = { decision: null, name: briefFor.get("name") ?? "Sample Dao", subject: briefFor.get("subject") ?? "Mathematics", gradedPaper: true, exam: briefFor.get("mock") ? null : "Sat 28 Nov, 10:00–11:30", mock: briefFor.get("mock") ?? "Sat 28 Nov, 12:00–12:45",
   interviewer: "Kru Peat", location: "BeGifted, 2nd floor, Siam Square One", answers, resume: "pdf" as const,
   rubric: null, form: recommendationBlock ? "closed" : briefState ?? "open", recommendationReady: briefState === "closed", recommendationBlock };
-createRoot(document.getElementById("root")!).render(<Suspense fallback="Loading">{paperCheck ? <BookingShell kind="paper-check" bare={embed}>{!embed && <ScheduleLink />}<PaperCheck view={PAPER_VIEW as never} token="sample-token" /></BookingShell> : briefState ? location.pathname.startsWith("/hiring/brief/") ? <BriefShell bare={embed}>{!embed && <ScheduleLink />}<InterviewerBrief brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BriefShell> : <BookingShell kind="brief"><InterviewerBrief brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BookingShell> : location.search.includes("preview=1") ? <div className="flex min-h-0 flex-1 flex-col overflow-auto"><HiringStaffPreview role="hr" /></div> : <HiringDashboard />}</Suspense>);
+createRoot(document.getElementById("root")!).render(<Suspense fallback="Loading">{paperCheck ? <BookingShell kind="paper-check" bare={embed}>{!embed && <ScheduleLink />}<PaperCheck view={PAPER_VIEW as never} token="sample-token" /></BookingShell> : briefState ? location.pathname.startsWith("/hiring/brief/") ? <BriefShell bare={embed}>{!embed && <ScheduleLink />}<InterviewerBrief compact={embed} brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BriefShell> : <BookingShell kind="brief"><InterviewerBrief brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BookingShell> : location.search.includes("preview=1") ? <div className="flex min-h-0 flex-1 flex-col overflow-auto"><HiringStaffPreview role="hr" /></div> : <HiringDashboard />}</Suspense>);
 `;
 
 // Only the framework parts that need a Next.js server are replaced. The components stay real.
@@ -1122,8 +1131,10 @@ try {
     const next = page.locator("section").filter({ has: page.getByRole("heading", { name: /^Next mock/ }) });
     assert.match(await next.innerText(), /Reply Low/);
     assert.doesNotMatch(await next.innerText(), /Paper test/);
-    const coming = page.locator("section").filter({ has: page.getByRole("heading", { name: /^Coming up/ }) });
-    assert.match(await coming.getByRole("listitem").filter({ hasText: "Sample Paper" }).innerText(), /Physics · Paper test/);
+    // A paper test needs nothing from the head: it sits in a closed group of its own.
+    const papers = page.locator("details").filter({ hasText: "Paper tests, no action" });
+    await papers.locator("summary").click();
+    assert.match(await papers.getByRole("listitem").filter({ hasText: "Sample Paper" }).innerText(), /Physics · Paper test/);
     assert.equal(await page.getByRole("link", { name: "Tutor onboarding and Experts access" }).count(), 0);
     await shot(page, "heads-next-phone");
     // Kru Peat's ended mocks: each line names its next step. Staff choose the head from the menu.
@@ -1139,12 +1150,12 @@ try {
     await page.setViewportSize({ width: 320, height: 700 });
     await page.goto(`${origin}/?view=heads&roles=1`);
     assert.equal(await head.inputValue(), "Peat", "the browser remembers the head staff chose");
-    const toDo = page.locator("section").filter({ has: page.getByRole("heading", { name: /^To do/ }) });
-    for (const [name, note] of [
-      ["Sample Lek", "Admin is checking the scores"],
-      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => [name, "Ask admin: check the scores"]),
+    const group = (title) => page.locator("section").filter({ has: page.getByRole("heading", { name: new RegExp(`^${title}`) }) });
+    for (const [title, name, note] of [
+      ["Waiting", "Sample Lek", "Admin checking scores"],
+      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => ["To do", name, "Ask admin to check"]),
     ]) {
-      const line = toDo.getByRole("listitem").filter({ hasText: name });
+      const line = group(title).getByRole("listitem").filter({ hasText: name });
       await line.getByText(note, { exact: true }).waitFor();
       const link = line.getByRole("link", { name: new RegExp(`^Interview brief: .*${name}`) });
       assert.match(await link.getAttribute("href"), /^\/hiring\/brief\/sample-token\?name=/);
@@ -1347,7 +1358,8 @@ try {
     const reject = page.getByRole("button", { name: "Reject and inform candidate" }).first();
     await page.getByRole("status").filter({ hasText: "Evidence changed. Ask HR for a new packet." }).waitFor();
     const rejectionNote = page.getByRole("textbox", { name: "Rejection note (5+ characters)" }).first();
-    await rejectionNote.fill("Reviewed the evidence.");
+    // The note stays locked until the packet is read.
+    assert.equal(await rejectionNote.isDisabled(), true);
     assert.equal(await approve.isDisabled(), true);
     assert.equal(await reject.isDisabled(), true);
     assert.equal(await read.isDisabled(), true);
@@ -1533,10 +1545,14 @@ try {
           await snap();
           await axe();
           await tap(check, "Check paper: Sample Joy");
-          await tab.getByRole("link", { name: "← My hiring list" }).waitFor();
+          const back = tab.getByRole("link", { name: "← My hiring list" });
+          await back.waitFor();
           await tab.addStyleTag({ content: "#root{padding:0!important}" });
           await snap();
           await axe();
+          // One tap back. The fixture serves the same page for /hiring, so the list comes back from the head's own link.
+          await tap(back, "← My hiring list");
+          await tab.waitForURL(/\/hiring\?view=heads$/);
           m.returnVisit = { taps: 0, firstAction: m.firstAction, scrollBeforeFirstActionPx: m.scrollBeforeFirstActionPx, wordsAboveFirstAction: m.wordsAboveFirstAction };
         } else {
           await open("view=review&roles=1&gift=1&live=1");
@@ -1586,7 +1602,8 @@ try {
       metrics[name] = {};
       for (const [width, height] of [[390, 844], [320, 700]]) {
         metrics[name][`${width}x${height}`] = {};
-        for (const id of ["H1", "H2", "G1"]) {
+        // WALK=H2,G1 runs some tasks only (H1 still describes the brief before PR 365).
+        for (const id of (process.env.WALK ?? "H1,H2,G1").split(",")) {
           process.stderr.write(`walkthrough ${name} ${width}x${height} ${id}\n`);
           metrics[name][`${width}x${height}`][id] = await task(engine, width, height, id);
         }
@@ -1595,7 +1612,7 @@ try {
     await wk.close?.();
     await page.setViewportSize({ width: 390, height: 844 });
     const briefStates = {};
-    for (const [state, message, button] of BRIEF_STATES) {
+    for (const [state, message, button] of (process.env.WALK ?? "H1").includes("H1") ? BRIEF_STATES : []) {
       await page.goto(`${origin}/?brief=${state}`);
       await page.addStyleTag({ content: "#root{padding:0!important}" });
       const nextAction = button ? page.getByRole("button", { name: button }) : page.getByText(message, { exact: true });

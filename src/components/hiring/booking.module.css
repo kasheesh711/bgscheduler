@@ -152,26 +152,26 @@
   box-shadow: none;
   animation: none;
 }
-.page[data-bare] .facts {
+.page[data-bare] .card > .facts {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 20px;
 }
-.page[data-bare] .facts .answers {
+.page[data-bare] .card > .facts .answers {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 20px;
 }
-.page[data-bare] .facts .answers > div {
+.page[data-bare] .card > .facts .answers > div {
   display: flex;
   align-items: baseline;
   gap: 6px;
 }
-.page[data-bare] .facts .answers dd {
+.page[data-bare] .card > .facts .answers dd {
   margin: 0;
 }
-.page[data-bare] .facts .ghost {
+.page[data-bare] .card > .facts .ghost {
   width: auto;
   min-height: 44px;
   padding: 0 14px;

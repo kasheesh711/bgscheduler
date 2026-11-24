@@ -147,7 +147,7 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
   const giftOnly = !!data?.reviewAccess?.gift && !data.reviewAccess.hr;
   const linkedReview = data?.reviewAccess?.gift ? reviewLink : undefined;
   // Gift's review email link opens her Heads screen with that review open, when she is a head; else the review screen.
-  const view: HiringView = giftOnly && linkedReview ? ((data?.viewerHead ?? head) ? "heads" : "review") : param && Object.hasOwn(VIEWS, param) ? (param as HiringView) : (data?.viewerHead ?? head) ? "heads" : "overview";
+  const view: HiringView = giftOnly && linkedReview ? ((data?.viewerHead ?? head) ? "heads" : "review") : param && Object.hasOwn(VIEWS, param) ? (param as HiringView) : (data?.viewerHead ?? head ?? search.get("head")) ? "heads" : "overview";
   const giftReview = view === "review" && giftOnly;
   const loaded = !!data;
   // Next.js keeps useSearchParams in step with pushState, and this does not reload the page.
@@ -161,14 +161,15 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
     // The demo must not change the screen that the real /hiring opens on.
     if (demo || hash === null || (reviewLink && (!loaded || giftOnly))) return;
     if (isRoleView(param)) return remember(param);
-    if (param) return;
+    // A signed-in head always opens on their own list, never on a role screen the browser saved.
+    if (param || head) return;
     try {
       const saved = window.localStorage.getItem(ROLE_KEY);
       if (isRoleView(saved)) window.history.replaceState(null, "", `?view=${saved}`);
     } catch {
       // As in remember().
     }
-  }, [demo, param, hash, reviewLink, loaded, giftOnly]);
+  }, [demo, param, hash, reviewLink, loaded, giftOnly, head]);
   const [selected, setSelected] = useState<string | null>(null);
   const [assessmentVisit, setAssessmentVisit] = useState<string | null>(null);
   // The candidate whose résumé viewer is open. It loads the file only on request.
@@ -326,7 +327,8 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
       <nav className={nav.tools} aria-label="Hiring tools">
         {TOOLS.map((name) => (
           <button key={name} type="button" aria-pressed={view === name} onClick={() => setView(name)}>
-            {VIEWS[name]}
+            {/* A head finds the way back to their own list by its name (blind test, 24 Nov 2026). */}
+            {name === "heads" && data?.viewerHead ? "My list" : VIEWS[name]}
           </button>
         ))}
         {/* A full page load, so the demo starts clean and the real data is gone from the screen. */}

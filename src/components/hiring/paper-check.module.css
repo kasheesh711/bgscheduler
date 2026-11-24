@@ -68,8 +68,8 @@
   min-width: 0;
 }
 
-/* 900: the check also opens beside the head's list in Hiring, in a pane about 1,000px wide. */
-@media (min-width: 900px) {
+/* 700: the check also opens beside the head's list in Hiring, in a pane 740–1,140px wide. */
+@media (min-width: 700px) {
   .split {
     grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);
     align-items: start;
@@ -94,4 +94,9 @@
   padding: 10px 0 12px;
   background: var(--card, #fffdf8);
   border-top: 1px solid var(--line, #e6decd);
+}
+
+/* A focused mark never hides under the sticky score and submit. */
+.mark {
+  scroll-margin-bottom: 200px;
 }

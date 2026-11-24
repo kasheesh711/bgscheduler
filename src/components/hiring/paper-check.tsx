@@ -138,7 +138,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
         {/* The score and the send stay in view while the head works down the questions. */}
         <div className={k.submit}>
           <p className={k.total} role="status">
-            Your score: <strong>{percent}%</strong>
+            Score with these marks: <strong>{percent}%</strong>
             {view.passMark !== null && <> — {passes ? "pass: goes on to mock teaching" : "not passed: the candidate gets the rejection email"}</>}
           </p>
           {bad.length > 0 && <p className={c.note}>Give a mark from 0 to the maximum for question {bad.map((q) => q.id).join(", ")}.</p>}

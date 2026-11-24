@@ -54,7 +54,8 @@ const points = (value: number) => String(Math.round(value * 10) / 10);
  * The interviewer's page: the score sheet for the mock, with the candidate's résumé and graded paper beside it and the
  * résumé score in parts. No contact details outside the résumé itself.
  */
-export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdfRuntime }: { brief: Brief; resumeUrl: string; rubricUrl: string; decisionUrl: string; /** The demo gives the staff copy of the pdf.js files: its link has no real token. */ pdfRuntime?: string }) {
+export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdfRuntime, compact = false }: { brief: Brief; resumeUrl: string; rubricUrl: string; decisionUrl: string; /** The demo gives the staff copy of the pdf.js files: its link has no real token. */ pdfRuntime?: string;
+  /** Inside the head's Hiring screen: a short header, so the scores and the résumé lead (Kevin, 24 Nov 2026). */ compact?: boolean }) {
   const [pending, setPending] = useState<BriefPending>(null);
   const [editCount, setEditCount] = useState(0);
   const [lastSent, setLastSent] = useState(() => brief.rubric ? { total: rubricTotals(brief.rubric).total, max: rubricTotals(brief.rubric).max, editCount: 0 } : null);
@@ -66,12 +67,12 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   const earlyRecommendation = brief.form === "closed" && brief.recommendationReady;
   const paperUrl = resumeUrl.replace(/resume$/, "paper");
   const runtime = pdfRuntime ?? resumeUrl.replace(/resume$/, "pdf-runtime");
+  // The head is the interviewer and the place does not change, so the short header keeps the subject and the time.
   const facts: [string, string][] = [
     ["Subject", brief.subject],
-    ["Mock teaching", `${brief.mock} (Bangkok)`],
-    ...(brief.exam ? ([["Exam", brief.exam]] as [string, string][]) : []),
-    ["Place", brief.location],
-    ["Interviewer", brief.interviewer ?? "To be confirmed"],
+    ["Mock teaching", compact ? brief.mock : `${brief.mock} (Bangkok)`],
+    ...(brief.exam && !compact ? ([["Exam", brief.exam]] as [string, string][]) : []),
+    ...(compact ? [] : ([["Place", brief.location], ["Interviewer", brief.interviewer ?? "To be confirmed"]] as [string, string][])),
   ];
   const recommendation = (
     <section id="recommendation" className={b.panel} tabIndex={-1}>
@@ -94,9 +95,9 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   const fileUrl = doc === "resume" && brief.resume ? resumeUrl : doc === "paper" ? paperUrl : null;
   return (
     <>
-      <header className={b.top}>
+      <header className={b.top} data-compact={compact ? "" : undefined}>
         <div>
-          <p className={b.eyebrow}>Interview brief</p>
+          {!compact && <p className={b.eyebrow}>Interview brief</p>}
           <h1 className={b.name}>{brief.name}</h1>
           <dl className={b.facts}>
             {facts.map(([label, value]) => (

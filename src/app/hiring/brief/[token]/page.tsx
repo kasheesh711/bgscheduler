@@ -24,7 +24,7 @@ async function Body({ params, searchParams }: Props) {
   }
   // The page is a client component: send only the answers it shows, not the sheet row or submit time.
   const answers = brief.answers && { ...brief.answers, sourceRow: 0, submittedAt: "" };
-  return <>{embed !== "1" && <ScheduleLink />}<InterviewerBrief brief={{ ...brief, answers }} resumeUrl={`/api/hiring/brief/${token}/resume`} rubricUrl={`/api/hiring/brief/${token}/rubric`} decisionUrl={`/api/hiring/brief/${token}/decision`} /></>;
+  return <>{embed !== "1" && <ScheduleLink />}<InterviewerBrief compact={embed === "1"} brief={{ ...brief, answers }} resumeUrl={`/api/hiring/brief/${token}/resume`} rubricUrl={`/api/hiring/brief/${token}/rubric`} decisionUrl={`/api/hiring/brief/${token}/decision`} /></>;
 }
 
 // The head's Hiring screen opens this page inside itself with embed=1, with no gutter or second background.

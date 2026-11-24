@@ -439,3 +439,87 @@
 [data-bare] > .wrap {
   padding-top: 8px;
 }
+
+/* The band names may wrap but never clip, and each score tile has a visible edge (3:1 against the card). */
+.scale > * {
+  min-width: 0;
+}
+
+/* Inside the head's Hiring screen the pane is narrower: each item name sits above full-width tiles, so the tiles are
+   large and the four band names fit on one line over their bands. */
+@media (min-width: 700px) {
+  [data-bare] .row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.cell {
+  outline: 1px solid #948a73;
+  outline-offset: -1px;
+}
+
+/* The short header inside the head's Hiring screen: one line of facts, the ATS parts in two short rows. */
+.top[data-compact] {
+  gap: 8px 24px;
+  padding: 10px 16px;
+}
+.top[data-compact] .name {
+  margin: 0 0 2px;
+  font-size: 26px;
+}
+.top[data-compact] .facts dt,
+.top[data-compact] .facts dd {
+  display: inline;
+}
+.top[data-compact] .facts dt::after {
+  content: " ";
+}
+.top[data-compact] .atsHead strong {
+  font-size: 18px;
+}
+.top[data-compact] .atsParts {
+  grid-template-columns: repeat(4, max-content);
+  gap: 2px 16px;
+  font-size: 12px;
+}
+.top[data-compact] .atsParts li {
+  grid-template-columns: auto 32px auto;
+  gap: 6px;
+}
+@media (min-width: 700px) {
+  .top[data-compact] {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+}
+
+/* Inside the head's Hiring screen the résumé sits beside the form from a 720px pane (a 1024px laptop). */
+@media (min-width: 720px) {
+  [data-bare] .cols {
+    grid-template-columns: minmax(0, 11fr) minmax(0, 9fr);
+  }
+  [data-bare] .docs {
+    position: sticky;
+    top: 16px;
+    height: calc(100dvh - 32px);
+  }
+  [data-bare] .pane {
+    max-height: none;
+  }
+}
+/* A link that opens at the scores or the recommendation lands below the sticky way back. */
+.panel[id] {
+  scroll-margin-top: 52px;
+}
+@media (max-width: 699px) {
+  .tabs {
+    flex-wrap: wrap;
+  }
+  .cell:is(:nth-child(2), :nth-child(5), :nth-child(8)) {
+    margin-right: 0;
+  }
+}
+@media (max-width: 359px) {
+  .panel {
+    padding-inline: 12px;
+  }
+}

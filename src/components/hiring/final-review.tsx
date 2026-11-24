@@ -381,7 +381,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
         <>
           <label className={css.fieldLabel}>
             <span id={rejectHint}>Rejection note (5+ characters)</span>
-            <textarea className={css.textarea} rows={2} maxLength={2000} value={reason} readOnly={busy === "sign"} onChange={(event) => setReason(event.target.value)} />
+            <textarea className={css.textarea} rows={2} maxLength={2000} value={reason} readOnly={busy === "sign"} disabled={!viewed}
+              onChange={(event) => setReason(event.target.value)} />
           </label>
           <div className={css.signOffActions}>
             <div>
