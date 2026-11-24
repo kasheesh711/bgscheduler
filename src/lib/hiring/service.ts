@@ -1561,7 +1561,7 @@ type Waiting = "answers" | "checking" | "held";
 const ANSWERS_FIRST: Record<Waiting, string> = {
   answers: "Please answer the questions on this page first. Then you can choose your times.",
   checking: "Thank you for your answers. We have them. When booking opens, we email you, and this link lets you book. If we have a question, we contact you.",
-  // Proposed wording, for Kevin to confirm. The system sends no rejection, so the text refuses nothing and promises nothing.
+  // Kevin approved this wording on 24 Nov 2026. The system sends no rejection, so the text refuses nothing and promises nothing.
   held: "Thank you for your answers. We have them. Our team reads every answer. If we can invite you to a test and a mock teaching, we email you.",
 };
 
