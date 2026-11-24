@@ -97,7 +97,7 @@ export type Subject = z.infer<typeof subjectSchema>;
 export type InterviewKind = "paper" | "mock";
 // `brief` is the interviewer's page for one mock booking: its id is a booking id, not a candidate id.
 // `call` is the candidate's link to book the HR pre-screen call.
-// `two-day` (Kevin, 24 Nov 2026) books the test (Monday to Sunday) and the final-round mock teaching on a later day
+// `two-day` (Kevin, 24 Nov 2026) books the test (Monday to Sunday) and the final-round mock teaching on the same day or a later day
 // (Monday to Friday) together. `visit` (both on one day) and `paper-visit` (test only) are links sent before that.
 export const tokenKindSchema = z.enum(["paper", "mock", "visit", "paper-visit", "two-day", "brief", "call", "contract", "onboarding"]);
 /** A booking of the visit flows. A row of kind `call` belongs to the HR call list only. */
@@ -574,7 +574,7 @@ export const bookingSchema = z
 export const visitBookingSchema = z
   .object({
     start: z.iso.datetime(),
-    /** A "two-day" link: the mock teaching time, on a later day than the test at `start`. */
+    /** A "two-day" link: the mock teaching time, after the test at `start` (the same day or a later day). */
     mockStart: z.iso.datetime().optional(),
     subject: subjectSchema,
     onsiteConfirmed: z.literal(true),
