@@ -12,7 +12,8 @@
   position: sticky;
   top: 0;
   z-index: 5;
-  justify-self: start;
+  /* Full width, so the sliders scrolling under it do not show beside the link. */
+  justify-self: stretch;
   padding-inline: 4px;
   background: var(--paper);
   display: inline-flex;

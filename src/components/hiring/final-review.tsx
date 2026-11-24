@@ -46,7 +46,7 @@ function subscribeToPhoneReader(change: () => void) {
   return () => query.removeEventListener("change", change);
 }
 
-export function FinalReview({ id, signing = false, autoLoad = false, hideHeading = false, inline = false, approveBlock, rejectBlock, pausedStatus, onChanged }: {
+export function FinalReview({ id, signing = false, autoLoad = false, hideHeading = false, inline = false, signed, approveBlock, rejectBlock, pausedStatus, onChanged }: {
   id: string;
   /** Gift's Hiring screen: on a wide screen the packet opens at once beside her decision, so she reads and writes together
    * (Kevin, 24 Nov 2026). Opening it is still what unlocks sign-off. A phone keeps the full-screen reader. */
@@ -57,7 +57,9 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   approveBlock?: string;
   rejectBlock?: string;
   pausedStatus?: string;
-  onChanged?: (signed: boolean) => Promise<void>;
+  /** A review signed in this session that mounts again (a phone row that moved to Just finished) keeps its receipt. */
+  signed?: "hired" | "rejected";
+  onChanged?: (signed: "hired" | "rejected" | false) => Promise<void>;
 }) {
   const url = `/api/hiring/review/${id}`;
   const controlId = useId();
@@ -77,7 +79,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   const [viewedId, setViewedId] = useState<string>();
   const [busy, setBusy] = useState<"review" | "packet" | "sign" | null>(null);
   const [saved, setSaved] = useState(false);
-  const [signedStage, setSignedStage] = useState<"hired" | "rejected">();
+  const [signedStage, setSignedStage] = useState<"hired" | "rejected" | undefined>(signed);
   const [error, setError] = useState<{ text: string; retry?: boolean; packetLoad?: boolean }>();
   const packet = review?.packet;
   const openPage = packetPage?.id === packet?.id ? packetPage : undefined;
@@ -110,9 +112,10 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
     loadStarted.current = true;
     void load();
   }, [autoLoad, load, signing]);
+  // Also after a load, so a review that mounts again after sign-off puts focus on its receipt once it shows.
   useEffect(() => {
     if (signedStage) outcome.current?.focus();
-  }, [signedStage]);
+  }, [signedStage, review]);
   const autoOpened = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (!openPage || !phone) return;
@@ -230,7 +233,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
         if (body.action === "sign") setSignedStage(body.decision === "hire" ? "hired" : "rejected");
       }
       await load(!!body);
-      if (body) await onChanged?.(body.action === "sign").catch(() => {
+      if (body) await onChanged?.(body.action === "sign" && (body.decision === "hire" ? "hired" : "rejected")).catch(() => {
         setError((current) => current ?? { text: "Could not refresh the dashboard." });
       });
     } catch (error) {
@@ -316,11 +319,12 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   const packetTitle = openPage && `Review packet for ${openPage.name}`;
   const besideDecision = inline && !phone;
   useEffect(() => {
-    if (!besideDecision || !packet || stale || !review?.access.gift || openPage || busy || autoOpened.current === packet.id) return;
+    // In the head list the packet opens with the row: beside the decision, or full screen on a phone, where Back closes it.
+    if (!inline || closed || !packet || stale || !review?.access.gift || openPage || busy || autoOpened.current === packet.id) return;
     autoOpened.current = packet.id;
-    void readPacket(packet.id, false);
+    void readPacket(packet.id, !besideDecision);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- readPacket is a plain function; the guard runs it once per packet.
-  }, [besideDecision, packet, stale, review, openPage, busy]);
+  }, [inline, besideDecision, closed, packet, stale, review, openPage, busy]);
   const packetFrame = openPage && (
     <iframe title={packetTitle} srcDoc={openPage.html}
       className={phone ? "block h-full min-h-0 w-full border-0" : undefined}
@@ -345,7 +349,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       {!signing && review && packet && (
         <div className={`${css.decisionActions} ${css.packetActions}`}>
           {besideDecision && openPage ? null : review.access.gift ? (
-            <button type="button" className={viewed ? css.secondary : css.primary} ref={readButton} disabled={stale && awaitingSignOff} aria-expanded={!!openPage} aria-disabled={!!busy || !!openPage || (stale && awaitingSignOff)}
+            <button type="button" className={viewed || closed ? css.secondary : css.primary} ref={readButton} disabled={stale && awaitingSignOff} aria-expanded={!!openPage} aria-disabled={!!busy || !!openPage || (stale && awaitingSignOff)}
               aria-controls={openPage ? `${controlId}-packet` : undefined}
               onClick={() => { if (!busy && !openPage) void readPacket(packet.id); }}>{viewed ? "Read packet again" : "Read review packet"}</button>
           ) : <a className={css.secondary} href={`${url}?file=html`} target="_blank" rel="noreferrer">Read review packet</a>}
@@ -398,6 +402,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       )}
       {awaitingSignOff && (packet ? (
         <>
+          {/* What Gift approves, beside the button; the letter itself is in the packet (Sol review, round 11). */}
+          {packet.offerType && <p className={css.inspectorMeta}>Offer: <strong>{OFFER_LETTERS[packet.offerType].label}</strong>. The pay and terms are in the contract.</p>}
           <div className={css.signOffActions}>
             <div>
               <button type="button" ref={approveButton} className={css.primary} disabled={signOffDisabled || !!approveBlock} aria-describedby={[pauseReason, instruction, approveReason].filter(Boolean).join(" ")} onClick={() => {
@@ -425,7 +431,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       ) : <p>Waiting for the packet. <button type="button" className={css.secondary} disabled={!!busy} onClick={() => void act()}>Check again</button></p>)}
       <p ref={outcome} role="status" tabIndex={-1}>{closed && (stage === "hired" ? (review?.appointment
         ? `Contract signing booked for ${new Date(review.appointment).toLocaleString("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium", timeStyle: "short" })} (Bangkok).`
-        : packet ? (signedStage ? "Offer approved. The offer email is queued." : "Offer approved.") : "There is no contract booking on record.")
+        : packet || signedStage ? (signedStage ? "Offer approved. The offer email is queued." : "Offer approved.") : "There is no contract booking on record.")
         : stage === "rejected" ? (signedStage ? "Application rejected. The email is queued." : "Application rejected.") : "Application stopped.")}</p>
       {saved && !signedStage && <p role="status">Saved.</p>}
       {error && !error.packetLoad && <div role="alert" className={css.errorText}>

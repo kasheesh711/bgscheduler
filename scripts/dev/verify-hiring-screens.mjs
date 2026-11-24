@@ -263,7 +263,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       return new Response(JSON.stringify({ ok: true }));
     }
     return new Response(JSON.stringify({ access: GIFT ? payload.reviewAccess : { hr: true, gift: false }, stage: GIFT ? "review" : "mock_booked",
-      callNotes: "Gave a specific example of adapting a lesson.", packet: GIFT ? { id: "packet", behavioral: "Gave a specific example of adapting a lesson.", offer: "Hourly rate 600 THB, 10 hours a week." } : reviewPacket,
+      callNotes: "Gave a specific example of adapting a lesson.", packet: GIFT ? { id: "packet", behavioral: "Gave a specific example of adapting a lesson.", offer: "Hourly rate 600 THB, 10 hours a week.", offerType: "part_time" } : reviewPacket,
       packetValid: new URLSearchParams(location.search).get("stale") === "unknown" ? null : !location.search.includes("stale=1"), appointment: null }));
   }
   if (url.pathname === "/api/hiring/marking") {
@@ -1155,7 +1155,7 @@ try {
     await shot(page, "heads-phone");
     await page.goto(`${origin}/?view=heads&roles=1&headNext=1&me=Ek`);
     await page.getByRole("status").filter({ hasText: /Kru Ek · next mock .*11:00/ }).waitFor();
-    const next = page.getByRole("region", { name: /hiring list/ }).locator("section").filter({ has: page.getByRole("heading", { name: /^Next mock/ }) });
+    const next = page.getByRole("navigation", { name: /hiring list/ }).locator("section").filter({ has: page.getByRole("heading", { name: /^Next mock/ }) });
     assert.match(await next.innerText(), /Reply Low/);
     assert.doesNotMatch(await next.innerText(), /Paper test/);
     // A paper test needs nothing from the head: it sits in a closed group of its own.
@@ -1177,7 +1177,7 @@ try {
     await page.setViewportSize({ width: 320, height: 700 });
     await page.goto(`${origin}/?view=heads&roles=1`);
     assert.equal(await head.inputValue(), "Peat", "the browser remembers the head staff chose");
-    const group = (title) => page.getByRole("region", { name: /hiring list/ }).locator("section").filter({ has: page.getByRole("heading", { name: new RegExp(`^${title}`) }) });
+    const group = (title) => page.getByRole("navigation", { name: /hiring list/ }).locator("section").filter({ has: page.getByRole("heading", { name: new RegExp(`^${title}`) }) });
     for (const [title, name, note] of [
       ["Waiting", "Sample Lek", "Admin checking scores"],
       ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => ["To do", name, /^Ask admin: /]),

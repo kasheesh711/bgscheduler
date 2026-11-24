@@ -70,7 +70,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   // The head is the interviewer and the place does not change, so the short header keeps the subject and the time.
   const facts: [string, string][] = [
     ["Subject", brief.subject],
-    ["Mock teaching", compact ? brief.mock : `${brief.mock} (Bangkok)`],
+    // Before the mock ends, the time says when the recommendation opens (Sol review, round 11).
+    ["Mock teaching", `${compact ? brief.mock : `${brief.mock} (Bangkok)`}${!brief.mockEnded && !brief.decision ? " · recommend after it ends" : ""}`],
     ...(brief.exam && !compact ? ([["Exam", brief.exam]] as [string, string][]) : []),
     ...(compact ? [] : ([["Place", brief.location], ["Interviewer", brief.interviewer ?? "To be confirmed"]] as [string, string][])),
   ];

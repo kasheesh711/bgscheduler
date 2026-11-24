@@ -168,3 +168,11 @@
 
 .paperHead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
 .fullPaper { display: inline-flex; align-items: center; min-height: 44px; font-family: var(--sans, inherit); font-size: 15px; font-weight: 600; }
+/* In the head's pane the mark sits to the right of its question, so each card is shorter and more questions fit (Sol review, round 11). */
+[data-bare] .questions { container-type: inline-size; }
+@container (min-width: 320px) {
+  .question { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; align-items: start; }
+  .question > .head, .question > .reason { grid-column: 1; }
+  .question > .markRow { grid-column: 2; grid-row: 1 / span 2; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .question .max { font-size: 13px; text-align: right; }
+}

@@ -123,7 +123,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
       <>
         {header}
         <p role="status" tabIndex={-1} ref={result} className={outcome === "rejected" || view.done?.passed === false ? c.notice : c.success}>
-          {outcome ? `Marks saved: ${percent}%. ${RESULT[outcome]}` : `${view.done!.head}'s check is recorded: ${view.done!.percent}%, ${view.done!.passed ? "pass" : "not passed"}.`}
+          {outcome ? `${outcome === "none" || outcome === "check" ? "" : "Marks saved. "}${RESULT[outcome]}` : `${view.done!.head}'s check is recorded: ${view.done!.percent}%, ${view.done!.passed ? "pass" : "not passed"}.`}
         </p>
       </>
     );

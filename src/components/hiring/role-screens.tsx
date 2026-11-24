@@ -472,6 +472,8 @@ interface HeadItem {
   note: string | null;
   /** The brief or the paper check, opened at the part that needs the head. */
   href: string | null;
+  /** Gift signed this review here; the row keeps the result if its review mounts again. */
+  signed?: "hired" | "rejected";
   task: string;
   /** The job in words on the row (Re-mark paper, Score mock…), for a row that needs the head now. */
   action?: string;
@@ -567,7 +569,7 @@ function ItemLink({ item, selected, onSelect, wide, readOnly, paneId }: { item: 
 }
 
 /** The right side: the real brief or paper check page, or the résumé when there is no page to open. */
-function ItemPane({ item, data, readOnly, reload, onSigned }: { item: HeadItem; data: HiringData; readOnly: boolean; reload?: () => Promise<void>; onSigned?: (item: HeadItem) => void }) {
+function ItemPane({ item, data, readOnly, reload, onSigned }: { item: HeadItem; data: HiringData; readOnly: boolean; reload?: () => Promise<void>; onSigned?: (item: HeadItem, stage: "hired" | "rejected") => void }) {
   // The paper-check link is signed again on every list load. Keep the first address, so a list refresh never reloads
   // the open page and loses marks the head is typing (code review, 24 Nov 2026). The pane is keyed by the row.
   const [src] = useState(() => (item.href ? embedded(item.href) : null));
@@ -581,9 +583,9 @@ function ItemPane({ item, data, readOnly, reload, onSigned }: { item: HeadItem; 
           {/* The open packet states the head's recommendation; a phone shows it here. */}
           <p className={`${r.meta} ${r.reviewWho}`}>{item.review.reason || "No reason given"}</p>
           {item.review.draftProblem && <p className={r.warn}>No email draft yet: {item.review.draftProblem}</p>}
-          <FinalReview id={item.review.candidateId!} autoLoad hideHeading inline {...reviewBlocks(data.writeGate, data.config, item.review.candidateId!)}
-            onChanged={async (didSign) => {
-              if (didSign) onSigned?.(item);
+          <FinalReview id={item.review.candidateId!} autoLoad hideHeading inline signed={item.signed} {...reviewBlocks(data.writeGate, data.config, item.review.candidateId!)}
+            onChanged={async (stage) => {
+              if (stage) onSigned?.(item, stage);
               await reload?.();
             }} />
         </div>
@@ -642,10 +644,10 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const key = fixedHead ?? (chosen && heads.includes(chosen) ? chosen : null);
   const [picked, setPicked] = useState<string | null>(open ? `review-${open}` : null);
   const [signedItems, setSignedItems] = useState<HeadItem[]>([]);
-  const keepSigned = (item: HeadItem) => {
+  const keepSigned = (item: HeadItem, stage: "hired" | "rejected") => {
     setPicked(item.id);
     setSignedItems((current) => [...current.filter((kept) => kept.id !== item.id),
-      { ...item, urgent: false, action: undefined, time: "Packet", day: "signed", tags: [] }]);
+      { ...item, urgent: false, action: undefined, time: "Packet", day: "signed", tags: [], signed: stage }]);
   };
   const choose = (value: string) => {
     setChosen(value);
@@ -660,7 +662,6 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   };
   const wide = useWide();
   // Navigation beside the open page; on a phone a region (changing the element would rebuild the list and drop focus).
-  const Rail = wide ? "nav" : "section";
   // A score sent in the open page shows in the list when the head comes back to it (not more than once in 30 seconds).
   const loadedAt = useRef(0);
   // "Saved for …" stays under To do until another row opens, so the head sees the save where they started.
@@ -733,7 +734,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
       return { id: `review-${d.candidateId}`, name: candidate?.name ?? "Candidate", candidate, time: "Packet",
         day: ready ? "ready" : "not ready", detail: `${candidate?.visitSubject ?? candidate?.subjects[0] ?? "Subject not recorded"} · Yes from ${d.head}`,
         tags: [], note: d.draftProblem && "No email draft yet", href: null, task: "Final review",
-        action: ready ? "Final review" : undefined, urgent: ready, review: d };
+        action: ready ? "Read packet and decide" : undefined, urgent: ready, review: d };
     })
     : [];
   // One To do list in the order of the work: papers to re-mark, mocks to score, packets to sign (Sol review, 24 Nov 2026).
@@ -795,9 +796,9 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     </ul>
   );
   return (
-    <div className={r.workspace} data-heads-review="" data-empty={key && fixedHead && !all.length && !givesMocks ? "" : undefined}>
-      {/* Navigation beside the open page; on a phone a region, because it also holds the open row's form. */}
-      <Rail className={r.rail} aria-label={name ? `${nickname(name)}'s hiring list` : "Hiring list"}>
+    <div className={r.workspace} data-heads-review="" data-empty={key && fixedHead && !all.length ? "" : undefined}>
+      {/* The list is navigation at every width; on a phone the open row's form is a labelled region inside it. */}
+      <nav className={r.rail} aria-label={name ? `${nickname(name)}'s hiring list` : "Hiring list"}>
         {!fixedHead && (
           <label className={r.headMenu}>
             Head
@@ -828,7 +829,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
         ))}
         {!heads.length ? <p className={r.quiet}>No heads are set up. Add interviewers in Rules and setup.</p>
           : !key ? <p className={r.quiet}>Choose a head to see their list.</p>
-          : !all.length && !givesMocks && !wide && <p className={r.quiet}>Nothing to do. New papers to check also come by LINE.</p>}
+          : !all.length && !givesMocks && !wide && <p className={r.quiet}>Nothing to do. We send you a LINE message when a paper needs you.</p>}
         {papers.length > 0 && (
           <details className={r.group}>
             <summary className={r.groupTitle}>Paper tests, no action <span className={r.count}>{papers.length}</span></summary>
@@ -841,12 +842,12 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
             {list(past)}
           </details>
         )}
-      </Rail>
+      </nav>
       {wide && (
         <section id="open-item" tabIndex={-1} className={r.pane} aria-label={selected ? `${selected.task}: ${selected.name}` : key && !all.length ? "Nothing to do" : "Nothing open"}>
           {selected ? <ItemPane key={selected.id} item={selected} data={data} readOnly={readOnly || (!fixedHead && !chosen)} reload={reload} onSigned={keepSigned} />
             : key && !all.length ? <div className={r.paneFacts}><h2 className={r.paneName}>Nothing to do</h2>
-              <p className={r.quiet}>{givesMocks ? "New bookings and papers to check also come by LINE." : "New papers to check also come by LINE."}</p></div>
+              <p className={r.quiet}>{givesMocks ? "We send you a LINE message when a mock or a paper needs you." : "We send you a LINE message when a paper needs you."}</p></div>
             : null}
         </section>
       )}
