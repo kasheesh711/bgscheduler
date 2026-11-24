@@ -455,7 +455,8 @@ function headVisit(row: Pick<RunSheetRow, "visitId" | "candidateId" | "date" | "
   const due = ended && !!path && active && !decision && !uncertain && !needsCheck && !!subject && (scored || (!bookingResult && !draft));
   const missingOutcome = ended && !!confirmed && active && !path && !decision && !uncertain && !needsCheck && (scored || (!bookingResult && !draft));
   const needsAction = due || missingOutcome || (active && (needsCheck || (!!bookingResult && !scored)));
-  return { row, candidate, active, path, ended, decision, scored, checkingScores, needsCheck, due, missingOutcome, needsAction, status };
+  const end = mock ? formatInTimeZone(new Date(mock.endTime), ZONE, "HH:mm") : null;
+  return { row, candidate, active, path, ended, decision, scored, checkingScores, needsCheck, due, missingOutcome, needsAction, status, end };
 }
 
 /** One line on the left and one page on the right: a mock, a paper visit, or a near-miss paper to re-mark. */
@@ -484,7 +485,7 @@ interface HeadItem {
 }
 
 function visitItem(visit: ReturnType<typeof headVisit>, today: string, live = false): HeadItem {
-  const { row, candidate, active, path, decision, scored, checkingScores, needsCheck, due, missingOutcome, status } = visit;
+  const { row, candidate, active, path, decision, scored, checkingScores, needsCheck, due, missingOutcome, status, end } = visit;
   const mock = !!row.mockStart;
   const open = path && active;
   return {
@@ -493,7 +494,8 @@ function visitItem(visit: ReturnType<typeof headVisit>, today: string, live = fa
     candidate,
     time: row.mockStart ?? row.paperStart,
     day: row.date === today ? "Today" : row.date === shiftDate(today, 1) ? "Tomorrow" : shortDay(row.date),
-    detail: `${row.subject ?? "Subject not recorded"} · ${mock ? "Mock" : "Paper test"}`,
+    // The end time too, so the head knows how long the mock takes without opening the brief (Sol review, round 13).
+    detail: `${row.subject ?? "Subject not recorded"} · ${mock ? (end ? `Mock until ${end}` : "Mock") : "Paper test"}`,
     tags: [
       ...(status ? [{ text: status }] : []),
       // A live mock with scores says so in its action instead.
@@ -648,7 +650,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const keepSigned = (item: HeadItem, stage: "hired" | "rejected") => {
     setPicked(item.id);
     setSignedItems((current) => [...current.filter((kept) => kept.id !== item.id),
-      { ...item, urgent: false, action: undefined, time: "Packet", day: "signed", tags: [], signed: stage }]);
+      { ...item, urgent: false, action: undefined, time: "Signed", day: stage === "hired" ? "Offer queued" : "Rejection queued", tags: [], signed: stage }]);
   };
   const choose = (value: string) => {
     setChosen(value);
@@ -741,14 +743,15 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const actionVisits = ended.filter((visit) => visit.needsAction && !visit.checkingScores).map((visit) => visitItem(visit, today));
   const checking = ended.filter((visit) => visit.needsAction && visit.checkingScores).map((visit) => visitItem(visit, today));
   const nextItem = nextMock ? visitItem(nextMock, today, mockNow) : undefined;
-  // A signed review leaves To do at once, before the reload drops it, and stays under Just finished while it is open.
+  // A signed review leaves Final review at once, before the reload drops it, and stays under Just finished for this visit.
   const signedIds = new Set(signedItems.map((item) => item.id));
   const unsigned = reviews.filter((item) => !signedIds.has(item.id));
-  const stillSigned = signedItems.filter((item) => item.id === picked);
+  const stillSigned = signedItems;
   const reviewer = !!key && key === data.finalReviewer;
   // Gift's sign-offs have their own heading under To do, so she sees at once whether a hire waits for her (Sol review, round 12).
-  const groups = [
-    { title: "To do", items: [...checks, ...actionVisits].sort((a, b) => Number(!!b.urgent) - Number(!!a.urgent)) },
+  const groups: { title: string; label?: string; items: HeadItem[] }[] = [
+    // Gift owns two kinds of work, so her first heading names it (Sol review, round 13).
+    { title: "To do", label: reviewer ? "Assessment tasks" : undefined, items: [...checks, ...actionVisits].sort((a, b) => Number(!!b.urgent) - Number(!!a.urgent)) },
     ...(reviewer ? [{ title: "Final review", items: unsigned.filter((item) => item.urgent) }] : []),
     { title: "Just finished", items: stillSigned },
     { title: mockNow ? "Mock now" : "Next mock", items: nextItem ? [nextItem] : [] },
@@ -820,11 +823,11 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
         {groups.map((group) => (group.items.length > 0 || (group.title === "Next mock" && givesMocks) || (group.title === "Final review") || (group.title === "To do" && (givesMocks || reviewer || (!!savedFor && selected?.id === savedFor.id)))) && (
           <section key={group.title} className={r.group} data-tone={(group.title === "To do" || group.title === "Final review") && group.items.length ? "todo" : undefined}>
             <h2 className={r.groupTitle}>
-              {group.title}
+              {group.label ?? group.title}
               {group.items.length > 1 && <span className={r.count}>{group.items.length}</span>}
             </h2>
             {group.title === "To do" && savedFor && selected?.id === savedFor.id && <p className={r.saved}>{savedFor.text}</p>}
-            {group.items.length ? list(group.items) : group.title === "To do" && savedFor && selected?.id === savedFor.id ? null : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "No papers or mocks to score now." : "Nothing to do now.") : group.title === "Final review" ? "No reviews to sign." : "No mock booked. New bookings also come by LINE."}</p>}
+            {group.items.length ? list(group.items) : group.title === "To do" && savedFor && selected?.id === savedFor.id ? null : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "No assessments due." : "Nothing to do now.") : group.title === "Final review" ? "No reviews to sign." : "No mock booked. New bookings also come by LINE."}</p>}
           </section>
         ))}
         {!heads.length ? <p className={r.quiet}>No heads are set up. Add interviewers in Rules and setup.</p>

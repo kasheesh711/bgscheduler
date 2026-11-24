@@ -48,16 +48,21 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
   const [more, setMore] = useState<string | null>(null);
   const checkMore = () => {
     const list = questionList.current;
-    if (!list || list.scrollHeight - list.scrollTop - list.clientHeight <= 8) return setMore(null);
-    // The first question whose box ends below the visible area.
-    const bottom = list.getBoundingClientRect().bottom;
-    const next = [...list.querySelectorAll<HTMLLIElement>("li[data-question]")].find((item) => item.getBoundingClientRect().bottom > bottom + 1);
-    setMore(next?.dataset.question ?? "");
+    if (!list) return setMore(null);
+    // The first question whose box ends below the visible area, else the comment if it is below it; nothing when all show.
+    const bottom = list.getBoundingClientRect().bottom + 1;
+    const next = [...list.querySelectorAll<HTMLLIElement>("li[data-question]")].find((item) => item.getBoundingClientRect().bottom > bottom);
+    if (next) return setMore(next.dataset.question ?? null);
+    const comment = list.querySelector("textarea");
+    setMore(comment && comment.getBoundingClientRect().bottom > bottom ? "" : null);
   };
   useEffect(() => {
     checkMore();
-    window.addEventListener("resize", checkMore);
-    return () => window.removeEventListener("resize", checkMore);
+    // The area also changes size when the facts above it wrap, not only with the window.
+    if (typeof ResizeObserver === "undefined" || !questionList.current) return;
+    const observer = new ResizeObserver(checkMore);
+    observer.observe(questionList.current);
+    return () => observer.disconnect();
   }, []);
   const draftKey = `hiring-paper-draft:${view.id}`;
   const [restored, setRestored] = useState(false);

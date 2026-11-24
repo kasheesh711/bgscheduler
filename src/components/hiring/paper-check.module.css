@@ -139,6 +139,7 @@
   [data-bare] .marks {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr) auto auto;
+    row-gap: 8px;
     min-height: 0;
     height: 100%;
   }
@@ -179,3 +180,4 @@
   .question .mark { width: 5rem; min-height: 44px; border-radius: 12px; }
   .question .max { font-size: 12px; text-align: right; }
 }
+[data-bare] .total { margin: 4px 0; }

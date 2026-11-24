@@ -94,7 +94,7 @@ payload.inviteOutbox = payload.outbox;
 const markQuestions = (level: string, marks: number[]) => marks.map((value, i) => ({ id: level[0] + (i + 1), level, marks: value, max: 10, reason: "Correct method", attempted: true, readable: true }));
 const visitFor = (candidateId: string, visitId: string, startIso: string, head: string, subject: string) => [
   { id: visitId + "e", candidateId, kind: "paper", status: "confirmed", startTime: startIso, endTime: startIso, visitId, interviewerKey: null, subjects: [subject] },
-  { id: visitId + "m", candidateId, kind: "mock", status: "confirmed", startTime: new Date(new Date(startIso).getTime() + 7200000).toISOString(), endTime: startIso, visitId, interviewerKey: head, subjects: [subject] },
+  { id: visitId + "m", candidateId, kind: "mock", status: "confirmed", startTime: new Date(new Date(startIso).getTime() + 7200000).toISOString(), endTime: new Date(new Date(startIso).getTime() + 10800000).toISOString(), visitId, interviewerKey: head, subjects: [subject] },
 ];
 payload.bookings = [...visitFor("r1", "v1", "2026-11-01T03:00:00Z", "Peat", "Mathematics"), ...visitFor("r2", "v2", new Date(Date.now() + 86400000).toISOString(), "Ek", "Physics")] as never[];
 // The role screens (HR, Admin, Heads). Only with ?roles=1, so the checks of the other tabs read the same payload as before.
