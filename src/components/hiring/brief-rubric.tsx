@@ -70,7 +70,8 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
     }
     const message = summary.current ?? feedback.current;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    message?.scrollIntoView({ block: error ? "center" : "start", behavior: error && !reducedMotion ? "smooth" : "instant" });
+    // "nearest" keeps the header (with when to recommend) in view after a send during the mock (critic review, round 13).
+    message?.scrollIntoView({ block: error ? "center" : "nearest", behavior: error && !reducedMotion ? "smooth" : "instant" });
     message?.focus({ preventScroll: true });
   }, [state, error, editing, sentTotal]);
   if (!decisionSent && form === "closed") return <p className={c.note}>Scores are recorded. Ask admin to edit scores.</p>;

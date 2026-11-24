@@ -334,7 +334,6 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   return (
     <section className={signing ? css.finalReview : `${css.inspectorSection} ${css.finalReview}`} id={`review-${id}`} aria-label={signing ? "Contract signing" : "Final hiring review"}
       data-inline={besideDecision ? "" : undefined}>
-      {besideDecision && openPage && <div className={css.inlinePacket} id={`${controlId}-packet`}>{packetFrame}</div>}
       {!signing && !hideHeading && <h3 className={css.inspectorHeading}>Final hiring review</h3>}
       {!review && !error && (autoLoad || busy
         ? <p className={css.inspectorMeta} role="status">Loading the review…</p>
@@ -402,9 +401,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       )}
       {awaitingSignOff && (packet ? (
         <>
-          {/* What Gift approves, beside the button: the letter's terms (Sol review, rounds 11–12). An older packet has its own terms text. */}
-          <p className={css.inspectorMeta}><strong>Proposed offer:</strong> {packet.offerType
-            ? `${OFFER_LETTERS[packet.offerType].label}. ${OFFER_LETTERS[packet.offerType].terms}` : packet.offer}</p>
+          {/* What Gift approves, beside the button: the letter's terms (Sol review, rounds 11–12). An older packet's letter is only in the packet. */}
+          {packet.offerType && <p className={css.inspectorMeta}><strong>Proposed offer:</strong> {OFFER_LETTERS[packet.offerType].terms}</p>}
           <div className={css.signOffActions}>
             <div>
               <button type="button" ref={approveButton} className={css.primary} disabled={signOffDisabled || !!approveBlock} aria-describedby={[pauseReason, instruction, approveReason].filter(Boolean).join(" ")} onClick={() => {
@@ -439,6 +437,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
         <p>{error.text}</p>
         {error.retry && <button type="button" className={css.secondary} disabled={!!busy} onClick={() => void act()}>Retry</button>}
       </div>}
+      {/* After the decision in the reading and tab order; CSS puts it in the right column (critic review, round 13). */}
+      {besideDecision && openPage && <div className={css.inlinePacket} id={`${controlId}-packet`}>{packetFrame}</div>}
     </section>
   );
 }

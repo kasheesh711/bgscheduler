@@ -54,7 +54,8 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
     const next = [...list.querySelectorAll<HTMLLIElement>("li[data-question]")].find((item) => item.getBoundingClientRect().bottom > bottom);
     if (next) return setMore(next.dataset.question ?? null);
     const comment = list.querySelector("textarea");
-    setMore(comment && comment.getBoundingClientRect().bottom > bottom ? "" : null);
+    // Only when the comment's label and first line are hidden, not for a box that is nearly all in view.
+    setMore(comment && comment.getBoundingClientRect().top + 32 > bottom ? "" : null);
   };
   useEffect(() => {
     checkMore();
