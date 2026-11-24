@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, isNotNull, isNull, like, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull, isNull, like, ne, notInArray, sql } from "drizzle-orm";
 import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -43,7 +43,7 @@ async function resultsOf(tx: Database, candidateId: string) {
   return { papers, mocks };
 }
 
-async function assertAllowed(tx: Database, candidate: Awaited<ReturnType<typeof candidateById>>, decision: Decision, reason: string) {
+async function assertAllowed(tx: Database, candidate: Awaited<ReturnType<typeof candidateById>>, decision: Decision, reason: string, ignore: string[] = []) {
   if (!candidate.email) throw new HiringError(409, "This candidate has no email address, so a result email cannot go. Use Stop in the full record.");
   if (decision === "reject" && reason.trim().length < 5) throw new HiringError(400, "Write a reason of at least 5 characters.");
   if (decision === "hire") {
@@ -55,7 +55,8 @@ async function assertAllowed(tx: Database, candidate: Awaited<ReturnType<typeof 
   const [ahead] = await tx
     .select({ id: s.hiringBookings.id })
     .from(s.hiringBookings)
-    .where(and(eq(s.hiringBookings.candidateId, candidate.id), eq(s.hiringBookings.status, "confirmed"), isNotNull(s.hiringBookings.visitId), gt(s.hiringBookings.endTime, new Date())))
+    .where(and(eq(s.hiringBookings.candidateId, candidate.id), eq(s.hiringBookings.status, "confirmed"), isNotNull(s.hiringBookings.visitId), gt(s.hiringBookings.endTime, new Date()),
+      ignore.length ? notInArray(s.hiringBookings.id, ignore) : undefined))
     .limit(1);
   if (ahead) throw new HiringError(409, "This candidate has a visit ahead. Cancel the visit first.");
   // A stale tab must not send the same result twice. A send that failed can go again.
@@ -95,23 +96,31 @@ export async function headRecommendation(db: Database, candidateId: string) {
   return row;
 }
 
-/** The caller holds the candidate row lock. */
+/**
+ * The caller holds the candidate row lock. `styled` replaces the plain Reject text. `ignore` names bookings that may
+ * still be open: the paper test that has just been marked.
+ */
 export async function queueFinalResult(tx: Database, candidate: Awaited<ReturnType<typeof candidateById>>,
-  decision: Decision, reason: string, actor: string, offer: string | null, now: Date) {
+  decision: Decision, reason: string, actor: string, offer: string | null, now: Date,
+  options: { styled?: { subject: string; text: string; html: string }; ignore?: string[] } = {}) {
   if (["stopped", "hired", "rejected"].includes(candidate.stage))
     throw new HiringError(409, "This application is closed.");
-  await assertAllowed(tx, candidate, decision, reason);
+  const ignore = options.ignore ?? [];
+  await assertAllowed(tx, candidate, decision, reason, ignore);
   const [future] = await tx.select({ id: s.hiringBookings.id }).from(s.hiringBookings).where(and(
     eq(s.hiringBookings.candidateId, candidate.id), eq(s.hiringBookings.status, "confirmed"), gt(s.hiringBookings.endTime, now),
+    ignore.length ? notInArray(s.hiringBookings.id, ignore) : undefined,
   )).limit(1);
   if (future) throw new HiringError(409, "Cancel the future appointment first.");
-  const message = resultEmail(decision, candidate.name, candidate.visitSubject ?? candidate.subjects[0] ?? null);
+  const message = decision === "reject" && options.styled
+    ? { subject: options.styled.subject, body: options.styled.text }
+    : resultEmail(decision, candidate.name, candidate.visitSubject ?? candidate.subjects[0] ?? null);
   const [row] = await tx.insert(d).values({
     candidateId: candidate.id, decision, reason, decidedBy: actor, status: "sent",
     emailSubject: message.subject, emailBody: message.body, sentAt: now,
   }).returning({ id: d.id });
   const outboxKey = `${candidate.id}:result:${row.id}`;
-  let html: string | undefined;
+  let html: string | undefined = decision === "reject" ? options.styled?.html : undefined;
   let archivedBody: string | undefined;
   if (decision === "hire") {
     if (!offer) throw new HiringError(409, "Add the offer letter first.");

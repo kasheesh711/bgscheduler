@@ -80,6 +80,7 @@ import { attendanceAccessForEmail } from "@/lib/tutor-attendance/access";
 import { attendanceConfig } from "@/lib/tutor-attendance/data";
 import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
 import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
+import { paperChecks } from "./paper-check";
 import { checkRubric, computeSheet, passRulesFor, RUBRIC_ITEMS, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
 import { HIRING_LINE_URL, hiringEmail, mockPrep, stepIcon, TWO_DAY_STEPS, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
@@ -751,6 +752,7 @@ export async function dashboard(db: Database = getDb()) {
     funnelAudit,
     onsiteRead,
     headDecisionRows,
+    paperCheckRows,
   ] = await Promise.all([
     settings(db),
     db
@@ -826,6 +828,7 @@ export async function dashboard(db: Database = getDb()) {
       .where(eq(s.hiringAudit.action, "head-decision"))
       .orderBy(desc(s.hiringAudit.createdAt))
       .limit(200),
+    paperChecks(db, now),
   ]);
   // The visit screens never see an HR call. The Calls tab reads `calls`.
   const bookings = allBookings.filter(isVisitBooking);
@@ -960,6 +963,12 @@ export async function dashboard(db: Database = getDb()) {
       draftProblem: typeof row.detail.draftProblem === "string" ? row.detail.draftProblem : null,
       at: row.at,
     })),
+    // Near-miss papers sent to a head for a check (Kevin, 24 Nov 2026), with the head's link while open.
+    // `headLabel` and `done.head` are display names; `head` stays the key the Heads screen matches.
+    paperChecks: paperCheckRows.map((check) => {
+      const label = (key: string | null) => (key && contacts.find((c) => c.canonicalKey === key)?.displayName) || key;
+      return { ...check, headLabel: label(check.head), done: check.done && { ...check.done, head: label(check.done.head) ?? check.done.head } };
+    }),
     // The head's page for each mock (scores and decision), as a path. The same link the head gets in LINE.
     briefPaths: briefPaths(bookings, now),
     visitClashes: clashes,
@@ -1755,26 +1764,40 @@ export async function endVisit(tx: Database, rows: VisitRow[], status: "cancelle
  * result that still needs a check, and a mock that has started all leave the mock in place. The stage does not change:
  * a person still sends the Reject result.
  */
+export const lockCandidate = (tx: Database, candidateId: string) =>
+  tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"hiring-candidate:" + candidateId},0))`);
+
+/** A counted paper fail in this subject, read under the caller's `lockCandidate`. Null for anything else. */
+export async function countedFail(tx: Database, candidateId: string, subject: Subject) {
+  const { config } = await settings(tx);
+  const [result] = await tx.select().from(s.hiringPaperResults).where(and(
+    eq(s.hiringPaperResults.candidateId, candidateId), eq(s.hiringPaperResults.subject, subject),
+  ));
+  // A sheet with no question tried is more likely the wrong scan than a fail, so a person decides that one.
+  if (result?.status !== "done" || !result.marks?.questions.some((q) => q.attempted)) return null;
+  const sheet = computeSheet(result.marks, passRulesFor(config, subject));
+  return sheet.result === "not_passed" ? { result, sheet, config } : null;
+}
+
+/** The caller holds `lockCandidate` and has read a counted fail. Returns the mock cancelled and the paper booking it followed. */
+export async function cancelFailedMock(tx: Database, result: { candidateId: string; subject: Subject; bookingId: string | null }, actor: string, now: Date) {
+  const rows = await visitRows(tx, result.candidateId);
+  const mock = rows.find((b) => b.kind === "mock" && b.subjects.includes(result.subject) && b.startTime > now);
+  // The result must be for this visit's paper: that paper has started, and a result tied to another booking is an older one.
+  const exam = mock && rows.find((b) => b.kind === "paper" && b.visitId === mock.visitId);
+  if (!mock || !exam || exam.startTime > now || (result.bookingId && result.bookingId !== exam.id)) return null;
+  await endVisit(tx, [mock], "cancelled", now);
+  await enqueue(tx, headNotice(mock, "cancelled"));
+  await audit(tx, actor, "mock-cancelled-after-fail", result.candidateId, { subject: result.subject, bookingId: mock.id });
+  return { mock, exam };
+}
+
 export async function cancelMockAfterFail(db: Database, candidateId: string, subject: Subject, actor: string, now = new Date()) {
   return withDatabaseTransaction(db, async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"hiring-candidate:" + candidateId},0))`);
+    await lockCandidate(tx, candidateId);
     // Read under the lock, so a mark changed back to a pass a moment ago is seen.
-    const { config } = await settings(tx);
-    const [result] = await tx.select().from(s.hiringPaperResults).where(and(
-      eq(s.hiringPaperResults.candidateId, candidateId), eq(s.hiringPaperResults.subject, subject),
-    ));
-    // A sheet with no question tried is more likely the wrong scan than a fail, so a person decides that one.
-    if (result?.status !== "done" || !result.marks?.questions.some((q) => q.attempted) ||
-      computeSheet(result.marks, passRulesFor(config, subject)).result !== "not_passed") return false;
-    const rows = await visitRows(tx, candidateId);
-    const mock = rows.find((b) => b.kind === "mock" && b.subjects.includes(subject) && b.startTime > now);
-    // The result must be for this visit's paper: that paper has started, and a result tied to another booking is an older one.
-    const exam = mock && rows.find((b) => b.kind === "paper" && b.visitId === mock.visitId);
-    if (!mock || !exam || exam.startTime > now || (result.bookingId && result.bookingId !== exam.id)) return false;
-    await endVisit(tx, [mock], "cancelled", now);
-    await enqueue(tx, headNotice(mock, "cancelled"));
-    await audit(tx, actor, "mock-cancelled-after-fail", candidateId, { subject, bookingId: mock.id });
-    return true;
+    const fail = await countedFail(tx, candidateId, subject);
+    return !!fail && !!(await cancelFailedMock(tx, fail.result, actor, now));
   });
 }
 
