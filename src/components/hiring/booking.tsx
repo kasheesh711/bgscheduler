@@ -75,6 +75,7 @@ export function VisitConfirm({
   onConfirm,
   summary,
   missing,
+  compact,
 }: {
   error: string;
   disabled: boolean;
@@ -83,9 +84,11 @@ export function VisitConfirm({
   summary?: ReactNode;
   /** What still stops the button, said beside it (Fable r3). */
   missing?: string;
+  /** On a phone, the summary and the button share one row (Sol r5). */
+  compact?: boolean;
 }) {
   return (
-    <div className={c.confirm} data-confirm="">
+    <div className={c.confirm} data-confirm="" data-compact={compact || undefined}>
       {summary}
       {missing && !error && <p className={c.note}>Still needed: {missing}.</p>}
       {error && (
@@ -150,7 +153,10 @@ function Picker<T extends { date: string }>({
   initialDate,
   zoneNote = true,
   liveDates = [],
+  currentKey,
 }: {
+  /** The booked time while moving: marked "Current" and not open, so the one move is not spent on it (Opus r5). */
+  currentKey?: string;
   /** The dates the live Wise read covered; only these say "checked live". */
   liveDates?: string[];
   /** "Bangkok time" under the week; said once on a page with two lists. */
@@ -234,8 +240,16 @@ function Picker<T extends { date: string }>({
             <div className={cs.times} data-compact={compact || undefined}>
               {times.map((item) => (
                 <label key={keyOf(item)} className={cs.time}>
-                  <input type="radio" name={legend} className={c.hidden} checked={selected === keyOf(item)} onChange={() => onSelect(item)} />
+                  <input
+                    type="radio"
+                    name={legend}
+                    className={c.hidden}
+                    disabled={keyOf(item) === currentKey}
+                    checked={selected === keyOf(item)}
+                    onChange={() => onSelect(item)}
+                  />
                   {tile(item)}
+                  {keyOf(item) === currentKey && <small className={cs.current}>Current</small>}
                   <Check aria-hidden size={16} className={cs.timeCheck} />
                 </label>
               ))}
@@ -325,7 +339,7 @@ function Checks({
   return (
     <div className={c.checks}>
       {row(onsite, setOnsite, "I will come to the address above.")}
-      {row(commitment, setCommitment, "I can teach onsite on a Saturday or Sunday and on a weekday after 15:00.")}
+      {row(commitment, setCommitment, "I can teach onsite at weekends and on a weekday after 15:00.")}
     </div>
   );
 }
@@ -409,7 +423,7 @@ export function VisitBooking({
         setError("");
       }}
     >
-      Keep my current time
+      {view.twoDay ? "Keep my current times" : "Keep my current time"}
     </button>
   );
   // A "Next steps" link before booking opens: the answers come first.
@@ -434,6 +448,8 @@ export function VisitBooking({
       </>
     );
   const short = (value: string) => part(value, { weekday: "short", day: "numeric", month: "short" });
+  // A move to the same times would use up the one move for nothing (Sol r5).
+  const unchanged = !!view.visit && moving && start === view.visit.examStart && (!view.twoDay || mock?.start === view.visit.mockStart);
   return (
     <>
       <Layout
@@ -493,8 +509,9 @@ export function VisitBooking({
                         <b>{short(view.visit.mockStart)}</b>
                         <small>
                           {time(view.visit.mockStart)}–{time(view.visit.mockEnd)}
-                          {view.visit.head && ` · ${view.visit.head}`} · if you pass
+                          {view.visit.head && ` · ${view.visit.head}`}
                         </small>
+                        <small>If you pass the test</small>
                       </div>
                     )}
                   </div>
@@ -537,6 +554,7 @@ export function VisitBooking({
                 legend={view.visit ? "New test time" : view.twoDay ? "Test time" : "Choose a time"}
                 checkedAt={view.checkedAt}
                 liveDates={view.liveDates}
+                currentKey={moving ? view.visit?.examStart : undefined}
                 items={view.slots}
                 keyOf={(s) => s.examStart}
                 startOf={(s) => s.examStart}
@@ -569,7 +587,7 @@ export function VisitBooking({
                 zoneNote={false}
                 id="mock-start"
                 legend="Mock teaching time"
-                hint="1 hour, if you pass · Monday to Friday, after your test"
+                hint="1 hour · weekdays"
                 checkedAt={null}
                 items={laterMocks}
                 keyOf={(m) => m.start}
@@ -593,9 +611,8 @@ export function VisitBooking({
               {keep}
               <VisitConfirm
                 error={error}
-                // Said once something is chosen; before that, the empty mock section already says what comes first.
-                missing={start ? [view.twoDay && !mock && "a mock teaching time", (!onsite || !commitment) && "both boxes"].filter(Boolean).join(", ") : ""}
-                disabled={busy || !start || (view.twoDay && !mock) || !onsite || !commitment}
+                missing={[!start && "a test time", unchanged && "times that differ from your booking", view.twoDay && !mock && "a mock teaching time", (!onsite || !commitment) && "both boxes"].filter(Boolean).join(", ")}
+                disabled={busy || !start || (view.twoDay && !mock) || !onsite || !commitment || unchanged}
                 label={busy ? "Confirming…" : view.visit ? (view.twoDay ? "Confirm new times" : "Confirm new time") : view.twoDay ? "Confirm both times" : "Confirm visit"}
                 onConfirm={book}
                 summary={
@@ -621,7 +638,8 @@ export function VisitBooking({
           )
         }
       />
-      {!notice && <Help />}
+      {/* While choosing, LINE help sits in the notices and errors; the footer comes back once a visit is booked (Sol r4–r5). */}
+      {!notice && !showForm && <Help />}
     </>
   );
 }

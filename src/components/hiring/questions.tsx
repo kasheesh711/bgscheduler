@@ -69,6 +69,7 @@ function Chips<T extends string>({
   onChange,
   many,
   disabled,
+  off = [],
 }: {
   name: string;
   choices: readonly T[];
@@ -76,6 +77,8 @@ function Chips<T extends string>({
   onChange: (value: T[]) => void;
   many?: boolean;
   disabled: boolean;
+  /** Choices shown but not open, such as a subject with no test now. */
+  off?: readonly T[];
 }) {
   return (
     <div className={s.chips}>
@@ -85,7 +88,7 @@ function Chips<T extends string>({
             className={c.hidden}
             type={many ? "checkbox" : "radio"}
             name={name}
-            disabled={disabled}
+            disabled={disabled || off.includes(choice)}
             checked={value.includes(choice)}
             onChange={(e) => onChange(many ? (e.target.checked ? [...value, choice] : value.filter((v) => v !== choice)) : [choice])}
           />
@@ -192,7 +195,7 @@ export function PreScreenQuestions({
     ["q-experience", "Experience", !!answers.experience],
     ["q-subjects", "Subjects", subjects.length > 0],
     // Always counted, so the total stays 11; asked only when there is a choice (one subject is chosen for the candidate).
-    [testChoices.length > 1 ? "q-test" : "q-subjects", "Test subject", !!test],
+    [subjects.length > 1 ? "q-test" : "q-subjects", "Test subject", !!test],
     ["q-curricula", "Curricula", curricula.length > 0],
     ["q-years", "Year groups", yearGroups.length > 0],
     ["q-hours", "Teaching hours", weekHoursCount(week) > 0],
@@ -261,7 +264,7 @@ export function PreScreenQuestions({
             </p>
             <div className={s.knownActions}>
               <button type="button" aria-pressed={degreeMode === "confirmed"} disabled={busy} onClick={() => setDegreeMode("confirmed")}>
-                <Check aria-hidden size={16} />
+                {degreeMode === "confirmed" && <Check aria-hidden size={16} />}
                 {degreeMode === "confirmed" ? "Confirmed" : "Correct"}
               </button>
               <button
@@ -306,7 +309,7 @@ export function PreScreenQuestions({
         </Q>
       </Section>
       <Section title="What you teach">
-        <Q id="q-subjects" title="Subjects you can teach confidently" hint="Choose all that apply.">
+        <Q id="q-subjects" title="Subjects you can teach confidently">
           <Chips name="subjects" choices={showRest ? [...first, ...rest] : first} value={subjects} onChange={setSubjects} many disabled={busy} />
           {rest.length > 0 && !subjects.some((v) => rest.includes(v)) && (
             <div>
@@ -330,7 +333,7 @@ export function PreScreenQuestions({
               <Upload aria-hidden size={18} />
               <span>
                 <b>{fileName || "Choose a file"}</b>
-                <small>{fileName ? "Uploaded. Choose again to replace it." : "PDF, JPEG or PNG, up to 25 MB"}</small>
+                <small>{fileName ? "Uploaded. Choose again to replace it." : "PDF, JPEG or PNG, max 25 MB"}</small>
               </span>
             </label>
             {fileNote && (
@@ -338,16 +341,23 @@ export function PreScreenQuestions({
                 {fileNote}
               </p>
             )}
-            {text("Or a link to it", portfolio, setPortfolio, 500, "A link that opens without a password", true)}
+            {text("Or a link", portfolio, setPortfolio, 500, "A link that opens without a password", true)}
           </Q>
         )}
-        {testChoices.length > 1 && (
+        {subjects.length > 1 && testChoices.length > 0 && (
           <Q
             id="q-test"
             title="Subject for your test and mock lesson"
-            hint="Choose one. You take the test and teach the mock lesson in this subject."
+            hint={testable.length && testable.length < subjects.length ? "Choose one. Greyed subjects are not tested now." : "Choose one."}
           >
-            <Chips name="testSubject" choices={testChoices} value={chosenTest} onChange={setTestSubject} disabled={busy} />
+            <Chips
+              name="testSubject"
+              choices={subjects}
+              value={test ? [test] : []}
+              onChange={setTestSubject}
+              disabled={busy}
+              off={testable.length ? subjects.filter((v) => !testable.includes(v)) : []}
+            />
           </Q>
         )}
         <Q id="q-curricula" title="Curricula you have taught">
@@ -377,6 +387,7 @@ export function PreScreenQuestions({
       main={questions}
       side={
         <VisitConfirm
+          compact
           error={error}
           disabled={busy}
           label={busy ? "Saving…" : "Save and see times"}

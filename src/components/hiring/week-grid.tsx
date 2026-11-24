@@ -25,9 +25,9 @@ const hh = (hour: number) => `${String(hour).padStart(2, "0")}:00`;
 const range = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => from + i);
 // Quick fills (Mobbin: User Interviews working-hours presets). They only add hours.
 const PRESETS = [
-  { label: "After school", days: [0, 1, 2, 3, 4], hours: range(15, 17), title: "Monday to Friday, 15:00 to 17:00" },
-  { label: "Weeknights", days: [0, 1, 2, 3, 4], hours: range(17, 21), title: "Monday to Friday, 17:00 to 21:00" },
-  { label: "Weekends", days: [5, 6], hours: range(9, 17), title: "Saturday and Sunday, 09:00 to 17:00" },
+  { label: "After school", short: "Mon–Fri 15–17", days: [0, 1, 2, 3, 4], hours: range(15, 17), title: "Monday to Friday, 15:00 to 17:00" },
+  { label: "Weeknights", short: "Mon–Fri 17–21", days: [0, 1, 2, 3, 4], hours: range(17, 21), title: "Monday to Friday, 17:00 to 21:00" },
+  { label: "Weekends", short: "Sat–Sun 09–17", days: [5, 6], hours: range(9, 17), title: "Saturday and Sunday, 09:00 to 17:00" },
 ];
 
 /**
@@ -45,6 +45,8 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   // the week as it was when the drag began.
   const drag = useRef<{ fill: boolean; from: [number, number]; before: WeekHours } | null>(null);
   const [focus, setFocus] = useState<[number, number]>([0, GRID_HOURS[0]]);
+  // The week before the last Clear, for one Undo; any new choice forgets it.
+  const [undo, setUndo] = useState<WeekHours | null>(null);
   const has = (week: WeekHours, d: number, h: number) => week[d].includes(h);
   function paint(cells: [number, number][], fill: boolean) {
     const next = current.current.map((hours, d) => {
@@ -55,6 +57,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
       return [...set].sort((a, b) => a - b);
     });
     current.current = next;
+    setUndo(null);
     onChange(next);
   }
   const cellOf = (el: Element | null) => {
@@ -182,6 +185,8 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
           <button key={p.label} type="button" className={s.preset} aria-label={`Add ${p.label.toLowerCase()}: ${p.title}`} title={p.title} disabled={disabled} onClick={() => preset(p)}>
             <Plus aria-hidden size={14} />
             {p.label}
+            {/* The hours it adds, before the tap (Sol r5). */}
+            <small aria-hidden>{p.short}</small>
           </button>
         ))}
       </div>
@@ -204,7 +209,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
           </span>
         ))}
         {GRID_HOURS.map((h) => (
-          <div key={h} className={s.row}>
+          <div key={h} className={s.row} data-hour={h}>
             <span aria-hidden className={s.hour}>
               {hh(h).slice(0, 2)}
             </span>
@@ -225,13 +230,33 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
             ))}
           </div>
         ))}
+        {/* The end of the last hour, so "17–21" in the readback matches a label (Opus r5). */}
+        <span aria-hidden className={s.hourEnd}>
+          21
+        </span>
       </div>
       <div className={s.readback} aria-live="polite">
         {count > 0 && (
           <p className={s.readline}>
             <span>{readback(value)}</span>
-            <button type="button" className={s.clear} disabled={disabled} onClick={() => onChange(WEEK_DAYS.map(() => []))}>
+            <button
+              type="button"
+              className={s.clear}
+              disabled={disabled}
+              onClick={() => {
+                setUndo(value);
+                onChange(WEEK_DAYS.map(() => []));
+              }}
+            >
               Clear
+            </button>
+          </p>
+        )}
+        {count === 0 && undo && (
+          <p className={s.readline}>
+            <span>Cleared.</span>
+            <button type="button" className={s.clear} disabled={disabled} onClick={() => (onChange(undo), setUndo(null))}>
+              Undo
             </button>
           </p>
         )}

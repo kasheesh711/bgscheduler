@@ -15,6 +15,8 @@
   --serif: var(--font-cormorant), "Cormorant Garamond", Georgia, serif;
   --mono: var(--font-jetbrains-mono), ui-monospace, monospace;
   height: 100%;
+  /* One background however short the content is (Opus r5). */
+  min-height: 100dvh;
   overflow-y: auto;
   background: var(--paper);
   color: var(--ink);
@@ -136,6 +138,7 @@
 }
 /* Inside the head's Hiring screen (embed=1) there is no hero: the sheet starts at the top and uses the pane's width. */
 .page[data-bare] {
+  min-height: 0;
   background: transparent;
 }
 .page[data-bare] .sheet {

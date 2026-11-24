@@ -200,10 +200,15 @@
   font-weight: 600;
   cursor: pointer;
 }
-.knownActions button + button,
-.known[data-ok] .knownActions button {
+/* "Correct" is an outline until tapped; then the card turns green and the button says "Confirmed" (Opus r5). */
+.knownActions button {
   background: transparent;
   color: var(--ink);
+}
+.known[data-ok] .knownActions button[aria-pressed="true"] {
+  border-color: var(--ok);
+  background: var(--ok);
+  color: #fff;
 }
 
 /* Week grid (Mobbin: Bonsai, Calendly, Outlook "tap the time slots"). */
@@ -261,8 +266,10 @@
 .dayHead[data-weekend] {
   color: #b0391a;
 }
+/* Hour labels sit on the line where the hour starts, as in a calendar. */
 .hour {
-  align-self: center;
+  align-self: start;
+  transform: translateY(-7px);
   font-family: var(--mono);
   font-size: 11px;
   color: var(--muted);
@@ -810,4 +817,68 @@
 }
 .time:has(input:checked) .timeCheck {
   display: block;
+}
+
+.preset small {
+  margin-left: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+/* The questions' bar on a phone: count and button on one row. */
+@media (max-width: 1023px) {
+  [data-confirm][data-compact] {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+  [data-confirm][data-compact] > :not(button) {
+    grid-column: 1 / -1;
+  }
+  [data-confirm][data-compact] > :first-child {
+    grid-column: 1;
+  }
+  [data-confirm][data-compact] > button {
+    grid-column: 2;
+    grid-row: 1;
+    width: auto;
+  }
+  [data-confirm][data-compact] .progress {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+}
+
+.hourEnd {
+  grid-column: 1;
+  height: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+  padding-right: 4px;
+  transform: translateY(-9px);
+}
+.current {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.time:has(input:disabled) {
+  border-style: dashed;
+  cursor: not-allowed;
+}
+.time b {
+  white-space: nowrap;
+}
+@media (max-width: 359px) {
+  .time b {
+    font-size: 15px;
+  }
+  .time {
+    padding: 8px 10px;
+  }
 }

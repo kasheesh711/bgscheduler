@@ -103,7 +103,7 @@ describe("VisitBooking", () => {
     expect(html).toContain("&lt;b&gt;Closed&lt;/b&gt;");
     expect(html).not.toContain("Need help?");
     // With no notice, the footer stays.
-    expect(page()).toContain("Need help?");
+    expect(page({ visit: { examStart: slot.examStart, examEnd: slot.examEnd, mockStart: slot.mockStart, mockEnd: slot.mockEnd, head: "Peat" } })).toContain("Need help?");
   });
   it("shows a fallback and the link for an empty list with no notice, never a blank page", () => {
     const html = page({ slots: [], notice: null });
