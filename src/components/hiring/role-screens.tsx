@@ -662,7 +662,6 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     }
   };
   const wide = useWide();
-  // Navigation beside the open page; on a phone a region (changing the element would rebuild the list and drop focus).
   // A score sent in the open page shows in the list when the head comes back to it (not more than once in 30 seconds).
   const loadedAt = useRef(0);
   // "Saved for …" stays under To do until another row opens, so the head sees the save where they started.
@@ -767,7 +766,6 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const [shown, setShown] = useState<HeadItem | null>(null);
   const found = picked ? all.find((item) => item.id === picked) : undefined;
   const keep = shown && (!picked || picked === shown.id) ? all.find((item) => item.id === shown.id) ?? shown : undefined;
-  // On arrival: the first job that needs the head, else the next mock, else the first row.
   // On arrival: a mock in progress (Kevin, 24 Nov 2026), else the first job that needs the head, else the next mock.
   const selected = wide ? found ?? keep ?? (mockNow ? nextItem : undefined) ?? all.find((item) => item.urgent) ?? nextItem ?? all[0] : found;
   if ((selected?.id ?? null) !== (shown?.id ?? null)) setShown(selected ?? null);
