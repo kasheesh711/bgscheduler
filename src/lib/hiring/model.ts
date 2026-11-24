@@ -501,7 +501,8 @@ const ticks = <T extends readonly [string, ...string[]]>(choices: T, message: st
 const written = (question: string) => z.string().trim().min(1, `Answer the question "${question}".`).max(5000);
 export const answersSchema = z
   .object({
-    degree: ticks(ANSWER_CHOICES.degree, "Choose your degree level."),
+    // One choice: "Below Bachelor's" with a higher degree would read as no degree.
+    degree: z.enum(ANSWER_CHOICES.degree),
     field: z.string().trim().min(1, "Write your field of study.").max(200),
     subjects: z.array(subjectSchema).min(1, "Choose at least one subject.").max(SUBJECTS.length),
     testSubject: subjectSchema,
@@ -529,7 +530,6 @@ export const answersToPreScreen = (answers: Answers, now: Date, portfolioFile = 
   portfolio: [answers.portfolio, portfolioFile].filter(Boolean).join(" · "),
   sourceRow: 0,
   submittedAt: now.toISOString(),
-  degree: answers.degree.join(", "),
   subjects: answers.subjects.join(", "),
   curricula: answers.curricula.join(", "),
   yearGroups: answers.yearGroups.join(", "),

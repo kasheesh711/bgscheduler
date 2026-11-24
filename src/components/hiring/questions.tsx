@@ -103,7 +103,7 @@ export function PreScreenQuestions({ token, filePath, reload }: { token: string;
   // A test subject that is no longer ticked is no longer chosen.
   const chosenTest = testSubject.filter((s) => subjects.includes(s));
   const answers = {
-    degree,
+    degree: degree[0],
     field,
     subjects,
     testSubject: chosenTest[0],
@@ -160,8 +160,8 @@ export function PreScreenQuestions({ token, filePath, reload }: { token: string;
   );
   return (
     <>
-      <Group title="Highest degree level" hint="Choose every degree that you have completed.">
-        <Pills name="degree" choices={ANSWER_CHOICES.degree} value={degree} onChange={setDegree} many disabled={busy} />
+      <Group title="Highest degree level" hint="Choose the highest degree that you have completed.">
+        <Pills name="degree" choices={ANSWER_CHOICES.degree} value={degree} onChange={setDegree} disabled={busy} />
       </Group>
       {text("Field of study", field, setField, 200)}
       <Group title="Which subjects can you confidently teach?">

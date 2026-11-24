@@ -27,6 +27,7 @@ import {
   instant,
   isVisitBooking,
   PRE_SCREEN_URL,
+  SUBJECTS,
   portfolioPath,
   answersSchema,
   answersToPreScreen,
@@ -1582,10 +1583,21 @@ const examOf = (rows: VisitRow[]) => rows.find((b) => b.kind === "paper");
 
 /** Stages where a live "Next steps" link books at once: the pre-screen answers never gate booking (Kevin, 24 Nov 2026). */
 const NEXT_STEPS_OPEN = ["pre_screen", "no_reply", "review"];
-/** The answers' visit subject when one is usable, else the highest-ranked CV subject that is hiring and has a head. */
+/**
+ * The answers' visit subject when one is usable. Else, because the answers never gate booking: the subject the
+ * candidate chose or ticked even when a hard stop dropped it, then the CV subjects, then any subject, each time the
+ * highest-ranked one that is hiring and has a head. So a candidate who answered always gets times.
+ */
 function nextStepsSubject(c: Candidate, config: HiringConfig): Subject | null {
-  const headed = (v: Subject) => config.interviewers.some((i) => i.subjects.includes(v));
-  return (c.preScreen && visitSubject(c.preScreen, c.workRightsAnswer, config)) || topHiringSubject(c.subjects.filter(headed), config.subjectPriority);
+  const top = (subjects: readonly Subject[]) =>
+    topHiringSubject(subjects.filter((v) => config.interviewers.some((i) => i.subjects.includes(v))), config.subjectPriority);
+  return (
+    (c.preScreen && visitSubject(c.preScreen, c.workRightsAnswer, config)) ||
+    top(normalizeSubjects(c.preScreen?.testSubject ?? "")) ||
+    top(normalizeSubjects(c.preScreen?.subjects ?? "")) ||
+    top(c.subjects) ||
+    top(SUBJECTS)
+  );
 }
 
 /**

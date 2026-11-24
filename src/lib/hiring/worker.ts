@@ -151,7 +151,8 @@ export async function assessCandidates(
               ...(phase === "pre"
                 ? { preScreenHash: hash, preScreenAssessment: null }
                 : { profileHash: hash, profileAssessment: null }),
-              ...(SELF_SERVED.includes(candidate.stage) ? {} : { reviewNote:
+              // A row already in review keeps its note (a hard stop from the booking page, for example).
+              ...(SELF_SERVED.includes(candidate.stage) || (candidate.stage === "review" && candidate.reviewNote) ? {} : { reviewNote:
                 "AI evidence could not be verified. Review this application before advancing it." }),
               // The visit reminder is tied to the row's revision, so an invited row keeps it.
               revision: candidate.revision + (SELF_SERVED.includes(candidate.stage) ? 0 : 1),

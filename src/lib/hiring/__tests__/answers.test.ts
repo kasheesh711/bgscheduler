@@ -9,7 +9,7 @@ const config = configSchema.parse({
   interviewers: [{ canonicalKey: "Peat", email: "peat@example.com", subjects: ["Mathematics", "Physics"] }],
 });
 const good: Answers = {
-  degree: ["Bachelor's", "Master's"],
+  degree: "Master's",
   field: "Physics",
   subjects: ["Mathematics", "Physics"],
   testSubject: "Physics",
@@ -35,7 +35,7 @@ describe("answersSchema (the questions on the booking page)", () => {
     expect(preScreenSchema.parse(pre)).toMatchObject({
       sourceRow: 0,
       submittedAt: "2026-11-24T05:00:00.000Z",
-      degree: "Bachelor's, Master's",
+      degree: "Master's",
       subjects: "Mathematics, Physics",
       testSubject: "Physics",
       availability: "Weekday Evening (17:00-21:00), Weekend Morning (before 12:00)",
@@ -47,7 +47,7 @@ describe("answersSchema (the questions on the booking page)", () => {
   });
   it("refuses a missing choice, an empty written answer and a value that is not a choice; a short answer is accepted", () => {
     const bad = (patch: object) => answersSchema.safeParse({ ...good, ...patch }).success;
-    expect(bad({ degree: [] })).toBe(false);
+    expect(bad({ degree: undefined })).toBe(false);
     expect(bad({ subjects: [] })).toBe(false);
     expect(bad({ availability: [] })).toBe(false);
     expect(bad({ english: undefined })).toBe(false);
@@ -70,7 +70,7 @@ describe("answersSchema (the questions on the booking page)", () => {
     expect(hardStops(bare, ACCEPTED, normalizeSubjects(bare.subjects), config).stops).toHaveLength(1);
   });
   it("lets every hard stop read the page's own choices", () => {
-    expect(stops({ degree: ["Below Bachelor's"] })).toEqual(["No completed bachelor's degree."]);
+    expect(stops({ degree: "Below Bachelor's" })).toEqual(["No completed bachelor's degree."]);
     expect(stops({ availability: ["Weekday Evening (17:00-21:00)"] })).toEqual(["Needs a weekend day and a weekday after 15:00."]);
     expect(stops({ availability: ["Weekday Morning (before 12:00)", "Weekend Evening (17:00-21:00)"] })).toHaveLength(1);
     // B1 meets no subject. B2 does not meet an English subject.

@@ -944,7 +944,7 @@ describe("Next steps after a good R1 (Kevin, 22 Nov 2026)", () => {
 
 describe("the questions on the booking page (Kevin, 24 Nov 2026)", () => {
   const answers = {
-    degree: ["Bachelor's"],
+    degree: "Bachelor's",
     field: "Mathematics",
     subjects: ["Mathematics"],
     testSubject: "Mathematics",
@@ -989,9 +989,14 @@ describe("the questions on the booking page (Kevin, 24 Nov 2026)", () => {
   });
   it("never gates booking on the answers: a hard stop is a note for staff, and the times still show", async () => {
     const { row, token } = await holder();
-    await answerPreScreen(token, { ...answers, degree: ["Below Bachelor's"] }, db);
+    await answerPreScreen(token, { ...answers, degree: "Below Bachelor's" }, db);
     expect(await candidate(row.id)).toMatchObject({ stage: "review", reviewNote: "No completed bachelor's degree." });
     expect(await visitView(token, db)).toMatchObject({ waiting: null, subject: "Mathematics" });
+    // An English level that drops every ticked subject still gives times, in the subject the candidate chose.
+    const weak = await holder({ subjects: [] });
+    await answerPreScreen(weak.token, { ...answers, english: "Intermediate (B1)" }, db);
+    expect((await candidate(weak.row.id)).stage).toBe("review");
+    expect(await visitView(weak.token, db)).toMatchObject({ waiting: null, subject: "Mathematics" });
     // A work-rights answer that is not accepted is a note too, not a gate.
     const other = await holder({ workRightsAnswer: "I need sponsorship" });
     await answerPreScreen(other.token, answers, db);
