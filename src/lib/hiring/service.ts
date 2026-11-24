@@ -1592,7 +1592,6 @@ export async function answerPreScreen(token: string, value: unknown, db: Databas
   const file = art && (await portfolioUploaded(cap.id))
     ? `Uploaded file: ${new URL(`/api/hiring/portfolio/${cap.id}`, process.env.APP_BASE_URL || "https://bgscheduler.vercel.app")}`
     : "";
-  if (art && !file && !answers.portfolio) throw new HiringError(400, "Upload your Art & Design portfolio, or add a link to it.");
   return withDatabaseTransaction(db, async (tx) => {
     // The lock order is queue, then candidate, as in `inviteToVisit`.
     await lockQueue(tx);
@@ -1600,6 +1599,7 @@ export async function answerPreScreen(token: string, value: unknown, db: Databas
     if (!row) throw new HiringError(404, onLine("This booking link is no longer active."));
     // A second send, or a Google Form answer that came first: the page reloads and shows what is true now.
     if (answersFirst(row, cap) !== "answers") return { opened: false, candidateId: cap.id };
+    if (art && !file && !answers.portfolio) throw new HiringError(400, "Upload your Art & Design portfolio, or add a link to it.");
     const preScreen = answersToPreScreen(answers, now, file);
     const [saved] = await tx
       .update(s.hiringCandidates)

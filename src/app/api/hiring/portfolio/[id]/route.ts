@@ -20,7 +20,8 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
         "X-Robots-Tag": "noindex, nofollow",
         // The file comes from outside, so it gets no scripts and no frame of another site.
         "Content-Security-Policy": "default-src 'none'; frame-ancestors 'self'; sandbox",
-        "Content-Disposition": `inline; filename="portfolio-${id}"`,
+        // A download, because the sandbox rule stops the browser's own PDF viewer.
+        "Content-Disposition": `attachment; filename="portfolio-${id}.${file.extension}"`,
       },
     });
   } catch (error) {

@@ -22,7 +22,8 @@ export function portfolioUploadHandler(request: Request, body: HandleUploadBody,
         maximumSizeInBytes: MAX_PORTFOLIO_BYTES,
         addRandomSuffix: false,
         allowOverwrite: true,
-        validUntil: Date.now() + 5 * 60_000,
+        // Short, so a token taken just before the answers are sent cannot replace the file long after.
+        validUntil: Date.now() + 2 * 60_000,
       };
     },
   });
@@ -38,5 +39,6 @@ export async function readPortfolio(candidateId: string) {
   if (!blob || blob.statusCode !== 200) throw new HiringError(404, "This candidate has no uploaded portfolio.");
   // Only the types the upload allows are served as themselves. Anything else downloads as plain bytes.
   const known = (PORTFOLIO_TYPES as readonly string[]).includes(blob.blob.contentType);
-  return { stream: blob.stream, size: blob.blob.size, contentType: known ? blob.blob.contentType : "application/octet-stream" };
+  const extension = { "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png" }[blob.blob.contentType] ?? "bin";
+  return { stream: blob.stream, size: blob.blob.size, contentType: known ? blob.blob.contentType : "application/octet-stream", extension };
 }

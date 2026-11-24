@@ -32,7 +32,7 @@ it("finds only the exact file, and serves an unknown type as plain bytes", async
   blob.get.mockResolvedValue(null);
   await expect(readPortfolio(id)).rejects.toMatchObject({ status: 404 });
   blob.get.mockResolvedValue({ statusCode: 200, stream: "bytes", blob: { contentType: "image/png", size: 3 } });
-  expect(await readPortfolio(id)).toEqual({ stream: "bytes", size: 3, contentType: "image/png" });
+  expect(await readPortfolio(id)).toEqual({ stream: "bytes", size: 3, contentType: "image/png", extension: "png" });
   blob.get.mockResolvedValue({ statusCode: 200, stream: "bytes", blob: { contentType: "text/html", size: 3 } });
   expect((await readPortfolio(id)).contentType).toBe("application/octet-stream");
   expect(blob.get).toHaveBeenCalledWith(portfolioPath(id), expect.objectContaining({ access: "private" }));
