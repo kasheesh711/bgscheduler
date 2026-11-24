@@ -213,8 +213,10 @@ export function PreScreenQuestions({
   const open = checks.filter((c) => !c[2]);
   async function send() {
     const parsed = answersSchema.safeParse(answers);
-    if (parsed.success && subjects.includes(ART) && !fileName && !portfolio.trim())
+    if (parsed.success && subjects.includes(ART) && !fileName && !portfolio.trim()) {
+      reveal("q-portfolio", true);
       return setError("Upload your Art & Design portfolio, or add a link to it.");
+    }
     if (!parsed.success) {
       // One plain sentence, and the first open question comes into view. A missing single choice has no message of its own.
       const issue = parsed.error.issues[0];
@@ -333,7 +335,7 @@ export function PreScreenQuestions({
           </p>
         )}
         {subjects.includes(ART) && (
-          <Q title="Portfolio" tag="file or link">
+          <Q id="q-portfolio" title="Portfolio" tag="file or link">
             <label className={s.drop}>
               <input
                 className={c.hidden}
@@ -359,7 +361,7 @@ export function PreScreenQuestions({
         {subjects.length > 1 && testChoices.length > 0 && (
           <Q
             id="q-test"
-            title="Your test and mock teaching subject"
+            title="Test and mock teaching subject"
             tag="choose one"
             hint={testable.length && testable.length < subjects.length ? "Greyed: no test now." : undefined}
           >
@@ -384,7 +386,7 @@ export function PreScreenQuestions({
         <Q id="q-hours" title="Tap the hours you can teach, or hold and drag">
           <WeekGrid value={week} onChange={setWeek} disabled={busy} />
         </Q>
-        <Q id="q-weekly" title="Hours you can commit each week">
+        <Q id="q-weekly" title="Weekly hours you can commit">
           <Chips name="weeklyHours" choices={ANSWER_CHOICES.weeklyHours} value={weeklyHours} onChange={setWeeklyHours} disabled={busy} />
         </Q>
       </Section>

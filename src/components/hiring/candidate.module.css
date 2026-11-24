@@ -994,15 +994,23 @@
 /* Week buttons: one tap to any week (Sol r9). */
 .weeks {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
-  gap: 6px;
+  gap: 4px;
+}
+.weeksLabel {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 .dateWeek {
   display: grid;
   justify-items: center;
   align-content: center;
   min-height: 48px;
-  padding: 4px 6px;
+  min-width: 0;
+  padding: 4px 2px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: #fff;

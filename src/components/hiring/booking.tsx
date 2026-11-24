@@ -82,15 +82,29 @@ export function VisitConfirm({
   label: string;
   onConfirm: () => void;
   summary?: ReactNode;
-  /** What still stops the button, said beside it (Fable r3). */
-  missing?: string;
+  /** The next step that still stops the button, and where it is (Fable r3, Sol r10: a link that jumps there). */
+  missing?: [string, string] | null;
   /** On a phone, the summary and the button share one row (Sol r5). */
   compact?: boolean;
 }) {
   return (
     <div className={c.confirm} data-confirm="" data-compact={compact || undefined}>
       {summary}
-      {missing && !error && <p className={c.note}>Next: {missing}.</p>}
+      {missing && !error && (
+        <p className={c.note}>
+          Next:{" "}
+          <a
+            href={`#${missing[1]}`}
+            onClick={(e) => {
+              e.preventDefault();
+              reveal(missing[1], true);
+            }}
+          >
+            {missing[0]}
+          </a>
+          .
+        </p>
+      )}
       {error && (
         <p role="alert" className={c.alert}>
           <Linked text={error} />
@@ -198,7 +212,10 @@ function Picker<T extends { date: string }>({
       {hint && <p className={c.note}>{hint}</p>}
       {/* One button per week, so a later week is one tap away (Sol r9), and the shown week is named. */}
       {weeks.length > 1 ? (
-        <div className={cs.weeks} role="group" aria-label="Week">
+        <div className={cs.weeks} role="group" aria-labelledby={`${id ?? legend}-weeks`} style={{ gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))` }}>
+          <span className={cs.weeksLabel} id={`${id ?? legend}-weeks`}>
+            Week of
+          </span>
           {weeks.map((w) => (
             <button
               key={w}
@@ -208,7 +225,6 @@ function Picker<T extends { date: string }>({
               aria-label={`Week of ${label(w, { day: "numeric", month: "long" })}`}
               onClick={() => setWeek(w)}
             >
-              <span aria-hidden>Week of</span>
               {label(w, { day: "numeric", month: "short" })}
             </button>
           ))}
@@ -335,9 +351,9 @@ function Checks({
   setOnsite: (v: boolean) => void;
   setCommitment: (v: boolean) => void;
 }) {
-  const row = (checked: boolean, set: (v: boolean) => void, text: string) => (
+  const row = (id: string, checked: boolean, set: (v: boolean) => void, text: string) => (
     <label className={c.check}>
-      <input type="checkbox" className={c.hidden} checked={checked} onChange={(e) => set(e.target.checked)} />
+      <input id={id} type="checkbox" className={c.hidden} checked={checked} onChange={(e) => set(e.target.checked)} />
       <span className={c.box} aria-hidden>
         <Check />
       </span>
@@ -346,8 +362,8 @@ function Checks({
   );
   return (
     <div className={c.checks}>
-      {row(onsite, setOnsite, "I will come to this address.")}
-      {row(commitment, setCommitment, "I can teach onsite on weekends and a weekday after 15:00.")}
+      {row("check-address", onsite, setOnsite, "I will come to this address.")}
+      {row("check-hours", commitment, setCommitment, "I can teach onsite on weekends and a weekday after 15:00.")}
     </div>
   );
 }
@@ -450,7 +466,7 @@ export function VisitBooking({
               <>
                 <Steps at={0} />
                 <VisitPlan />
-                <p className={c.note}>Then choose both times. They can be on different days.</p>
+                <p className={c.note}>After these questions, book both times. They can be on different days.</p>
               </>
             }
           />
@@ -598,7 +614,7 @@ export function VisitBooking({
                 <h2 className={c.stepTitle} id="mock-wait">
                   Mock teaching time
                 </h2>
-                <p className={c.note}>1 hour, if you pass. Choose a test time first.</p>
+                <p className={c.note}>1 hour, if you pass.</p>
               </section>
             )}
             {showForm && view.twoDay && slot && (
@@ -641,7 +657,19 @@ export function VisitBooking({
               <VisitConfirm
                 error={error}
                 // One next step at a time (Sol r9).
-                missing={[!start && "choose a test time", unchanged && "choose times that differ from your booking", view.twoDay && !mock && "choose a mock teaching time", !onsite && !commitment ? "tick both boxes" : !onsite ? "tick the address box" : !commitment && "tick the teaching hours box"].filter(Boolean)[0] || ""}
+                missing={
+                  (
+                    [
+                      [!start, "choose a test time", "times-start"],
+                      [unchanged, "choose times that differ from your booking", "times-start"],
+                      [view.twoDay && !mock, "choose a mock teaching time", "mock-start"],
+                      [!onsite, "tick the address box", "check-address"],
+                      [!commitment, "tick the teaching hours box", "check-hours"],
+                    ] as [boolean, string, string][]
+                  )
+                    .filter(([open]) => open)
+                    .map(([, text, id]) => [text, id] as [string, string])[0] ?? null
+                }
                 disabled={busy || !start || (view.twoDay && !mock) || !onsite || !commitment || unchanged}
                 label={busy ? "Confirming…" : view.visit ? (view.twoDay ? "Confirm new times" : "Confirm new time") : view.twoDay ? "Confirm both times" : "Confirm visit"}
                 onConfirm={book}
@@ -731,6 +759,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
         setMoving(false);
         setStart("");
         setError("");
+        reveal("move-call", true);
       }}
     >
       Keep my current time
@@ -773,7 +802,16 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
           {view.canMove && !moving && (
             <div className={c.move}>
               <p className={c.note}>You can move this {appointment} once, before it starts.</p>
-              <button type="button" className={c.ghost} disabled={busy || !view.slots.length} onClick={() => setMoving(true)}>
+              <button
+                id="move-call"
+                type="button"
+                className={c.ghost}
+                disabled={busy || !view.slots.length}
+                onClick={() => {
+                  setMoving(true);
+                  reveal("call-times", true);
+                }}
+              >
                 Move this {appointment}
               </button>
               {!view.slots.length && <p className={c.note}>You cannot move it now, because no other time is open.</p>}
@@ -794,6 +832,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
         <>
           <Picker
             compact
+            id="call-times"
             legend={view.call ? "Choose a new time" : "Choose a time"}
             checkedAt={null}
             items={view.slots}
@@ -806,6 +845,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
           {!contract && <label className={c.field}>
             <span className={c.stepTitle}>Your phone number</span>
             <input
+              id="call-phone"
               className={c.input}
               type="tel"
               inputMode="tel"
@@ -821,7 +861,9 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
           {keep}
           <VisitConfirm
             error={error}
-            missing={[!start && "choose a time", !phoneOk && "add your phone number"].filter(Boolean)[0] || ""}
+            missing={
+              !start ? ["choose a time", "call-times"] : !phoneOk ? [phone.trim() ? "check your phone number, with the country code" : "add your phone number", "call-phone"] : null
+            }
             disabled={busy || !start || !phoneOk}
             label={busy ? "Confirming…" : view.call ? "Confirm new time" : `Confirm ${appointment}`}
             onConfirm={book}

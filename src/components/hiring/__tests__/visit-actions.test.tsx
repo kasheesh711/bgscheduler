@@ -70,7 +70,7 @@ describe("VisitBooking", () => {
     expect(html).toContain("Test time");
     expect(html).toContain("Confirm both times");
     // The mock teaching list opens after a test time is chosen; until then its section says what comes first.
-    expect(html).toContain("Choose a test time first.");
+    expect(html).toContain("1 hour, if you pass.");
     expect(html).not.toContain('id="mock-start"');
     expect(page({ twoDay: true, waiting: "answers", formUrl: "https://forms.gle/x", slots: [], enabled: false, subject: "", notice: "Answer first." })).toContain("Save and see times");
   });
