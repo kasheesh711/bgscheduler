@@ -128,6 +128,7 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
   const [config, setConfig] = useState<HiringConfig | null>(null);
   const [configRevision, setConfigRevision] = useState(0);
   const [error, setError] = useState("");
+  const [retrying, setRetrying] = useState(false);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const search = useSearchParams();
@@ -458,13 +459,18 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
         error ? (
           view === "heads" ? (
             // A head cannot check the setup, so the list offers a retry and names who to ask (Sol review, round 18).
+            // The button stays while it retries, so focus is not lost; on success focus moves to the list (Sol review, round 20).
             <div role="alert" className={css.loading}>
               <p>Could not load your hiring list.</p>
-              <button type="button" className={css.primary} onClick={() => {
-                setError("");
-                load(true).catch((e) => setError(e.message));
+              <button type="button" className={css.primary} aria-disabled={retrying || undefined} onClick={() => {
+                if (retrying) return;
+                setRetrying(true);
+                load(true).then(() => {
+                  setError("");
+                  window.requestAnimationFrame(() => document.getElementById("hiring-list")?.focus());
+                }).catch((e) => setError(e.message)).finally(() => setRetrying(false));
               }}>Try again</button>
-              <p>If it fails again, ask BeGifted admin.</p>
+              <p role="status">{retrying ? "Loading your hiring list…" : "If it fails again, ask BeGifted admin."}</p>
             </div>
           ) : (
             <p role="status" className={css.loading} hidden={view === "capacity"}>

@@ -751,7 +751,9 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   // To do in the order of the work: papers to re-mark, then mocks to score; Gift's packets follow under Final review.
   const actionVisits = ended.filter((visit) => visit.needsAction && !visit.checkingScores).map((visit) => visitItem(visit, today));
   const checking = ended.filter((visit) => visit.needsAction && visit.checkingScores).map((visit) => visitItem(visit, today));
-  const nextItem = nextMock ? visitItem(nextMock, today, mockNow) : undefined;
+  // The next mock says what to do before it, where the head scans the list (Sol review, round 20).
+  const nextRow = nextMock ? visitItem(nextMock, today, mockNow) : undefined;
+  const nextItem = nextRow && !mockNow && nextRow.href && !nextRow.note ? { ...nextRow, note: "Prepare" } : nextRow;
   // A signed review leaves Final review at once, before the reload drops it, and stays under Just finished for this visit.
   const signedIds = new Set(signedItems.map((item) => item.id));
   const unsigned = reviews.filter((item) => !signedIds.has(item.id));
@@ -838,7 +840,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   return (
     <div className={r.workspace} data-heads-review="" data-empty={key && fixedHead && !all.length ? "" : undefined}>
       {/* The list is navigation at every width; on a phone the open row's form is a labelled region inside it. */}
-      <nav className={r.rail} aria-label={name ? `${nickname(name)}'s hiring list` : "Hiring list"}>
+      <nav id="hiring-list" tabIndex={-1} className={r.rail} aria-label={name ? `${nickname(name)}'s hiring list` : "Hiring list"}>
         {!fixedHead && (
           <label className={r.headMenu}>
             Head

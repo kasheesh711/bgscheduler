@@ -354,7 +354,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                   (next.closest("[data-score-row]") ?? next).scrollIntoView({ block: "center" });
                   next.focus({ preventScroll: true });
                 }}>Next unscored</button>}
-                {lastSent && sentCopy.current && <button type="button" className={b.moreBelow} onClick={discard}>Discard changes</button>}
+                {lastSent && sentCopy.current && <button type="button" className={b.discard} onClick={discard}>Discard changes</button>}
               </div>
               <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
             </div>

@@ -1276,6 +1276,20 @@ try {
     await page.getByText("Not open yet. Recommend after the mock ends.").waitFor();
     assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Check recommendation");
   });
+  await check("Discard changes shows on a phone with a full touch target", async () => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${origin}/hiring/brief/sample-token?brief=open`);
+    const sliders = page.getByRole("slider");
+    await sliders.first().waitFor();
+    for (let i = 0, n = await sliders.count(); i < n; i += 1) await sliders.nth(i).fill("7");
+    await page.getByText("Yes", { exact: true }).click();
+    await page.getByRole("button", { name: "Send scores" }).click();
+    await page.getByRole("button", { name: "Edit scores" }).click();
+    await sliders.nth(0).fill("9");
+    const discard = page.getByRole("button", { name: "Discard changes" });
+    await discard.waitFor();
+    assert.ok((await discard.boundingBox()).height >= 44, "Discard changes is smaller than 44 px");
+  });
   await check("the paper check's comment jump puts focus in the comment field", async () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`${origin}/?roles=1&me=Ek`);
