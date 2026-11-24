@@ -2,7 +2,8 @@ export type HighSchoolRecord = { name: string; aliases: string[]; tier: 1 | 2 };
 /**
  * International schools in Bangkok and the nearby provinces that teach secondary years (ISAT member list, 24 Nov 2026,
  * plus schools from public sources). Tier 1 is a draft of the top group for the owner to edit in Hiring rules; tier 2 is
- * each other listed school. Bare acronyms that other schools share (ISB, KIS, RIS) are left out on purpose.
+ * each other listed school. Bare acronyms that other schools share (ISB, KIS, RIS) are left out on purpose. A listed name
+ * matches as written, so add a name with no city only when no school in a different city has it.
  */
 export const BANGKOK_INTERNATIONAL_SCHOOLS: HighSchoolRecord[] = (
   [
@@ -14,9 +15,9 @@ export const BANGKOK_INTERNATIONAL_SCHOOLS: HighSchoolRecord[] = (
   ["KIS International School",1,["KIS Bangkok","KIS International School Bangkok"]],
   ["Ruamrudee International School",1,["Ruamrudee","Ruam Rudee International School","RIS Bangkok"]],
   ["St Andrews International School Bangkok",1,["St. Andrews International School Bangkok","St Andrews Bangkok","St Andrews Sukhumvit 71","Saint Andrews International School Bangkok"]],
-  ["Wellington College International School Bangkok",1,["Wellington College Bangkok","Wellington Bangkok"]],
-  ["King's College International School Bangkok",1,["King's College Bangkok","Kings College Bangkok","King's Bangkok","Kings Bangkok"]],
-  ["Brighton College International School Bangkok",1,["Brighton College Bangkok","Brighton Bangkok","Brighton College Bangkok Krungthep Kreetha"]],
+  ["Wellington College International School Bangkok",1,["Wellington College International School","Wellington College Bangkok","Wellington Bangkok"]],
+  ["King's College International School Bangkok",1,["King's College International School","Kings College International School","King's College Bangkok","Kings College Bangkok","King's Bangkok","Kings Bangkok"]],
+  ["Brighton College International School Bangkok",1,["Brighton College International School","Brighton College Bangkok","Brighton Bangkok","Brighton College Bangkok Krungthep Kreetha"]],
   ["Regent's International School Bangkok",1,["Regent's Bangkok","Regents International School Bangkok","The Regent's School Bangkok","Regent's International School Bangkok - Rama 9"]],
   ["Concordian International School",1,["Concordian","Concordian Bangkok"]],
   ["Denla British International School",1,["Denla British School","Denla","DBS Denla","DBS Bangkok"]],

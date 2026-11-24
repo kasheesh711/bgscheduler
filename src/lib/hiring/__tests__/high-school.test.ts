@@ -20,6 +20,11 @@ describe("high-school score part", () => {
   });
   it("gives nothing for an unlisted school, a longer branch name, or a row with no schools", () => {
     expect(highSchoolMatch([{ name: "Harrow School" }], config.highSchools)).toBeNull();
+    for (const name of ["International School", "ISB", "KIS", "King's College", "St Andrews", "Harrow", "Prep", "Garden International School", "Singapore International School"])
+      expect(highSchoolMatch([{ name }], config.highSchools), name).toBeNull();
+    expect(highSchoolMatch([{ name: "Harrow International School (Bangkok, Thailand)" }], config.highSchools)?.tier).toBe(1);
+    expect(highSchoolMatch([{ name: "The International School Bangkok" }], config.highSchools)?.tier).toBe(1);
+    expect(highSchoolMatch([{ name: "สาธิตจุฬา" }], config.highSchools)?.tier).toBe(1);
     expect(highSchoolMatch([{ name: "Triam Udom Suksa Pattanakarn School" }], config.highSchools)).toBeNull();
     expect(highSchoolFraction({}, config)).toBe(0);
     expect(highSchoolFraction(null, {})).toBe(0);

@@ -128,19 +128,26 @@ export const validatePreScreenAssessment = (
 ): PreScreenAssessment =>
   checkEvidence(preScreenAssessmentSchema.parse(value), source, 6, written);
 type Scored = { criteria: { id: string; result: CriterionResult }[] };
-const schoolKey = (value: string) =>
-  ` ${normal(value).replace(/[^\p{L}\p{N}]+/gu, " ")} `.replace(/ (the|bangkok|thailand)(?= )/g, "").trim();
+// Thai vowel and tone marks (\p{M}) are part of a name.
+const schoolKey = (value: string) => normal(value).replace(/[^\p{L}\p{N}\p{M}]+/gu, " ").trim().replace(/^the /, "");
 /**
  * The best listed high school the candidate attended, or null. A name counts only when it equals a listed name or
- * alias; the words "the", "Bangkok" and "Thailand" are ignored, so "Harrow International School" matches its Bangkok row.
- * shortcut: a same-named school in another city also matches (for example Harrow Hong Kong). Add the city to the
- * extracted name if this gives wrong points.
+ * other name as written in the list. The CV name is also tried without "the", "Bangkok" and "Thailand", so
+ * "Harrow International School (Bangkok, Thailand)" matches the listed "Harrow International School". The listed names
+ * keep every word: "International School Bangkok" never becomes "International School".
+ * shortcut: a listed name with no city also matches that school in another city (for example Harrow Hong Kong).
  */
 export function highSchoolMatch(
   schools: { name: string }[] | undefined,
   catalog: HiringConfig["highSchools"] | undefined,
 ): { name: string; tier: 1 | 2; fraction: number } | null {
-  const attended = new Set((schools ?? []).map((s) => schoolKey(s.name)));
+  const attended = new Set(
+    (schools ?? []).flatMap((s) => {
+      const key = schoolKey(s.name);
+      return [key, ` ${key} `.replace(/ (the|bangkok|thailand)(?= )/g, "").trim()];
+    }),
+  );
+  attended.delete("");
   const found = (catalog ?? [])
     .filter((row) => [row.name, ...row.aliases].some((n) => attended.has(schoolKey(n))))
     .sort((a, b) => a.tier - b.tier)[0];
