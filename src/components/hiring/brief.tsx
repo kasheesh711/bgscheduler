@@ -50,7 +50,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   const [doc, setDoc] = useState<Doc>("resume");
   const [paperOpened, setPaperOpened] = useState(false);
   const unsent = lastSent !== null && lastSent.editCount !== editCount;
-  const blocked = brief.form === "closed" && !brief.recommendationReady && !decision;
+  const blocked = brief.form === "closed" && brief.mockEnded && !brief.recommendationReady && !decision;
   const earlyRecommendation = brief.form === "closed" && brief.recommendationReady;
   const paperUrl = resumeUrl.replace(/resume$/, "paper");
   const runtime = pdfRuntime ?? resumeUrl.replace(/resume$/, "pdf-runtime");
@@ -75,7 +75,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
       />
     </section>
   );
-  const wait = brief.form === "wait" && !decision;
+  const wait = !brief.mockEnded && !decision;
   const fileUrl = doc === "resume" && brief.resume ? resumeUrl : doc === "paper" ? paperUrl : null;
   return (
     <>
@@ -119,18 +119,17 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
       </header>
       <div className={b.cols}>
         <div className={b.sheet}>
-          {(wait || blocked) && (
+          {blocked && (
             <div className={`${b.panel} ${c.field}`}>
-              <p role="status">{wait ? "Scores open after the mock."
-                : brief.recommendationBlock === "checking" ? "Scores are being checked."
+              <p role="status">{brief.recommendationBlock === "checking" ? "Scores are being checked."
                 : "Ask BeGifted admin to check the scores."}</p>
-              {(wait || brief.recommendationBlock === "checking") && (
+              {brief.recommendationBlock === "checking" && (
                 <button type="button" className={c.button} onClick={() => window.location.reload()}>Check again</button>
               )}
             </div>
           )}
           {earlyRecommendation && recommendation}
-          {!wait && !blocked && (
+          {!blocked && (
             <section id="scores" className={b.panel} tabIndex={-1}>
               <h2 className="sr-only">Mock lesson scores</h2>
               <BriefRubric
@@ -147,7 +146,13 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
               />
             </section>
           )}
-          {brief.form !== "wait" && !blocked && !earlyRecommendation && recommendation}
+          {brief.mockEnded && !blocked && !earlyRecommendation && recommendation}
+          {wait && (
+            <div className={`${b.panel} ${c.field}`}>
+              <p role="status">Your recommendation opens when the mock ends.</p>
+              <button type="button" className={c.button} onClick={() => window.location.reload()}>Check again</button>
+            </div>
+          )}
         </div>
         <aside className={`${b.panel} ${b.docs}`} aria-label="Candidate files">
           <div className={b.tabs}>
