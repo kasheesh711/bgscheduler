@@ -49,7 +49,7 @@ describe("VisitBooking", () => {
     for (const question of ["Highest degree", "Field of study", "Subjects you teach confidently", "English level", "When you can teach onsite", "Why do you want to tutor with BeGifted?", "Next: Highest degree"])
       expect(html).toContain(question);
     expect(html).toContain("1 hour, only if you pass");
-    expect(html).not.toContain("I will come to");
+    expect(html).not.toContain("I can attend at this address");
   });
   it("shows the résumé's degree as one line to confirm, in place of the two degree questions", () => {
     const html = page({ waiting: "answers", slots: [], enabled: false, subject: "", knownDegree: { degree: "Bachelor's", field: "English" } });
@@ -80,7 +80,7 @@ describe("VisitBooking", () => {
     expect(html).toContain("10:00");
     expect(html).toContain("10:00–13:00");
     expect(html).toContain("with mock teaching");
-    expect(html).toContain("I will come to");
+    expect(html).toContain("I can attend at this address");
     expect(html).toContain("I can teach onsite");
     expect(html).not.toContain("Peat");
     // The live-check line shows only when the list came from a live Wise read.
@@ -93,7 +93,7 @@ describe("VisitBooking", () => {
     const html = page({ slots: [], notice: `Times cannot be shown. Contact BeGifted on LINE: ${LINE}` });
     expect(html).toContain("Times cannot be shown");
     expect(html).toContain(`href="${LINE}"`);
-    expect(html).not.toContain("I will come to");
+    expect(html).not.toContain("I can attend at this address");
     expect(html).not.toContain("Confirm visit");
   });
   it("makes the address in a notice a real link, with no second link in the footer, and renders no HTML from the text", () => {
@@ -130,7 +130,7 @@ describe("VisitBooking", () => {
     expect(html).toContain("Peat");
     expect(html).toContain("Move this visit");
     // The times to choose stay hidden until the candidate presses Move.
-    expect(html).not.toContain("I will come to");
+    expect(html).not.toContain("I can attend at this address");
     expect(html).not.toContain("You cannot move it now");
   });
   it("does not open Move when the only open time is the booked one", () => {

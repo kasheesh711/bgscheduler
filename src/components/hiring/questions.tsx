@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { upload } from "@vercel/blob/client";
-import { Check, ChevronDown, Circle, CircleDot, Pencil, Upload } from "lucide-react";
+import { Check, ChevronDown, Circle, CircleDot, Pencil, Square, SquareCheck, Upload } from "lucide-react";
 import { ANSWER_CHOICES, answersSchema, MAX_PORTFOLIO_BYTES, PORTFOLIO_TYPES, SUBJECTS, type Subject } from "@/lib/hiring/model";
 import type { KnownDegree } from "@/lib/hiring/profile-degree";
 import { emptyWeek, weekHoursCount, type WeekHours } from "@/lib/hiring/week-hours";
@@ -97,8 +97,8 @@ function Chips<T extends string>({
             checked={value.includes(choice)}
             onChange={(e) => onChange(many ? (e.target.checked ? [...value, choice] : value.filter((v) => v !== choice)) : [choice])}
           />
-          {/* Checks for "all that apply", radio dots for "choose one" (Opus r18). */}
-          {many ? <Check aria-hidden size={14} /> : value.includes(choice) ? <CircleDot aria-hidden size={14} /> : <Circle aria-hidden size={14} />}
+          {/* Boxes for "all that apply", radio dots for "choose one"; empty until chosen (Opus r18, Sol r22). */}
+          {value.includes(choice) ? many ? <SquareCheck aria-hidden size={14} /> : <CircleDot aria-hidden size={14} /> : many ? <Square aria-hidden size={14} /> : <Circle aria-hidden size={14} />}
           {SHORT[choice] ?? choice}
         </label>
       ))}
@@ -325,7 +325,8 @@ export function PreScreenQuestions({
       <Section title="What you teach">
         <Q id="q-subjects" title="Subjects you teach confidently" tag="choose all">
           <Chips name="subjects" choices={shownSubjects} value={subjects} onChange={setSubjects} many disabled={busy} />
-          {rest.length > 0 && (showRest || rest.some((v) => !subjects.includes(v))) && (
+          {/* Only while some subject is still hidden or could be hidden (Sol r22). */}
+          {rest.some((v) => !subjects.includes(v)) && (
             <div>
               <button type="button" className={s.more} aria-expanded={showRest} onClick={() => setMoreOpen(!showRest)}>
                 <ChevronDown aria-hidden size={16} style={showRest ? { transform: "rotate(180deg)" } : undefined} />

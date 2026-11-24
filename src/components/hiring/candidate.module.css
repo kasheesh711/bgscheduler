@@ -1278,3 +1278,14 @@
   text-transform: none;
   color: inherit;
 }
+
+/* The address under "I can attend at this address." (Sol r22). */
+.place {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.chip:not(:has(input:checked)) svg {
+  color: #8f8571;
+}

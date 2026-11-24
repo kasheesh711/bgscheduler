@@ -261,7 +261,7 @@ function Picker<T extends { date: string }>({
               type="button"
               className={cs.dateWeek}
               aria-pressed={w === week}
-              aria-label={`Week of ${label(w, { day: "numeric", month: "long" })}`}
+              aria-label={`${label(w, { day: "numeric", month: "long" })} to ${label(plusDays(w, 6), { day: "numeric", month: "long" })}`}
               onClick={() => {
                 setWeek(w);
                 setPicked(firstOpen(w) ?? "");
@@ -457,13 +457,14 @@ function Checks({
       </span>
       <span>
         {text}
-        {note && <small className={cs.fromAnswers}>{note}</small>}
+        {note && <small className={place && note === place ? cs.place : cs.fromAnswers}>{note}</small>}
       </span>
     </label>
   );
   return (
     <div className={c.checks}>
-      {row("check-address", onsite, setOnsite, `I will come to ${place ?? "this address"}.`)}
+      {/* The address is said once on the Times page, here, where the candidate confirms it (Sol r22, Opus r20). */}
+      {row("check-address", onsite, setOnsite, "I can attend at this address.", place)}
       {/* Saved answers that already meet the rule need no second confirmation: the line under the boxes says so (Sol r18). */}
       {!fromAnswers && row("check-hours", commitment, setCommitment, "I can teach onsite on a Saturday or Sunday and a weekday at or after 15:00.")}
     </div>
@@ -595,9 +596,12 @@ export function VisitBooking({
               <Fact icon={<BookOpen aria-hidden />} label="Subject">
                 <span className={c.subject}>{view.subject}</span>
               </Fact>
-              <Fact icon={<MapPin aria-hidden />} label="Where">
-                {view.location}
-              </Fact>
+              {/* While choosing times the address sits in the attendance box instead (Sol r22). */}
+              {!showForm && (
+                <Fact icon={<MapPin aria-hidden />} label="Where">
+                  {view.location}
+                </Fact>
+              )}
               {!view.twoDay && (
                 <p className={c.note}>
                   {view.paired ? "We grade your test in 5 to 10 minutes. If you pass, the mock teaching interview follows on the same day." : "We will contact you after we grade your paper."} All
@@ -679,12 +683,14 @@ export function VisitBooking({
             )}
             {/* The list can empty while the candidate is moving: the way back stays on the page. */}
             {!showForm && keep}
+            {/* Two times on the ticket: either one can change (Sol r22). */}
+            {showForm && moving && view.twoDay && <p className={c.note}>Change one or both times.</p>}
             {showForm && (
               <Picker
                 id="times-start"
                 hint={view.twoDay ? "2 hours" : undefined}
                 initialDate={view.visit ? part(view.visit.examStart, { year: "numeric", month: "2-digit", day: "2-digit" }).split("/").reverse().join("-") : undefined}
-                legend={view.visit ? "New test time" : view.twoDay ? "Test time" : "Choose a time"}
+                legend={view.twoDay ? "Test time" : view.visit ? "New test time" : "Choose a time"}
                 checkedAt={view.checkedAt}
                 liveDates={view.liveDates}
                 currentKey={moving ? view.visit?.examStart : undefined}
@@ -718,7 +724,16 @@ export function VisitBooking({
                 <p className={c.note}>1 hour, if you pass. Shown after you choose a test time.</p>
               </section>
             )}
-            {showForm && view.twoDay && slot && (
+            {/* A test with no mock time after it: say so where the mock list would be, so "Next" has a place (Sol r22). */}
+            {showForm && view.twoDay && slot && !laterMocks.length && (
+              <section className={c.step} id="mock-start" tabIndex={-1} aria-labelledby="mock-none">
+                <h2 className={c.stepTitle} id="mock-none">
+                  Mock teaching time
+                </h2>
+                <p className={c.note}>No mock teaching time after this test. Choose an earlier test time.</p>
+              </section>
+            )}
+            {showForm && view.twoDay && slot && laterMocks.length > 0 && (
               <Picker
                 zoneNote={false}
                 id="mock-start"
@@ -726,7 +741,7 @@ export function VisitBooking({
                 liveDates={view.liveDates}
                 currentKey={moving ? (view.visit?.mockStart ?? undefined) : undefined}
                 currentOpen
-                legend={moving ? "New mock teaching time" : "Mock teaching time"}
+                legend="Mock teaching time"
                 hint="1 hour, if you pass."
                 items={laterMocks}
                 keyOf={(m) => m.start}

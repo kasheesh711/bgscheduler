@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { Check, Plus } from "lucide-react";
+import { Check, Circle, Plus } from "lucide-react";
 import { GRID_HOURS, hourRanges, WEEK_DAYS, weekHoursCount, type WeekHours } from "@/lib/hiring/week-hours";
 import s from "./candidate.module.css";
 
@@ -194,7 +194,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   return (
     <div className={s.week}>
       {/* The rule, fixed above the grid; the live ticks stay under it, where their changes move nothing (Sol r18). */}
-      <p className={s.hint}>Tap, or hold and drag. Include a weekend hour and a weekday hour at or after 15:00. Bangkok time.</p>
+      <p className={s.hint}>Tap, or hold and drag. Bangkok time.</p>
       <div className={s.presets} role="group" aria-label="Quick fill">
         {PRESETS.map((p) => {
           // Add only; a check once every hour of it is in the week (Sol r6).
@@ -312,14 +312,14 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
         )}
         <p className={s.rules}>
           {/* What the booking asks for: a note to add, then a tick once the grid has it (Sol r2: not radio-like). */}
-          {/* Status, not actions: a muted tick until met, then green (Opus r6, r20). */}
+          {/* Says what to add until each rule is met, then a green tick (Sol r22); inside the live readback, so it is announced. */}
           <span data-ok={weekend || undefined}>
-            <Check aria-hidden size={14} />
-            Weekend
+            {weekend ? <Check aria-hidden size={14} /> : <Circle aria-hidden size={14} />}
+            {weekend ? "Weekend hour added" : "Add a weekend hour"}
           </span>
           <span data-ok={late || undefined}>
-            <Check aria-hidden size={14} />
-            Weekday from 15:00
+            {late ? <Check aria-hidden size={14} /> : <Circle aria-hidden size={14} />}
+            {late ? "Weekday hour from 15:00 added" : "Add a weekday hour from 15:00"}
           </span>
         </p>
       </div>
