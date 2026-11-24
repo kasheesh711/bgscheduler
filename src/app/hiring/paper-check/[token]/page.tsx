@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { BookingShell } from "@/components/hiring/booking";
-import { BriefGone, BriefLoading, BriefShell, ScheduleLink } from "@/components/hiring/brief";
+import { BriefGone, BriefLoading, ScheduleLink } from "@/components/hiring/brief";
 import { PaperCheck } from "@/components/hiring/paper-check";
 import { HiringError } from "@/lib/hiring/model";
 import { paperCheckView } from "@/lib/hiring/paper-check";
@@ -41,7 +41,7 @@ async function Shell(props: Props) {
 
 export default function Page(props: Props) {
   return (
-    <Suspense fallback={<BriefShell><BriefLoading /></BriefShell>}>
+    <Suspense fallback={<BookingShell kind="paper-check"><BriefLoading /></BookingShell>}>
       <Shell {...props} />
     </Suspense>
   );

@@ -594,8 +594,40 @@
   line-height: 1;
   text-align: center;
 }
-.scale {
-  grid-template-columns: 1fr 2fr 3fr 3fr 2fr;
+/* The band names on one wrapping line: each carries its score, so they need no column grid. Hidden on a phone, as before. */
+@media (min-width: 700px) {
+  .scale {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 2px 16px;
+  }
+  .scale > span {
+    white-space: nowrap;
+  }
 }
 .scale { align-items: end; }
 .top[data-compact] .name { overflow-wrap: anywhere; }
+[data-bare] .tabs { flex-wrap: wrap; }
+/* Below a 1000px pane the short header stacks, and the files panel never grows past its column. */
+.top[data-compact] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.docs {
+  grid-template-columns: minmax(0, 1fr);
+}
+.tabs {
+  flex-wrap: wrap;
+}
+@media (min-width: 1000px) {
+  .top[data-compact] {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+}
+/* A wide pane puts the item name beside its slider, so more items fit on the first screen. */
+@media (min-width: 900px) {
+  [data-bare] .row {
+    grid-template-columns: minmax(140px, 180px) minmax(0, 1fr);
+  }
+}

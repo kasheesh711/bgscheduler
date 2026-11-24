@@ -395,11 +395,6 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       )}
       {awaitingSignOff && (packet ? (
         <>
-          <label className={css.fieldLabel}>
-            <span id={rejectHint}>Rejection note (5+ characters)</span>
-            <textarea className={css.textarea} rows={2} maxLength={2000} value={reason} readOnly={busy === "sign"} disabled={!viewed}
-              onChange={(event) => setReason(event.target.value)} />
-          </label>
           <div className={css.signOffActions}>
             <div>
               <button type="button" ref={approveButton} className={css.primary} disabled={signOffDisabled || !!approveBlock} aria-describedby={[pauseReason, instruction, approveReason].filter(Boolean).join(" ")} onClick={() => {
@@ -408,7 +403,13 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
               }}>Approve and send offer</button>
               {approveReason && <p id={approveReason} className={css.inspectorMeta}>{approveBlock}</p>}
             </div>
-            <div>
+            {/* The note belongs to Reject, so it sits with it, below Approve. */}
+            <div className={css.rejectGroup}>
+              <label className={css.fieldLabel}>
+                <span id={rejectHint}>Rejection note (5+ characters)</span>
+                <textarea className={css.textarea} rows={2} maxLength={2000} value={reason} readOnly={busy === "sign"} disabled={!viewed}
+                  onChange={(event) => setReason(event.target.value)} />
+              </label>
               <button type="button" className={css.secondary} disabled={signOffDisabled || reason.trim().length < 5 || !!rejectBlock} aria-describedby={[pauseReason, instruction, rejectReason, rejectHint].filter(Boolean).join(" ")} onClick={() => {
                 if (window.confirm("Reject this application and inform the candidate?"))
                   void act({ action: "sign", packetId: packet.id, decision: "reject", reason });

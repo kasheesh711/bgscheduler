@@ -136,7 +136,16 @@ if (/roles=1|pipeline=1/.test(location.search)) {
   }
 }
 // ?me=Ek: the signed-in head, as /api/hiring names them. A near-miss paper waits for Ek's marks.
-const me = new URLSearchParams(location.search).get("me");
+// ?persist=1 keeps ?me= for the tab, as a sign-in would: the brief's "My hiring list" link carries no query.
+const me = (() => {
+  const params = new URLSearchParams(location.search);
+  try {
+    if (params.get("persist") === "1" && params.get("me")) sessionStorage.setItem("fixture:me", params.get("me")!);
+    return params.get("me") ?? sessionStorage.getItem("fixture:me");
+  } catch {
+    return params.get("me");
+  }
+})();
 if (me) payload.viewerHead = me;
 if (location.search.includes("roles=1")) {
   candidates.push(person("near-miss", "Sample Joy", { seekApplicationId: null, stage: "onsite_booked" }));
@@ -171,6 +180,11 @@ if (me === "Gift") {
     { id: "gift-later", candidateId: "gift-later", kind: "mock", status: "confirmed", startTime: at(6, 13), endTime: at(6, 14), visitId: null, interviewerKey: "Gift", subjects: ["English Literature"] },
   );
   Object.assign(payload.briefPaths, { "gift-mock": "/hiring/brief/sample-token", "gift-later": "/hiring/brief/sample-token" });
+}
+// ?mockNow=1: Ek's mock (Reply Low) started ten minutes ago.
+if (location.search.includes("mockNow=1")) {
+  const live = (payload.bookings as { id: string; startTime: string; endTime: string }[]).find(({ id }) => id === "v2m");
+  if (live) Object.assign(live, { startTime: new Date(Date.now() - 600000).toISOString(), endTime: new Date(Date.now() + 3000000).toISOString() });
 }
 // Each row's brief shows that row's candidate: the fixture link carries the name, subject and mock time.
 if (/roles=1/.test(location.search)) {
@@ -984,7 +998,7 @@ try {
     await page.goto(`${origin}/?roles=1&me=Ek`);
     await page.evaluate(() => localStorage.clear());
     await page.goto(`${origin}/?roles=1&me=Ek`);
-    await page.getByRole("region", { name: "Kru Ek's hiring list" }).waitFor();
+    await page.getByRole("navigation", { name: "Kru Ek's hiring list" }).waitFor();
     assert.equal(await page.getByRole("combobox", { name: "Head" }).count(), 0);
     assert.equal(await page.getByRole("heading", { level: 1 }).locator("xpath=following-sibling::p").first().textContent(), "Kru Ek");
     // The paper to re-mark comes first and is already open beside the list.
@@ -1155,7 +1169,7 @@ try {
     const group = (title) => page.getByRole("region", { name: /hiring list/ }).locator("section").filter({ has: page.getByRole("heading", { name: new RegExp(`^${title}`) }) });
     for (const [title, name, note] of [
       ["Waiting", "Sample Lek", "Admin checking scores"],
-      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => ["To do", name, "to check the scores"]),
+      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => ["To do", name, "Ask admin"]),
     ]) {
       const line = group(title).getByRole("listitem").filter({ hasText: name });
       await line.getByText(note, { exact: true }).waitFor();

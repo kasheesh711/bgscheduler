@@ -9,7 +9,7 @@ const RUNTIME = "/api/hiring/pdf-runtime";
 // scroll when a longer file must show in full. Download always gives the whole file.
 const MAX_PAGES = 15;
 
-const FAILED = "This PDF could not be drawn here. Use Download to open it.";
+const FAILED = "This PDF could not be drawn here. Use the link to open it.";
 
 /**
  * The pages of a PDF, drawn on the page itself. The browser's own PDF viewer is not used: Safari, phones and a

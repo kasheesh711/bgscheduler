@@ -156,8 +156,6 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       <div className={b.row} aria-hidden="true">
         <span />
         <div className={b.scale}>
-          {/* The first stop of each slider is "not scored", so the band names start one stop in. */}
-          <span />
           {LEVELS.map(({ label }) => <span key={label}>{label}</span>)}
         </div>
       </div>
@@ -174,7 +172,12 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                   </button>
                   <div className={b.barLine}>
                     {/* One slider per item (Kevin, 24 Nov 2026). Its first stop is "not scored", then 1–10 with the numbers under it. */}
-                    <div className={b.slider} data-band={selected ? band(selected) : undefined}>
+                    <div className={b.slider} data-band={selected ? band(selected) : undefined} onClick={(event) => {
+                      // iOS Safari moves a range input only by dragging the thumb. A tap (not a scroll) fires click.
+                      if (event.target instanceof HTMLInputElement && event.detail === 0) return;
+                      const box = event.currentTarget.getBoundingClientRect();
+                      selectScore(id, Math.max(0, Math.min(ITEM_MAX, Math.round(((event.clientX - box.left - 14) / (box.width - 28)) * ITEM_MAX))));
+                    }}>
                       <input
                         type="range"
                         min={0}
@@ -185,6 +188,8 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                         aria-label={label}
                         aria-valuetext={selected ? `${selected} of ${ITEM_MAX}` : "Not scored"}
                         style={{ "--fill": `${(selected / ITEM_MAX) * 100}%` } as CSSProperties}
+                        // Safari does not focus a range input on a click, so the arrow keys would move nothing after it.
+                        onPointerDown={(event) => event.currentTarget.focus({ preventScroll: true })}
                         onChange={(event) => selectScore(id, Number(event.target.value))}
                       />
                       <div className={b.sliderNumbers} aria-hidden="true">
@@ -192,7 +197,8 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                         {SCORES.map((score) => <span key={score}>{score}</span>)}
                       </div>
                     </div>
-                    <output className={b.value}>{selected || "–"}</output>
+                    {/* The slider already says its value to a screen reader; this number is for the eye. */}
+                    <output className={b.value} aria-hidden="true">{selected || "–"}</output>
                   </div>
                   {id === "stress" && (
                     <div className={b.ticks}>

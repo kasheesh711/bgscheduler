@@ -323,13 +323,24 @@ export function HrScreen({ data, command, busy, onOpenResults, readOnly = false,
 
 // ─── Shared visit data ───
 
-function useVisits(data: HiringData) {
+function useMinute() {
+  const [minute, setMinute] = useState(() => Math.floor(Date.now() / 60000));
+  useEffect(() => {
+    const timer = window.setInterval(() => setMinute(Math.floor(Date.now() / 60000)), 60000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return minute;
+}
+
+function useVisits(data: HiringData, minute = 0) {
   return useMemo(() => {
+    // `minute` only makes the list count again each minute, so a mock that starts shows as "Mock now".
+    void minute;
     const now = new Date();
     const rows = buildRunSheet({ ...data, now });
     const today = localDate(now);
     return { rows, now, today, coming: upcoming(rows, today), recent: pastVisits(rows, today) };
-  }, [data]);
+  }, [data, minute]);
 }
 const clock = (row: Pick<RunSheetRow, "paperStart" | "mockStart">) => row.paperStart ?? row.mockStart ?? "";
 const parts = (row: RunSheetRow) => [row.paperStart && `Paper ${row.paperStart}`, row.mockStart && `Mock ${row.mockStart}`].filter(Boolean).join(" · ");
@@ -465,7 +476,7 @@ interface HeadItem {
   review?: HeadDecisionRow;
 }
 
-function visitItem(visit: ReturnType<typeof headVisit>, today: string): HeadItem {
+function visitItem(visit: ReturnType<typeof headVisit>, today: string, live = false): HeadItem {
   const { row, candidate, active, path, decision, scored, checkingScores, needsCheck, due, missingOutcome, status } = visit;
   const mock = !!row.mockStart;
   const open = path && active;
@@ -481,10 +492,10 @@ function visitItem(visit: ReturnType<typeof headVisit>, today: string): HeadItem
       ...(scored && !decision && !due ? [{ text: "Scores sent", tone: "hire" as const }] : []),
       ...(decision ? [{ text: `Recommendation: ${decision.decision === "hire" ? "Yes" : "No"}`, tone: decision.decision }] : []),
     ],
-    action: due && open ? (scored ? "Recommend Yes or No" : "Score mock")
+    action: due && open ? (scored ? "Recommend Yes or No" : "Score mock") : live && open ? "Score mock"
       : !checkingScores && (needsCheck || (mock && !path && !status && missingOutcome)) ? "Ask admin" : undefined,
     note: checkingScores ? "Admin checking scores"
-      : needsCheck ? "to check the scores"
+      : needsCheck ? null
       : mock && !path && !status ? (missingOutcome ? "to record the outcome" : "No brief yet")
       : path && !active ? "Brief closed"
       : candidate?.resumeState === "none" ? "No résumé"
@@ -536,7 +547,7 @@ function ItemLink({ item, selected, onSelect, wide, readOnly, paneId }: { item: 
     </a>
   ) : (
     <button type="button" className={r.item} aria-current={selected ? "true" : undefined} aria-expanded={wide ? undefined : selected}
-      aria-controls={wide ? undefined : paneId} data-urgent={item.urgent ? "" : undefined} onClick={onSelect}>
+      aria-controls={!wide && selected ? paneId : undefined} data-urgent={item.urgent ? "" : undefined} onClick={onSelect}>
       {body}
     </button>
   );
@@ -611,7 +622,8 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
       return null;
     }
   });
-  const key = fixedHead ?? (chosen && heads.includes(chosen) ? chosen : heads[0] ?? null);
+  // Staff choose a head first; nothing opens in a head's name before that.
+  const key = fixedHead ?? (chosen && heads.includes(chosen) ? chosen : null);
   const [picked, setPicked] = useState<string | null>(open ? `review-${open}` : null);
   const choose = (value: string) => {
     setChosen(value);
@@ -625,6 +637,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     }
   };
   const wide = useWide();
+  const Rail = wide ? "nav" : "section";
   // A score sent in the open page shows in the list when the head comes back to it (not more than once in 30 seconds).
   const loadedAt = useRef(0);
   // The dashboard passes a new function on each render; the listeners use the latest one without subscribing again.
@@ -656,7 +669,8 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     };
   }, [canReload]);
 
-  const { rows, now, today } = useVisits(data);
+  const minute = useMinute();
+  const { rows, now, today } = useVisits(data, minute);
   const visits = key ? [
     ...data.bookings.filter((mock) => mock.kind === "mock" && mock.interviewerKey === key).map((mock) => {
       const start = new Date(mock.startTime);
@@ -698,7 +712,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   // One To do list in the order of the work: papers to re-mark, mocks to score, packets to sign (Sol review, 24 Nov 2026).
   const actionVisits = ended.filter((visit) => visit.needsAction && !visit.checkingScores).map((visit) => visitItem(visit, today));
   const checking = ended.filter((visit) => visit.needsAction && visit.checkingScores).map((visit) => visitItem(visit, today));
-  const nextItem = nextMock ? visitItem(nextMock, today) : undefined;
+  const nextItem = nextMock ? visitItem(nextMock, today, mockNow) : undefined;
   const groups = [
     { title: "To do", items: [...checks, ...actionVisits, ...reviews.filter((item) => item.urgent)]
       .sort((a, b) => Number(!!b.urgent) - Number(!!a.urgent)) },
@@ -747,12 +761,13 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   );
   return (
     <div className={r.workspace} data-heads-review="">
-      {/* A region, not navigation: on a phone it also holds the open row's form. */}
-      <section className={r.rail} aria-label={name ? `${nickname(name)}'s hiring list` : "Hiring list"}>
+      {/* Navigation beside the open page; on a phone a region, because it also holds the open row's form. */}
+      <Rail className={r.rail} aria-label={name ? `${nickname(name)}'s hiring list` : "Hiring list"}>
         {!fixedHead && (
           <label className={r.headMenu}>
             Head
             <select value={key ?? ""} onChange={(event) => choose(event.target.value)}>
+              {!key && <option value="" disabled>Choose a head</option>}
               {heads.map((h) => <option key={h} value={h}>{headName(h, data.tutors)}</option>)}
             </select>
           </label>
@@ -766,22 +781,17 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
         )}
         <p className="sr-only" role="status">{name && `${name} · ${nextMock
           ? `next mock ${shortDay(nextMock.row.date)}, ${nextMock.row.mockStart}` : "no mock booked"}`}</p>
-        {reviewer && !reviews.length && (
-          <section className={r.group}>
-            <h2 className={r.groupTitle}>Final review</h2>
-            <p className={r.quiet}>No hires waiting for your sign-off.</p>
-          </section>
-        )}
         {groups.map((group) => (group.items.length > 0 || (group.title === "Next mock" && givesMocks) || (group.title === "To do" && (givesMocks || reviewer))) && (
           <section key={group.title} className={r.group} data-tone={group.title === "To do" && group.items.length ? "todo" : undefined}>
             <h2 className={r.groupTitle}>
               {group.title}
               {group.items.length > 1 && <span className={r.count}>{group.items.length}</span>}
             </h2>
-            {group.items.length ? list(group.items) : <p className={r.quiet}>{group.title === "To do" ? "Nothing to do now." : "No mock booked. New bookings also come by LINE."}</p>}
+            {group.items.length ? list(group.items) : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "Nothing to score or sign now." : "Nothing to do now.") : "No mock booked. New bookings also come by LINE."}</p>}
           </section>
         ))}
         {!heads.length ? <p className={r.quiet}>No heads are set up. Add interviewers in Rules and setup.</p>
+          : !key ? <p className={r.quiet}>Choose a head to see their list.</p>
           : !all.length && !givesMocks && <p className={r.quiet}>Nothing to do. New papers to check also come by LINE.</p>}
         {papers.length > 0 && (
           <details className={r.group}>
@@ -795,7 +805,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
             {list(past)}
           </details>
         )}
-      </section>
+      </Rail>
       {wide && (
         <section id="open-item" tabIndex={-1} className={r.pane} aria-label={selected ? `${selected.task}: ${selected.name}` : "Nothing open"}>
           {selected ? <ItemPane key={selected.id} item={selected} data={data} readOnly={readOnly || (!fixedHead && !chosen)} reload={reload} />

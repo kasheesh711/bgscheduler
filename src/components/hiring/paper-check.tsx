@@ -49,12 +49,12 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
           setMarks((current) => Object.fromEntries(Object.keys(current).map((id) => [id, typeof draft.marks?.[id] === "string" ? draft.marks[id] : current[id]])));
           if (typeof draft.comment === "string") setComment(draft.comment);
         }
-      } else if (outcome) localStorage.removeItem(draftKey);
+      } else if (outcome || view.done || !view.open) localStorage.removeItem(draftKey);
       else localStorage.setItem(draftKey, JSON.stringify({ updatedAt: view.updatedAt, marks, comment }));
     } catch {
       // Private mode or a full store: the page still works, without the copy.
     }
-  }, [draftKey, restored, outcome, view.updatedAt, marks, comment]);
+  }, [draftKey, restored, outcome, view.done, view.open, view.updatedAt, marks, comment]);
   const bad = view.questions.filter((q) => {
     const value = Number(marks[q.id]);
     return marks[q.id] === "" || !Number.isFinite(value) || value < 0 || value > q.max;
@@ -123,7 +123,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
         <PdfPages src={`/api/hiring/paper-check/${token}/paper`} runtime={`/api/hiring/paper-check/${token}/runtime`} title={`Marked paper of ${view.name}`} maxPages={40} />
       </section>
       <section className={`${c.facts} ${k.marks}`}>
-        <h2 className={c.stepTitle}>Your marks</h2>
+        <h2 className={c.stepTitle}>Your marks <span className={c.note}>{view.questions.length} questions · half marks allowed</span></h2>
         <ol className={k.questions}>
           {view.questions.map((q) => (
             <li key={q.id} className={k.question}>
