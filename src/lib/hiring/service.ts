@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { queueRecruitmentMock } from "./recruitment";
+import { queueRecruitmentForm, queueRecruitmentMock } from "./recruitment";
 import { PRESTIGE_RULES } from "./prestige";
 import { createHash, randomUUID } from "node:crypto";
 import { fromZonedTime } from "date-fns-tz";
@@ -27,6 +27,8 @@ import {
   instant,
   isVisitBooking,
   PRE_SCREEN_URL,
+  answersSchema,
+  answersToPreScreen,
   normalizeSubjects,
   overlap,
   runtimeWritesAllowed,
@@ -60,7 +62,10 @@ import { bookingToken, readBookingToken, VISIT_LINK_DAYS } from "./tokens";
 import { storedResume } from "./resume-files";
 import { blockingLimit, headWeekMocks, releaseQueue, type Funnel, type LimitName, type QueueHold } from "./limits";
 import {
+  allowed,
   callInviteSentAt,
+  formSentAt,
+  replyCheck,
   inviteRows,
   linkSentAt,
   lockQueue,
@@ -82,7 +87,7 @@ import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
 import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
 import { checkRubric, computeSheet, passRulesFor, RUBRIC_ITEMS, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
-import { HIRING_LINE_URL, hiringEmail, mockPrep, stepIcon, TWO_DAY_STEPS, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
+import { HIRING_LINE_URL, hiringEmail, mockPrep, TWO_DAY_STEPS, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -481,12 +486,12 @@ export const preScreenEmail = (name: string, email: string, reminder: boolean, v
         subject: reminder
           ? "Reminder: answer your BeGifted pre-screening questions"
           : "Next steps: your BeGifted pre-screening questions and onsite visit",
-        preheader: "Answer a short questionnaire, then book your test and your mock teaching.",
+        preheader: "Answer a few questions, then book your test and your mock teaching on one page.",
         title: reminder ? "Your questions are still open" : "Here are your next steps",
         hero: "next",
         name,
         paragraphs: reminder
-          ? ["We have not yet received your pre-screening answers. If you are still interested in joining BeGifted, please answer them. Then you can book your test and your mock teaching."]
+          ? ["We have not yet received your pre-screening answers. If you are still interested in joining BeGifted, please answer them on the page below. Then you can book your test and your mock teaching on the same page."]
           : hrLeft
             ? [
                 "Thank you for your interest in joining BeGifted, and for your patience.",
@@ -495,28 +500,14 @@ export const preScreenEmail = (name: string, email: string, reminder: boolean, v
               ]
             : ["Thank you for your interest in joining BeGifted. We invite you to the next steps."],
         details: [
-          { label: "Use this email", value: email },
-          { label: "Questionnaire", value: "About 5–7 minutes" },
+          { label: "Questions", value: "About 5–7 minutes" },
           { label: "Onsite visits", value: VISIT_LENGTH },
         ],
-        stepsHeading: "Your next steps",
-        steps: [
-          {
-            heading: "Answer the pre-screening questions",
-            paragraphs: [
-              "Use this email address on the form. One question asks which subject you want to be tested on at your visit.",
-            ],
-            action: { label: "Open the questionnaire", url: PRE_SCREEN_URL },
-            icon: stepIcon(2),
-          },
-          {
-            heading: "Book your test and your mock teaching",
-            paragraphs: [
-              "We check your answers first. When booking opens, we email you. Then choose your two times on this link: the test first, and the mock teaching on the same day or a later day.",
-            ],
-            action: { label: "Book your test and mock teaching", url: visitUrl },
-            icon: stepIcon(3),
-          },
+        // One page holds the questions and the booking (Kevin, 24 Nov 2026), so the email has one button.
+        action: { label: "Answer the questions and book", url: visitUrl },
+        after: [
+          "The link opens one page. First you answer the questions. One question asks which subject you want to be tested on.",
+          "Then you choose your two times on the same page: the test first, and the mock teaching on the same day or a later day. If we must check an answer first, the page tells you, and we email you when booking opens.",
         ],
       })
     : hiringEmail({
@@ -589,6 +580,8 @@ export async function inviteToVisit(
   now = new Date(),
   // A repeat to someone already invited. They hold a place already, so the limits do not stop it.
   resend = false,
+  // Answers from the booking page, not yet scored by the AI. Only `answerPreScreen` sets this, after `replyCheck`.
+  unscored = false,
 ) {
   await lockQueue(tx);
   const [c] = await tx
@@ -601,7 +594,7 @@ export async function inviteToVisit(
     throw new HiringError(409, "This candidate cannot get an onsite invitation at this stage.");
   if (!c.email)
     throw new HiringError(409, "A verified application email is required.");
-  if (!c.preScreen || !c.preScreenAssessment)
+  if (!c.preScreen || (!c.preScreenAssessment && !unscored))
     throw new HiringError(409, "The pre-screen response has no score yet.");
   const { stops } = hardStops(
     c.preScreen,
@@ -1557,14 +1550,86 @@ const examOf = (rows: VisitRow[]) => rows.find((b) => b.kind === "paper");
  * A "Next steps" link before booking opens: "answers" while the form is unanswered, "checking" while the answers wait
  * for the checks or a person. Null for every other link.
  */
-function answersFirst(candidate: Candidate, cap: VisitLink): "answers" | "checking" | null {
-  if (!["pre_screen", "no_reply"].includes(candidate.stage) || candidate.inviteExpiresAt?.getTime() !== cap.exp * 1000) return null;
+function answersFirst(candidate: Candidate, cap: VisitLink): Waiting | null {
+  if (candidate.inviteExpiresAt?.getTime() !== cap.exp * 1000) return null;
+  // Answers that a person must read (a hard stop, for example). The page shows no times and promises none.
+  if (candidate.stage === "review" && candidate.preScreen && !candidate.visitSubject) return "held";
+  if (!["pre_screen", "no_reply"].includes(candidate.stage)) return null;
   return candidate.preScreen ? "checking" : "answers";
 }
-const ANSWERS_FIRST = {
-  answers: `Please answer the pre-screening questions first: ${PRE_SCREEN_URL} When booking opens, we email you, and this link lets you book.`,
+type Waiting = "answers" | "checking" | "held";
+const ANSWERS_FIRST: Record<Waiting, string> = {
+  answers: "Please answer the questions on this page first. Then you can choose your times.",
   checking: "Thank you for your answers. We have them. When booking opens, we email you, and this link lets you book. If we have a question, we contact you.",
+  // Proposed wording, for Kevin to confirm. The system sends no rejection, so the text refuses nothing and promises nothing.
+  held: "Thank you for your answers. We have them. Our team reads every answer. If we can invite you to a test and a mock teaching, we email you.",
 };
+
+/**
+ * The questions on the booking page (Kevin, 24 Nov 2026). The answers are stored in the Google Form's shape, the hard
+ * stops run at once, and a pass opens booking on this same link when the AI score is not a gate (pass score 0) and
+ * every onsite limit has room. A candidate who fails a hard stop goes to review and sees no times. Anyone else waits
+ * for the onsite queue, as after a Google Form answer. The AI scores the written answers later, for staff to read.
+ */
+export async function answerPreScreen(token: string, value: unknown, db: Database = getDb(), now = new Date()) {
+  const answers = answersSchema.parse(value);
+  const cap = visitToken(token, now);
+  return withDatabaseTransaction(db, async (tx) => {
+    // The lock order is queue, then candidate, as in `inviteToVisit`.
+    await lockQueue(tx);
+    const [row] = await tx.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, cap.id)).for("update");
+    if (!row) throw new HiringError(404, onLine("This booking link is no longer active."));
+    // A second send, or a Google Form answer that came first: the page reloads and shows what is true now.
+    if (answersFirst(row, cap) !== "answers") return { opened: false, candidateId: cap.id };
+    const preScreen = answersToPreScreen(answers, now);
+    const [saved] = await tx
+      .update(s.hiringCandidates)
+      .set({ preScreen, preScreenRepliedAt: now, stage: "pre_screen", revision: row.revision + 1, updatedAt: now })
+      .where(eq(s.hiringCandidates.id, row.id))
+      .returning();
+    // They answered, so an unsent form or reminder must not follow, as in the sheet import.
+    await tx
+      .update(s.hiringOutbox)
+      .set({ status: "cancelled" })
+      .where(
+        and(
+          eq(s.hiringOutbox.candidateId, row.id),
+          sql`${s.hiringOutbox.payload}->>'workflowStage' = 'pre_screen'`,
+          inArray(s.hiringOutbox.status, ["pending", "failed"]),
+        ),
+      );
+    const sentAt = await formSentAt(tx, row.id);
+    // As in the sheet import: the recruitment group hears only of an answer to a form that was sent.
+    if (sentAt) await queueRecruitmentForm(tx, saved, now);
+    const { config } = await settings(tx);
+    // The hard stops come first, so they decide at once even while the AI score is a gate.
+    const { stops } = hardStops(preScreen, row.workRightsAnswer, normalizeSubjects(preScreen.subjects), config);
+    const check = stops.length ? { kind: "hold" as const, reason: stops.join(" ") } : replyCheck(saved, sentAt, config);
+    await audit(tx, "candidate", "pre-screen-answered", row.id, { source: "booking-page", check: check.kind });
+    if (check.kind === "hold") {
+      await tx
+        .update(s.hiringCandidates)
+        .set({ stage: "review", reviewNote: check.reason, revision: saved.revision + 1, updatedAt: now })
+        .where(eq(s.hiringCandidates.id, row.id));
+      await audit(tx, "hiring-queue", "move-to-review", row.id, { phase: "pre", reasons: [check.reason] });
+      return { opened: false, candidateId: cap.id };
+    }
+    // A full limit, a pause or a scored gate: the answers wait for the onsite queue, which emails when booking opens.
+    // So does a link that `inviteToVisit` would replace (it ends inside the onsite window), and a candidate with an
+    // earlier invitation row, whom only a click can invite again.
+    if (
+      check.kind !== "ready" ||
+      !allowed(config) ||
+      row.inviteExpiresAt!.getTime() < now.getTime() + config.onsiteFollowUp.expireDays * DAY ||
+      (await inviteRows(tx, row.id)).length > 0 ||
+      blockingLimit("onsite", check.subject, await readLimitUsage(tx, "onsite", now), config)
+    )
+      return { opened: false, candidateId: cap.id };
+    const subject = await inviteToVisit(tx, saved, config, `${row.id}:visit-invite`, now, false, true);
+    await audit(tx, "hiring-queue", "onsite-release", row.id, { subject, score: null, selfServed: true });
+    return { opened: true, candidateId: cap.id };
+  });
+}
 
 async function openVisit(db: Database, cap: VisitLink, config: HiringConfig, now: Date) {
   const candidate = await candidateById(db, cap.id);
@@ -1644,8 +1709,7 @@ export async function visitView(token: string, db: Database = getDb(), now = new
       canMove: false,
       notice: ANSWERS_FIRST[waiting],
       checkedAt: null,
-      waiting: waiting as "answers" | "checking" | null,
-      formUrl: (waiting === "answers" ? PRE_SCREEN_URL : null) as string | null,
+      waiting: waiting as Waiting | null,
     };
   const { subject, rows } = await openVisit(db, cap, config, now);
   const enabled = bookable(config, cap.id);
@@ -1703,8 +1767,7 @@ export async function visitView(token: string, db: Database = getDb(), now = new
     notice,
     // When the times were checked against live Wise. Null means the 30-minute Wise copy was used.
     checkedAt: live?.checkedAt ?? null,
-    waiting: null as "answers" | "checking" | null,
-    formUrl: null as string | null,
+    waiting: null as Waiting | null,
   };
 }
 

@@ -30,21 +30,21 @@ const view = (patch = {}) => ({
   checkedAt: null as string | null,
   twoDay: false,
   mockSlots: [] as { date: string; start: string; end: string }[],
-  waiting: null as "answers" | "checking" | null,
-  formUrl: null as string | null,
+  waiting: null as "answers" | "checking" | "held" | null,
   ...patch,
 });
 const page = (patch = {}) => renderToStaticMarkup(<VisitBooking token="t" view={view(patch)} reload={async () => {}} />);
 
 describe("VisitBooking", () => {
-  it("asks for the answers first on a Next steps link, with the form button and no booking form", () => {
-    const html = page({ waiting: "answers", formUrl: "https://forms.gle/x", slots: [], enabled: false, subject: "", notice: "Please answer the pre-screening questions first: https://forms.gle/x When booking opens, we email you, and this link lets you book." });
-    expect(html).toContain("Please answer the pre-screening questions first");
-    expect(html).toContain('href="https://forms.gle/x"');
-    expect(html).toContain("Answer the pre-screening questions");
+  it("asks the questions on the page first on a Next steps link, with no Google Form and no booking form", () => {
+    const html = page({ waiting: "answers", slots: [], enabled: false, subject: "", notice: "Please answer the questions on this page first. Then you can choose your times." });
+    expect(html).toContain("Please answer the questions on this page first");
+    expect(html).not.toContain("docs.google.com");
+    for (const question of ["Highest degree level", "Which subjects can you confidently teach?", "English proficiency level", "Which time slots work for you?", "Why do you want to tutor with BeGifted?", "Save my answers and see the times"])
+      expect(html).toContain(question);
     expect(html).toContain("1 hour, if you pass");
     expect(html).not.toContain("I will attend onsite");
-    const checking = page({ waiting: "checking", formUrl: null, slots: [], enabled: false, subject: "", notice: "Thank you for your answers. We are checking them now." });
+    const checking = page({ waiting: "checking", slots: [], enabled: false, subject: "", notice: "Thank you for your answers. We are checking them now." });
     expect(checking).toContain("We are checking them now");
     expect(checking).not.toContain("Answer the pre-screening questions");
   });

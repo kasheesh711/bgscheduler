@@ -1,9 +1,9 @@
 import { after, NextResponse } from "next/server";
 import { subjectSchema } from "@/lib/hiring/model";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
-import { bookCall, bookContract, contractView, bookInterview, bookingView, bookVisit, callView, visitView } from "@/lib/hiring/service";
+import { answerPreScreen, bookCall, bookContract, contractView, bookInterview, bookingView, bookVisit, callView, visitView } from "@/lib/hiring/service";
 import { readBookingToken } from "@/lib/hiring/tokens";
-import { deliverBookingMessages } from "@/lib/hiring/worker";
+import { deliverBookingMessages, deliverVisitInvite } from "@/lib/hiring/worker";
 export const maxDuration = 120;
 const headers = {
   "Cache-Control": "private, no-store",
@@ -40,8 +40,17 @@ export async function POST(
     requireSameOrigin(request);
     const { token } = await params;
     const kind = readBookingToken(token).kind;
-    const book = (kind === "visit" || kind === "paper-visit" || kind === "two-day") ? bookVisit : kind === "call" ? bookCall : kind === "contract" ? bookContract : bookInterview;
-    const booking = await book(token, await request.json());
+    const visit = kind === "visit" || kind === "paper-visit" || kind === "two-day";
+    const body = await request.json();
+    // The questions step of a "Next steps" link. The page reloads the view, which shows the times or the reason for none.
+    if (visit && body && typeof body === "object" && "answers" in body) {
+      const { opened, candidateId } = await answerPreScreen(token, body.answers);
+      // The "booking is open" email leaves at once, so the candidate holds the link and the weekly count stays true.
+      if (opened) after(() => deliverVisitInvite(candidateId));
+      return NextResponse.json({ opened }, { headers });
+    }
+    const book = visit ? bookVisit : kind === "call" ? bookCall : kind === "contract" ? bookContract : bookInterview;
+    const booking = await book(token, body);
     after(() => deliverBookingMessages());
     return NextResponse.json(
       {

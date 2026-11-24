@@ -475,6 +475,8 @@ export async function syncTracker(db: Database, config: HiringConfig) {
         .where(eq(s.hiringCandidates.email, email))
         .for("update");
       if (existing) {
+        // An answer given on the booking page stays: booking may already be open on it, and the checks ran on it.
+        if (existing.preScreen?.sourceRow === 0) return;
         // A stored subject choice survives a sheet read that cannot see it (the header was renamed or an older worker).
         const pre: PreScreen =
           existing.preScreen?.testSubject && !read.testSubject ? { ...read, testSubject: existing.preScreen.testSubject } : read;
