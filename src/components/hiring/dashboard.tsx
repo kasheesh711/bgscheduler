@@ -388,7 +388,8 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
           {view === "setup" ? "" : notice}
         </div>
         {role ? (
-          <div className={css.viewSwitch}>
+          // Heads see only their own list (Kevin, 24 Nov 2026). Staff keep the way to the full dashboard.
+          view === "heads" && (data?.viewerHead ?? head) ? null : <div className={css.viewSwitch}>
             <button type="button" onClick={() => setView("overview")}>
               Full dashboard
             </button>

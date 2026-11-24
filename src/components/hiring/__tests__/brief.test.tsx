@@ -72,11 +72,12 @@ describe("InterviewerBrief", () => {
     for (const { part, items } of RUBRIC) {
       expect(page).toContain(part);
       for (const [, label] of items) {
-        expect(page).toContain(`role="radiogroup" aria-label="${label}"`);
+        expect(page).toContain(`type="range" min="0" max="${ITEM_MAX}" step="1" aria-label="${label}" aria-valuetext="Not scored"`);
         expect(page).toContain(`aria-label="${label}: what each level means"`);
       }
     }
-    expect(page.match(/type="radio"/g)).toHaveLength(ITEM_MAX * RUBRIC_ITEMS.length + 2);
+    expect(page.match(/type="range"/g)).toHaveLength(RUBRIC_ITEMS.length);
+    expect(page.match(/type="radio"/g)).toHaveLength(2);
     expect(page.match(/type="checkbox"/g)).toHaveLength(3);
     expect(page).not.toContain("Suggested score");
     expect(page).toContain("School&#x27;s required checks completed");

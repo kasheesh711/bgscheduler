@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { ITEM_MAX, RUBRIC, RUBRIC_ITEMS, stressSuggestion, type MockRubric, type RubricItem, type StressTicks } from "@/lib/hiring/marking-sheet";
 import { BAND_LABELS, RUBRIC_GUIDE, STRESS_ELEMENTS } from "@/lib/hiring/rubric-guide";
 import type { BriefPending } from "./brief";
@@ -156,6 +156,8 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       <div className={b.row} aria-hidden="true">
         <span />
         <div className={b.scale}>
+          {/* The first stop of each slider is "not scored", so the band names start one stop in. */}
+          <span />
           {LEVELS.map(({ label }) => <span key={label}>{label}</span>)}
         </div>
       </div>
@@ -171,22 +173,24 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                     {label}
                   </button>
                   <div className={b.barLine}>
-                    <div className={b.bar} role="radiogroup" aria-label={label} data-band={selected ? band(selected) : undefined}>
-                      {SCORES.map((score) => (
-                        <label key={score} className={b.cell} data-on={score <= selected ? "" : undefined} title={String(score)}>
-                          <input
-                            type="radio"
-                            // Edit scores puts focus on the first item's own score, so a key press does not change it.
-                            ref={id === RUBRIC_ITEMS[0] && score === (selected || 1) ? firstScore : undefined}
-                            name={`${rubricId}-${id}`}
-                            value={score}
-                            aria-label={String(score)}
-                            className={c.hidden}
-                            checked={selected === score}
-                            onChange={() => selectScore(id, score)}
-                          />
-                        </label>
-                      ))}
+                    {/* One slider per item (Kevin, 24 Nov 2026). Its first stop is "not scored", then 1–10 with the numbers under it. */}
+                    <div className={b.slider} data-band={selected ? band(selected) : undefined}>
+                      <input
+                        type="range"
+                        min={0}
+                        max={ITEM_MAX}
+                        step={1}
+                        value={selected}
+                        ref={id === RUBRIC_ITEMS[0] ? firstScore : undefined}
+                        aria-label={label}
+                        aria-valuetext={selected ? `${selected} of ${ITEM_MAX}` : "Not scored"}
+                        style={{ "--fill": `${(selected / ITEM_MAX) * 100}%` } as CSSProperties}
+                        onChange={(event) => selectScore(id, Number(event.target.value))}
+                      />
+                      <div className={b.sliderNumbers} aria-hidden="true">
+                        <span>–</span>
+                        {SCORES.map((score) => <span key={score}>{score}</span>)}
+                      </div>
                     </div>
                     <output className={b.value}>{selected || "–"}</output>
                   </div>

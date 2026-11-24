@@ -148,3 +148,5 @@ summary.groupTitle { list-style: none; }
 summary.groupTitle::-webkit-details-marker { display: none; }
 summary.groupTitle::after { content: "▸"; margin-left: auto; color: var(--muted); font-family: var(--sans); font-size: 14px; }
 details[open] > summary.groupTitle::after { content: "▾"; }
+.opening { padding: 12px 20px; }
+.inlinePane .paneFacts { padding-inline: 0; }

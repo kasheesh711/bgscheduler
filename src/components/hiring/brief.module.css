@@ -523,3 +523,79 @@
     padding-inline: 12px;
   }
 }
+
+/* The score slider (Kevin, 24 Nov 2026): the far left stop is "not scored", then 1–10. The fill takes the band colour. */
+.slider {
+  --fill-colour: var(--ink-2);
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+.slider[data-band="0"] { --fill-colour: var(--err); }
+.slider[data-band="1"] { --fill-colour: #c9861a; }
+.slider[data-band="2"] { --fill-colour: #3a62ad; }
+.slider[data-band="3"] { --fill-colour: var(--ok); }
+.slider input {
+  width: 100%;
+  height: 44px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.slider input::-webkit-slider-runnable-track {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(to right, var(--fill-colour) var(--fill), var(--line) var(--fill));
+  box-shadow: inset 0 0 0 1px #948a73;
+}
+.slider input::-moz-range-track {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(to right, var(--fill-colour) var(--fill), var(--line) var(--fill));
+  box-shadow: inset 0 0 0 1px #948a73;
+}
+.slider input::-webkit-slider-thumb {
+  width: 28px;
+  height: 28px;
+  margin-top: -9px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: var(--fill-colour);
+  box-shadow: 0 0 0 1px var(--ink);
+  -webkit-appearance: none;
+  appearance: none;
+}
+.slider input::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: var(--fill-colour);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+/* Not scored yet: a hollow thumb on the "–" stop. */
+.slider:not([data-band]) input::-webkit-slider-thumb { background: #fff; box-shadow: 0 0 0 2px #948a73; }
+.slider:not([data-band]) input::-moz-range-thumb { background: #fff; box-shadow: 0 0 0 2px #948a73; }
+.slider input:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+/* The numbers sit under the thumb's stops: 11 columns, each as wide as one step, centred on the stops. */
+.sliderNumbers {
+  display: grid;
+  grid-template-columns: repeat(11, minmax(0, 1fr));
+  margin-inline: calc(14px - (100% - 28px) / 20);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-align: center;
+}
+.scale {
+  grid-template-columns: 1fr 2fr 3fr 3fr 2fr;
+}
+.scale { align-items: end; }
+.top[data-compact] .name { overflow-wrap: anywhere; }

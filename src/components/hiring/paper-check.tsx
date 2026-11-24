@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { paperCheckView } from "@/lib/hiring/paper-check";
 import { tellHiringList } from "./brief";
 import { PdfPages } from "./pdf-pages";
@@ -36,6 +36,25 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  // Marks not sent yet stay in this browser, so opening another row and coming back loses nothing. The link token is
+  // signed again on each list load, so the draft is keyed by the result, and kept only while the AI marks are the same.
+  const draftKey = `hiring-paper-draft:${view.id}`;
+  const [restored, setRestored] = useState(false);
+  useEffect(() => {
+    try {
+      if (!restored) {
+        setRestored(true);
+        const draft = JSON.parse(localStorage.getItem(draftKey) ?? "null") as { updatedAt?: string; marks?: Record<string, string>; comment?: string } | null;
+        if (draft?.updatedAt === view.updatedAt && draft.marks) {
+          setMarks((current) => Object.fromEntries(Object.keys(current).map((id) => [id, typeof draft.marks?.[id] === "string" ? draft.marks[id] : current[id]])));
+          if (typeof draft.comment === "string") setComment(draft.comment);
+        }
+      } else if (outcome) localStorage.removeItem(draftKey);
+      else localStorage.setItem(draftKey, JSON.stringify({ updatedAt: view.updatedAt, marks, comment }));
+    } catch {
+      // Private mode or a full store: the page still works, without the copy.
+    }
+  }, [draftKey, restored, outcome, view.updatedAt, marks, comment]);
   const bad = view.questions.filter((q) => {
     const value = Number(marks[q.id]);
     return marks[q.id] === "" || !Number.isFinite(value) || value < 0 || value > q.max;
