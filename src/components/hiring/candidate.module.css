@@ -1384,3 +1384,9 @@ span.qTitle {
 .dateWeek[aria-pressed="true"] {
   background: #e6eaf3;
 }
+
+/* Month names in normal case: "Nov–Dec" fits its chip with room at the sides (Sol r27). */
+.dateWeek span {
+  text-transform: none;
+  letter-spacing: 0;
+}

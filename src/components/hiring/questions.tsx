@@ -217,7 +217,8 @@ export function PreScreenQuestions({
     ...(subjects.includes(ART) ? [["q-portfolio", "Portfolio", !!fileName || !!portfolio.trim()] as [string, string, boolean]] : []),
     ["q-curricula", "Curricula", curricula.length > 0],
     ["q-years", "Year groups", yearGroups.length > 0],
-    ["q-hours", "Your onsite hours", weekHoursCount(week) > 0],
+    // Starts like the section title, so the button names what the candidate sees (Opus r24, Sol r27).
+    ["q-hours", "When you can teach", weekHoursCount(week) > 0],
     ["q-weekly", "Hours a week", !!answers.weeklyHours],
     ["q-why", "Why BeGifted", !!motivation.trim()],
     ["q-approach", "Your approach", !!teachingApproach.trim()],
@@ -365,7 +366,7 @@ export function PreScreenQuestions({
         {subjects.length > 1 && testChoices.length > 0 && (
           <Q
             id="q-test"
-            title="Your test subject"
+            title="Subject for your test and mock teaching"
             tag="choose one"
             hint={testable.length && testable.length < subjects.length ? "Greyed: not tested." : undefined}
           >
@@ -380,7 +381,7 @@ export function PreScreenQuestions({
           </Q>
         )}
         {subjects.includes(ART) && (
-          <Q id="q-portfolio" title="Art & Design Technology portfolio">
+          <Q id="q-portfolio" title="Art portfolio">
             <label className={s.drop}>
               <input
                 className={c.hidden}
@@ -391,8 +392,8 @@ export function PreScreenQuestions({
               />
               <Upload aria-hidden size={18} />
               <span>
-                <b>{fileName || "Upload your portfolio"}</b>
-                <small>{fileName ? "Uploaded. Choose again to replace it." : "PDF, JPG or PNG, max 25 MB"}</small>
+                <b>{fileName || "Upload a file"}</b>
+                <small>{fileName ? "Uploaded. Choose again to replace it." : "PDF, JPG, PNG, 25 MB max"}</small>
               </span>
             </label>
             {fileNote && (
@@ -410,7 +411,7 @@ export function PreScreenQuestions({
           <Chips name="yearGroups" choices={ANSWER_CHOICES.yearGroups} value={yearGroups} onChange={setYearGroups} many disabled={busy} />
         </Q>
       </Section>
-      <Section title="Your onsite hours">
+      <Section title="When you can teach onsite each week">
         <Q id="q-hours" title="Your weekly hours for teaching onsite" hideTitle>
           <WeekGrid value={week} onChange={setWeek} disabled={busy} />
         </Q>

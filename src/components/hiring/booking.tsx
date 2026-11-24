@@ -593,7 +593,6 @@ export function VisitBooking({
               <>
                 <Steps at={0} />
                 <VisitPlan place={view.location} />
-                <p className={c.note}>Then book both times.</p>
               </>
             }
           />
@@ -708,7 +707,11 @@ export function VisitBooking({
             {/* The list can empty while the candidate is moving: the way back stays on the page. */}
             {!showForm && keep}
             {/* Two times on the ticket: either one can change (Sol r22). */}
-            {showForm && moving && view.twoDay && <p className={c.note}>Change one or both times.</p>}
+            {showForm && moving && (
+              <p className={c.note}>
+                {view.twoDay ? "Change one or both times. " : ""}Your current times stay booked until you confirm.
+              </p>
+            )}
             {showForm && (
               <Picker
                 id="times-start"
@@ -797,7 +800,6 @@ export function VisitBooking({
           showForm && (
             <>
               <Checks onsite={onsite} commitment={commitment} setOnsite={setOnsite} setCommitment={setCommitment} fromAnswers={view.timeRuleMet} place={view.location} />
-              {moving && <p className={c.note}>Your current times stay booked until you confirm.</p>}
               <VisitConfirm
                 compact={!slot}
                 error={error}
