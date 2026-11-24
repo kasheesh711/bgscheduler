@@ -20,6 +20,7 @@ import {
   type HiringConfig,
   type Subject,
 } from "./model";
+import { withWiseHours } from "./rules";
 
 export type HeadBlock = {
   kind: "wise" | "leave" | "mock" | "exam" | "sit_in";
@@ -155,7 +156,7 @@ export function buildHeadWeek(input: {
       ...booked("exam", exams),
       ...booked("mock", mocks),
     ].sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end));
-    return { date, office: headOfficeWindow(head, date, input.ctx), blocks };
+    return { date, office: headOfficeWindow(withWiseHours(head, group?.availabilityWindows), date, input.ctx), blocks };
   });
 
   const visits = mocks

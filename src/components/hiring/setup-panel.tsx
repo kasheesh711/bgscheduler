@@ -552,16 +552,25 @@ export function SetupPanel({
               const dirty = ticks.some((on, i) => on !== saved[i]);
               const name = data.tutors.find((t) => t.canonicalKey === key)?.name ?? key;
               const ended = state?.state === "ended";
+              const fromWise = state?.state === "wise";
               return (
                 <div key={key} className={css.headDayRow}>
                   <div>
                     <strong>{name}</strong>
                     <span className={css.railMeta}>
                       {" "}
-                      {state?.state === "enrolled" || ended ? "Tutor Attendance schedule" : "Hiring settings only"}
+                      {state?.state === "enrolled" || ended ? "Tutor Attendance schedule" : fromWise ? "Wise working hours" : "Hiring settings only"}
                     </span>
                   </div>
-                  {inSaved && !ended ? (
+                  {fromWise ? (
+                    <p className={css.railMeta}>
+                      {HEAD_DAYS.flatMap((day, i) => {
+                        const w = state.week?.[i + 1];
+                        return w ? [`${day} ${w.start}–${w.end}`] : [];
+                      }).join(" · ") || "No onsite hours on a weekday in Wise."}{" "}
+                      Change them in Wise. Mocks run 10:00 to 16:00.
+                    </p>
+                  ) : inSaved && !ended ? (
                     <div className={css.dayChecks}>
                       {HEAD_DAYS.map((day, i) => (
                         <label key={day}>
@@ -594,7 +603,7 @@ export function SetupPanel({
                     </p>
                   )}
                   {inSaved && !ended && !hasSavedHours(state?.week) && (
-                    <p className={css.warnWord}>No saved hours: this head gets no visit times.</p>
+                    <p className={css.warnWord}>{fromWise ? "No onsite Wise hours" : "No saved hours"}: this head gets no visit times.</p>
                   )}
                   {state?.from && state.from > today && (
                     <p className={css.railMeta}>The saved change starts {dayText(state.from)}.</p>
@@ -660,6 +669,14 @@ export function SetupPanel({
               >
                 Remove
               </button>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={!!interviewer.hoursFromWise}
+                  onChange={(e) => setInterviewer(i, { hoursFromWise: e.target.checked || undefined })}
+                />{" "}
+                Hours from Wise (heads not in Tutor Attendance)
+              </label>
               <div className={css.subjectChecks}>
                 {SUBJECTS.map((subject) => (
                   <label key={subject}>

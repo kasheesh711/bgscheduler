@@ -2753,6 +2753,14 @@ describe("hiring workflow persistence", () => {
       expect((await saveHeadDays("Gift", [true, false, false, false, false], 4, ADMIN, db)).affectedVisits).toBe(0);
     });
 
+    it("refuses head days for a head whose hours come from Wise", async () => {
+      await setHeads({ interviewers: [peat, { ...gift, hoursFromWise: true }] });
+      const error = await saveHeadDays("Gift", ALL, 4, ADMIN, db).catch((e) => e);
+      expect(error).toBeInstanceOf(HiringError);
+      expect(error.status).toBe(409);
+      expect(await hiringRevision()).toBe(4);
+    });
+
     it("treats an attendance enrollment whose end date has passed as ended", async () => {
       await enrol();
       await db.update(s.tutorAttendanceEnrollments).set({ endDate: "2026-10-30" });
