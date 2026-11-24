@@ -127,6 +127,13 @@
     max-width: 880px;
   }
 }
+/* The head's paper check shows the paper beside the marks, so it uses the full width. */
+@media (min-width: 1024px) {
+  .hero[data-wide] .heroInner,
+  .hero[data-wide] + .sheet {
+    max-width: 1440px;
+  }
+}
 @keyframes rise {
   from {
     opacity: 0;

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { paperCheckView } from "@/lib/hiring/paper-check";
+import { PdfPages } from "./pdf-pages";
 import c from "./booking.module.css";
 import k from "./paper-check.module.css";
 
@@ -68,7 +69,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
         <div><dt className={c.factLabel}>AI score</dt><dd>{view.aiPercent}%{view.passMark !== null && ` (pass mark ${view.passMark}%)`}</dd></div>
         <div><dt className={c.factLabel}>Mock teaching</dt><dd>{view.mock ?? "Not booked yet"}</dd></div>
       </dl>
-      <a className={`${c.ghost} ${c.jumpLink}`} href={`/api/hiring/paper-check/${token}/paper`} target="_blank" rel="noreferrer">Open the marked paper (PDF)</a>
+      <a className={`${c.ghost} ${c.jumpLink}`} href={`/api/hiring/paper-check/${token}/paper`} target="_blank" rel="noreferrer">Open the marked paper in a new tab</a>
       <p className={c.note}>Personal data. Do not share.</p>
     </section>
   );
@@ -92,7 +93,13 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
   return (
     <>
       {header}
-      <section className={c.facts}>
+      <div className={k.split}>
+      {/* The paper beside the marks on a wide screen, above them on a phone. Drawn on the page: a PDF frame is blank on Safari and phones. */}
+      <section className={k.paper} aria-label="Marked paper">
+        <h2 className={c.stepTitle}>Marked paper</h2>
+        <PdfPages src={`/api/hiring/paper-check/${token}/paper`} runtime={`/api/hiring/paper-check/${token}/runtime`} title={`Marked paper of ${view.name}`} maxPages={40} />
+      </section>
+      <section className={`${c.facts} ${k.marks}`}>
         <h2 className={c.stepTitle}>Your marks</h2>
         <p className={c.note}>The AI marked this paper just below the pass mark. Read the marked paper, then give your mark for each question. Your marks are final.</p>
         <ol className={k.questions}>
@@ -135,6 +142,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
         </button>
         {error && <p role="alert" className={c.alert}>{error}</p>}
       </section>
+      </div>
     </>
   );
 }
