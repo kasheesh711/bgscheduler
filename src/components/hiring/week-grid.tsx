@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { Check } from "lucide-react";
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { Check, Circle } from "lucide-react";
 import { GRID_HOURS, hourRanges, WEEK_DAYS, weekHoursCount, type WeekHours } from "@/lib/hiring/week-hours";
 import s from "./candidate.module.css";
 
@@ -23,7 +23,9 @@ const PRESETS = [
 export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onChange: (week: WeekHours) => void; disabled: boolean }) {
   // The latest week, so the many changes of one drag build on each other before React renders again.
   const current = useRef(value);
-  current.current = value;
+  useLayoutEffect(() => {
+    current.current = value;
+  }, [value]);
   // A drag fills or clears the rectangle from the first cell to the cell under the pointer (as in When2meet), on top of
   // the week as it was when the drag began.
   const drag = useRef<{ fill: boolean; from: [number, number]; before: WeekHours } | null>(null);
@@ -32,7 +34,9 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   function paint(cells: [number, number][], fill: boolean) {
     const next = current.current.map((hours, d) => {
       const set = new Set(hours);
-      for (const [cd, ch] of cells) if (cd === d) (fill ? set.add(ch) : set.delete(ch));
+      for (const [cd, ch] of cells) if (cd !== d) continue;
+      else if (fill) set.add(ch);
+      else set.delete(ch);
       return [...set].sort((a, b) => a - b);
     });
     current.current = next;
@@ -64,7 +68,11 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
     const [h0, h1] = [Math.min(from[1], cell[1]), Math.max(from[1], cell[1])];
     const next = before.map((hours, d) => {
       const set = new Set(hours);
-      if (d >= d0 && d <= d1) for (let h = h0; h <= h1; h++) (fill ? set.add(h) : set.delete(h));
+      if (d >= d0 && d <= d1)
+        for (let h = h0; h <= h1; h++) {
+          if (fill) set.add(h);
+          else set.delete(h);
+        }
       return [...set].sort((a, b) => a - b);
     });
     if (JSON.stringify(next) === JSON.stringify(current.current)) return;
@@ -98,6 +106,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   const late = value.slice(0, 5).some((hours) => hours.some((h) => h >= 15));
   return (
     <div className={s.week}>
+      <p className={s.hint}>Tap or drag across the hours. Start on a dark hour to clear.</p>
       <div className={s.presets} role="group" aria-label="Quick fill">
         {PRESETS.map((p) => {
           const on = p.days.every((d) => p.hours.every((h) => has(value, d, h)));
@@ -156,19 +165,17 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
         ))}
       </div>
       <div className={s.readback} aria-live="polite">
-        <p>
-          {count
-            ? value.flatMap((hours, d) => (hours.length ? [`${WEEK_DAYS[d]} ${hourRanges(hours).replaceAll(":00", "").replace(/-/g, "–")}`] : [])).join(" · ")
-            : "Tap or drag across the hours you can teach."}
-        </p>
+        {count > 0 && (
+          <p>{value.flatMap((hours, d) => (hours.length ? [`${WEEK_DAYS[d]} ${hourRanges(hours).replaceAll(":00", "").replace(/-/g, "–")}`] : [])).join(" · ")}</p>
+        )}
         <p className={s.rules}>
           <span data-ok={weekend || undefined}>
-            <Check aria-hidden size={14} /> Saturday or Sunday
+            {weekend ? <Check aria-hidden size={14} /> : <Circle aria-hidden size={12} />} Saturday or Sunday
           </span>
           <span data-ok={late || undefined}>
-            <Check aria-hidden size={14} /> A weekday after 15:00
+            {late ? <Check aria-hidden size={14} /> : <Circle aria-hidden size={12} />} A weekday after 15:00
           </span>
-          {count > 0 && <b>{count} h a week</b>}
+          {count > 0 && <b>{count} hours a week</b>}
         </p>
       </div>
     </div>

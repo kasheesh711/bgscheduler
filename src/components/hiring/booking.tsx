@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { BookOpen, Check, ChevronLeft, ChevronRight, CircleCheck, Info, MapPin, Phone, Video } from "lucide-react";
+import { BookOpen, Check, ChevronLeft, ChevronRight, CircleCheck, FileSignature, Info, MapPin, Video } from "lucide-react";
 import { mockCanFollow, phoneSchema, type Subject, type Slot } from "@/lib/hiring/model";
 import type { bookingView, callView, contractView, visitView } from "@/lib/hiring/service";
 import { PreScreenQuestions } from "./questions";
@@ -30,6 +30,19 @@ const Help = () => (
 
 /** Server text is plain text. Only the known LINE address becomes a link, so no HTML comes through. */
 function Linked({ text }: { text: string }) {
+  // "Contact BeGifted on LINE: <address>" reads better as one link with those words (Fable r1).
+  const named = "Contact BeGifted on LINE: " + LINE_URL;
+  const i = text.indexOf(named);
+  if (i >= 0)
+    return (
+      <>
+        {text.slice(0, i)}
+        <a href={LINE_URL} rel="noreferrer">
+          Contact BeGifted on LINE
+        </a>
+        {text.slice(i + named.length)}
+      </>
+    );
   const at = text.indexOf(LINE_URL);
   if (at < 0) return <>{text}</>;
   return (
@@ -69,7 +82,7 @@ export function VisitConfirm({
   summary?: ReactNode;
 }) {
   return (
-    <div className={c.confirm}>
+    <div className={c.confirm} data-confirm="">
       {summary}
       {error && (
         <p role="alert" className={c.alert}>
@@ -101,7 +114,7 @@ const Fact = ({ icon, label, children }: { icon: ReactNode; label: string; child
 );
 
 /** When the times were checked against live Wise. Nothing shows when the list came from the Wise copy. */
-const Live = ({ at }: { at: string | null }) => (at ? <span className={c.live}>Live schedule, checked {time(at)}</span> : null);
+const Live = ({ at }: { at: string | null }) => (at ? <span className={c.live}>Next 5 days checked live, {time(at)}</span> : null);
 
 const NOON = (date: string) => `${date}T12:00:00+07:00`;
 const plusDays = (date: string, n: number) => new Date(Date.parse(NOON(date)) + n * 86_400_000).toISOString().slice(0, 10);
@@ -119,6 +132,8 @@ const PARTS = [
  * not fit a phone in one list. Real radio inputs keep the keyboard and screen readers working.
  */
 function Picker<T extends { date: string }>({
+  id,
+  hint,
   legend,
   checkedAt,
   items,
@@ -129,6 +144,9 @@ function Picker<T extends { date: string }>({
   tile,
   compact,
 }: {
+  /** The page can focus or scroll to this list. */
+  id?: string;
+  hint?: string;
   legend: string;
   /** When the first days were checked against live Wise; later days come from the Wise copy (PR #371). */
   checkedAt: string | null;
@@ -154,11 +172,12 @@ function Picker<T extends { date: string }>({
   const shown = items.filter((i) => i.date === active);
   const label = (date: string, options: Intl.DateTimeFormatOptions) => part(NOON(date), options);
   return (
-    <fieldset className={c.step}>
+    <fieldset className={c.step} id={id} tabIndex={-1}>
       <legend className={c.stepHead}>
         <span className={c.stepTitle}>{legend}</span>
         <Live at={checkedAt && days.slice(0, 5).includes(active) ? checkedAt : null} />
       </legend>
+      {hint && <p className={c.note}>{hint}</p>}
       {weeks.length > 1 && (
         <div className={cs.weekNav}>
           <button type="button" className={cs.arrow} aria-label="Previous week" disabled={at <= 0} onClick={() => setWeek(weeks[at - 1])}>
@@ -166,6 +185,7 @@ function Picker<T extends { date: string }>({
           </button>
           <b aria-live="polite">
             {label(week, { day: "numeric", month: "short" })} – {label(plusDays(week, 6), { day: "numeric", month: "short" })}
+            <small>Bangkok time</small>
           </b>
           <button type="button" className={cs.arrow} aria-label="Next week" disabled={at >= weeks.length - 1} onClick={() => setWeek(weeks[at + 1])}>
             <ChevronRight aria-hidden size={20} />
@@ -213,6 +233,32 @@ function Picker<T extends { date: string }>({
   );
 }
 
+/** Bring a part of the page into view, smoothly unless the candidate asked for less motion. */
+export function reveal(id: string, focus = false) {
+  requestAnimationFrame(() => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    if (focus) el.focus({ preventScroll: true });
+  });
+}
+
+/**
+ * One column on a phone (top, then main, then side). From 1024 px the main part is on the left and the top and side
+ * parts stay in view on the right (Fable r1: use the width at 1280).
+ */
+export function Layout({ top, main, side }: { top: ReactNode; main: ReactNode; side: ReactNode }) {
+  return (
+    <div className={cs.layout} data-wide-layout="">
+      <div className={cs.main}>{main}</div>
+      <div className={cs.rail}>
+        <div className={cs.top}>{top}</div>
+        {side && <div className={cs.side}>{side}</div>}
+      </div>
+    </div>
+  );
+}
+
 /** Questions → Times → Booked, so a candidate always sees where they are. */
 function Steps({ at }: { at: 0 | 1 | 2 }) {
   return (
@@ -249,8 +295,8 @@ function Checks({
   );
   return (
     <div className={c.checks}>
-      {row(onsite, setOnsite, "I will attend onsite at the address above.")}
-      {row(commitment, setCommitment, "I can teach onsite on Saturday or Sunday and on at least one weekday after 15:00.")}
+      {row(onsite, setOnsite, "I will come to the address above.")}
+      {row(commitment, setCommitment, "I can teach onsite on a Saturday or Sunday and on a weekday after 15:00.")}
     </div>
   );
 }
@@ -338,16 +384,6 @@ export function VisitBooking({
   if (view.waiting)
     return (
       <>
-        <Steps at={0} />
-        <div className={c.plan}>
-          <span>
-            Test<small>2 hours</small>
-          </span>
-          <span>
-            Mock teaching<small>1 hour, if you pass</small>
-          </span>
-        </div>
-        <p className={c.note}>Answer a few questions, then choose your times.</p>
         {view.waiting === "answers" && (
           <PreScreenQuestions
             token={token}
@@ -355,144 +391,181 @@ export function VisitBooking({
             reload={reload}
             knownDegree={view.knownDegree}
             testSubjects={view.testSubjects}
+            top={
+              <>
+                <Steps at={0} />
+                <div className={c.plan}>
+                  <span>
+                    Test<small>2 hours</small>
+                  </span>
+                  <span>
+                    Mock teaching<small>1 hour, if you pass</small>
+                  </span>
+                </div>
+              </>
+            }
           />
         )}
         <Help />
       </>
     );
+  const short = (value: string) => part(value, { weekday: "short", day: "numeric", month: "short" });
   return (
     <>
-      {saved && <Saved>{saved}</Saved>}
-      {view.twoDay && <Steps at={view.visit && !moving ? 2 : 1} />}
-      <div className={c.facts}>
-        <Fact icon={<BookOpen aria-hidden />} label="Subject">
-          <span className={c.subject}>{view.subject}</span>
-        </Fact>
-        <Fact icon={<MapPin aria-hidden />} label="Where">
-          {view.location}
-        </Fact>
-        <div className={c.plan}>
-          <span>
-            Exam<small>2 hours</small>
-          </span>
-          {view.paired && <span>Mock teaching<small>1 hour</small></span>}
-        </div>
-        <p className={c.note}>{view.twoDay ? "Mock teaching is Monday to Friday, after your test day or later the same day." : view.paired ? "We grade your test in 5 to 10 minutes. If you pass, the mock teaching interview follows on the same day." : "We will contact you after we grade your paper."} All times are Bangkok time.</p>
-      </div>
-      {view.visit && (
-        <section>
-          <div className={c.stepHead}>
-            <h2 className={c.stepTitle}>Your booked visit</h2>
-            <span className={c.badge}>
-              <Check aria-hidden size={14} /> Confirmed
-            </span>
-          </div>
-          <div className={c.ticket}>
-            <div className={c.ticketDate}>
-              <span>{part(view.visit.examStart, { weekday: "short" })}</span>
-              <b>{part(view.visit.examStart, { day: "numeric" })}</b>
-              <span>{part(view.visit.examStart, { month: "short" })}</span>
-            </div>
-            <div className={c.ticketBody}>
-              <span>{day(view.visit.examStart)}</span>
-              <div className={c.ticketRow}>
-                <span>Exam</span>
-                <strong>
-                  {time(view.visit.examStart)}–{time(view.visit.examEnd)}
-                </strong>
-              </div>
-              {view.visit.mockStart && view.visit.mockEnd && <div className={c.ticketRow}>
-                <span>Mock teaching with {view.visit.head}, if you pass</span>
-                <strong>
-                  {view.twoDay && `${day(view.visit.mockStart)}, `}
-                  {time(view.visit.mockStart)}–{time(view.visit.mockEnd)}
-                </strong>
-              </div>}
-            </div>
-          </div>
-          {!view.canMove && !notice && <p className={c.note}>To change this visit, contact BeGifted on LINE.</p>}
-          {view.canMove && !moving && (
-            <div className={c.move}>
-              <p className={c.note}>You can move this visit once, up to 24 hours before it starts.</p>
-              <button type="button" className={c.ghost} disabled={busy || !view.slots.length} onClick={() => setMoving(true)}>
-                Move this visit
-              </button>
-              {!view.slots.length && <p className={c.note}>You cannot move it now, because no other time is open.</p>}
-            </div>
-          )}
-        </section>
-      )}
-      {notice && <VisitNotice text={notice} />}
-      {/* With no form on the page, a failed booking still shows its error here. */}
-      {!showForm && error && (
-        <p role="alert" className={c.alert}>
-          {error}
-        </p>
-      )}
-      {/* The list can empty while the candidate is moving: the way back stays on the page. */}
-      {!showForm && keep}
-      {showForm && (
-        <>
-          <Picker
-            legend={view.twoDay ? "1 · Test time" : view.visit ? "Choose a new time" : "Choose a time"}
-            checkedAt={view.checkedAt}
-            items={view.slots}
-            keyOf={(s) => s.examStart}
-            startOf={(s) => s.examStart}
-            selected={start}
-            onSelect={(s) => setStart(s.examStart)}
-            tile={(s) => (
-              <>
-                <b>{time(s.examStart)}</b>
-                <small>{s.mockEnd ? `Test + mock to ${time(s.mockEnd)}` : `Test to ${time(s.examEnd)}`}</small>
-              </>
-            )}
-          />
-          {view.twoDay && slot && (
-            <Picker
-              legend="2 · Mock teaching time"
-              checkedAt={null}
-              items={laterMocks}
-              keyOf={(m) => m.start}
-              startOf={(m) => m.start}
-              selected={mock?.start ?? ""}
-              onSelect={(m) => setMock(m.start)}
-              tile={(m) => (
-                <>
-                  <b>{time(m.start)}</b>
-                  <small>to {time(m.end)}</small>
-                </>
+      <Layout
+        top={
+          <>
+            {view.twoDay && <Steps at={view.visit && !moving ? 2 : 1} />}
+            {saved && <Saved>{saved}</Saved>}
+            <div className={c.facts}>
+              <Fact icon={<BookOpen aria-hidden />} label="Subject">
+                <span className={c.subject}>{view.subject}</span>
+              </Fact>
+              <Fact icon={<MapPin aria-hidden />} label="Where">
+                {view.location}
+              </Fact>
+              {!view.twoDay && (
+                <p className={c.note}>
+                  {view.paired ? "We grade your test in 5 to 10 minutes. If you pass, the mock teaching interview follows on the same day." : "We will contact you after we grade your paper."} All
+                  times are Bangkok time.
+                </p>
               )}
-            />
-          )}
-          <Checks onsite={onsite} commitment={commitment} setOnsite={setOnsite} setCommitment={setCommitment} />
-          {keep}
-          <VisitConfirm
-            error={error}
-            disabled={busy || !start || (view.twoDay && !mock) || !onsite || !commitment}
-            label={busy ? "Confirming…" : view.twoDay ? "Confirm both times" : view.visit ? "Confirm new time" : "Confirm visit"}
-            onConfirm={book}
-            summary={
-              slot && (
-                <div className={cs.chosen}>
-                  <div>
-                    <span>Test</span>
-                    <b>
-                      {part(slot.examStart, { weekday: "short", day: "numeric", month: "short" })}, {time(slot.examStart)}
-                    </b>
-                  </div>
-                  {view.twoDay && (
-                    <div>
-                      <span>Mock teaching</span>
-                      <b>{mock ? `${part(mock.start, { weekday: "short", day: "numeric", month: "short" })}, ${time(mock.start)}` : "Choose a time"}</b>
-                    </div>
-                  )}
+            </div>
+          </>
+        }
+        main={
+          <>
+            {view.visit && (
+              <section className={cs.booked}>
+                <div className={c.stepHead}>
+                  <h2 className={c.stepTitle}>Your booked visit</h2>
+                  <span className={c.badge}>
+                    <Check aria-hidden size={14} /> Confirmed
+                  </span>
                 </div>
-              )
-            }
-          />
-        </>
-      )}
+                <div className={c.ticket}>
+                  <div className={c.ticketDate}>
+                    <span>{part(view.visit.examStart, { weekday: "short" })}</span>
+                    <b>{part(view.visit.examStart, { day: "numeric" })}</b>
+                    <span>{part(view.visit.examStart, { month: "short" })}</span>
+                  </div>
+                  <div className={cs.legs}>
+                    <div>
+                      <span>Test</span>
+                      <b>{short(view.visit.examStart)}</b>
+                      <small>
+                        {time(view.visit.examStart)}–{time(view.visit.examEnd)}
+                      </small>
+                    </div>
+                    {view.visit.mockStart && view.visit.mockEnd && (
+                      <div>
+                        <span>Mock teaching, if you pass</span>
+                        <b>{short(view.visit.mockStart)}</b>
+                        <small>
+                          {time(view.visit.mockStart)}–{time(view.visit.mockEnd)}
+                          {view.visit.head && ` · ${view.visit.head}`}
+                        </small>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {!view.canMove && !notice && <p className={c.note}>This visit can no longer be moved online.</p>}
+                {view.canMove && !moving && (
+                  <div className={c.move}>
+                    <p className={c.note}>You can move this visit once, up to 24 hours before it starts.</p>
+                    <button type="button" className={c.ghost} disabled={busy || !view.slots.length} onClick={() => setMoving(true)}>
+                      Move this visit
+                    </button>
+                    {!view.slots.length && <p className={c.note}>You cannot move it now, because no other time is open.</p>}
+                  </div>
+                )}
+              </section>
+            )}
+            {notice && <VisitNotice text={notice} />}
+            {/* With no form on the page, a failed booking still shows its error here. */}
+            {!showForm && error && (
+              <p role="alert" className={c.alert}>
+                {error}
+              </p>
+            )}
+            {/* The list can empty while the candidate is moving: the way back stays on the page. */}
+            {!showForm && keep}
+            {showForm && (
+              <Picker
+                id="times-start"
+                legend={view.twoDay ? "Test time" : view.visit ? "Choose a new time" : "Choose a time"}
+                checkedAt={view.checkedAt}
+                items={view.slots}
+                keyOf={(s) => s.examStart}
+                startOf={(s) => s.examStart}
+                selected={start}
+                onSelect={(s) => {
+                  setStart(s.examStart);
+                  // The mock list opens below the test list: bring it into view (Sol r1).
+                  if (view.twoDay && !slot) reveal("mock-start");
+                }}
+                tile={(s) => (
+                  <>
+                    <b>{time(s.examStart)}</b>
+                    <small>{s.mockEnd ? `Test + mock to ${time(s.mockEnd)}` : `Test to ${time(s.examEnd)}`}</small>
+                  </>
+                )}
+              />
+            )}
+            {showForm && view.twoDay && slot && (
+              <Picker
+                id="mock-start"
+                legend="Mock teaching time"
+                hint="Monday to Friday, after your test"
+                checkedAt={null}
+                items={laterMocks}
+                keyOf={(m) => m.start}
+                startOf={(m) => m.start}
+                selected={mock?.start ?? ""}
+                onSelect={(m) => setMock(m.start)}
+                tile={(m) => (
+                  <>
+                    <b>{time(m.start)}</b>
+                    <small>to {time(m.end)}</small>
+                  </>
+                )}
+              />
+            )}
+          </>
+        }
+        side={
+          showForm && (
+            <>
+              <Checks onsite={onsite} commitment={commitment} setOnsite={setOnsite} setCommitment={setCommitment} />
+              {keep}
+              <VisitConfirm
+                error={error}
+                disabled={busy || !start || (view.twoDay && !mock) || !onsite || !commitment}
+                label={busy ? "Confirming…" : view.twoDay ? "Confirm both times" : view.visit ? "Confirm new time" : "Confirm visit"}
+                onConfirm={book}
+                summary={
+                  slot && (
+                    <div className={cs.chosen}>
+                      <div>
+                        <span>Test</span>
+                        <b>
+                          {short(slot.examStart)}, {time(slot.examStart)}
+                        </b>
+                      </div>
+                      {view.twoDay && (
+                        <div>
+                          <span>Mock teaching</span>
+                          <b>{mock ? `${short(mock.start)}, ${time(mock.start)}` : "Choose a time"}</b>
+                        </div>
+                      )}
+                    </div>
+                  )
+                }
+              />
+            </>
+          )
+        }
+      />
       {!notice && <Help />}
     </>
   );
@@ -564,7 +637,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
     <>
       {saved && <Saved>{saved}</Saved>}
       <div className={c.facts}>
-        <Fact icon={contract ? <Phone aria-hidden /> : <Video aria-hidden />} label={contract ? "Contract signing" : "R1: HR Interview"}>
+        <Fact icon={contract ? <FileSignature aria-hidden /> : <Video aria-hidden />} label={contract ? "Contract signing" : "R1: HR Interview"}>
           {view.minutes} minutes {contract ? "with our team" : "on Google Meet with our HR team"}
         </Fact>
         {view.kind === "contract" ? <Fact icon={<MapPin aria-hidden />} label="Where">{view.location}</Fact> : <p className={c.note}>A video call. Google Calendar sends you an invitation with the Google Meet link. All times are Bangkok time.</p>}
@@ -688,8 +761,8 @@ export function BookingShell({ kind, children, bare = false }: { kind?: "visit" 
         <div className={c.heroInner}>
           <p className={c.brand}>BeGifted Education</p>
           <h1 className={c.title}>
-            {kind === "onboarding" ? "Tutor " : kind === "brief" ? "Interview " : kind === "paper-check" ? "Paper " : "Book your "}
-            <em>{kind === "onboarding" ? "onboarding" : kind === "brief" ? "brief" : kind === "paper-check" ? "check" : kind === "contract" ? "contract signing" : kind === "call" ? "R1: HR Interview" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "assessment"}</em>
+            {kind === "onboarding" ? "Tutor " : kind === "brief" ? "Interview " : kind === "paper-check" ? "Paper " : kind ? "Book your " : "Your "}
+            <em>{kind === "onboarding" ? "onboarding" : kind === "brief" ? "brief" : kind === "paper-check" ? "check" : kind === "contract" ? "contract signing" : kind === "call" ? "R1: HR Interview" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "booking"}</em>
           </h1>
         </div>
       </header>}

@@ -6,32 +6,41 @@ import { Check, ChevronDown, Pencil } from "lucide-react";
 import { ANSWER_CHOICES, answersSchema, MAX_PORTFOLIO_BYTES, PORTFOLIO_TYPES, SUBJECTS, type Subject } from "@/lib/hiring/model";
 import type { KnownDegree } from "@/lib/hiring/profile-degree";
 import { emptyWeek, weekHoursCount, type WeekHours } from "@/lib/hiring/week-hours";
-import { VisitConfirm } from "./booking";
+import { Layout, reveal, VisitConfirm } from "./booking";
 import { WeekGrid } from "./week-grid";
 import c from "./booking.module.css";
 import s from "./candidate.module.css";
 
 const ART: Subject = "Art & Design Technology";
+// Shorter words on the chips (Fable r1). The stored value stays the Google Form's text, which the import and scoring read.
+const SHORT: Record<string, string> = {
+  "IB (MYP/ DP)": "IB",
+  "British (IGCSE/ GCSE/ A-level)": "British (IGCSE, A-level)",
+  "American (US High School/ AP)": "American (AP)",
+  "Thai National Curriculum": "Thai national",
+  "Year 2-6 (Primary)": "Year 2–6",
+  "Year 7-9 (Lower Secondary)": "Year 7–9",
+  "Year 10-11 (IGCSE Level)": "Year 10–11",
+  "Year 12-13 (A-level/ IB DP)": "Year 12–13",
+};
 
-function Section({ n, title, children }: { n: number; title: string; children: ReactNode }) {
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <fieldset className={s.section}>
-      <legend className={s.sectionHead}>
-        <span>0{n}</span>
-        {title}
-      </legend>
+      <legend className={s.sectionHead}>{title}</legend>
       {children}
     </fieldset>
   );
 }
 
-function Q({ title, optional, children }: { title: string; optional?: boolean; children: ReactNode }) {
+function Q({ title, hint, optional, children }: { title: string; hint?: string; optional?: boolean; children: ReactNode }) {
   return (
     <fieldset className={s.q}>
       <legend className={s.qTitle}>
         {title}
         {optional && <small>optional</small>}
       </legend>
+      {hint && <p className={c.note}>{hint}</p>}
       {children}
     </fieldset>
   );
@@ -66,7 +75,7 @@ function Chips<T extends string>({
             onChange={(e) => onChange(many ? (e.target.checked ? [...value, choice] : value.filter((v) => v !== choice)) : [choice])}
           />
           {many && <Check aria-hidden size={14} />}
-          {choice}
+          {SHORT[choice] ?? choice}
         </label>
       ))}
     </div>
@@ -83,6 +92,7 @@ export function PreScreenQuestions({
   reload,
   knownDegree = null,
   testSubjects = [],
+  top,
 }: {
   token: string;
   filePath: string;
@@ -91,6 +101,8 @@ export function PreScreenQuestions({
   knownDegree?: KnownDegree | null;
   /** Subjects a visit can be in now, highest priority first. */
   testSubjects?: Subject[];
+  /** The steps and the visit plan, shown above the questions on a phone and beside them on a wide screen. */
+  top?: ReactNode;
 }) {
   const [degree, setDegree] = useState<(typeof ANSWER_CHOICES.degree)[number][]>([]),
     [field, setField] = useState(""),
@@ -193,7 +205,8 @@ export function PreScreenQuestions({
       const body = await r.json();
       if (!r.ok) throw new Error(body.error);
       await reload();
-      window.scrollTo({ top: 0 });
+      // The times replace the questions: start the candidate at the test times.
+      reveal("times-start", true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save your answers.");
     } finally {
@@ -215,9 +228,9 @@ export function PreScreenQuestions({
       <textarea className={c.input} rows={4} value={value} maxLength={5000} disabled={busy} onChange={(e) => set(e.target.value)} />
     </label>
   );
-  return (
+  const questions = (
     <>
-      <Section n={1} title="About you">
+      <Section title="About you">
         {degreeMode !== "ask" && knownDegree ? (
           <div className={s.known} data-ok={degreeMode === "confirmed" || undefined}>
             <p>
@@ -261,7 +274,7 @@ export function PreScreenQuestions({
           <Chips name="experience" choices={ANSWER_CHOICES.experience} value={experience} onChange={setExperience} disabled={busy} />
         </Q>
       </Section>
-      <Section n={2} title="What you teach">
+      <Section title="What you teach">
         <Q title="Subjects you can teach confidently">
           <Chips name="subjects" choices={showRest ? [...first, ...rest] : first} value={subjects} onChange={setSubjects} many disabled={busy} />
           {!showRest && rest.length > 0 && (
@@ -274,7 +287,7 @@ export function PreScreenQuestions({
           )}
         </Q>
         {testChoices.length > 1 && (
-          <Q title="Your test subject">
+          <Q title="Your test subject" hint="Your test and mock lesson are in this subject.">
             <Chips name="testSubject" choices={testChoices} value={chosenTest} onChange={setTestSubject} disabled={busy} />
           </Q>
         )}
@@ -303,7 +316,7 @@ export function PreScreenQuestions({
           <Chips name="yearGroups" choices={ANSWER_CHOICES.yearGroups} value={yearGroups} onChange={setYearGroups} many disabled={busy} />
         </Q>
       </Section>
-      <Section n={3} title="When you can teach">
+      <Section title="When you can teach">
         <Q title="Hours you can teach onsite">
           <WeekGrid value={week} onChange={setWeek} disabled={busy} />
         </Q>
@@ -311,26 +324,34 @@ export function PreScreenQuestions({
           <Chips name="weeklyHours" choices={ANSWER_CHOICES.weeklyHours} value={weeklyHours} onChange={setWeeklyHours} disabled={busy} />
         </Q>
       </Section>
-      <Section n={4} title="In your words">
+      <Section title="In your words">
         {long("Why do you want to tutor with BeGifted?", motivation, setMotivation)}
-        {long("A bright student keeps losing motivation and their grades are slipping. How would you approach it?", teachingApproach, setTeachingApproach)}
+        {long("A bright student is losing motivation and their grades are slipping. How would you approach it?", teachingApproach, setTeachingApproach)}
       </Section>
-      <VisitConfirm
-        error={error}
-        disabled={busy}
-        label={busy ? "Saving…" : "Save and see times"}
-        onConfirm={send}
-        summary={
-          <div className={s.progress}>
-            <span>
-              {answered} of {done.length} answered
-            </span>
-            <span className={s.progressBar} aria-hidden>
-              <i style={{ width: `${(answered / done.length) * 100}%` }} />
-            </span>
-          </div>
-        }
-      />
     </>
+  );
+  return (
+    <Layout
+      top={top}
+      main={questions}
+      side={
+        <VisitConfirm
+          error={error}
+          disabled={busy}
+          label={busy ? "Saving…" : "Save and see times"}
+          onConfirm={send}
+          summary={
+            <div className={s.progress}>
+              <span>
+                {answered} of {done.length} answered
+              </span>
+              <span className={s.progressBar} aria-hidden>
+                <i style={{ width: `${(answered / done.length) * 100}%` }} />
+              </span>
+            </div>
+          }
+        />
+      }
+    />
   );
 }

@@ -49,6 +49,7 @@
   align-items: baseline;
   gap: 10px;
   padding: 0;
+  margin-bottom: 4px;
   font-family: var(--serif);
   font-size: 26px;
   font-weight: 600;
@@ -92,7 +93,9 @@
 .chip {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
+  min-width: 44px;
   min-height: 44px;
   padding: 0 14px;
   border: 1px solid var(--line);
@@ -233,8 +236,11 @@
   background: #eef1f7;
 }
 .clear {
-  border-style: dashed;
+  border-color: transparent;
   background: transparent;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 .grid {
   display: grid;
@@ -317,19 +323,19 @@
   gap: 4px;
 }
 .rules span svg {
-  opacity: 0.35;
+  color: #9a917d;
 }
 .rules span[data-ok] {
   color: var(--ok);
   font-weight: 600;
 }
 .rules span[data-ok] svg {
-  opacity: 1;
+  color: var(--ok);
 }
 .rules b {
   margin-left: auto;
-  font-family: var(--mono);
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
   color: var(--ink);
 }
 @media (min-width: 640px) {
@@ -512,9 +518,9 @@
   cursor: pointer;
 }
 .time b {
-  font-family: var(--mono);
-  font-size: 17px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
 }
 .time small {
   font-size: 12px;
@@ -559,5 +565,110 @@
   .cell,
   .chip {
     transition: none;
+  }
+}
+
+.hint {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Layout: one column on a phone; from 1024 px the questions or the times on the left and a sticky rail on the right. */
+.layout {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  min-width: 0;
+}
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  min-width: 0;
+  order: 0;
+}
+.rail {
+  display: contents;
+}
+.top {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  order: -1;
+}
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  order: 1;
+}
+@media (min-width: 1024px) {
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: 48px;
+    align-items: start;
+  }
+  .rail {
+    position: sticky;
+    top: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+  .side [data-confirm] {
+    position: static;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    backdrop-filter: none;
+  }
+}
+
+/* Booked ticket: the test and the mock teaching each with its own day. */
+.booked {
+  display: grid;
+  gap: 14px;
+}
+.legs {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+}
+.legs div {
+  display: grid;
+  gap: 1px;
+}
+/* On the navy ticket. */
+.legs span {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #d9d4c8;
+}
+.legs b {
+  font-size: 16px;
+  font-weight: 650;
+}
+.legs small {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  color: #fbf7ee;
+}
+.weekNav b {
+  display: grid;
+}
+.weekNav b small {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+@media (max-width: 359px) {
+  .steps li {
+    gap: 4px;
+    font-size: 12px;
   }
 }

@@ -917,3 +917,19 @@ input[type="file"].input {
 .page:not([data-brief]) :is(input, select, textarea, button):focus-visible {
   scroll-margin-bottom: 200px;
 }
+
+/* The candidate pages with a side rail (candidate.module.css .layout) use more of a wide screen. */
+@media (min-width: 1024px) {
+  .page:has([data-wide-layout]) .heroInner,
+  .page:has([data-wide-layout]) .sheet {
+    max-width: 1040px;
+  }
+  .page:has([data-wide-layout]) .card {
+    padding: 40px 44px;
+  }
+}
+@media (max-width: 359px) {
+  .title {
+    font-size: 34px;
+  }
+}
