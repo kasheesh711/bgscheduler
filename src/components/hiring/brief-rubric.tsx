@@ -267,7 +267,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
               <input
                 type="radio"
                 name={`${rubricId}-checks`}
-                className={c.hidden}
+                className={b.choiceInput}
                 checked={checksDone === value}
                 onChange={() => {
                   setChecksDone(value);

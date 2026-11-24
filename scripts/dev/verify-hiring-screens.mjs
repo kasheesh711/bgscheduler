@@ -1193,6 +1193,26 @@ try {
     assert.ok(await dashboardFits(), "Heads scrolls sideways at 320px");
     await page.setViewportSize({ width: 1440, height: 900 });
   });
+  await check("Gift signs from her list on a phone and focus stays on the receipt", async () => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${origin}/?roles=1&me=Gift&gift=1&live=1`);
+    await page.getByRole("button", { name: /^Final review: .*Reply Passed/ }).click();
+    // The packet opens with the row, full screen; Back closes it and keeps the list.
+    const close = page.getByRole("button", { name: "Close packet" });
+    await close.waitFor();
+    // Reading means the packet drew; Approve unlocks once the open packet is checked as current.
+    await page.frameLocator("iframe[title^='Review packet']").getByText("Assessment summary").waitFor();
+    await page.goBack();
+    await close.waitFor({ state: "hidden" });
+    await page.locator("button:not([disabled])", { hasText: "Approve and send offer" }).waitFor();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Approve and send offer" }).click();
+    const receipt = "Offer approved. The offer email is queued.";
+    await page.getByText(receipt).waitFor();
+    await page.waitForFunction((text) => document.activeElement?.textContent === text, receipt);
+    const finished = page.getByRole("navigation", { name: /hiring list/ }).locator("section").filter({ has: page.getByRole("heading", { name: /^Just finished/ }) });
+    assert.equal(await finished.getByRole("button", { name: /Reply Passed/ }).count(), 1);
+  });
   await check("the head and Gift screens render on phone and desktop", async () => {
     const onOneLine = (locator) => locator.evaluate((node) => {
       const text = document.createRange();

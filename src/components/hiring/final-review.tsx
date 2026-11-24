@@ -402,8 +402,9 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       )}
       {awaitingSignOff && (packet ? (
         <>
-          {/* What Gift approves, beside the button; the letter itself is in the packet (Sol review, round 11). */}
-          {packet.offerType && <p className={css.inspectorMeta}>Offer: <strong>{OFFER_LETTERS[packet.offerType].label}</strong>. The pay and terms are in the contract.</p>}
+          {/* What Gift approves, beside the button: the letter's terms (Sol review, rounds 11–12). An older packet has its own terms text. */}
+          <p className={css.inspectorMeta}><strong>Proposed offer:</strong> {packet.offerType
+            ? `${OFFER_LETTERS[packet.offerType].label}. ${OFFER_LETTERS[packet.offerType].terms}` : packet.offer}</p>
           <div className={css.signOffActions}>
             <div>
               <button type="button" ref={approveButton} className={css.primary} disabled={signOffDisabled || !!approveBlock} aria-describedby={[pauseReason, instruction, approveReason].filter(Boolean).join(" ")} onClick={() => {

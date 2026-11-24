@@ -171,8 +171,11 @@
 /* In the head's pane the mark sits to the right of its question, so each card is shorter and more questions fit (Sol review, round 11). */
 [data-bare] .questions { container-type: inline-size; }
 @container (min-width: 320px) {
-  .question { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; align-items: start; }
+  .questionList { gap: 8px; }
+  .question { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; row-gap: 2px; align-items: center; padding: 6px 10px; }
   .question > .head, .question > .reason { grid-column: 1; }
-  .question > .markRow { grid-column: 2; grid-row: 1 / span 2; flex-direction: column; align-items: flex-end; gap: 2px; }
-  .question .max { font-size: 13px; text-align: right; }
+  .question > .head { justify-content: flex-start; }
+  .question > .markRow { grid-column: 2; grid-row: 1 / span 2; flex-direction: column; align-items: flex-end; gap: 0; }
+  .question .mark { width: 5rem; min-height: 44px; border-radius: 12px; }
+  .question .max { font-size: 12px; text-align: right; }
 }

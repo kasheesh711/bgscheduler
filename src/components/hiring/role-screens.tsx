@@ -496,10 +496,11 @@ function visitItem(visit: ReturnType<typeof headVisit>, today: string, live = fa
     detail: `${row.subject ?? "Subject not recorded"} · ${mock ? "Mock" : "Paper test"}`,
     tags: [
       ...(status ? [{ text: status }] : []),
-      ...(scored && !decision && !due ? [{ text: "Scores sent", tone: "hire" as const }] : []),
+      // A live mock with scores says so in its action instead.
+      ...(scored && !decision && !due && !(live && open) ? [{ text: "Scores sent", tone: "hire" as const }] : []),
       ...(decision ? [{ text: `Recommendation: ${decision.decision === "hire" ? "Yes" : "No"}`, tone: decision.decision }] : []),
     ],
-    action: due && open ? (scored ? "Recommend Yes or No" : "Score mock") : live && open ? "Score mock"
+    action: due && open ? (scored ? "Recommend Yes or No" : "Score mock") : live && open ? (scored ? "Scores sent" : "Score mock")
       : checkingScores ? undefined
       : needsCheck ? "Ask admin: check scores"
       : mock && !path && !status && missingOutcome ? "Ask admin: outcome missing" : undefined,
@@ -731,8 +732,8 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     .map((d) => {
       const candidate = byId.get(d.candidateId!);
       const ready = packets.has(d.candidateId!);
-      return { id: `review-${d.candidateId}`, name: candidate?.name ?? "Candidate", candidate, time: "Packet",
-        day: ready ? "ready" : "not ready", detail: `${candidate?.visitSubject ?? candidate?.subjects[0] ?? "Subject not recorded"} · Yes from ${d.head}`,
+      return { id: `review-${d.candidateId}`, name: candidate?.name ?? "Candidate", candidate, time: ready ? "Ready" : "Packet",
+        day: ready ? "" : "not ready", detail: `${candidate?.visitSubject ?? candidate?.subjects[0] ?? "Subject not recorded"} · Yes from ${d.head}`,
         tags: [], note: d.draftProblem && "No email draft yet", href: null, task: "Final review",
         action: ready ? "Read packet and decide" : undefined, urgent: ready, review: d };
     })
@@ -745,9 +746,11 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const signedIds = new Set(signedItems.map((item) => item.id));
   const unsigned = reviews.filter((item) => !signedIds.has(item.id));
   const stillSigned = signedItems.filter((item) => item.id === picked);
+  const reviewer = !!key && key === data.finalReviewer;
+  // Gift's sign-offs have their own heading under To do, so she sees at once whether a hire waits for her (Sol review, round 12).
   const groups = [
-    { title: "To do", items: [...checks, ...actionVisits, ...unsigned.filter((item) => item.urgent)]
-      .sort((a, b) => Number(!!b.urgent) - Number(!!a.urgent)) },
+    { title: "To do", items: [...checks, ...actionVisits].sort((a, b) => Number(!!b.urgent) - Number(!!a.urgent)) },
+    ...(reviewer ? [{ title: "Final review", items: unsigned.filter((item) => item.urgent) }] : []),
     { title: "Just finished", items: stillSigned },
     { title: mockNow ? "Mock now" : "Next mock", items: nextItem ? [nextItem] : [] },
     { title: "Coming up", items: coming.map((visit) => visitItem(visit, today)) },
@@ -755,9 +758,8 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     { title: "Waiting", items: [...checking, ...unsigned.filter((item) => !item.urgent)] },
   ];
   // A mock in progress leads the list.
-  if (mockNow) groups.unshift(...groups.splice(2, 1));
+  if (mockNow) groups.unshift(...groups.splice(groups.findIndex((group) => group.title === "Mock now"), 1));
   const papers = paperTests.map((visit) => visitItem(visit, today));
-  const reviewer = !!key && key === data.finalReviewer;
   const past = ended.filter((visit) => !visit.needsAction).slice(0, 6).map((visit) => visitItem(visit, today));
   const all = [...groups.flatMap((group) => group.items), ...papers, ...past];
   // The most urgent page is already open: a paper to re-mark or a mock to score, else the next mock.
@@ -817,14 +819,14 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
         )}
         <p className="sr-only" role="status">{name && `${name} · ${nextMock
           ? `${mockNow ? "mock now" : "next mock"} ${shortDay(nextMock.row.date)}, ${nextMock.row.mockStart}` : "no mock booked"}`}</p>
-        {groups.map((group) => (group.items.length > 0 || (group.title === "Next mock" && givesMocks) || (group.title === "To do" && (givesMocks || reviewer || (!!savedFor && selected?.id === savedFor.id)))) && (
-          <section key={group.title} className={r.group} data-tone={group.title === "To do" && group.items.length ? "todo" : undefined}>
+        {groups.map((group) => (group.items.length > 0 || (group.title === "Next mock" && givesMocks) || (group.title === "Final review") || (group.title === "To do" && (givesMocks || reviewer || (!!savedFor && selected?.id === savedFor.id)))) && (
+          <section key={group.title} className={r.group} data-tone={(group.title === "To do" || group.title === "Final review") && group.items.length ? "todo" : undefined}>
             <h2 className={r.groupTitle}>
               {group.title}
               {group.items.length > 1 && <span className={r.count}>{group.items.length}</span>}
             </h2>
             {group.title === "To do" && savedFor && selected?.id === savedFor.id && <p className={r.saved}>{savedFor.text}</p>}
-            {group.items.length ? list(group.items) : group.title === "To do" && savedFor && selected?.id === savedFor.id ? null : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "Nothing to score or sign now." : "Nothing to do now.") : "No mock booked. New bookings also come by LINE."}</p>}
+            {group.items.length ? list(group.items) : group.title === "To do" && savedFor && selected?.id === savedFor.id ? null : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "No papers or mocks to score now." : "Nothing to do now.") : group.title === "Final review" ? "No reviews to sign." : "No mock booked. New bookings also come by LINE."}</p>}
           </section>
         ))}
         {!heads.length ? <p className={r.quiet}>No heads are set up. Add interviewers in Rules and setup.</p>
