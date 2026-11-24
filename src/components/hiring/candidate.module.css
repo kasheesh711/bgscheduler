@@ -596,13 +596,16 @@
   gap: 18px;
   order: -1;
 }
+/* On a phone the side parts join the column, so the confirm bar sticks to the bottom of the whole layout. */
 .side {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  order: 1;
+  display: contents;
 }
 @media (min-width: 1024px) {
+  .side {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
   .layout {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 300px;
