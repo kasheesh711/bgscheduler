@@ -124,3 +124,19 @@
   font-size: 13px;
   font-weight: 600;
 }
+
+/* Inside the head's Hiring screen: the marks column fills the pane, the questions take the rest of it, and the score,
+   Submit and "Your marks are final." always show below them. */
+@media (min-width: 700px) {
+  [data-bare] .marks {
+    position: sticky;
+    top: 12px;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    height: calc(100dvh - 120px);
+  }
+  [data-bare] .questions {
+    max-height: none;
+    min-height: 0;
+  }
+}

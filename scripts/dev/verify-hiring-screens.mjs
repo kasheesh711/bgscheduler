@@ -24,6 +24,12 @@ const BRIEF_STATES = [
 ];
 
 const ENTRY = `
+// ?persist=1 keeps the whole sample query for the tab, as a signed-in head keeps their session across links.
+try {
+  if (location.search.includes("persist=1")) sessionStorage.setItem("fixture:query", location.search.slice(1));
+  else if (!location.search.includes("roles=") && !location.pathname.startsWith("/hiring/brief/") && !location.pathname.startsWith("/hiring/paper-check/") && sessionStorage.getItem("fixture:query"))
+    history.replaceState(null, "", "?" + sessionStorage.getItem("fixture:query"));
+} catch {}
 import { Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { baseConfigSchema, localDate } from "@/lib/hiring/model";

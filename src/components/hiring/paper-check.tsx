@@ -40,10 +40,19 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
   // signed again on each list load, so the draft is keyed by the result, and kept only while the AI marks are the same.
   // On a wide pane the questions scroll in their own area; the cue shows while some are still below it.
   const questionList = useRef<HTMLDivElement>(null);
-  const [more, setMore] = useState(false);
+  // Submit leaves the page with the result, so focus moves to it.
+  const result = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (outcome) result.current?.focus();
+  }, [outcome]);
+  const [more, setMore] = useState<string | null>(null);
   const checkMore = () => {
     const list = questionList.current;
-    setMore(!!list && list.scrollHeight - list.scrollTop - list.clientHeight > 8);
+    if (!list || list.scrollHeight - list.scrollTop - list.clientHeight <= 8) return setMore(null);
+    // The first question whose box ends below the visible area.
+    const bottom = list.getBoundingClientRect().bottom;
+    const next = [...list.querySelectorAll<HTMLLIElement>("li[data-question]")].find((item) => item.getBoundingClientRect().bottom > bottom + 1);
+    setMore(next?.dataset.question ?? "");
   };
   useEffect(() => {
     checkMore();
@@ -113,7 +122,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
     return (
       <>
         {header}
-        <p role="status" className={outcome === "rejected" || view.done?.passed === false ? c.notice : c.success}>
+        <p role="status" tabIndex={-1} ref={result} className={outcome === "rejected" || view.done?.passed === false ? c.notice : c.success}>
           {outcome ? `Marks saved: ${percent}%. ${RESULT[outcome]}` : `${view.done!.head}'s check is recorded: ${view.done!.percent}%, ${view.done!.passed ? "pass" : "not passed"}.`}
         </p>
       </>
@@ -140,7 +149,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
         <div className={k.questions} ref={questionList} onScroll={checkMore}>
         <ol className={k.questionList}>
           {view.questions.map((q) => (
-            <li key={q.id} className={k.question}>
+            <li key={q.id} className={k.question} data-question={q.id}>
               <div className={k.head}>
                 <label htmlFor={`q-${q.id}`} className={k.label}>Question {q.id}</label>
                 <span className={k.level}>{q.level}</span>
@@ -170,7 +179,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
           <textarea className={c.input} rows={3} maxLength={4000} value={comment} onChange={(event) => setComment(event.target.value)} />
         </label>
         </div>
-        {more && <p className={k.more} aria-hidden="true">More below ↓</p>}
+        {more !== null && <p className={k.more} aria-hidden="true">{more ? `Scroll to question ${more} ↓` : "Scroll for the comment ↓"}</p>}
         {/* The score and the send stay in view while the head works down the questions. */}
         <div className={k.submit}>
           <p className={k.total} role="status">

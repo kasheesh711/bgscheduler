@@ -194,7 +194,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                       />
                       <div className={b.sliderNumbers} aria-hidden="true">
                         <span>–</span>
-                        {SCORES.map((score) => <span key={score}>{score}</span>)}
+                        {SCORES.map((score) => <span key={score} data-on={score === selected ? "" : undefined}>{score}</span>)}
                       </div>
                     </div>
                     {/* The slider already says its value to a screen reader; this number is for the eye. */}

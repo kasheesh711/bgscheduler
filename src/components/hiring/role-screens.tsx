@@ -500,15 +500,15 @@ function visitItem(visit: ReturnType<typeof headVisit>, today: string, live = fa
     action: due && open ? (scored ? "Recommend Yes or No" : "Score mock") : live && open ? "Score mock"
       : !checkingScores && (needsCheck || (mock && !path && !status && missingOutcome)) ? "Ask admin" : undefined,
     note: checkingScores ? "Admin checking scores"
-      : needsCheck ? (open ? null : "to check the scores")
-      : mock && !path && !status ? (missingOutcome ? "to record the outcome" : "No brief yet")
+      : needsCheck ? (open ? null : "Check scores")
+      : mock && !path && !status ? (missingOutcome ? "Outcome missing" : "No brief yet")
       : path && !active ? "Brief closed"
       : candidate?.resumeState === "none" ? "No résumé"
       : candidate?.resumeState === "deleted" ? "Résumé deleted"
       : null,
     href: open ? (due ? `${path}#${scored ? "recommendation" : "scores"}` : path) : null,
     task: decision && !needsCheck && !checkingScores ? "View brief" : !due ? "Interview brief" : scored ? "Record recommendation" : "Score and recommend",
-    urgent: !!open && due,
+    urgent: !!open && (due || live),
   };
 }
 
@@ -575,7 +575,8 @@ function ItemPane({ item, data, readOnly, reload }: { item: HeadItem; data: Hiri
       <div className={r.paneFacts}>
         <div className={r.reviewMain}>
           <h2 className={r.paneName}>{item.name}</h2>
-          <p className={r.meta}>
+          {/* The open packet states the head's recommendation; a phone shows it here. */}
+          <p className={`${r.meta} ${r.reviewWho}`}>
             <span className={r.tag} data-tone={item.review.decision}>{item.review.decision === "hire" ? "Yes" : "No"}</span>
             {item.review.head} · {item.review.reason || "No reason given"}
           </p>
@@ -800,14 +801,14 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
         )}
         <p className="sr-only" role="status">{name && `${name} · ${nextMock
           ? `${mockNow ? "mock now" : "next mock"} ${shortDay(nextMock.row.date)}, ${nextMock.row.mockStart}` : "no mock booked"}`}</p>
-        {groups.map((group) => (group.items.length > 0 || (group.title === "Next mock" && givesMocks) || (group.title === "To do" && (givesMocks || reviewer))) && (
+        {groups.map((group) => (group.items.length > 0 || (group.title === "Next mock" && givesMocks) || (group.title === "To do" && (givesMocks || reviewer || !!savedFor))) && (
           <section key={group.title} className={r.group} data-tone={group.title === "To do" && group.items.length ? "todo" : undefined}>
             <h2 className={r.groupTitle}>
               {group.title}
               {group.items.length > 1 && <span className={r.count}>{group.items.length}</span>}
             </h2>
             {group.title === "To do" && savedFor && selected?.id === savedFor.id && <p className={r.saved}>{savedFor.text}</p>}
-            {group.items.length ? list(group.items) : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "Nothing to score or sign now." : "Nothing to do now.") : "No mock booked. New bookings also come by LINE."}</p>}
+            {group.items.length ? list(group.items) : savedFor ? null : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "Nothing to score or sign now." : "Nothing to do now.") : "No mock booked. New bookings also come by LINE."}</p>}
           </section>
         ))}
         {!heads.length ? <p className={r.quiet}>No heads are set up. Add interviewers in Rules and setup.</p>

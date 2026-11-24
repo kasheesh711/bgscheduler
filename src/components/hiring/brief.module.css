@@ -631,3 +631,5 @@
     grid-template-columns: minmax(140px, 180px) minmax(0, 1fr);
   }
 }
+.sliderNumbers { cursor: pointer; }
+.sliderNumbers [data-on] { color: var(--ink); font-weight: 700; }
