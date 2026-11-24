@@ -850,3 +850,5 @@
 .inlinePacket iframe { display: block; width: 100%; height: calc(100dvh - 150px); min-height: 480px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 .rejectGroup { display: grid; gap: 6px; flex-basis: 100%; justify-items: start; }
 .rejectGroup .fieldLabel { width: 100%; }
+/* The sign-off receipt takes focus; a soft ring, not the browser's square box (critic review, round 15). */
+.receipt:focus { outline: 2px solid color-mix(in oklch, var(--ink) 35%, transparent); outline-offset: 4px; border-radius: 8px; }

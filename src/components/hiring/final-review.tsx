@@ -429,7 +429,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
           {busy === "sign" && <p role="status" className={css.inspectorMeta}>Saving sign-off…</p>}
         </>
       ) : <p>Waiting for the packet. <button type="button" className={css.secondary} disabled={!!busy} onClick={() => void act()}>Check again</button></p>)}
-      <p ref={outcome} role="status" tabIndex={-1}>{closed && (stage === "hired" ? (review?.appointment
+      <p ref={outcome} role="status" tabIndex={-1} className={css.receipt}>{closed && (stage === "hired" ? (review?.appointment
         ? `Contract signing booked for ${new Date(review.appointment).toLocaleString("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium", timeStyle: "short" })} (Bangkok).`
         : packet || signedStage ? (signedStage ? "Offer approved. The offer email is queued." : "Offer approved.") : "There is no contract booking on record.")
         : stage === "rejected" ? (signedStage ? "Application rejected. The email is queued." : "Application rejected.") : "Application stopped.")}</p>

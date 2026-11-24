@@ -660,3 +660,6 @@
 .countRow > p { margin: 0; }
 .moreBelow { min-height: 24px; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; text-decoration: underline; cursor: pointer; }
 @media (max-width: 699px) { .moreBelow { display: none; } }
+/* The scoring hint names the pointer the head has: a phone is tapped, not clicked (critic review, round 15). */
+.coarsePointer { display: none; }
+@media (pointer: coarse) { .finePointer { display: none; } .coarsePointer { display: inline; } }

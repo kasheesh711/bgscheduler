@@ -1206,6 +1206,9 @@ try {
     await page.getByRole("navigation", { name: /hiring list/ }).getByRole("link", { name: /Sample Noi/ }).click();
     await page.frameLocator("iframe").first().getByRole("heading", { name: "Mock scores" }).waitFor();
     assert.deepEqual(await fits(), [true, 0, 0]);
+    // Every group open, tags included: the list never scrolls sideways (critic review, round 15).
+    for (const group of await page.locator("nav details").all()) await group.evaluate((element) => { element.open = true; });
+    assert.ok(await page.getByRole("navigation", { name: /hiring list/ }).evaluate((nav) => nav.scrollWidth <= nav.clientWidth), "the list scrolls sideways");
   });
   await check("Gift signs from her list on a phone and focus stays on the receipt", async () => {
     await page.setViewportSize({ width: 390, height: 844 });
