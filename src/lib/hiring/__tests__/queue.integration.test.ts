@@ -30,7 +30,7 @@ import {
   saveCallNotes,
 } from "../queue";
 
-vi.mock("../availability", () => ({ availableSlots: vi.fn(), availableVisitSlots: vi.fn(async () => []), verifyLiveSlot: vi.fn(), readLiveBusy: vi.fn(async () => { throw new Error("no Wise in tests"); }) }));
+vi.mock("../availability", () => ({ availableSlots: vi.fn(async () => []), availableVisitSlots: vi.fn(async () => []), verifyLiveSlot: vi.fn(), readLiveBusy: vi.fn(async () => { throw new Error("no Wise in tests"); }) }));
 vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
 // The grant cannot read HR's calendar unless a test says so, so no call booking link leaves in the other tests.
 vi.mock("../google", () => ({
@@ -774,14 +774,14 @@ describe("follow-ups", () => {
     const text = String(job.payload.text);
     expect(job.payload.workflowStage).toBe("onsite_invited");
     expect(text).toMatch(/2-hour test/);
-    expect(text).toContain("5. If you pass: mock teaching interview");
+    expect(text).toContain("3. Day 2, if you pass: final round mock teaching");
     expect(text).toContain("Mathematics");
     expect(text).toContain("https://lin.ee/OjMHF41");
     expect(text).toContain("prepare one lesson in Mathematics");
     // The link: a fixed 30-day life, and the same second on the row and in the token.
     const token = text.match(/\/hiring\/book\/([\w.-]+)/)![1];
     const payload = JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString());
-    expect(payload).toMatchObject({ id: invited.id, kind: "visit" });
+    expect(payload).toMatchObject({ id: invited.id, kind: "two-day" });
     expect(invited.inviteExpiresAt!.getTime()).toBe(payload.exp * 1000);
     expect(payload.exp * 1000).toBe(Math.floor(now.getTime() / 1000) * 1000 + 30 * DAY);
     // The old paper and mock routes do not accept it.
@@ -866,8 +866,8 @@ describe("Next steps after a good R1 (Kevin, 22 Nov 2026)", () => {
     const text = String(form.payload.text);
     expect(text).toContain("docs.google.com/forms");
     const token = text.match(/\/hiring\/book\/([\w.-]+)/)![1];
-    // The link is the paired visit kind, and its second is the one stored on the row.
-    expect(JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString()).kind).toBe("visit");
+    // The link is the two-day kind (test, then mock teaching on a later day), and its second is the one stored on the row.
+    expect(JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString()).kind).toBe("two-day");
     const expires = (await candidate(row.id)).inviteExpiresAt;
     expect(expires).not.toBeNull();
     // Before the answers: the page asks for them, and a booking is refused with the same words.

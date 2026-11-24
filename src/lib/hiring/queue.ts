@@ -642,7 +642,7 @@ export async function runFollowUps(db: Database, now = new Date()) {
           payload: {
             to: row.email,
             workflowStage: "pre_screen",
-            ...preScreenEmail(row.name, row.email, true, row.inviteExpiresAt ? visitLink(id, row.inviteExpiresAt) : undefined, !!row.callReview?.good),
+            ...preScreenEmail(row.name, row.email, true, row.inviteExpiresAt ? visitLink(id, row.inviteExpiresAt) : undefined),
           },
         }))
       ) {

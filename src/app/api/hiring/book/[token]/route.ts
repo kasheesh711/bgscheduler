@@ -17,7 +17,7 @@ export async function GET(
   try {
     const { token } = await params;
     const kind = readBookingToken(token).kind;
-    if ((kind === "visit" || kind === "paper-visit"))
+    if ((kind === "visit" || kind === "paper-visit" || kind === "two-day"))
       return NextResponse.json(await visitView(token), { headers });
     if (kind === "contract")
       return NextResponse.json(await contractView(token), { headers });
@@ -40,7 +40,7 @@ export async function POST(
     requireSameOrigin(request);
     const { token } = await params;
     const kind = readBookingToken(token).kind;
-    const book = (kind === "visit" || kind === "paper-visit") ? bookVisit : kind === "call" ? bookCall : kind === "contract" ? bookContract : bookInterview;
+    const book = (kind === "visit" || kind === "paper-visit" || kind === "two-day") ? bookVisit : kind === "call" ? bookCall : kind === "contract" ? bookContract : bookInterview;
     const booking = await book(token, await request.json());
     after(() => deliverBookingMessages());
     return NextResponse.json(

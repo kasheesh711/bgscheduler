@@ -57,6 +57,7 @@ import { bookingToken, readBookingToken, VISIT_LINK_DAYS } from "./tokens";
 import { storedResume } from "./resume-files";
 import { blockingLimit, headWeekMocks, releaseQueue, type Funnel, type LimitName, type QueueHold } from "./limits";
 import {
+  callInviteSentAt,
   inviteRows,
   linkSentAt,
   lockQueue,
@@ -78,7 +79,7 @@ import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
 import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
 import { checkRubric, computeSheet, passRulesFor, RUBRIC_ITEMS, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
-import { HIRING_LINE_URL, hiringEmail, mockPrep, stepIcon, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
+import { HIRING_LINE_URL, hiringEmail, mockPrep, stepIcon, TWO_DAY_STEPS, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -371,7 +372,7 @@ export async function inviteToMock(
     .where(eq(s.hiringCandidates.id, candidate.id));
 }
 /**
- * The "Next steps" email after a good R1 (Kevin, 22 Nov 2026): the form and the visit link together. The visit link
+ * The "Next steps" email (Kevin, 22 Nov 2026): the form and the visit link together. The visit link
  * opens booking only after the answers pass the usual checks; until then its page asks for the answers first.
  * `inviteExpiresAt` holds the link's second, and `inviteToVisit` keeps it, so this same link books the visit.
  */
@@ -388,15 +389,19 @@ export async function inviteToPreScreen(db: Database, candidate: Candidate, now 
     payload: {
       to: candidate.email,
       workflowStage: "pre_screen",
-      ...preScreenEmail(candidate.name, candidate.email, false, visitLink(candidate.id, expires), !!candidate.callReview?.good),
+      ...preScreenEmail(candidate.name, candidate.email, false, visitLink(candidate.id, expires), !!(await callInviteSentAt(db, candidate.id))),
     },
   });
   if (queued)
     await db.update(s.hiringCandidates).set({ inviteExpiresAt: expires }).where(eq(s.hiringCandidates.id, candidate.id));
   return queued;
 }
-/** New links book the exam and the mock together (Kevin, 22 Nov 2026). A "paper-visit" link sent earlier still books the paper only. */
-export const visitLink = (id: string, expires: Date, kind: "visit" | "paper-visit" = "visit") =>
+/**
+ * New links are "two-day" (Kevin, 24 Nov 2026): the test, Monday to Sunday, and the final-round mock teaching on a later
+ * day, Monday to Friday, booked together. A "visit" link sent earlier still books both on one day, and a "paper-visit"
+ * the test only.
+ */
+export const visitLink = (id: string, expires: Date, kind: VisitLink["kind"] = "two-day") =>
   new URL(
     `/hiring/book/${bookingToken(id, kind, expires)}`,
     process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
@@ -460,32 +465,34 @@ export async function inviteToCall(db: Database, candidate: Candidate, now = new
   });
 }
 /**
- * The form invitation and its reminder. With a visit link it is the "Next steps" email after a good R1: answer the
- * questions, then book the visit on that link. A form sent before this change has no visit link.
+ * The form invitation and its reminder. With a visit link it is the "Next steps" email: answer the questions, then book
+ * the test and the mock teaching on that link. A form sent before 22 Nov 2026 has no visit link.
+ * `hrLeft` is for a candidate who got a link to the old R1: HR Interview (Kevin, 24 Nov 2026: say that the HRBP is no
+ * longer available, thank the candidate for their patience and apologise).
  */
-export const preScreenEmail = (name: string, email: string, reminder: boolean, visitUrl?: string, afterR1 = true) =>
+export const preScreenEmail = (name: string, email: string, reminder: boolean, visitUrl?: string, hrLeft = false) =>
   visitUrl
     ? hiringEmail({
         subject: reminder
           ? "Reminder: answer your BeGifted pre-screening questions"
           : "Next steps: your BeGifted pre-screening questions and onsite visit",
-        preheader: "Answer a short questionnaire, then book your onsite visit.",
-        title: reminder ? "Your questions are still open" : afterR1 ? "Thank you for R1. Here are your next steps" : "Here are your next steps",
+        preheader: "Answer a short questionnaire, then book your test and your mock teaching.",
+        title: reminder ? "Your questions are still open" : "Here are your next steps",
         hero: "next",
-        // With no R1 (no call score, or a person sent the form), step 1 is not done, so the process is not shown.
-        ...(afterR1 ? { process: 2 as const } : {}),
         name,
-        paragraphs: [
-          reminder
-            ? "We have not yet received your pre-screening answers. If you are still interested in joining BeGifted, please answer them. Then you can book your onsite visit."
-            : afterR1
-              ? "Thank you for your time at R1: HR Interview. It went well, and we invite you to the next steps."
-              : "Thank you for your interest in joining BeGifted. We invite you to the next steps.",
-        ],
+        paragraphs: reminder
+          ? ["We have not yet received your pre-screening answers. If you are still interested in joining BeGifted, please answer them. Then you can book your test and your mock teaching."]
+          : hrLeft
+            ? [
+                "Thank you for your interest in joining BeGifted, and for your patience.",
+                "Our HR Business Partner is no longer available because of emergency circumstances, so there is no HR interview. Your link to book the HR interview is closed. We sincerely apologise for the inconvenience.",
+                "The good news is that you go directly to the next steps: a subject test and a final-round mock teaching interview at BeGifted.",
+              ]
+            : ["Thank you for your interest in joining BeGifted. We invite you to the next steps."],
         details: [
           { label: "Use this email", value: email },
           { label: "Questionnaire", value: "About 5–7 minutes" },
-          { label: "Onsite visit", value: VISIT_LENGTH },
+          { label: "Onsite visits", value: VISIT_LENGTH },
         ],
         stepsHeading: "Your next steps",
         steps: [
@@ -498,11 +505,11 @@ export const preScreenEmail = (name: string, email: string, reminder: boolean, v
             icon: stepIcon(2),
           },
           {
-            heading: "Book your onsite visit",
+            heading: "Book your test and your mock teaching",
             paragraphs: [
-              "We check your answers first. When booking opens, we email you. Then choose your visit time on this link.",
+              "We check your answers first. When booking opens, we email you. Then choose your two times on this link: the test first, and the mock teaching on a later day.",
             ],
-            action: { label: "Book your onsite visit", url: visitUrl },
+            action: { label: "Book your test and mock teaching", url: visitUrl },
             icon: stepIcon(3),
           },
         ],
@@ -529,26 +536,26 @@ export const visitInviteEmail = (input: { name: string; subject: string; url: st
   hiringEmail({
     subject: input.expireDays === undefined ? "Reminder: book your BeGifted onsite visit" : "BeGifted onsite visit invitation",
     hero: "visit",
-    preheader: `Book one onsite visit for ${input.subject}.`,
-    title: input.expireDays === undefined ? "Your visit is not booked yet" : "Book your onsite visit",
+    preheader: `Book your test and your mock teaching for ${input.subject}.`,
+    title: input.expireDays === undefined ? "Your test and mock teaching are not booked yet" : "Book your test and mock teaching",
     tone: "ink",
     name: input.name,
     paragraphs: [
       input.expireDays === undefined
-        ? `You have not yet booked your onsite visit for ${input.subject}.`
-        : `Thank you for your pre-screening response. We invite you to one onsite visit for ${input.subject}.`,
+        ? `You have not yet booked your test and your mock teaching for ${input.subject}.`
+        : `Thank you for your pre-screening response. We invite you to the test and the final-round mock teaching for ${input.subject}.`,
     ],
     details: [
       { label: "Subject", value: input.subject },
-      { label: "Visit", value: VISIT_LENGTH },
+      { label: "Two visits", value: VISIT_LENGTH },
       { label: "Location", value: input.location },
       ...(input.expireDays === undefined ? [] : [{ label: "Link closes", value: `${input.expireDays} days after this email` }]),
     ],
-    action: { label: "Book your visit", url: input.url },
-    stepsHeading: "Your visit day",
-    steps: VISIT_STEPS,
+    action: { label: "Book your two times", url: input.url },
+    stepsHeading: "Your two visits",
+    steps: TWO_DAY_STEPS,
     list: VISIT_BRING,
-    after: ["The time that you book covers the test and the mock teaching interview.", ...mockPrep(input.subject).paragraphs],
+    after: ["You book both times together: the test first, then the mock teaching on a later day.", ...mockPrep(input.subject).paragraphs],
     links: mockPrep(input.subject).links,
   });
 const onLine = (text: string) => `${text} Contact BeGifted on LINE: ${HIRING_LINE_URL}`;
@@ -1513,10 +1520,10 @@ export async function saveBriefRubric(token: string, rubric: MockRubric, db: Dat
     return rubricTotals(rubric).total;
   });
 }
-type VisitLink = { id: string; exp: number; kind: "visit" | "paper-visit" };
+type VisitLink = { id: string; exp: number; kind: "visit" | "paper-visit" | "two-day" };
 function visitToken(token: string, now: Date): VisitLink {
   const cap = readBookingToken(token, now);
-  if (cap.kind !== "visit" && cap.kind !== "paper-visit") throw new HiringError(404, onLine("This booking link is no longer active."));
+  if (cap.kind !== "visit" && cap.kind !== "paper-visit" && cap.kind !== "two-day") throw new HiringError(404, onLine("This booking link is no longer active."));
   return { ...cap, kind: cap.kind };
 }
 const bookable = (config: HiringConfig, candidateId: string) =>
@@ -1584,6 +1591,28 @@ const paperVisitSlots = async (db: Database, config: HiringConfig, subject: Subj
     .filter((slot) => Date.parse(slot.start) < cap.exp * 1000 && slot.start !== examOf(rows)?.startTime.toISOString())
     .map((slot) => ({ date: slot.date, examStart: slot.start, examEnd: slot.end, mockStart: null, mockEnd: null }));
 
+/**
+ * A "two-day" link: every open test time (Monday to Sunday, by the test office hours) and every open mock teaching hour
+ * (Monday to Friday, by the head's saved hours, Wise and the weekly limit). The candidate's own booked times stay in the
+ * lists, so a move can change one and keep the other.
+ * shortcut: with two free heads the first in settings order gets the mock; use `assignHead` if one head fills up first.
+ */
+const twoDaySlots = async (db: Database, config: HiringConfig, subject: Subject, cap: VisitLink, now: Date, indexDb = db, live?: LiveBusy) => {
+  const open = (start: string) => Date.parse(start) < cap.exp * 1000;
+  const tests = (await availableSlots(db, config, "paper", [subject], now, db, undefined, cap.id))
+    .filter((slot) => open(slot.start))
+    .map((slot) => ({ date: slot.date, examStart: slot.start, examEnd: slot.end, mockStart: null, mockEnd: null }));
+  const seen = new Set<string>();
+  const mocks = (await availableSlots(db, config, "mock", [subject], now, indexDb, live, cap.id))
+    .filter((slot) => open(slot.start) && !seen.has(slot.start) && !!seen.add(slot.start))
+    .map((slot) => ({ date: slot.date, start: slot.start, end: slot.end, interviewerKey: slot.interviewerKey! }));
+  // The mock teaching is on a later day than the test, so a time with no partner is not a choice.
+  return {
+    tests: tests.filter((test) => mocks.some((mock) => mock.date > test.date)),
+    mocks: mocks.filter((mock) => tests.some((test) => mock.date > test.date)),
+  };
+};
+
 const offeredSlots = async (db: Database, config: HiringConfig, subject: Subject, cap: VisitLink, rows: VisitRow[], now: Date, indexDb = db, live?: LiveBusy) =>
   (await availableVisitSlots(db, config, subject, now, cap.id, indexDb, live)).filter((slot) => {
     const start = new Date(slot.examStart).getTime();
@@ -1598,6 +1627,8 @@ export async function visitView(token: string, db: Database = getDb(), now = new
     return {
       kind: "visit" as const,
       paired: true,
+      twoDay: cap.kind === "two-day",
+      mockSlots: [] as { date: string; start: string; end: string }[],
       subject: "",
       location: config.location,
       enabled: false,
@@ -1616,13 +1647,21 @@ export async function visitView(token: string, db: Database = getDb(), now = new
   const refusal = exam ? moveRefusal(rows, now) : null;
   const paired = cap.kind === "visit" || !!mock;
   let slots: (Awaited<ReturnType<typeof paperVisitSlots>>[number] | Awaited<ReturnType<typeof offeredSlots>>[number])[] = [];
+  let mockSlots: { date: string; start: string; end: string }[] = [];
+  const twoDay = cap.kind === "two-day";
   let notice: string | null = null;
   let live: LiveBusy | null = null;
   if (!enabled) notice = onLine("Booking is temporarily paused.");
   else if (refusal) notice = refusal;
   else {
     try {
-      if (paired) {
+      if (twoDay) {
+        live = await liveForList(db, config, [subject], now);
+        const lists = await twoDaySlots(db, config, subject, cap, now, db, live ?? undefined);
+        slots = lists.tests;
+        // The head is the server's choice, so the page gets no name.
+        mockSlots = lists.mocks.map(({ date, start, end }) => ({ date, start, end }));
+      } else if (paired) {
         live = await liveForList(db, config, [subject], now);
         slots = await offeredSlots(db, config, subject, cap, rows, now, db, live ?? undefined);
       } else slots = await paperVisitSlots(db, config, subject, cap, rows, now);
@@ -1635,7 +1674,10 @@ export async function visitView(token: string, db: Database = getDb(), now = new
   }
   return {
     kind: "visit" as const,
-    paired,
+    paired: paired || twoDay,
+    // The test and the mock teaching are two choices on two days. `mockSlots` is empty for every other link.
+    twoDay,
+    mockSlots,
     subject,
     location: config.location,
     enabled,
@@ -2024,9 +2066,16 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
   const { config } = await settings(db);
   if (!bookable(config, cap.id)) throw new HiringError(503, "Booking is temporarily unavailable.");
   // A retry returns the original visit.
-  const prior = examOf(await visitRows(db, cap.id));
-  if (prior?.startTime.getTime() === start) return prior;
+  const twoDay = cap.kind === "two-day";
+  const mockStart = input.mockStart ? new Date(input.mockStart).getTime() : null;
+  /** The booked visit already has these times: a retry, which returns the original. */
+  const same = (rows: VisitRow[]) =>
+    examOf(rows)?.startTime.getTime() === start && (!twoDay || rows.find((b) => b.kind === "mock")?.startTime.getTime() === mockStart);
+  const priorRows = await visitRows(db, cap.id);
+  if (same(priorRows)) return examOf(priorRows)!;
   const open = await openVisit(db, cap, config, now);
+  // After `openVisit`, so a link that still waits for the answers says that first.
+  if (twoDay && mockStart === null) throw new HiringError(400, "Choose a mock teaching time too.");
   if (cap.kind === "paper-visit" && !open.rows.some((row) => row.kind === "mock")) {
     return withDatabaseTransaction(db, async (tx) => {
       await tx.execute(sql`select id from hiring_candidates where id=${cap.id} for update`);
@@ -2081,9 +2130,18 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
   const unavailable = () => new HiringError(409, "That visit time is no longer available. Choose another time.");
   // The same live read as the list, so the head assigned here is the head the candidate's list was built on.
   const live = (await liveForList(db, config, [open.subject], now)) ?? undefined;
-  const slot = (await offeredSlots(db, config, open.subject, cap, open.rows, now, db, live)).find(
-    (v) => new Date(v.examStart).getTime() === start,
-  );
+  /** The chosen times, if still open. A two-day visit joins a test time and a mock teaching hour on a later day. */
+  const pick = async (d: Database, c: HiringConfig, subject: Subject, rows: VisitRow[], at: Date) => {
+    if (!twoDay) return (await offeredSlots(d, c, subject, cap, rows, at, db, live)).find((v) => new Date(v.examStart).getTime() === start);
+    const { tests, mocks } = await twoDaySlots(d, c, subject, cap, at, db, live);
+    const test = tests.find((v) => Date.parse(v.examStart) === start);
+    const mock = mocks.find((v) => Date.parse(v.start) === mockStart);
+    // `date` is the day of the head's hour: the live Wise check reads it.
+    return test && mock && mock.date > test.date
+      ? { date: mock.date, examStart: test.examStart, examEnd: test.examEnd, mockStart: mock.start, mockEnd: mock.end, interviewerKey: mock.interviewerKey, subject }
+      : undefined;
+  };
+  const slot = await pick(db, config, open.subject, open.rows, now);
   if (!slot) throw unavailable();
   // The head's hour is the only part Wise can block. Office staff supervise the exam.
   const evidence = await verifyLiveSlot(db, {
@@ -2101,12 +2159,10 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
     const latest = await settings(tx);
     if (!bookable(latest.config, cap.id)) throw new HiringError(503, "Booking has been paused.");
     const { candidate, subject, rows } = await openVisit(tx, cap, latest.config, now);
-    if (examOf(rows)?.startTime.getTime() === start) return examOf(rows)!;
+    if (same(rows)) return examOf(rows)!;
     refuseChange(rows);
     if (input.subject !== subject) throw new HiringError(409, onLine("This visit is for another subject."));
-    const fresh = (await offeredSlots(tx, latest.config, subject, cap, rows, new Date(), db, live)).find(
-      (v) => new Date(v.examStart).getTime() === start,
-    );
+    const fresh = await pick(tx, latest.config, subject, rows, new Date());
     // Only this head's lock is held, and the live read was for this head.
     if (!fresh || fresh.interviewerKey !== slot.interviewerKey) throw unavailable();
     const head = latest.config.interviewers.find((i) => i.canonicalKey === fresh.interviewerKey);
@@ -2163,27 +2219,27 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
           ...hiringEmail({
             subject: `BeGifted onsite visit ${rows.length ? "moved" : "confirmed"}`,
             hero: "visit",
-            preheader: `Test ${bangkok(exam.startTime)} (Bangkok). If you pass, mock teaching follows on the same day.`,
+            preheader: `Test ${bangkok(exam.startTime)} (Bangkok). If you pass, mock teaching follows ${twoDay ? `on ${bangkok(mock.startTime)}` : "on the same day"}.`,
             title: rows.length ? "Your visit has moved" : "Your visit is confirmed",
             tone: "ink",
             name: candidate.name,
-            paragraphs: [`Your onsite visit ${rows.length ? "has moved. The new times are below" : "is confirmed"}.`],
+            paragraphs: [`Your ${twoDay ? "test and your mock teaching are" : "onsite visit is"} ${rows.length ? "moved. The new times are below" : "confirmed"}.`],
             details: [
               { label: "Subject", value: subject },
               { label: "Test", value: `${bangkok(exam.startTime)}–${bangkokTime(exam.endTime)} (Bangkok)` },
-              { label: "Mock teaching, if you pass", value: `${bangkok(mock.startTime)}–${bangkokTime(mock.endTime)} (Bangkok), with ${head.canonicalKey}` },
+              { label: twoDay ? "Final round: mock teaching, if you pass" : "Mock teaching, if you pass", value: `${bangkok(mock.startTime)}–${bangkokTime(mock.endTime)} (Bangkok), with ${head.canonicalKey}` },
               { label: "Location", value: latest.config.location },
             ],
             ...(rows.length
               ? {}
-              : { action: { label: "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!, "visit") } }),
-            stepsHeading: "Your visit day",
-            steps: VISIT_STEPS,
+              : { action: { label: twoDay ? "Move your times" : "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!, twoDay ? "two-day" : "visit") } }),
+            stepsHeading: twoDay ? "Your two visits" : "Your visit day",
+            steps: twoDay ? TWO_DAY_STEPS : VISIT_STEPS,
             list: VISIT_BRING,
             after: [
               rows.length
-                ? "This visit cannot move again through the link."
-                : "You can move this visit once, up to 24 hours before it starts.",
+                ? "This booking cannot move again through the link."
+                : twoDay ? "You can move your times once, up to 24 hours before the test starts." : "You can move this visit once, up to 24 hours before it starts.",
               "For other changes, message BeGifted on LINE.",
               ...mockPrep(subject).paragraphs,
             ],

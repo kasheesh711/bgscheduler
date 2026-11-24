@@ -227,7 +227,8 @@ export async function availableSlots(
   movingCandidate?: string,
 ): Promise<Slot[]> {
   if (!subjects.length || (kind === "mock" && subjects.length !== 1)) return [];
-  const dates = businessDates(now, config.holidays);
+  // A weekend day gives test times only when the test office hours in Hiring settings hold that day.
+  const dates = businessDates(now, config.holidays, 5, kind === "paper");
   const calendar = await readCalendar(db);
   const { bookings, observations } = calendar;
   const duration = kind === "mock" ? 60 : subjects.length * 120;
@@ -277,6 +278,8 @@ export async function availableSlots(
           bookings.some(
             (b) =>
               b.interviewerKey === interviewer.canonicalKey &&
+              // A move gives up the candidate's own mock, so it must not block its new time.
+              b.candidateId !== movingCandidate &&
               overlap(range, { start: b.startTime, end: b.endTime }),
           )
         )

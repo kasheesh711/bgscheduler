@@ -28,6 +28,8 @@ const view = (patch = {}) => ({
   canMove: false,
   notice: null,
   checkedAt: null as string | null,
+  twoDay: false,
+  mockSlots: [] as { date: string; start: string; end: string }[],
   waiting: null as "answers" | "checking" | null,
   formUrl: null as string | null,
   ...patch,
@@ -45,6 +47,15 @@ describe("VisitBooking", () => {
     const checking = page({ waiting: "checking", formUrl: null, slots: [], enabled: false, subject: "", notice: "Thank you for your answers. We are checking them now." });
     expect(checking).toContain("We are checking them now");
     expect(checking).not.toContain("Answer the pre-screening questions");
+  });
+  it("a two-day link asks for the test time first and says the mock teaching is on a later day", () => {
+    const html = page({ twoDay: true, mockSlots: [{ date: "2026-11-03", start: "2026-11-03T04:00:00.000Z", end: "2026-11-03T05:00:00.000Z" }] });
+    expect(html).toContain("1. Choose your test time");
+    expect(html).toContain("a mock teaching time on a later day (Monday to Friday)");
+    expect(html).toContain("Confirm both times");
+    // The mock teaching list opens after a test time is chosen.
+    expect(html).not.toContain("2. Choose your mock teaching time");
+    expect(page({ twoDay: true, waiting: "answers", formUrl: "https://forms.gle/x", slots: [], enabled: false, subject: "", notice: "Answer first." })).toContain("the test first, then the final-round mock teaching interview on a later day");
   });
   it("shows one subject, exam and mock times, and both confirmation boxes", () => {
     const html = page();
