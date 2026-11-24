@@ -80,4 +80,3 @@ it.each([new Error("Could not read the database."), new HiringError(404, "Candid
     await expect(reviewPacketValid(db, "candidate", packet)).resolves.toBeNull();
   },
 );
-
