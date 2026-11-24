@@ -1420,3 +1420,8 @@ span.qTitle {
     font-size: 10px;
   }
 }
+
+/* A cell reached by the keyboard scrolls clear of the pinned day names (code review r29). */
+.cell {
+  scroll-margin-top: 44px;
+}

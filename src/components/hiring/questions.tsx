@@ -220,7 +220,7 @@ export function PreScreenQuestions({
     // Always counted; asked only when there is a choice (one subject is chosen for the candidate).
     [subjects.length > 1 ? "q-test" : "q-subjects", "Test subject", !!test],
     // Art & Design needs its portfolio (a file or a link): its own step, so "Next" names it (Sol r13).
-    ...(subjects.includes(ART) ? [["q-portfolio", "Portfolio", !!fileName || !!portfolio.trim()] as [string, string, boolean]] : []),
+    ...(subjects.includes(ART) ? [["q-portfolio", "Art portfolio", !!fileName || !!portfolio.trim()] as [string, string, boolean]] : []),
     ["q-curricula", "Curricula", curricula.length > 0],
     ["q-years", "Year groups", yearGroups.length > 0],
     // Starts like the section title, so the button names what the candidate sees (Opus r24, Sol r27).

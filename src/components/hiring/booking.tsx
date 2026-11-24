@@ -506,8 +506,7 @@ export function VisitBooking({
 }) {
   const [moving, setMoving] = useState(false),
     [chosen, setStart] = useState(""),
-    // A booked visit already confirmed the address; a move after a reload keeps it ticked (Opus r24).
-    [onsite, setOnsite] = useState(!!view.visit),
+    [onsite, setOnsite] = useState(false),
     // Ticked for the candidate when the saved answers already meet the rule; it stays editable (Fable r3).
     [commitment, setCommitment] = useState(view.timeRuleMet),
     [busy, setBusy] = useState(false),
@@ -686,6 +685,8 @@ export function VisitBooking({
                       disabled={busy || !otherTimes}
                       onClick={() => {
                         setMoving(true);
+                        // Moving keeps the same address, already confirmed at booking (Opus r24); never ticked on a new booking (code review r29).
+                        setOnsite(true);
                         setSaved("");
                         reveal("times-start", true);
                       }}
