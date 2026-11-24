@@ -51,3 +51,36 @@
   margin: 0.75rem 0;
   font-size: 1.05rem;
 }
+
+/* The paper and the marks. Stacked on a phone; side by side from 1024px, the paper fixed while the marks scroll. */
+.split {
+  display: grid;
+  gap: 24px;
+}
+
+.paper {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.marks {
+  min-width: 0;
+}
+
+@media (min-width: 1024px) {
+  .split {
+    grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);
+    align-items: start;
+  }
+
+  .paper {
+    position: sticky;
+    top: 12px;
+  }
+
+  /* The page box of PdfPages: as tall as the window allows. */
+  .paper > div {
+    height: calc(100dvh - 80px);
+  }
+}
