@@ -1166,7 +1166,7 @@ try {
     // A paper test needs nothing from the head: it sits in a closed group of its own.
     const papers = page.locator("details").filter({ hasText: "Paper tests, no action" });
     await papers.locator("summary").click();
-    assert.match(await papers.getByRole("listitem").filter({ hasText: "Sample Paper" }).innerText(), /Physics · Paper test/);
+    assert.match(await papers.getByRole("listitem").filter({ hasText: "Sample Paper" }).innerText(), /Physics\s· Paper test/);
     assert.equal(await page.getByRole("link", { name: "Tutor onboarding and Experts access" }).count(), 0);
     await shot(page, "heads-next-phone");
     // Kru Peat's ended mocks: each line names its next step. Staff choose the head from the menu.
