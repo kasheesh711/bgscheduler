@@ -11,6 +11,11 @@ type View = Awaited<ReturnType<typeof bookingView>>;
 type VisitView = Awaited<ReturnType<typeof visitView>>;
 type CallView = Awaited<ReturnType<typeof callView> | ReturnType<typeof contractView>>;
 const LINE_URL = "https://lin.ee/OjMHF41";
+/** A refusal the server explained; its words are shown as they are. */
+export class ApiError extends Error {}
+/** Network failures, non-JSON replies and empty refusals get one plain sentence with the LINE way out (Opus r30). */
+export const failure = (e: unknown, what: string) =>
+  e instanceof ApiError && e.message ? e.message : `${what} Try again. Contact BeGifted on LINE: ${LINE_URL}`;
 const ZONE = { timeZone: "Asia/Bangkok" } as const;
 const time = (value: string) =>
   new Date(value).toLocaleTimeString("en-GB", { ...ZONE, hour: "2-digit", minute: "2-digit" });
@@ -20,10 +25,12 @@ const part = (value: string | Date, options: Intl.DateTimeFormatOptions) =>
   new Date(value).toLocaleDateString("en-GB", { ...ZONE, ...options });
 const Help = () => (
   <p className={c.help}>
-    <a href={LINE_URL} rel="noreferrer">
-      Contact BeGifted on LINE
-    </a>
-    .
+    <span className={cs.nowrap}>
+      <a href={LINE_URL} rel="noreferrer">
+        Contact BeGifted on LINE
+      </a>
+      .
+    </span>
   </p>
 );
 
@@ -538,7 +545,7 @@ export function VisitBooking({
         }),
       });
       const body = await r.json();
-      if (!r.ok) throw new Error(body.error);
+      if (!r.ok) throw new ApiError(body.error);
       await reload();
       setSaved(
         view.visit
@@ -550,7 +557,7 @@ export function VisitBooking({
       // The ticket replaces the lists: start the candidate at their booked visit (Sol r3).
       reveal("booked-visit", true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not confirm.");
+      setError(failure(e, "Could not confirm."));
       // That time may be gone, so the candidate chooses again from the fresh list.
       setStart("");
       await reload().catch(() => {});
@@ -789,10 +796,12 @@ export function VisitBooking({
             {showForm && (!slot || (view.twoDay && !mock)) && (
               <p className={c.help}>
                 {!slot ? "No time works? " : "No mock time works? "}
-                <a href={LINE_URL} rel="noreferrer">
-                  Contact BeGifted on LINE
-                </a>
-                .
+                <span className={cs.nowrap}>
+                  <a href={LINE_URL} rel="noreferrer">
+                    Contact BeGifted on LINE
+                  </a>
+                  .
+                </span>
               </p>
             )}
           </>
@@ -880,7 +889,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
         body: JSON.stringify(contract ? { start } : { start, phone, ...(view.call ? { move: true } : {}) }),
       });
       const body = await r.json();
-      if (!r.ok) throw new Error(body.error);
+      if (!r.ok) throw new ApiError(body.error);
       await reload();
       setSaved(
         view.call
@@ -890,7 +899,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
       setMoving(false);
       setStart("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not confirm.");
+      setError(failure(e, "Could not confirm."));
       // That time may be gone, so the candidate chooses again from the fresh list.
       setStart("");
       await reload().catch(() => {});
@@ -1098,14 +1107,14 @@ export function HiringBooking({ token }: { token: string }) {
       cache: "no-store",
     });
     const body = await r.json();
-    if (!r.ok) throw new Error(body.error);
+    if (!r.ok) throw new ApiError(body.error);
     setView(body);
     setSubjects(body.selectedSubjects ?? []);
     // A chosen time stays chosen only while the new list still has it.
     setSlot((prev) => (prev && (body.slots as Slot[] | undefined)?.some((s) => "start" in s && slotKey(s) === slotKey(prev)) ? prev : null));
   }
   useEffect(() => {
-    load().catch((e) => setError(e.message));
+    load().catch((e) => setError(failure(e, "Could not load times.")));
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
   // A page left open shows old times, so the list reloads when the candidate comes back to the tab.
   // One list with no subject choice: the visit and the HR call.
@@ -1126,7 +1135,7 @@ export function HiringBooking({ token }: { token: string }) {
       try {
         await load(chosen);
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Could not load times.");
+        setError(failure(e, "Could not load times."));
       }
     else setSlot(null);
   }
@@ -1147,11 +1156,11 @@ export function HiringBooking({ token }: { token: string }) {
         }),
       });
       const body = await r.json();
-      if (!r.ok) throw new Error(body.error);
+      if (!r.ok) throw new ApiError(body.error);
       await load(subjects);
       setSaved(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not confirm.");
+      setError(failure(e, "Could not confirm."));
       await load(subjects).catch(() => {});
     } finally {
       setBusy(false);

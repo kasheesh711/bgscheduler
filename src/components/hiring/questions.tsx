@@ -6,7 +6,7 @@ import { Check, ChevronDown, Circle, CircleDot, Pencil, Square, SquareCheck, Upl
 import { ANSWER_CHOICES, answersSchema, MAX_PORTFOLIO_BYTES, PORTFOLIO_TYPES, SUBJECTS, type Subject } from "@/lib/hiring/model";
 import type { KnownDegree } from "@/lib/hiring/profile-degree";
 import { emptyWeek, weekHoursCount, type WeekHours } from "@/lib/hiring/week-hours";
-import { Layout, reveal, VisitConfirm } from "./booking";
+import { ApiError, failure, Layout, reveal, VisitConfirm } from "./booking";
 import { WeekGrid } from "./week-grid";
 import c from "./booking.module.css";
 import s from "./candidate.module.css";
@@ -255,12 +255,12 @@ export function PreScreenQuestions({
         body: JSON.stringify({ answers: parsed.data }),
       });
       const body = await r.json();
-      if (!r.ok) throw new Error(body.error);
+      if (!r.ok) throw new ApiError(body.error);
       await reload();
       // The times replace the questions: start the candidate at the test times.
       reveal("times-start", true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save your answers.");
+      setError(failure(e, "Could not save your answers."));
     } finally {
       setBusy(false);
     }
