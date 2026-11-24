@@ -333,6 +333,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/hiring" && url.searchParams.get("head"))
     return new Response(JSON.stringify({ name: "Kru Peat", subjects: ["Mathematics"], days: [0, 1, 2, 3, 4].map((i) => ({ date: "2026-11-0" + (2 + i), office: { start: "09:00", end: "18:00" }, blocks: [] })), visits: [], mocks: 0, limit: 2, stale: false, staleReason: null, weekStart: "2026-11-02", head: "Peat" }));
   if (url.pathname === "/api/hiring") {
+    // ?failFirst=1: the first list load fails, as a short outage would, so the retry can be checked.
+    const once = window as unknown as { failedOnce?: boolean };
+    if (location.search.includes("failFirst=1") && !once.failedOnce) {
+      once.failedOnce = true;
+      return new Response(JSON.stringify({ error: "Service unavailable" }), { status: 503 });
+    }
     // A paper sent in the open page (another frame) is done: the list drops it, as /api/hiring would.
     let sent = false;
     try { sent = localStorage.getItem("fixture:paper-sent") === "1"; } catch {}
@@ -1291,6 +1297,15 @@ try {
     const discard = page.getByRole("button", { name: "Discard changes" });
     await discard.waitFor();
     assert.ok((await discard.boundingBox()).height >= 44, "Discard changes is smaller than 44 px");
+  });
+  await check("a head's failed list load retries in place and lands focus on a visible area", async () => {
+    // Tito's empty list hides the list column on a laptop, so focus goes to the open area (critic review, round 21).
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/?roles=1&me=Tito&head=Tito&failFirst=1`);
+    const retry = page.getByRole("button", { name: "Try again" });
+    await retry.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.activeElement?.id === "open-item");
   });
   await check("the paper check's comment jump puts focus in the comment field", async () => {
     await page.setViewportSize({ width: 1280, height: 800 });

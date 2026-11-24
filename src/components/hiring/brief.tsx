@@ -68,9 +68,10 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   const [seenRubric, setSeenRubric] = useState(serverRubric);
   if (serverRubric !== seenRubric) {
     setSeenRubric(serverRubric);
-    if (brief.rubric && !lastSent) {
+    if (brief.rubric) {
+      // The receipt follows the server's sent scores; unsent edits on this page stay marked as unsent (critic, round 21).
       const sent = rubricTotals(brief.rubric);
-      setLastSent({ total: sent.total, max: sent.max, editCount });
+      setLastSent({ total: sent.total, max: sent.max, editCount: lastSent && lastSent.editCount !== editCount ? lastSent.editCount : editCount });
     }
   }
   if (brief.decision && !decision) setDecision(brief.decision);

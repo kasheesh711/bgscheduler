@@ -731,7 +731,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const checks: HeadItem[] = key ? data.paperChecks.filter((check) => !check.done && check.head === key).map((check) => {
     const candidate = data.candidates.find((c) => c.id === check.candidateId);
     return { id: check.resultId, name: candidate?.name ?? "Needs review: candidate record not found", candidate, time: `${check.percent}%`, day: "AI score",
-      detail: `${check.subject}\u00a0· Paper check`, tags: [], note: null,
+      detail: `${check.subject}\u00a0· Paper\u00a0check`, tags: [], note: null,
       href: check.path, task: "Re-mark paper", action: "Re-mark paper", urgent: !!check.path };
   }) : [];
   // Gift's final reviews: each newest Yes from a head that no sent result has closed. A ready packet comes first.
@@ -787,6 +787,15 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   // mock scores are kept as drafts, so nothing typed is lost (Sol review, rounds 11–14).
   const selected = wide ? found ?? (mockNow && !picked ? nextItem : undefined) ?? keep ?? all.find((item) => item.urgent) ?? nextItem ?? all[0] : found;
   if ((selected?.id ?? null) !== (shown?.id ?? null)) setShown(selected ?? null);
+  // Work in the open pane makes it the head's choice, so a mock that starts does not take it away. Focus inside a frame
+  // reaches this page only as a window blur, so that is checked too (code and critic reviews, rounds 20–21).
+  useEffect(() => {
+    const claim = () => window.setTimeout(() => {
+      if (document.activeElement?.closest("#open-item") && !picked && selected) setPicked(selected.id);
+    });
+    window.addEventListener("blur", claim);
+    return () => window.removeEventListener("blur", claim);
+  }, [picked, selected]);
   // A mock that starts while its brief is open: the brief fetches itself again, so its label reads "Mock now" (critic, round 18).
   const liveId = mockNow ? nextItem?.id : undefined;
   useEffect(() => {
@@ -857,7 +866,8 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
             document.getElementById("open-item")?.focus();
           }}>Skip to open item</a>
         )}
-        <p className="sr-only" role="status">{name && `${name} · ${nextMock
+        {/* One status that is always there, so the save receipt is announced too (critic review, round 21). */}
+        <p className="sr-only" role="status">{savedIn && savedFor ? savedFor.text : name && `${name} · ${nextMock
           ? `${mockNow ? "mock now" : "next mock"} ${shortDay(nextMock.row.date)}, ${nextMock.row.mockStart}` : "no mock booked"}`}</p>
         {groups.map((group) => (group.items.length > 0 || (group.title === "Next mock" && givesMocks) || (group.title === "To do" && (savedIn === "To do" || (!ready.length && (givesMocks || reviewer))))) && (
           <section key={group.title} className={r.group} data-tone={(group.title === "To do" || group.title === "Final review") && group.items.length ? "todo" : undefined}>
@@ -865,7 +875,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
               {group.label ?? group.title}
               {group.items.length > 1 && <span className={r.count}>{group.items.length}</span>}
             </h2>
-            {group.title === savedIn && <p role="status" className={r.saved}>{savedFor?.text}</p>}
+            {group.title === savedIn && <p className={r.saved}>{savedFor?.text}</p>}
             {group.items.length ? list(group.items) : group.title === savedIn ? null : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "Nothing to score or sign now." : nextItem?.note === "Prepare" ? "No marks or recommendations due." : "Nothing to do now.") : "No mock booked. New bookings also come by LINE."}</p>}
           </section>
         ))}
@@ -886,7 +896,6 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
         )}
       </nav>
       {wide && (
-        // Work in the open pane makes it the head's choice, so a mock that starts does not take it away (code review, round 20).
         <section id="open-item" tabIndex={-1} className={r.pane} onFocus={() => { if (!picked && selected) setPicked(selected.id); }} aria-label={selected ? `${selected.task}: ${selected.name}` : key && !all.length ? "Nothing to do" : "Nothing open"}>
           {selected ? <ItemPane key={paneKey!} item={selected} data={data} readOnly={readOnly || (!fixedHead && !chosen)} reload={reload} onSigned={keepSigned} />
             : key && !all.length ? <div className={r.paneFacts}><h2 className={r.paneName}>Nothing to do</h2>

@@ -852,3 +852,6 @@
 .rejectGroup .fieldLabel { width: 100%; }
 /* The sign-off receipt takes focus; a soft ring, not the browser's square box (critic review, round 15). */
 .receipt:focus { outline: 2px solid color-mix(in oklch, var(--ink) 35%, transparent); outline-offset: 4px; border-radius: 8px; }
+/* A head's list retry: a full touch target in the workspace navy, dimmed while it retries (critic review, round 21). */
+.primary.retry { min-height: 44px; padding-inline: 18px; background: #14213d; color: #fff; font-size: 15px; }
+.primary.retry[aria-disabled="true"] { opacity: 0.55; cursor: progress; }

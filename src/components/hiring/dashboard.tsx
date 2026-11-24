@@ -462,7 +462,7 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
             // The button stays while it retries, so focus is not lost; on success focus moves to the list (Sol review, round 20).
             <div role="alert" className={css.loading}>
               <p>Could not load your hiring list.</p>
-              <button type="button" className={css.primary} aria-disabled={retrying || undefined} onClick={() => {
+              <button type="button" className={`${css.primary} ${css.retry}`} aria-disabled={retrying || undefined} onClick={() => {
                 if (retrying) return;
                 setRetrying(true);
                 load(true).then(() => {
