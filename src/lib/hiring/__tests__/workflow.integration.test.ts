@@ -20,7 +20,8 @@ import { handleLineWebhookPost } from "@/lib/line/webhook";
 import { handleProgressGroupCommand } from "@/lib/line/progress-reminders";
 import { createHmac } from "node:crypto";
 import { saveBriefDecision } from "../decisions";
-import { clearResultCheck } from "../marking";
+import { clearResultCheck, submitPaperCheck } from "../marking";
+import { afterPaperCounted, paperCheckView } from "../paper-check";
 import {
   bookInterview,
   bookContract,
@@ -956,6 +957,89 @@ describe("hiring workflow persistence", () => {
       expect(jobs.find((j) => j.kind === "line")!.payload).toEqual({ notice: "cancelled" });
       // A second call finds no mock.
       expect(await inGap(unchecked.id)).toBe(false);
+    });
+    it("a near miss goes to the head for a check, the head's marks decide, and a clear fail gets the rejection email at once", async () => {
+      await setVisit({ paperPassRules: [{ subject: "Mathematics", level: "IGCSE / GCSE", percent: 80 }] });
+      const graded = async (score: number) => {
+        const row = await invited();
+        await bookVisit(link(row), choice(), db);
+        const [result] = await db.insert(s.hiringPaperResults).values({ candidateId: row.id, subject: "Mathematics", source: "person", status: "done", updatedAt: now, marks: { comment: "", missingPages: null, questions: [
+          { id: "1", level: "IGCSE / GCSE" as const, attempted: true, readable: true, marks: score, max: 10, reason: "Marked." },
+        ] } }).returning();
+        return { row, result };
+      };
+      const mockOf = async (id: string) => (await db.select().from(s.hiringBookings).where(and(eq(s.hiringBookings.candidateId, id), eq(s.hiringBookings.kind, "mock"))))[0];
+      const notices = (resultId: string) => db.select().from(s.hiringRecruitmentDeliveries).where(eq(s.hiringRecruitmentDeliveries.key, `paper-check:${resultId}:0000`));
+      const rejection = async (id: string) => (await jobsOf(id)).find((job) => job.payload.workflowStage === "rejected");
+      const gap = () => vi.setSystemTime(new Date("2026-11-02T05:05:00Z"));
+      // One visit slot: each case frees it before the next books.
+      const free = async (id: string) => {
+        vi.setSystemTime(now);
+        const open = (await rowsOf(id)).filter((b) => b.status === "confirmed");
+        if (open.length) await endVisit(db, open, "cancelled", new Date(), false);
+      };
+      const near = await graded(7.5);
+      gap();
+      // 75%: the head checks first. The mock stays, and nothing goes to the candidate.
+      expect((await afterPaperCounted(db, near.row.id, "Mathematics", "ai")).outcome).toBe("check");
+      expect((await afterPaperCounted(db, near.row.id, "Mathematics", "ai")).outcome).toBe("check");
+      const [notice, ...more] = await notices(near.result.id);
+      expect(more).toHaveLength(0);
+      expect(notice.groupId).toBe("group");
+      expect(notice.message).toContain("AI score: 75% (pass mark 80%)");
+      expect((await mockOf(near.row.id)).status).toBe("confirmed");
+      expect(await rejection(near.row.id)).toBeUndefined();
+      const token = notice.message.match(/\/hiring\/paper-check\/([\w.-]+)/)![1];
+      const view = await paperCheckView(token, db);
+      expect(view).toMatchObject({ open: true, head: "Peat", aiPercent: 75, passMark: 80, done: null });
+      await expect(submitPaperCheck(token, { updatedAt: view.updatedAt, marks: {}, comment: "" }, db)).rejects.toThrow(/question 1/);
+      // The head's 80% is a pass: on to mock teaching.
+      expect((await submitPaperCheck(token, { updatedAt: view.updatedAt, marks: { "1": 8 }, comment: "Fair." }, db)).outcome).toBe("passed");
+      expect((await mockOf(near.row.id)).status).toBe("confirmed");
+      expect((await read(near.row.id)).stage).toBe("onsite_booked");
+      expect(await rejection(near.row.id)).toBeUndefined();
+      expect((await paperCheckView(token, db)).done).toEqual({ passed: true, percent: 80, head: "Peat" });
+      await expect(submitPaperCheck(token, { updatedAt: view.updatedAt, marks: { "1": 8 }, comment: "" }, db)).rejects.toThrow(/already recorded/);
+      await free(near.row.id);
+      const confirmed = await graded(7.2);
+      gap();
+      // 72%: the head keeps it below the pass mark, so the mock goes and the styled email is queued.
+      await afterPaperCounted(db, confirmed.row.id, "Mathematics", "ai");
+      const [second] = await notices(confirmed.result.id);
+      const token2 = second.message.match(/\/hiring\/paper-check\/([\w.-]+)/)![1];
+      const view2 = await paperCheckView(token2, db);
+      expect((await submitPaperCheck(token2, { updatedAt: view2.updatedAt, marks: { "1": 7 }, comment: "" }, db)).outcome).toBe("rejected");
+      expect((await mockOf(confirmed.row.id)).status).toBe("cancelled");
+      expect((await read(confirmed.row.id)).stage).toBe("rejected");
+      const email = await rejection(confirmed.row.id);
+      expect(email!.payload.subject).toBe("Your BeGifted test result");
+      expect(String(email!.payload.text)).toContain("checked it a second time");
+      expect(String(email!.payload.html)).toContain("Your test result");
+      await free(confirmed.row.id);
+      const low = await graded(5);
+      gap();
+      // 50%: no check. Rejected at once.
+      expect((await afterPaperCounted(db, low.row.id, "Mathematics", "ai")).outcome).toBe("rejected");
+      expect(await notices(low.result.id)).toHaveLength(0);
+      expect((await mockOf(low.row.id)).status).toBe("cancelled");
+      const lowEmail = String((await rejection(low.row.id))!.payload.text);
+      expect(lowEmail).not.toContain("second time");
+      expect(lowEmail).toContain("We cancelled your mock teaching booking");
+      // A second run does not send the email again.
+      expect((await afterPaperCounted(db, low.row.id, "Mathematics", "ai")).outcome).toBe("none");
+      expect((await jobsOf(low.row.id)).filter((job) => job.payload.workflowStage === "rejected")).toHaveLength(1);
+      // A clear fail in one subject does not reject while another subject waits for its head's check.
+      await free(low.row.id);
+      await setVisit({ paperPassRules: ["Mathematics", "Physics"].map((subject) => ({ subject, level: "IGCSE / GCSE", percent: 80 })) as never });
+      const two = await graded(4);
+      await db.insert(s.hiringPaperResults).values({ candidateId: two.row.id, subject: "Physics", source: "person", status: "done", updatedAt: now, marks: { comment: "", missingPages: null, questions: [
+        { id: "1", level: "IGCSE / GCSE" as const, attempted: true, readable: true, marks: 7.5, max: 10, reason: "Marked." },
+      ] } });
+      gap();
+      expect((await afterPaperCounted(db, two.row.id, "Physics", "ai")).outcome).toBe("check");
+      expect((await afterPaperCounted(db, two.row.id, "Mathematics", "ai")).outcome).toBe("held");
+      expect(await rejection(two.row.id)).toBeUndefined();
+      vi.setSystemTime(now);
     });
     it("sends one email holding both times", async () => {
       const row = await invited();

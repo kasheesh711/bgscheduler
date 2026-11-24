@@ -7,7 +7,8 @@ import { readAssessmentBytes } from "./assessment-files";
 import { callClaude } from "./claude";
 import { checkPaperMarks, checkRubric, LEGACY_RUBRIC_ITEMS, paperNeedsCheck, RUBRIC, RUBRIC_ITEMS, rubricNeedsCheck, type MockRubric, type PaperMarks, type StressTicks } from "./marking-sheet";
 import { HiringError, PAPER_LEVELS, runtimeWritesAllowed, type Subject } from "./model";
-import { audit, cancelMockAfterFail, MARKING_STUCK_AFTER_MS } from "./service";
+import { afterPaperCounted, afterPaperCountedQuietly, paperCheckView } from "./paper-check";
+import { audit, MARKING_STUCK_AFTER_MS } from "./service";
 
 export const MARKING_PROMPT_VERSION = "hiring-marking-2026-11-20.1";
 // One deadline for the whole run, below the route's 300 seconds, so a slow run can still save its result.
@@ -118,9 +119,6 @@ function callFailureText(call: Extract<OpenRouterCallResult, { ok: false }>) {
   return `The AI could not finish (${call.error}). The upload is saved. Retry.`;
 }
 
-/** A counted paper result that is a fail frees the head's mock hour. Saved marks must not be lost to an error here. */
-const cancelMockQuietly = (db: Database, candidateId: string, subject: Subject, actor: string, now: Date) =>
-  cancelMockAfterFail(db, candidateId, subject, actor, now).catch((error) => console.error("Hiring mock cancel failed", error instanceof Error ? error.name : "UnknownError"));
 
 /** A paid answer must not be lost to an audit error, so this never throws. */
 const auditQuietly = (db: Database, actor: string, action: string, candidateId: string, detail: Record<string, unknown>) =>
@@ -233,7 +231,7 @@ async function runResult<T>(table: typeof p, spec: Spec<T>, id: string, actor: s
       .returning({ id: table.id });
     if (!saved.length) return { status: "replaced" as const, error: "A newer upload replaced this file while it was being read." };
     await auditQuietly(db, actor, spec.doneAudit, claimed.candidateId, { subject: claimed.subject, status });
-    if (spec.kind === "paper") await cancelMockQuietly(db, claimed.candidateId, claimed.subject, actor, new Date());
+    if (spec.kind === "paper") await afterPaperCountedQuietly(db, claimed.candidateId, claimed.subject, actor, new Date());
     return { status, error: null };
   } catch (error) {
     // Only a known message reaches the screen. An unknown error could hold file text, so only its name is logged.
@@ -244,8 +242,8 @@ async function runResult<T>(table: typeof p, spec: Spec<T>, id: string, actor: s
 
 /**
  * Marks one uploaded paper. The result counts at once. It changes no stage and writes no old-flow paper pass, so an AI
- * "Passed" can never start the old flow's mock invitation. A counted fail cancels the mock of the same visit and tells
- * the head (`cancelMockAfterFail`).
+ * "Passed" can never start the old flow's mock invitation. A counted fail goes to `afterPaperCounted`: a near miss goes to
+ * the subject's head for a check, and a clear fail cancels the mock and queues the rejection email.
  */
 export const markPaper = (id: string, actor: string, db: Database, callModel?: CallModel, now = new Date()) =>
   runResult(
@@ -335,7 +333,7 @@ export const readMockRubric = (id: string, actor: string, db: Database, callMode
   );
 
 /** A person's change. The AI's first answer stays. The server recalculates the sheet from these marks. */
-export async function changePaperMarks(id: string, input: { updatedAt: string; marks: Record<string, number | null>; comment: string }, actor: string, db: Database, now = new Date()) {
+export async function changePaperMarks(id: string, input: { updatedAt: string; marks: Record<string, number | null>; comment: string }, actor: string, db: Database, now = new Date(), followUp = true) {
   const [row] = await db.select().from(p).where(eq(p.id, id));
   if (!row?.marks || !["done", "needs_check"].includes(row.status)) throw new HiringError(409, "This paper has no marks to change yet.");
   const questions = row.marks.questions.map((q) => {
@@ -356,7 +354,27 @@ export async function changePaperMarks(id: string, input: { updatedAt: string; m
     .returning({ id: p.id });
   if (!saved.length) throw new HiringError(409, "These marks changed while you were editing. Refresh the page.");
   await audit(db, actor, "paper-marks-changed", row.candidateId, { subject: row.subject, before: row.marks.questions.map((q) => [q.id, q.marks]), after: questions.map((q) => [q.id, q.marks]) });
-  await cancelMockQuietly(db, row.candidateId, row.subject, actor, now);
+  if (followUp) await afterPaperCountedQuietly(db, row.candidateId, row.subject, actor, now);
+  return row;
+}
+
+/**
+ * The head's check of a near-miss paper, from the LINE link. Every question needs a mark. The head's marks replace the
+ * AI's (the AI's first answer stays), then `afterPaperCounted` sends the candidate on to the mock or rejects.
+ */
+export async function submitPaperCheck(token: string, input: { updatedAt: string; marks: Record<string, number>; comment: string }, db: Database, now = new Date()) {
+  if (!runtimeWritesAllowed()) throw new HiringError(503, "A check can be saved only on the live site.");
+  const view = await paperCheckView(token, db, now);
+  if (view.done) throw new HiringError(409, "Your check is already recorded.");
+  if (!view.open) throw new HiringError(409, "This paper no longer needs a check.");
+  const missing = view.questions.filter((q) => !Object.hasOwn(input.marks, q.id));
+  if (missing.length) throw new HiringError(400, `Give a mark for question ${missing.map((q) => q.id).join(", ")}.`);
+  const head = view.head ?? "admin";
+  const actor = `head:${head}`;
+  const row = await changePaperMarks(view.id, input, actor, db, now, false);
+  // A noted missing page sets the row back to "needs check". The head has read the paper, so the head's marks count.
+  await db.update(p).set({ status: "done", checkedBy: actor, checkedAt: now }).where(and(eq(p.id, view.id), eq(p.status, "needs_check")));
+  return afterPaperCounted(db, row.candidateId, row.subject, actor, now, head);
 }
 
 /** A person's change to a rubric. Same rule as marks: the AI's first read stays, and the total is calculated. */
@@ -444,5 +462,5 @@ export async function clearResultCheck(kind: "paper" | "mock", id: string, actor
     .returning();
   if (!row) throw new HiringError(409, "This result does not need a check. Refresh the page.");
   await audit(db, actor, "result-checked", row.candidateId, { kind, subject: row.subject });
-  if (kind === "paper") await cancelMockQuietly(db, row.candidateId, row.subject, actor, now);
+  if (kind === "paper") await afterPaperCountedQuietly(db, row.candidateId, row.subject, actor, now);
 }

@@ -99,7 +99,7 @@ export type InterviewKind = "paper" | "mock";
 // `call` is the candidate's link to book the HR pre-screen call.
 // `two-day` (Kevin, 24 Nov 2026) books the test (Monday to Sunday) and the final-round mock teaching on the same day or a later day
 // (Monday to Friday) together. `visit` (both on one day) and `paper-visit` (test only) are links sent before that.
-export const tokenKindSchema = z.enum(["paper", "mock", "visit", "paper-visit", "two-day", "brief", "call", "contract", "onboarding"]);
+export const tokenKindSchema = z.enum(["paper", "mock", "visit", "paper-visit", "two-day", "brief", "call", "contract", "onboarding", "paper-check"]);
 /** A booking of the visit flows. A row of kind `call` belongs to the HR call list only. */
 export const isVisitBooking = <T extends { kind: string }>(row: T): row is T & { kind: InterviewKind } =>
   row.kind === "paper" || row.kind === "mock";
@@ -366,6 +366,15 @@ export const baseConfigSchema = z
     visitStartMinute: z.number().int().min(0).max(1439).default(600),
     visitEndMinute: z.number().int().min(1).max(1440).default(960),
     resumeRetentionMonths: z.number().int().min(1).max(120).default(12),
+    /**
+     * The head who checks a near-miss paper (PAPER_CHECK_FROM_PERCENT up to the pass mark) in each subject. A subject
+     * with no row goes to its first mock interviewer. Optional with no default, for the same reason as
+     * `workRightsPenalties`; `DEFAULT_PAPER_CHECKERS` applies until a person saves a change.
+     */
+    paperCheckers: z
+      .array(z.object({ subject: subjectSchema, canonicalKey: z.string().min(1).max(200) }).strict())
+      .max(SUBJECTS.length)
+      .optional(),
     /** The pass percentage for each subject and level of the paper. A pair with no row has no pass mark yet. */
     paperPassRules: z
       .array(z.object({ subject: subjectSchema, level: z.enum(PAPER_LEVELS), percent: z.number().min(0).max(100) }).strict())
@@ -380,6 +389,15 @@ export const baseConfigSchema = z
   })
   .strict();
 export type HiringConfig = z.infer<typeof baseConfigSchema>;
+/** Kevin, 24 Nov 2026: a failed paper at or above this best-level percent goes to the subject's head for a check first. */
+export const PAPER_CHECK_FROM_PERCENT = 70;
+/** Kevin, 24 Nov 2026: Tito checks the English papers. Other subjects go to their mock interviewer. */
+export const DEFAULT_PAPER_CHECKERS: NonNullable<HiringConfig["paperCheckers"]> = (["EFL/ESL", "English Language", "English Literature", "IELTS"] as const)
+  .map((subject) => ({ subject, canonicalKey: "Tito" }));
+/** The head who checks a near-miss paper in this subject, or null when nobody covers it. */
+export const paperCheckerFor = (config: Pick<HiringConfig, "paperCheckers" | "interviewers">, subject: Subject) =>
+  (config.paperCheckers ?? DEFAULT_PAPER_CHECKERS).find((row) => row.subject === subject)?.canonicalKey
+  ?? config.interviewers.find((head) => head.subjects.includes(subject))?.canonicalKey ?? null;
 
 /** Rules that link two settings. Plain English, because Kevin reads them on the Rules screen. */
 export function configRuleErrors(
