@@ -21,7 +21,6 @@ describe("WeekGrid", () => {
     expect(html).toContain("Weekday hour from 15:00 added");
     expect(html).toContain("3 h");
     const none = renderToStaticMarkup(<WeekGrid value={emptyWeek()} onChange={() => {}} disabled={false} />);
-    expect(none).toContain("Add a weekend hour");
-    expect(none).toContain("Add a weekday hour from 15:00");
+    expect(none).toContain("Still needed: a weekend hour · a weekday hour from 15:00");
   });
 });

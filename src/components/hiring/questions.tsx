@@ -217,7 +217,7 @@ export function PreScreenQuestions({
     ...(subjects.includes(ART) ? [["q-portfolio", "Portfolio", !!fileName || !!portfolio.trim()] as [string, string, boolean]] : []),
     ["q-curricula", "Curricula", curricula.length > 0],
     ["q-years", "Year groups", yearGroups.length > 0],
-    ["q-hours", "Your hours", weekHoursCount(week) > 0],
+    ["q-hours", "Your onsite hours", weekHoursCount(week) > 0],
     ["q-weekly", "Hours a week", !!answers.weeklyHours],
     ["q-why", "Why BeGifted", !!motivation.trim()],
     ["q-approach", "Your approach", !!teachingApproach.trim()],
@@ -331,7 +331,7 @@ export function PreScreenQuestions({
         </Q>
       </Section>
       <Section title="What you teach">
-        <Q id="q-subjects" title="Subjects you teach confidently" tag="all that apply" hint="One becomes your test subject.">
+        <Q id="q-subjects" title="Subjects you teach confidently" tag="all that apply">
           <Chips
             name="subjects"
             choices={shownSubjects}
@@ -410,7 +410,7 @@ export function PreScreenQuestions({
           <Chips name="yearGroups" choices={ANSWER_CHOICES.yearGroups} value={yearGroups} onChange={setYearGroups} many disabled={busy} />
         </Q>
       </Section>
-      <Section title="When you can teach onsite">
+      <Section title="Your onsite hours">
         <Q id="q-hours" title="Your weekly hours for teaching onsite" hideTitle>
           <WeekGrid value={week} onChange={setWeek} disabled={busy} />
         </Q>

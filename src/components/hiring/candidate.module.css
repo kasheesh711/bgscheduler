@@ -1350,3 +1350,32 @@ span.qTitle {
     text-align: center;
   }
 }
+
+/* The first hour label sits above its row, under the pinned day names: keep it on top (Sol r25). */
+.row[data-hour="8"] .hour {
+  position: relative;
+  z-index: 2;
+}
+/* Plan rows: a name beside the first line of its detail; on a phone the address takes the full width (Sol r25). */
+.plan {
+  align-items: baseline;
+}
+@media (max-width: 400px) {
+  .plan li[data-where] b,
+  .plan li[data-where] span {
+    grid-column: 1 / -1;
+  }
+}
+.sectionHead {
+  text-wrap: balance;
+}
+/* 320 px: a two-month week label ("NOV–DEC") fits its chip (harness r26). */
+@media (max-width: 359px) {
+  .dateWeek {
+    padding-inline: 1px;
+  }
+  .dateWeek span {
+    font-size: 9px;
+    letter-spacing: 0;
+  }
+}

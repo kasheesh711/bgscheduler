@@ -287,8 +287,13 @@ function Picker<T extends { date: string }>({
                 </>
               ) : (
                 <>
-                  <b>{label(w, { day: "numeric", month: "short" })}</b>
-                  <span>– {label(plusDays(w, 6), { day: "numeric", month: "short" })}</span>
+                  {/* One format on every chip: days over months (Opus r24). */}
+                  <b>
+                    {label(w, { day: "numeric" })}–{label(plusDays(w, 6), { day: "numeric" })}
+                  </b>
+                  <span>
+                    {label(w, { month: "short" })}–{label(plusDays(w, 6), { month: "short" })}
+                  </span>
                 </>
               )}
             </button>
@@ -425,7 +430,7 @@ const VisitPlan = ({ place }: { place?: string }) => (
     </li>
     {/* Where "onsite" is, before the questions (Sol r24). */}
     {place && (
-      <li>
+      <li data-where="">
         <b>Where</b>
         <span>{place}</span>
       </li>
@@ -498,7 +503,8 @@ export function VisitBooking({
 }) {
   const [moving, setMoving] = useState(false),
     [chosen, setStart] = useState(""),
-    [onsite, setOnsite] = useState(false),
+    // A booked visit already confirmed the address; a move after a reload keeps it ticked (Opus r24).
+    [onsite, setOnsite] = useState(!!view.visit),
     // Ticked for the candidate when the saved answers already meet the rule; it stays editable (Fable r3).
     [commitment, setCommitment] = useState(view.timeRuleMet),
     [busy, setBusy] = useState(false),
@@ -797,7 +803,7 @@ export function VisitBooking({
                     [
                       // Short, so "Next: …" fits on one line beside the button at 390 px (Opus r22).
                       [!start, "test time", "times-start"],
-                      [unchanged, "change the test time, the mock teaching time, or both", "times-start"],
+                      [unchanged, "a new time", "times-start"],
                       // No mock time after the chosen test: the way on is an earlier test (Sol r24).
                       [view.twoDay && !!slot && !laterMocks.length, "an earlier test time", "times-start"],
                       [view.twoDay && !mock, "mock time", "mock-start"],
@@ -816,14 +822,15 @@ export function VisitBooking({
                     <div className={cs.chosen}>
                       <div>
                         <span>Test</span>
+                        {/* Start and end, so the bar alone says when each part is (Sol r25). */}
                         <b>
-                          {short(slot.examStart)}, {time(slot.examStart)}
+                          {short(slot.examStart)}, {time(slot.examStart)}–{time(slot.examEnd)}
                         </b>
                       </div>
                       {view.twoDay && (
                         <div>
                           <span>Mock, if you pass</span>
-                          <b>{mock ? `${short(mock.start)}, ${time(mock.start)}` : "Choose a time"}</b>
+                          <b>{mock ? `${short(mock.start)}, ${time(mock.start)}–${time(mock.end)}` : "Choose a time"}</b>
                         </div>
                       )}
                     </div>

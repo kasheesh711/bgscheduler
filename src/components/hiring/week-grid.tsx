@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { Check, Circle, Plus } from "lucide-react";
+import { Check, Plus } from "lucide-react";
 import { GRID_HOURS, hourRanges, WEEK_DAYS, weekHoursCount, type WeekHours } from "@/lib/hiring/week-hours";
 import s from "./candidate.module.css";
 
@@ -195,6 +195,10 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
       {/* The rule, fixed above the grid; the live ticks stay under it, where their changes move nothing (Sol r18). */}
       {/* One visible line: holding to drag is not something a phone user finds alone (settled after Sol r23/r24). */}
       <p className={s.hint}>Tap, or hold and drag. Bangkok time.</p>
+      {/* Read by screen readers always; shown above the grid when the keyboard reaches it (Opus r13, r24). */}
+      <p id="week-grid-keys" className={s.keysHint}>
+        Arrows move. Space chooses.
+      </p>
       <div className={s.presets} role="group" aria-label="Quick fill">
         {PRESETS.map((p) => {
           // Add only; a check once every hour of it is in the week (Sol r6).
@@ -321,21 +325,25 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
         <p className={s.rules}>
           {/* What the booking asks for: a note to add, then a tick once the grid has it (Sol r2: not radio-like). */}
           {/* Says what to add until each rule is met, then a green tick (Sol r22); inside the live readback, so it is announced. */}
-          <span data-ok={weekend || undefined}>
-            {weekend ? <Check aria-hidden size={14} /> : <Circle aria-hidden size={14} />}
-            {weekend ? "Weekend hour added" : "Add a weekend hour"}
-          </span>
-          <span data-ok={late || undefined}>
-            {late ? <Check aria-hidden size={14} /> : <Circle aria-hidden size={14} />}
-            {late ? "Weekday hour from 15:00 added" : "Add a weekday hour from 15:00"}
-          </span>
+          {/* Met rules get a green tick; what is still missing is plain text, never a control-like circle (Sol r25, Opus r24). */}
+          {weekend && (
+            <span data-ok>
+              <Check aria-hidden size={14} />
+              Weekend hour added
+            </span>
+          )}
+          {late && (
+            <span data-ok>
+              <Check aria-hidden size={14} />
+              Weekday hour from 15:00 added
+            </span>
+          )}
+          {(!weekend || !late) && (
+            <span>Still needed: {[!weekend && "a weekend hour", !late && "a weekday hour from 15:00"].filter(Boolean).join(" · ")}</span>
+          )}
         </p>
       </div>
 
-      {/* Read by screen readers always; shown when the keyboard reaches the grid (Opus r13). */}
-      <p id="week-grid-keys" className={s.keysHint}>
-        Arrows move. Space chooses.
-      </p>
 
     </div>
   );
