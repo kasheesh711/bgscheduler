@@ -524,7 +524,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
       {saved && <Saved>{saved}</Saved>}
       <div className={c.facts}>
         <Fact icon={contract ? <Phone aria-hidden /> : <Video aria-hidden />} label={contract ? "Contract signing" : "R1: HR Interview"}>
-          {view.minutes} minutes {contract ? "with our HR team" : "on Google Meet with our HR team"}
+          {view.minutes} minutes {contract ? "with our team" : "on Google Meet with our HR team"}
         </Fact>
         {view.kind === "contract" ? <Fact icon={<MapPin aria-hidden />} label="Where">{view.location}</Fact> : <p className={c.note}>A video call. Google Calendar sends you an invitation with the Google Meet link. All times are Bangkok time.</p>}
       </div>

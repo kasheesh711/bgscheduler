@@ -20,7 +20,7 @@ export function OnboardingForm({ token, submitted, linked, locked, lineIssue }: 
   const [saved, setSaved] = useState(submitted);
   const [isLinked, setLinked] = useState(linked);
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState(lineIssue ? "LINE sign-in did not finish. Try again or contact BeGifted HR." : "");
+  const [error, setError] = useState(lineIssue ? "LINE sign-in did not finish. Try again or contact BeGifted." : "");
   const endpoint = `/api/hiring/onboarding/${encodeURIComponent(token)}`;
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -43,15 +43,15 @@ export function OnboardingForm({ token, submitted, linked, locked, lineIssue }: 
   return <section className="mx-auto grid max-w-lg gap-4">
     {error && <p role="alert" className="text-destructive">{error}</p>}
     {saved ? <>
-      <p role="status">BeGifted HR received your details.</p>
-      {isLinked ? <p>LINE account linked. HR will review your details at contract signing.</p> : <>
+      <p role="status">BeGifted received your details.</p>
+      {isLinked ? <p>LINE account linked. We will review your details at contract signing.</p> : <>
         <p>Sign in with the LINE account you want BeGifted to invite.</p>
         <a className={cn(buttonVariants({ variant: "outline" }), "w-fit")} href={`${endpoint}/line`}>Connect LINE</a>
       </>}
       {!locked && <button className="w-fit text-sm underline underline-offset-4" type="button"
         onClick={() => { setError(""); setSaved(false); }}>Correct your details</button>}
     </> : <>
-      <p>BeGifted HR uses these details for your contract and tutor account setup.</p>
+      <p>BeGifted uses these details for your contract and tutor account setup.</p>
       <form className="grid gap-4" onSubmit={save}>
         {fields.map((field) => <label key={field.name} className="grid gap-1 text-sm font-medium">
           {field.label}

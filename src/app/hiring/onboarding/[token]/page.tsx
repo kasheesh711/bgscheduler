@@ -19,7 +19,7 @@ async function Body({ params, searchParams }: Props) {
   try {
     view = await onboardingView(getDb(), token);
   } catch (error) {
-    return <p role="alert">{error instanceof HiringError ? error.message : "Tutor onboarding is temporarily unavailable. Contact BeGifted HR."}</p>;
+    return <p role="alert">{error instanceof HiringError ? error.message : "Tutor onboarding is temporarily unavailable. Contact BeGifted."}</p>;
   }
   return <OnboardingForm token={token} {...view} lineIssue={query.line === "review"} />;
 }

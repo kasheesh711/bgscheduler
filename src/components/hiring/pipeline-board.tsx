@@ -15,7 +15,7 @@ export function PipelineBoardPanel({ data, onOpenRecord }: { data: HiringData; o
   const worst = board.columns.find((column) => column.key === board.bottleneck);
   return (
     <section className={css.panel} aria-labelledby="pipeline-board-title">
-      <h2 id="pipeline-board-title" className={css.panelTitle}>Pipeline from the HR call</h2>
+      <h2 id="pipeline-board-title" className={css.panelTitle}>Pipeline</h2>
       <p className={css.panelLede}>
         {worst ? (
           <>
@@ -28,7 +28,8 @@ export function PipelineBoardPanel({ data, onOpenRecord }: { data: HiringData; o
         Click a name to open the record.
       </p>
       <ol className={b.board} role="list">
-        {board.columns.map((column) => {
+        {/* The HR call column shows only while a call is booked: HR calls are retired (Kevin, 24 Nov 2026). */}
+        {board.columns.filter((column) => column.key !== "call" || column.cards.length > 0).map((column) => {
           const bottleneck = column.key === board.bottleneck;
           return (
             <li key={column.key} className={b.column} data-bottleneck={bottleneck ? "" : undefined} aria-label={`${column.label}: ${people(column.count)}${bottleneck ? ", bottleneck" : ""}`}>

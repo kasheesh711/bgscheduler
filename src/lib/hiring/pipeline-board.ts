@@ -15,12 +15,12 @@ export type PipelineBoardInput = Omit<FunnelInput, "candidates" | "bookings"> & 
 };
 
 export const PIPELINE_COLUMNS = [
-  { key: "call", label: "HR call booked", owner: "HR" },
+  { key: "call", label: "HR call booked", owner: "Kevin" },
   { key: "form", label: "Form and visit link", owner: "Candidate" },
   { key: "visit", label: "Visit booked", owner: "Candidate" },
   { key: "marking", label: "Marking and mock scores", owner: "Head" },
-  { key: "review", label: "Final review", owner: "HR, then Gift" },
-  { key: "offer", label: "Offer and signing", owner: "HR" },
+  { key: "review", label: "Final review", owner: "Kevin, then Gift" },
+  { key: "offer", label: "Offer and signing", owner: "Kevin" },
 ] as const;
 export type PipelineColumnKey = (typeof PIPELINE_COLUMNS)[number]["key"];
 export type PipelineCard = {
@@ -96,8 +96,8 @@ export function buildPipelineBoard(data: PipelineBoardInput, now: Date): Pipelin
       const offer = data.decisions.find((d) => d.candidateId === id && d.decision === "hire" && d.status === "sent");
       // "hired" has no stuck rule, so an offer is never stuck.
       place = offer?.sentAt
-        ? { column: "offer", exact: daysSince(offer.sentAt), stuck: false, note: `Offer sent ${dayOnly(offer.sentAt)}`, owner: "HR" }
-        : { column: "offer", exact: f.daysInStage, stuck: false, note: NEEDS_REVIEW, owner: "HR" };
+        ? { column: "offer", exact: daysSince(offer.sentAt), stuck: false, note: `Offer sent ${dayOnly(offer.sentAt)}`, owner: "Kevin" }
+        : { column: "offer", exact: f.daysInStage, stuck: false, note: NEEDS_REVIEW, owner: "Kevin" };
     } else if (head) {
       const yes = head.decision === "hire";
       const exact = daysSince(head.at);
@@ -107,7 +107,7 @@ export function buildPipelineBoard(data: PipelineBoardInput, now: Date): Pipelin
         // The same limit as a visit with no result: the decision is due.
         stuck: after(exact, stuckAfter("onsite_booked")),
         note: `${head.head || "Head"} said ${yes ? "Yes" : "No"}`,
-        owner: yes ? "HR, then Gift" : "HR",
+        owner: yes ? "Kevin, then Gift" : "Kevin",
       };
     } else if (VISIT_STAGES.includes(stage)) {
       const ahead = mine.filter((b) => new Date(b.startTime!).getTime() > nowMs).sort((a, b) => new Date(a.startTime!).getTime() - new Date(b.startTime!).getTime());
@@ -118,7 +118,7 @@ export function buildPipelineBoard(data: PipelineBoardInput, now: Date): Pipelin
         const last = Math.max(...mine.map((b) => new Date(b.startTime!).getTime()));
         place = { column: "marking", exact: f.daysInStage, stuck: f.stuck, note: `Visited ${dayOnly(new Date(last))}. No head decision.`, owner: headKey ?? "Head" };
       } else
-        place = { column: stage === "paper_passed" ? "marking" : "visit", exact: f.daysInStage, stuck: f.stuck, note: NEEDS_REVIEW, owner: "HR" };
+        place = { column: stage === "paper_passed" ? "marking" : "visit", exact: f.daysInStage, stuck: f.stuck, note: NEEDS_REVIEW, owner: "Kevin" };
     } else if (stage === "onsite_invited" || stage === "paper_invited") {
       place = { column: "form", exact: f.daysInStage, stuck: f.stuck, note: "Waits for a visit booking", owner: "Candidate" };
     } else if (stage === "pre_screen") {
@@ -134,7 +134,7 @@ export function buildPipelineBoard(data: PipelineBoardInput, now: Date): Pipelin
         exact,
         stuck: after(exact, stuckAfter("pre_screen")),
         note: stage === "new" ? "Next steps email not sent yet" : NEEDS_REVIEW,
-        owner: "HR",
+        owner: "Kevin",
       };
     } else if (f.stageKey === "new (call booked)") {
       const at = callAt.get(id)!;
@@ -143,7 +143,7 @@ export function buildPipelineBoard(data: PipelineBoardInput, now: Date): Pipelin
         exact: f.daysInStage,
         stuck: f.stuck,
         note: at <= nowMs ? `Call was ${dayTime(new Date(at))}. Result not recorded.` : `Call ${dayTime(new Date(at))}`,
-        owner: "HR",
+        owner: "Kevin",
       };
     }
     if (!place) continue;

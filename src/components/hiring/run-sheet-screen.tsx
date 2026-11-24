@@ -124,8 +124,8 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
       {tab === "sheet" && (
         <>
           <FirstUseHint id="hr-run-sheet">
-            HR: this list shows every visit from today, first visit first. Old visits show under the list. &quot;Needs review&quot; tells you what is missing: tell
-            Kevin. Full steps: the printed HR job aid.
+            This list shows every visit from today, first visit first. Old visits show under the list. &quot;Needs review&quot; tells you what is missing: tell
+            Kevin. Full steps: the printed job aid.
           </FirstUseHint>
           {unrecorded.length > 0 && (
             <>

@@ -49,7 +49,7 @@ describe("buildPipelineBoard", () => {
     const cards = column(board, "call").cards;
     // The stuck card comes first.
     expect(cards.map((c) => c.id)).toEqual(["late", "ahead"]);
-    expect(cards[0]).toMatchObject({ days: 5, stuck: true, owner: "HR", note: "Call was 15 Nov 10:00. Result not recorded." });
+    expect(cards[0]).toMatchObject({ days: 5, stuck: true, owner: "Kevin", note: "Call was 15 Nov 10:00. Result not recorded." });
     expect(cards[1]).toMatchObject({ days: 2, stuck: false, note: "Call 21 Nov 10:00", subject: "Physics" });
     // No call yet: before the HR call, so not on the board.
     expect(where(board, "before")).toBeNull();
@@ -71,7 +71,7 @@ describe("buildPipelineBoard", () => {
       ],
     });
     const cards = Object.fromEntries(column(board, "form").cards.map((c) => [c.id, c]));
-    expect(cards.unsent).toMatchObject({ days: 1, stuck: false, note: "Next steps email not sent yet", owner: "HR" });
+    expect(cards.unsent).toMatchObject({ days: 1, stuck: false, note: "Next steps email not sent yet", owner: "Kevin" });
     // 10 days after the form went: over the 7-day limit.
     expect(cards.form).toMatchObject({ days: 10, stuck: true, note: "Waits for the form", owner: "Candidate" });
     expect(cards.place).toMatchObject({ days: 3, stuck: false, owner: "Kevin" });
@@ -124,8 +124,8 @@ describe("buildPipelineBoard", () => {
       decisions: [{ candidateId: "offer", decision: "hire", status: "sent", sentAt: at("14") }],
     });
     const review = Object.fromEntries(column(board, "review").cards.map((c) => [c.id, c]));
-    expect(review.yes).toMatchObject({ days: 1, stuck: false, note: "Peat said Yes", owner: "HR, then Gift" });
-    expect(review.no).toMatchObject({ days: 4, stuck: true, note: "Peat said No", owner: "HR" });
+    expect(review.yes).toMatchObject({ days: 1, stuck: false, note: "Peat said Yes", owner: "Kevin, then Gift" });
+    expect(review.no).toMatchObject({ days: 4, stuck: true, note: "Peat said No", owner: "Kevin" });
     const offer = Object.fromEntries(column(board, "offer").cards.map((c) => [c.id, c]));
     expect(offer.offer).toMatchObject({ days: 6, stuck: false, note: "Offer sent 14 Nov" });
     // Fail closed: hired with no sent offer on record.

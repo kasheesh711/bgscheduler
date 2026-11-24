@@ -99,7 +99,7 @@ export async function reviewPacketValid(db: Database, id: string, packet: Review
 
 /** The packet as it would be saved now. Nothing is written. HR only. */
 export async function draftReviewPacket(db: Database, id: string, actor: string, input?: ReviewInput): Promise<ReviewPacket> {
-  if (!finalReviewAccess(actor).hr) throw new HiringError(403, "HR prepares the review packet.");
+  if (!finalReviewAccess(actor).hr) throw new HiringError(403, "Only the final review sender prepares the review packet.");
   const material = await evidence(db, id, false);
   return {
     id: "draft", author: actor, at: new Date(), evidence: material, fingerprint: fingerprint(material),
@@ -109,7 +109,7 @@ export async function draftReviewPacket(db: Database, id: string, actor: string,
 }
 
 export async function submitReview(db: Database, id: string, actor: string, { behavioral, offerType }: ReviewInput) {
-  if (!finalReviewAccess(actor).hr) throw new HiringError(403, "HR prepares the review packet.");
+  if (!finalReviewAccess(actor).hr) throw new HiringError(403, "Only the final review sender prepares the review packet.");
   if (!runtimeWritesAllowed()) throw new HiringError(503, "Review packets can be saved only on the live site.");
   const reviewer = normalizeEmail(process.env.HIRING_FINAL_REVIEWER_EMAIL);
   if (!reviewer || reviewer === actor) throw new HiringError(409, "Set up Gift’s sign-in before submitting the review.");
@@ -130,7 +130,7 @@ export async function submitReview(db: Database, id: string, actor: string, { be
     const link = new URL(`/hiring?view=hr#review-${id}`, process.env.APP_BASE_URL || "https://bgscheduler.vercel.app");
     const key = `${id}:final-review:${row.id}`;
     await enqueue(tx, { key, candidateId: id, kind: "email",
-      payload: { to: reviewer, cc: [], subject: "BeGifted hiring review ready", closeLoop: true, text: `HR has submitted a hiring review for your sign-off.\n\n${link}` } });
+      payload: { to: reviewer, cc: [], subject: "BeGifted hiring review ready", closeLoop: true, text: `A hiring review is ready for your sign-off.\n\n${link}` } });
     return key;
   });
 }
@@ -140,16 +140,16 @@ export async function signOffReview(db: Database, id: string, packetId: string, 
   if (!runtimeWritesAllowed()) throw new HiringError(503, "Sign-off is available only on the live site.");
   const { config } = await settings(db);
   if (decision === "hire" && await callCalendarState(db, config, now) !== "readable")
-    throw new HiringError(409, "Connect the HR calendar before approving an offer.");
+    throw new HiringError(409, "Connect the signing calendar before approving an offer.");
   return withDatabaseTransaction(db, async (tx) => {
     await tx.execute(sql`select id from hiring_candidates where id=${id} for no key update`);
     const candidate = await candidateById(tx, id);
     const packet = await latestReviewPacket(tx, id);
     if (!packet || packet.id !== packetId || !packetMatches(packet, await evidence(tx, id)))
-      throw new HiringError(409, "The evidence changed. Ask HR to submit a new review packet.");
+      throw new HiringError(409, "The evidence changed. Ask Kevin to submit a new review packet.");
     const latest = (await settings(tx)).config;
     if (decision === "hire" && latest.connectedEmail !== config.connectedEmail)
-      throw new HiringError(409, "The HR calendar changed. Refresh and review again.");
+      throw new HiringError(409, "The signing calendar changed. Refresh and review again.");
     const refusal = decision === "hire" && contractTestAllowed(latest, id) ? null : sendRefusal(latest);
     if (refusal) throw new HiringError(409, refusal);
     const key = await queueFinalResult(tx, candidate, decision, reason, actor, packet.offer, now);

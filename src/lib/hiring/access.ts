@@ -17,6 +17,6 @@ export async function requireHiringAdmin() {
 export async function requireHiringHr() {
   const actor = await requireHiringAdmin();
   const { finalReviewAccess } = await import("./final-review");
-  if (!finalReviewAccess(actor).hr) throw new HiringError(403, "Hiring HR access is required.");
+  if (!finalReviewAccess(actor).hr) throw new HiringError(403, "Final review access is required.");
   return actor;
 }

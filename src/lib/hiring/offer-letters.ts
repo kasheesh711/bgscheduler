@@ -5,7 +5,7 @@ We are pleased to offer you the position of ${role} ${subject} tutor at BeGifted
 
 ${terms}
 
-Read the contract at your signing appointment. Ask HR your questions before you sign.
+Read the contract at your signing appointment. Ask us your questions before you sign.
 
 We look forward to working with you.
 

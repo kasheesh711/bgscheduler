@@ -215,7 +215,7 @@ describe("review fixes", () => {
     const [row] = buildRunSheet({ ...base, bookings: [booking({ subjects: ["Mathematics", "Physics"] })] });
     expect(row.subject).toBe("Mathematics");
     expect(row.issues).toContain("Needs review: 2 subjects (Mathematics, Physics), only Mathematics is shown");
-    expect(replayRunSheet([row]).owners[row.issues[0]]).toBe("HR: book one subject per visit");
+    expect(replayRunSheet([row]).owners[row.issues[0]]).toBe("Kevin: book one subject per visit");
   });
 
   it("shows a mock-only visit with no paper to print and no paper gap", () => {

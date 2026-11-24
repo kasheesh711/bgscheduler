@@ -345,7 +345,7 @@ describe("CandidateTable pipeline columns", () => {
     expect(html).toContain(">10 d<");
     expect(html).toContain(">2 d<");
     expect(html).toContain("Candidate sends the form. The worker sends a reminder.");
-    expect(html).toContain(">HR<");
+    expect(html).toContain(">Kevin<");
     // Only a is over the 7-day pre-screen rule.
     expect(html.match(/>Stuck</g)).toHaveLength(1);
   });
