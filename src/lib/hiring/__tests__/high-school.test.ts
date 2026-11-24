@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { baseConfigSchema, profileWeightsSchema, DEFAULT_WEIGHTS } from "../model";
-import { highSchoolFraction, highSchoolMatch, profileScore, validateAssessment } from "../scoring";
+import { highSchoolFraction, highSchoolMatch, profileParts, profileScore, validateAssessment } from "../scoring";
 
 const config = baseConfigSchema.parse({});
 const criteria = (["degree", "subject", "curriculum", "teaching", "english"] as const).map((id) => ({
@@ -33,6 +33,10 @@ describe("high-school score part", () => {
     expect(DEFAULT_WEIGHTS).toMatchObject({ curriculum: 15, prestige: 15, school: 10 });
     expect(profileScore({ criteria }, DEFAULT_WEIGHTS, 0.5, 0, 1)).toBe(75 + 7.5 + 10);
     expect(profileScore({ criteria }, DEFAULT_WEIGHTS, 0.5, 0, 0)).toBe(82.5);
+    // The parts a page shows add up to the score, before the work-rights penalty.
+    const parts = profileParts({ criteria }, DEFAULT_WEIGHTS, 0.5, 1);
+    expect(parts.reduce((sum, part) => sum + part.earned, 0)).toBe(profileScore({ criteria }, DEFAULT_WEIGHTS, 0.5, 0, 1));
+    expect(parts.map((part) => part.name).slice(-2)).toEqual(["University", "High school"]);
   });
   it("reads a config saved before the part with a school weight of 0", () => {
     const old = { degree: 10, subject: 10, curriculum: 20, teaching: 20, english: 20, prestige: 20 };
