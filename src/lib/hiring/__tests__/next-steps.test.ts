@@ -81,9 +81,8 @@ describe("preScreenEmail with a visit link (Next steps)", () => {
       expect(part).toContain("When booking opens, we email you");
       expect(part).toContain("ann@example.com");
       // Two-day visit (Kevin, 24 Nov 2026): the test first, the mock teaching on a later day. No HR interview.
-      expect(part).toContain("the test first, and the mock teaching on a later day");
+      expect(part).toContain("the test first, and the mock teaching on the same day or a later day");
       expect(part).not.toContain("HR");
-      expect(part).not.toContain("same day");
     }
   });
   it("shows the two steps as buttons, with no process strip that names the old HR interview", () => {

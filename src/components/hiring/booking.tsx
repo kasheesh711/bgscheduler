@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { BookOpen, Check, CircleCheck, Info, MapPin, Phone, Video } from "lucide-react";
-import { phoneSchema, type Subject, type Slot } from "@/lib/hiring/model";
+import { mockCanFollow, phoneSchema, type Subject, type Slot } from "@/lib/hiring/model";
 import type { bookingView, callView, contractView, visitView } from "@/lib/hiring/service";
 import c from "./booking.module.css";
 type View = Awaited<ReturnType<typeof bookingView>>;
@@ -216,10 +216,10 @@ export function VisitBooking({
   // The list reloads on its own, so a chosen time that has gone is no longer chosen.
   const slot = view.slots.find((s) => s.examStart === chosen);
   const start = slot?.examStart ?? "";
-  // A two-day link: the mock teaching is a second choice, on a later day than the chosen test. With no test chosen
+  // A two-day link: the mock teaching is a second choice, after the chosen test (same day after grading, or a later day). With no test chosen
   // (also after a booking) no mock is chosen.
   const [mockChosen, setMock] = useState("");
-  const laterMocks = slot ? view.mockSlots.filter((m) => m.date > slot.date) : [];
+  const laterMocks = slot ? view.mockSlots.filter((m) => mockCanFollow(slot.examEnd, m.start)) : [];
   const mock = laterMocks.find((m) => m.start === mockChosen);
   async function book() {
     setBusy(true);
@@ -290,7 +290,7 @@ export function VisitBooking({
           </div>
           <p className={c.note}>
             {view.twoDay
-              ? "You book two times together: the test first, then the final-round mock teaching interview on a later day."
+              ? "You book two times together: the test first, then the final-round mock teaching interview, on the same day or a later day."
               : "Your onsite visit is one day: the test, then the mock teaching interview if you pass."}
           </p>
         </div>
@@ -319,7 +319,7 @@ export function VisitBooking({
           </span>
           {view.paired && <span>Mock teaching<small>1 hour</small></span>}
         </div>
-        <p className={c.note}>{view.twoDay ? "Choose a test time (Monday to Sunday) and a mock teaching time on a later day (Monday to Friday). The mock teaching takes place if you pass the test." : view.paired ? "We grade your test in 5 to 10 minutes. If you pass, the mock teaching interview follows on the same day." : "We will contact you after we grade your paper."} All times are Bangkok time.</p>
+        <p className={c.note}>{view.twoDay ? "Choose a test time (Monday to Sunday) and a mock teaching time after it, on the same day or a later day (Monday to Friday). The mock teaching takes place if you pass the test." : view.paired ? "We grade your test in 5 to 10 minutes. If you pass, the mock teaching interview follows on the same day." : "We will contact you after we grade your paper."} All times are Bangkok time.</p>
       </div>
       {view.visit && (
         <section>
@@ -403,7 +403,7 @@ export function VisitBooking({
           />
           {view.twoDay && slot && (
             <Picker
-              legend="2. Choose your mock teaching time (a later day)"
+              legend="2. Choose your mock teaching time (same day or later)"
               checkedAt={null}
               items={laterMocks}
               keyOf={(m) => m.start}

@@ -885,7 +885,7 @@ describe("hiring workflow persistence", () => {
       expect(view.mockSlots.every((slot) => ![0, 6].includes(new Date(`${slot.date}T12:00:00Z`).getUTCDay()))).toBe(true);
       expect(view.mockSlots[0]).not.toHaveProperty("interviewerKey");
       await expect(bookVisit(twoDay, choice(TEST_SUN), db)).rejects.toThrow(/mock teaching time/);
-      // The mock teaching must be on a later day than the test.
+      // The mock teaching must start after the test ends and the grading gap (this one starts during the test).
       await expect(bookVisit(twoDay, choice(EXAM, { mockStart: MOCK_MON }), db)).rejects.toThrow(/no longer available/);
       await bookVisit(twoDay, choice(TEST_SUN, { mockStart: MOCK_MON }), db);
       const [exam, mock] = await rowsOf(row.id);
@@ -895,7 +895,7 @@ describe("hiring workflow persistence", () => {
       expect((await read(row.id)).stage).toBe("onsite_booked");
       const email = (await jobsOf(row.id)).find((job) => job.key === `booking:${exam.id}:email`)!;
       expect(String(email.payload.text)).toContain("Final round: mock teaching, if you pass");
-      expect(String(email.payload.text)).not.toContain("same day");
+      expect(String(email.payload.text)).toContain("on the same day or a later day");
       // A retry returns the same visit.
       await bookVisit(twoDay, choice(TEST_SUN, { mockStart: MOCK_MON }), db);
       expect(await rowsOf(row.id)).toHaveLength(2);

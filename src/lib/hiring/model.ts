@@ -97,7 +97,7 @@ export type Subject = z.infer<typeof subjectSchema>;
 export type InterviewKind = "paper" | "mock";
 // `brief` is the interviewer's page for one mock booking: its id is a booking id, not a candidate id.
 // `call` is the candidate's link to book the HR pre-screen call.
-// `two-day` (Kevin, 24 Nov 2026) books the test (Monday to Sunday) and the final-round mock teaching on a later day
+// `two-day` (Kevin, 24 Nov 2026) books the test (Monday to Sunday) and the final-round mock teaching on the same day or a later day
 // (Monday to Friday) together. `visit` (both on one day) and `paper-visit` (test only) are links sent before that.
 export const tokenKindSchema = z.enum(["paper", "mock", "visit", "paper-visit", "two-day", "brief", "call", "contract", "onboarding"]);
 /** A booking of the visit flows. A row of kind `call` belongs to the HR call list only. */
@@ -211,6 +211,12 @@ export const DEFAULT_PRE_SCREEN_WEIGHTS = {
 export const VISIT_LINK_DAYS = 30;
 /** Staff grade the paper between the exam and the mock (Kevin, 22 Nov 2026: grading takes 5 to 10 minutes). */
 export const VISIT_GAP_MINUTES = 15;
+/**
+ * A mock teaching time can follow a test when it starts after the test ends and the grading gap: on the same day or on a
+ * later day (Kevin, 24 Nov 2026, the same day he first asked for a later day only).
+ */
+export const mockCanFollow = (examEnd: string | Date, mockStart: string | Date) =>
+  new Date(mockStart).getTime() >= new Date(examEnd).getTime() + VISIT_GAP_MINUTES * 60000;
 const limit = z.number().int().min(0).max(1000);
 const followUpSchema = z
   .object({
@@ -568,7 +574,7 @@ export const bookingSchema = z
 export const visitBookingSchema = z
   .object({
     start: z.iso.datetime(),
-    /** A "two-day" link: the mock teaching time, on a later day than the test at `start`. */
+    /** A "two-day" link: the mock teaching time, after the test at `start` (the same day or a later day). */
     mockStart: z.iso.datetime().optional(),
     subject: subjectSchema,
     onsiteConfirmed: z.literal(true),

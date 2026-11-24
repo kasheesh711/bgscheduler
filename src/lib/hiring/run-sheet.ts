@@ -102,7 +102,7 @@ export function buildRunSheet({ bookings, candidates, config, library, tutors }:
 
     let hod: RunSheetHead | null = null;
     let hodReason: string | null = null;
-    // The test day of a two-day visit names the head who is booked for its mock on the later day.
+    // The test day of a two-day visit names the head who is booked for its mock, also when the mock is on a later day.
     const headRow = mockRow ?? bookings.find((b) => b.kind === "mock" && b.status === "confirmed" && !!b.visitId && b.visitId === visitId);
     if (headRow?.interviewerKey) {
       const key = headRow.interviewerKey;
