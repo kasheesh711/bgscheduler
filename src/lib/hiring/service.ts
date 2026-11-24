@@ -91,6 +91,7 @@ import { paperChecks } from "./paper-check";
 import { checkRubric, computeSheet, passRulesFor, RUBRIC_ITEMS, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
 import { HIRING_LINE_URL, hiringEmail, mockPrep, TWO_DAY_STEPS, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
+import { profileDegree, type KnownDegree } from "./profile-degree";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -1763,7 +1764,8 @@ const offeredSlots = async (db: Database, config: HiringConfig, subject: Subject
 export async function visitView(token: string, db: Database = getDb(), now = new Date()) {
   const cap = visitToken(token, now);
   const { config } = await settings(db);
-  if (answersFirst(await candidateById(db, cap.id), cap))
+  const candidate = await candidateById(db, cap.id);
+  if (answersFirst(candidate, cap))
     return {
       kind: "visit" as const,
       paired: true,
@@ -1780,6 +1782,12 @@ export async function visitView(token: string, db: Database = getDb(), now = new
       waiting: "answers" as "answers" | null,
       // Where the page uploads an Art & Design portfolio while the questions are open.
       portfolioPath: portfolioPath(cap.id) as string | null,
+      // The link holder's own résumé degree, for a one-tap confirm in place of the two degree questions (Kevin, 24 Nov 2026).
+      knownDegree: profileDegree(candidate.profileAssessment) as KnownDegree | null,
+      // Subjects a visit can be in now (hiring, with a head), highest priority first: the page lists them first.
+      testSubjects: config.subjectPriority
+        .filter((p) => p.hiring && config.interviewers.some((i) => i.subjects.includes(p.subject)))
+        .map((p) => p.subject) as Subject[],
     };
   const { subject, rows } = await openVisit(db, cap, config, now);
   const enabled = bookable(config, cap.id);
@@ -1839,6 +1847,8 @@ export async function visitView(token: string, db: Database = getDb(), now = new
     checkedAt: live?.checkedAt ?? null,
     waiting: null as "answers" | null,
     portfolioPath: null as string | null,
+    knownDegree: null as KnownDegree | null,
+    testSubjects: [] as Subject[],
   };
 }
 

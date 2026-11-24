@@ -32,6 +32,8 @@ const view = (patch = {}) => ({
   mockSlots: [] as { date: string; start: string; end: string }[],
   waiting: null as "answers" | null,
   portfolioPath: null as string | null,
+  knownDegree: null as { degree: "Bachelor's" | "Master's" | "PhD"; field: string } | null,
+  testSubjects: [] as "Mathematics"[],
   ...patch,
 });
 const page = (patch = {}) => renderToStaticMarkup(<VisitBooking token="t" view={view(patch)} reload={async () => {}} />);
@@ -39,28 +41,41 @@ const page = (patch = {}) => renderToStaticMarkup(<VisitBooking token="t" view={
 describe("VisitBooking", () => {
   it("asks the questions on the page first on a Next steps link, with no Google Form and no booking form", () => {
     const html = page({ waiting: "answers", slots: [], enabled: false, subject: "", notice: "Please answer the questions on this page first. Then you can choose your times." });
-    expect(html).toContain("Please answer the questions on this page first");
+    expect(html).toContain("Answer a few questions, then choose your times.");
     expect(html).not.toContain("docs.google.com");
-    for (const question of ["Highest degree level", "Which subjects can you confidently teach?", "English proficiency level", "Which time slots work for you?", "Why do you want to tutor with BeGifted?", "Save my answers and see the times"])
+    for (const question of ["Highest completed degree", "Field of study", "Subjects you can teach confidently", "English level", "Hours you can teach onsite", "Why do you want to tutor with BeGifted?", "Save and see times"])
       expect(html).toContain(question);
     expect(html).toContain("1 hour, if you pass");
     expect(html).not.toContain("I will attend onsite");
   });
+  it("shows the résumé's degree as one line to confirm, in place of the two degree questions", () => {
+    const html = page({ waiting: "answers", slots: [], enabled: false, subject: "", knownDegree: { degree: "Bachelor's", field: "English" } });
+    expect(html).toContain("Bachelor&#x27;s · English");
+    expect(html).toContain("Correct");
+    expect(html).toContain("Edit");
+    expect(html).not.toContain("Highest completed degree");
+    expect(html).not.toContain("Field of study");
+  });
+  it("lists the subjects a visit can be in first and keeps the rest behind one button", () => {
+    const html = page({ waiting: "answers", slots: [], enabled: false, subject: "", testSubjects: ["Mathematics"] });
+    expect(html).toContain("Mathematics");
+    expect(html).not.toContain("Psychology");
+    expect(html).toContain("17 more subjects");
+  });
   it("a two-day link asks for the test time first and says the mock teaching is on the same day or a later day", () => {
     const html = page({ twoDay: true, mockSlots: [{ date: "2026-11-03", start: "2026-11-03T04:00:00.000Z", end: "2026-11-03T05:00:00.000Z" }] });
-    expect(html).toContain("1. Choose your test time");
-    expect(html).toContain("a mock teaching time after it, on the same day or a later day (Monday to Friday)");
+    expect(html).toContain("1 · Test time");
+    expect(html).toContain("Mock teaching is Monday to Friday, after your test day or later the same day.");
     expect(html).toContain("Confirm both times");
     // The mock teaching list opens after a test time is chosen.
-    expect(html).not.toContain("2. Choose your mock teaching time");
-    expect(page({ twoDay: true, waiting: "answers", formUrl: "https://forms.gle/x", slots: [], enabled: false, subject: "", notice: "Answer first." })).toContain("the test first, then the final-round mock teaching interview, on the same day or a later day");
+    expect(html).not.toContain("2 · Mock teaching time");
+    expect(page({ twoDay: true, waiting: "answers", formUrl: "https://forms.gle/x", slots: [], enabled: false, subject: "", notice: "Answer first." })).toContain("Answer a few questions");
   });
   it("shows one subject, exam and mock times, and both confirmation boxes", () => {
     const html = page();
     expect(html).toContain("Mathematics");
     expect(html).toContain("10:00");
-    expect(html).toContain("12:00");
-    expect(html).toContain("13:00");
+    expect(html).toContain("Test + mock to 13:00");
     expect(html).toContain("I will attend onsite");
     expect(html).toContain("I can teach onsite");
     expect(html).not.toContain("Peat");

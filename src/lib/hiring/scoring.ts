@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseWeekHours } from "./week-hours";
 import {
   DEFAULT_WEIGHTS,
   normalizeSubjects,
@@ -220,8 +221,17 @@ export function englishLevel(english: string, evidence: string): number | null {
   const found = read(evidence);
   return found.length ? Math.max(...found) : null;
 }
-/** The weekend option and the late-weekday option are read one option at a time, so "17:00" in a weekend option never counts as a weekday. */
+/**
+ * A week-grid answer (`week-hours.ts`) is read exactly: a Saturday or Sunday hour, and a weekday hour that starts at 15:00
+ * or later. A Google Form answer is read one option at a time, so "17:00" in a weekend option never counts as a weekday.
+ */
 function timeSlots(availability: string) {
+  const week = parseWeekHours(availability);
+  if (week)
+    return {
+      weekend: week[5].length + week[6].length > 0,
+      weekdayLate: week.slice(0, 5).some((hours) => hours.some((h) => h >= 15)),
+    };
   const options = availability.split(",");
   return {
     weekend: options.some((o) => /weekend|saturday|sunday/i.test(o)),

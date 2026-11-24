@@ -3,6 +3,7 @@ import { z } from "zod";
 import { weekSchema } from "@/lib/tutor-attendance/model";
 import { UNIVERSITY_CATALOG, THAI_UNIVERSITIES } from "./university-catalog";
 import { BANGKOK_INTERNATIONAL_SCHOOLS, TOP_THAI_SCHOOLS } from "./high-school-catalog";
+import { weekHoursSchema, weekHoursText } from "./week-hours";
 
 export const ZONE = "Asia/Bangkok";
 export const GOOGLE_SCOPES = [
@@ -515,7 +516,8 @@ export const answersSchema = z
     experience: z.enum(ANSWER_CHOICES.experience),
     // An optional link. The file upload is checked on the server (`answerPreScreen`).
     portfolio: z.string().trim().max(500),
-    availability: ticks(ANSWER_CHOICES.availability, "Choose at least one time."),
+    // The week grid (Kevin, 24 Nov 2026). Stored as text, so every later check reads one format.
+    availability: weekHoursSchema,
     weeklyHours: z.enum(ANSWER_CHOICES.weeklyHours),
     motivation: written("Why do you want to tutor with BeGifted?"),
     teachingApproach: written("How would you approach it?"),
@@ -535,7 +537,7 @@ export const answersToPreScreen = (answers: Answers, now: Date, portfolioFile = 
   subjects: answers.subjects.join(", "),
   curricula: answers.curricula.join(", "),
   yearGroups: answers.yearGroups.join(", "),
-  availability: answers.availability.join(", "),
+  availability: weekHoursText(answers.availability),
 });
 /** The form answers in reading order, for the admin panel and the interviewer's page. */
 export const ANSWER_LABELS: [Exclude<keyof PreScreen, "sourceRow" | "submittedAt">, string][] = [

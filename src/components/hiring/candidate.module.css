@@ -1,0 +1,563 @@
+/* Candidate booking page parts: steps, question sections, week grid, subject picker, week date picker.
+   Colours come from the tokens on booking.module.css `.page`. */
+
+/* Steps: Questions → Times → Booked */
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.steps li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 10px;
+  border-top: 3px solid var(--line);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.steps li[data-state="done"] {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.steps li[data-state="now"] {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+.steps svg {
+  flex: none;
+}
+
+/* Question sections */
+.section {
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.sectionHead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0;
+  font-family: var(--serif);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+.sectionHead span {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  /* The coral of the page, darkened so small text passes AA on cream. */
+  color: #b0391a;
+}
+.q {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.qTitle {
+  padding: 0;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.qTitle small {
+  margin-left: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* Choice chips: 44 px targets, a check on the chosen ones (Mobbin: BFF, Perplexity). */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  font-size: 14px;
+  font-weight: 550;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+.chip:hover {
+  border-color: #b8ae98;
+}
+.chip svg {
+  display: none;
+}
+.chip:has(input:checked) {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fbf7ee;
+}
+.chip:has(input:checked) svg {
+  display: block;
+}
+.chip:has(input:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.chip:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.more {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px dashed #cfc5ae;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.more:hover {
+  background: #f1ebde;
+}
+
+/* The résumé's degree, confirmed in one tap. */
+.known {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+}
+.known[data-ok] {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+.known p {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.known small {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.known b {
+  font-size: 16px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.knownActions {
+  display: flex;
+  gap: 8px;
+}
+.knownActions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--ink);
+  border-radius: 999px;
+  background: var(--ink);
+  color: #fbf7ee;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.knownActions button + button,
+.known[data-ok] .knownActions button {
+  background: transparent;
+  color: var(--ink);
+}
+
+/* Week grid (Mobbin: Bonsai, Calendly, Outlook "tap the time slots"). */
+.week {
+  display: grid;
+  gap: 12px;
+}
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.preset,
+.clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.preset[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: #eef1f7;
+}
+.clear {
+  border-style: dashed;
+  background: transparent;
+}
+.grid {
+  display: grid;
+  grid-template-columns: 26px repeat(7, minmax(0, 1fr));
+  gap: 2px;
+  /* The grid reaches the card edges on a phone, so a cell keeps 44 px at 390 px. */
+  margin: 0 -14px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.row {
+  display: contents;
+}
+.dayHead {
+  padding-bottom: 4px;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-align: center;
+  color: var(--ink);
+}
+.dayHead[data-weekend] {
+  color: #b0391a;
+}
+.hour {
+  align-self: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+  padding-right: 4px;
+}
+.cell {
+  height: 44px;
+  min-width: 0;
+  padding: 0;
+  border: 1px solid #ece4d3;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  touch-action: none;
+  transition: background 0.08s;
+}
+.cell[data-weekend] {
+  background: #fdf9f1;
+}
+.cell:hover {
+  border-color: #b8ae98;
+}
+.cell[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--ink);
+}
+.cell:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 1px;
+  position: relative;
+  z-index: 1;
+}
+.readback {
+  display: grid;
+  gap: 8px;
+  font-size: 14px;
+}
+.readback > p:first-child {
+  color: var(--ink);
+  font-weight: 550;
+}
+.rules {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.rules span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.rules span svg {
+  opacity: 0.35;
+}
+.rules span[data-ok] {
+  color: var(--ok);
+  font-weight: 600;
+}
+.rules span[data-ok] svg {
+  opacity: 1;
+}
+.rules b {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--ink);
+}
+@media (min-width: 640px) {
+  .grid {
+    grid-template-columns: 40px repeat(7, minmax(0, 1fr));
+    gap: 4px;
+    margin: 0;
+  }
+  .dayHead {
+    font-size: 13px;
+  }
+}
+@media (max-width: 359px) {
+  .grid {
+    grid-template-columns: 20px repeat(7, minmax(0, 1fr));
+    gap: 2px;
+    margin: 0 -14px;
+  }
+  .dates {
+    margin: 0 -14px;
+  }
+  .dayHead {
+    font-size: 11px;
+    letter-spacing: 0;
+  }
+  .hour {
+    padding-right: 2px;
+    font-size: 10px;
+  }
+}
+
+/* Footer of the questions: progress and the send button. */
+.progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.progressBar {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+.progressBar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ok);
+  transition: width 0.2s;
+}
+
+/* Week date picker (Mobbin: Preply, Alan): one week, arrows, times by part of day. */
+.weekNav {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 8px;
+}
+.weekNav b {
+  font-size: 14px;
+  font-weight: 650;
+  text-align: center;
+}
+.arrow {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+.arrow:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.dates {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+}
+.date {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  min-height: 64px;
+  padding: 8px 0 6px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+.date span {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.date b {
+  font-family: var(--serif);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1;
+}
+.date i {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.date:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+.date:disabled i {
+  visibility: hidden;
+}
+.date:not(:disabled):hover {
+  border-color: var(--line);
+  background: #fff;
+}
+.date[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fbf7ee;
+}
+.date[aria-pressed="true"] span {
+  color: #d9d4c8;
+}
+.date[aria-pressed="true"] i {
+  background: #ffc9b8;
+}
+.date:focus-visible,
+.arrow:focus-visible,
+.preset:focus-visible,
+.clear:focus-visible,
+.more:focus-visible,
+.knownActions button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.part {
+  display: grid;
+  gap: 8px;
+}
+.partName {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.times {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.times[data-compact] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.time {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  min-height: 56px;
+  align-content: center;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  cursor: pointer;
+}
+.time b {
+  font-family: var(--mono);
+  font-size: 17px;
+  font-weight: 600;
+}
+.time small {
+  font-size: 12px;
+  color: var(--muted);
+}
+.time:hover {
+  border-color: var(--ink);
+}
+.time:has(input:checked) {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fbf7ee;
+}
+.time:has(input:checked) small {
+  color: #d9d4c8;
+}
+.time:has(input:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The chosen times in the sticky bar. */
+.chosen {
+  display: grid;
+  gap: 4px;
+  font-size: 14px;
+}
+.chosen div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.chosen span {
+  color: var(--muted);
+}
+.chosen b {
+  font-weight: 650;
+  text-align: right;
+}
+@media (prefers-reduced-motion: reduce) {
+  .progressBar i,
+  .cell,
+  .chip {
+    transition: none;
+  }
+}

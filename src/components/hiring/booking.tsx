@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { BookOpen, Check, CircleCheck, Info, MapPin, Phone, Video } from "lucide-react";
+import { BookOpen, Check, ChevronLeft, ChevronRight, CircleCheck, Info, MapPin, Phone, Video } from "lucide-react";
 import { mockCanFollow, phoneSchema, type Subject, type Slot } from "@/lib/hiring/model";
 import type { bookingView, callView, contractView, visitView } from "@/lib/hiring/service";
 import { PreScreenQuestions } from "./questions";
 import c from "./booking.module.css";
+import cs from "./candidate.module.css";
 type View = Awaited<ReturnType<typeof bookingView>>;
 type VisitView = Awaited<ReturnType<typeof visitView>>;
 type CallView = Awaited<ReturnType<typeof callView> | ReturnType<typeof contractView>>;
@@ -102,70 +103,127 @@ const Fact = ({ icon, label, children }: { icon: ReactNode; label: string; child
 /** When the times were checked against live Wise. Nothing shows when the list came from the Wise copy. */
 const Live = ({ at }: { at: string | null }) => (at ? <span className={c.live}>Live schedule, checked {time(at)}</span> : null);
 
-/** Days first, then the times of one day: a long list of times does not fit a phone. Real radio inputs keep the keyboard and screen readers working. */
+const NOON = (date: string) => `${date}T12:00:00+07:00`;
+const plusDays = (date: string, n: number) => new Date(Date.parse(NOON(date)) + n * 86_400_000).toISOString().slice(0, 10);
+/** Monday of the Bangkok week of a date. */
+const mondayOf = (date: string) => plusDays(date, -((new Date(NOON(date)).getUTCDay() + 6) % 7));
+const hourOf = (value: string) => Number(new Date(value).toLocaleTimeString("en-GB", { ...ZONE, hour: "2-digit", hour12: false }).slice(0, 2));
+const PARTS = [
+  { name: "Morning", until: 12 },
+  { name: "Afternoon", until: 17 },
+  { name: "Evening", until: 24 },
+];
+
+/**
+ * One week of days, then the times of one day grouped by part of the day (Mobbin: Preply, Alan). Four weeks of dates do
+ * not fit a phone in one list. Real radio inputs keep the keyboard and screen readers working.
+ */
 function Picker<T extends { date: string }>({
   legend,
   checkedAt,
   items,
   keyOf,
+  startOf,
   selected,
   onSelect,
   tile,
   compact,
 }: {
   legend: string;
+  /** When the first days were checked against live Wise; later days come from the Wise copy (PR #371). */
   checkedAt: string | null;
   /** Many short times in a day (the HR call): three time-only tiles in a row. */
   compact?: boolean;
   items: T[];
   keyOf: (item: T) => string;
+  startOf: (item: T) => string;
   selected: string;
   onSelect: (item: T) => void;
   tile: (item: T) => ReactNode;
 }) {
   const days = [...new Set(items.map((i) => i.date))].sort();
+  const weeks = [...new Set(days.map(mondayOf))];
+  const chosenDate = items.find((i) => keyOf(i) === selected)?.date;
+  const [weekPicked, setWeek] = useState<string | null>(null);
   const [picked, setPicked] = useState("");
-  const active = days.includes(picked) ? picked : (items.find((i) => keyOf(i) === selected)?.date ?? days[0]);
+  const week = weekPicked && weeks.includes(weekPicked) ? weekPicked : chosenDate ? mondayOf(chosenDate) : weeks[0];
+  const inWeek = days.filter((d) => mondayOf(d) === week);
+  const active = inWeek.includes(picked) ? picked : chosenDate && inWeek.includes(chosenDate) ? chosenDate : inWeek[0];
   if (!days.length) return null;
+  const at = weeks.indexOf(week);
+  const shown = items.filter((i) => i.date === active);
+  const label = (date: string, options: Intl.DateTimeFormatOptions) => part(NOON(date), options);
   return (
     <fieldset className={c.step}>
       <legend className={c.stepHead}>
         <span className={c.stepTitle}>{legend}</span>
-        <Live at={checkedAt} />
+        <Live at={checkedAt && days.slice(0, 5).includes(active) ? checkedAt : null} />
       </legend>
-      <div className={c.days}>
-        {days.map((date) => {
-          const noon = `${date}T12:00:00+07:00`;
+      {weeks.length > 1 && (
+        <div className={cs.weekNav}>
+          <button type="button" className={cs.arrow} aria-label="Previous week" disabled={at <= 0} onClick={() => setWeek(weeks[at - 1])}>
+            <ChevronLeft aria-hidden size={20} />
+          </button>
+          <b aria-live="polite">
+            {label(week, { day: "numeric", month: "short" })} – {label(plusDays(week, 6), { day: "numeric", month: "short" })}
+          </b>
+          <button type="button" className={cs.arrow} aria-label="Next week" disabled={at >= weeks.length - 1} onClick={() => setWeek(weeks[at + 1])}>
+            <ChevronRight aria-hidden size={20} />
+          </button>
+        </div>
+      )}
+      <div className={cs.dates}>
+        {Array.from({ length: 7 }, (_, i) => plusDays(week, i)).map((date) => {
           const count = items.filter((i) => i.date === date).length;
           return (
-            <button key={date} type="button" className={c.day} aria-pressed={date === active} onClick={() => setPicked(date)}>
-              <span>{part(noon, { weekday: "short" })}</span>
-              <b>{part(noon, { day: "numeric" })}</b>
-              <span>{part(noon, { month: "short" })}</span>
-              <i>
-                {count} {count === 1 ? "time" : "times"}
-              </i>
+            <button
+              key={date}
+              type="button"
+              className={cs.date}
+              disabled={!count}
+              aria-pressed={date === active}
+              aria-label={`${label(date, { weekday: "long", day: "numeric", month: "long" })}, ${count} ${count === 1 ? "time" : "times"}`}
+              onClick={() => setPicked(date)}
+            >
+              <span>{label(date, { weekday: "short" })}</span>
+              <b>{label(date, { day: "numeric" })}</b>
+              <i />
             </button>
           );
         })}
       </div>
-      <div className={compact ? `${c.tiles} ${c.tilesCompact}` : c.tiles}>
-        {items
-          .filter((i) => i.date === active)
-          .map((item) => (
-            <label key={keyOf(item)} className={c.tile}>
-              <input
-                type="radio"
-                name="slot"
-                className={c.hidden}
-                checked={selected === keyOf(item)}
-                onChange={() => onSelect(item)}
-              />
-              {tile(item)}
-            </label>
-          ))}
-      </div>
+      {PARTS.map((p, n) => {
+        const times = shown.filter((i) => hourOf(startOf(i)) < p.until && hourOf(startOf(i)) >= (PARTS[n - 1]?.until ?? 0));
+        if (!times.length) return null;
+        return (
+          <div key={p.name} className={cs.part}>
+            <span className={cs.partName}>{p.name}</span>
+            <div className={cs.times} data-compact={compact || undefined}>
+              {times.map((item) => (
+                <label key={keyOf(item)} className={cs.time}>
+                  <input type="radio" name={legend} className={c.hidden} checked={selected === keyOf(item)} onChange={() => onSelect(item)} />
+                  {tile(item)}
+                </label>
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </fieldset>
+  );
+}
+
+/** Questions → Times → Booked, so a candidate always sees where they are. */
+function Steps({ at }: { at: 0 | 1 | 2 }) {
+  return (
+    <ol className={cs.steps} aria-label="Steps">
+      {["Questions", "Times", "Booked"].map((name, i) => (
+        <li key={name} data-state={i < at ? "done" : i === at ? "now" : undefined} aria-current={i === at ? "step" : undefined}>
+          {i < at ? <Check aria-hidden size={14} /> : <span aria-hidden>{i + 1}</span>}
+          {name}
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -280,29 +338,32 @@ export function VisitBooking({
   if (view.waiting)
     return (
       <>
-        <div className={c.facts}>
-          <div className={c.plan}>
-            <span>
-              Test<small>2 hours</small>
-            </span>
-            <span>
-              Mock teaching<small>1 hour, if you pass</small>
-            </span>
-          </div>
-          <p className={c.note}>
-            {view.twoDay
-              ? "You book two times together: the test first, then the final-round mock teaching interview, on the same day or a later day."
-              : "Your onsite visit is one day: the test, then the mock teaching interview if you pass."}
-          </p>
+        <Steps at={0} />
+        <div className={c.plan}>
+          <span>
+            Test<small>2 hours</small>
+          </span>
+          <span>
+            Mock teaching<small>1 hour, if you pass</small>
+          </span>
         </div>
-        <VisitNotice text={view.notice ?? ""} />
-        {view.waiting === "answers" && <PreScreenQuestions token={token} filePath={view.portfolioPath ?? ""} reload={reload} />}
+        <p className={c.note}>Answer a few questions, then choose your times.</p>
+        {view.waiting === "answers" && (
+          <PreScreenQuestions
+            token={token}
+            filePath={view.portfolioPath ?? ""}
+            reload={reload}
+            knownDegree={view.knownDegree}
+            testSubjects={view.testSubjects}
+          />
+        )}
         <Help />
       </>
     );
   return (
     <>
       {saved && <Saved>{saved}</Saved>}
+      {view.twoDay && <Steps at={view.visit && !moving ? 2 : 1} />}
       <div className={c.facts}>
         <Fact icon={<BookOpen aria-hidden />} label="Subject">
           <span className={c.subject}>{view.subject}</span>
@@ -316,7 +377,7 @@ export function VisitBooking({
           </span>
           {view.paired && <span>Mock teaching<small>1 hour</small></span>}
         </div>
-        <p className={c.note}>{view.twoDay ? "Choose a test time (Monday to Sunday) and a mock teaching time after it, on the same day or a later day (Monday to Friday). The mock teaching takes place if you pass the test." : view.paired ? "We grade your test in 5 to 10 minutes. If you pass, the mock teaching interview follows on the same day." : "We will contact you after we grade your paper."} All times are Bangkok time.</p>
+        <p className={c.note}>{view.twoDay ? "Mock teaching is Monday to Friday, after your test day or later the same day." : view.paired ? "We grade your test in 5 to 10 minutes. If you pass, the mock teaching interview follows on the same day." : "We will contact you after we grade your paper."} All times are Bangkok time.</p>
       </div>
       {view.visit && (
         <section>
@@ -341,7 +402,7 @@ export function VisitBooking({
                 </strong>
               </div>
               {view.visit.mockStart && view.visit.mockEnd && <div className={c.ticketRow}>
-                <span>Mock teaching with {view.visit.head}</span>
+                <span>Mock teaching with {view.visit.head}, if you pass</span>
                 <strong>
                   {view.twoDay && `${day(view.visit.mockStart)}, `}
                   {time(view.visit.mockStart)}–{time(view.visit.mockEnd)}
@@ -349,6 +410,7 @@ export function VisitBooking({
               </div>}
             </div>
           </div>
+          {!view.canMove && !notice && <p className={c.note}>To change this visit, contact BeGifted on LINE.</p>}
           {view.canMove && !moving && (
             <div className={c.move}>
               <p className={c.note}>You can move this visit once, up to 24 hours before it starts.</p>
@@ -372,51 +434,33 @@ export function VisitBooking({
       {showForm && (
         <>
           <Picker
-            legend={view.twoDay ? "1. Choose your test time" : view.visit ? "Choose a new time" : "Choose a time"}
+            legend={view.twoDay ? "1 · Test time" : view.visit ? "Choose a new time" : "Choose a time"}
             checkedAt={view.checkedAt}
             items={view.slots}
             keyOf={(s) => s.examStart}
+            startOf={(s) => s.examStart}
             selected={start}
             onSelect={(s) => setStart(s.examStart)}
             tile={(s) => (
               <>
-                <span className={c.tileTime}>{time(s.examStart)}</span>
-                <span className={c.tileLines}>
-                  <span className={c.tileLine}>
-                    <span>Exam</span>
-                    <span>
-                      {time(s.examStart)}–{time(s.examEnd)}
-                    </span>
-                  </span>
-                  {s.mockStart && s.mockEnd && <span className={c.tileLine}>
-                    <span>Mock teaching</span>
-                    <span>
-                      {time(s.mockStart)}–{time(s.mockEnd)}
-                    </span>
-                  </span>}
-                </span>
+                <b>{time(s.examStart)}</b>
+                <small>{s.mockEnd ? `Test + mock to ${time(s.mockEnd)}` : `Test to ${time(s.examEnd)}`}</small>
               </>
             )}
           />
           {view.twoDay && slot && (
             <Picker
-              legend="2. Choose your mock teaching time (same day or later)"
+              legend="2 · Mock teaching time"
               checkedAt={null}
               items={laterMocks}
               keyOf={(m) => m.start}
+              startOf={(m) => m.start}
               selected={mock?.start ?? ""}
               onSelect={(m) => setMock(m.start)}
               tile={(m) => (
                 <>
-                  <span className={c.tileTime}>{time(m.start)}</span>
-                  <span className={c.tileLines}>
-                    <span className={c.tileLine}>
-                      <span>Mock teaching</span>
-                      <span>
-                        {time(m.start)}–{time(m.end)}
-                      </span>
-                    </span>
-                  </span>
+                  <b>{time(m.start)}</b>
+                  <small>to {time(m.end)}</small>
                 </>
               )}
             />
@@ -430,20 +474,20 @@ export function VisitBooking({
             onConfirm={book}
             summary={
               slot && (
-                <p className={c.summary}>
-                  <span>{day(slot.examStart)}</span>
-                  <b>
-                    {time(slot.examStart)}–{time(slot.mockEnd ?? slot.examEnd)}
-                  </b>
-                  {mock && (
-                    <>
-                      <span>{day(mock.start)}</span>
-                      <b>
-                        {time(mock.start)}–{time(mock.end)}
-                      </b>
-                    </>
+                <div className={cs.chosen}>
+                  <div>
+                    <span>Test</span>
+                    <b>
+                      {part(slot.examStart, { weekday: "short", day: "numeric", month: "short" })}, {time(slot.examStart)}
+                    </b>
+                  </div>
+                  {view.twoDay && (
+                    <div>
+                      <span>Mock teaching</span>
+                      <b>{mock ? `${part(mock.start, { weekday: "short", day: "numeric", month: "short" })}, ${time(mock.start)}` : "Choose a time"}</b>
+                    </div>
                   )}
-                </p>
+                </div>
               )
             }
           />
@@ -549,6 +593,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
               </div>
             </div>
           </div>
+          {!view.canMove && !notice && <p className={c.note}>To change this visit, contact BeGifted on LINE.</p>}
           {view.canMove && !moving && (
             <div className={c.move}>
               <p className={c.note}>You can move this {appointment} once, before it starts.</p>
@@ -577,9 +622,10 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
             checkedAt={null}
             items={view.slots}
             keyOf={(s) => s.start}
+            startOf={(s) => s.start}
             selected={start}
             onSelect={(s) => setStart(s.start)}
-            tile={(s) => <span className={c.tileTime}>{time(s.start)}</span>}
+            tile={(s) => <b>{time(s.start)}</b>}
           />
           {!contract && <label className={c.field}>
             <span className={c.stepTitle}>Your phone number (backup)</span>
@@ -817,6 +863,7 @@ export function HiringBooking({ token }: { token: string }) {
                   checkedAt={view.checkedAt}
                   items={view.slots}
                   keyOf={slotKey}
+                  startOf={(slot) => slot.start}
                   selected={slot ? slotKey(slot) : ""}
                   onSelect={setSlot}
                   tile={(s) => (
