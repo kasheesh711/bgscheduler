@@ -331,7 +331,7 @@ export function PreScreenQuestions({
         </Q>
       </Section>
       <Section title="What you teach">
-        <Q id="q-subjects" title="Subjects you teach confidently" tag="all that apply">
+        <Q id="q-subjects" title="Subjects you teach confidently" tag="all that apply" hint="One becomes your test subject.">
           <Chips
             name="subjects"
             choices={shownSubjects}
@@ -365,7 +365,8 @@ export function PreScreenQuestions({
         {subjects.length > 1 && testChoices.length > 0 && (
           <Q
             id="q-test"
-            title="Choose one subject for your test and mock teaching"
+            title="Your test subject"
+            tag="choose one"
             hint={testable.length && testable.length < subjects.length ? "Greyed: not tested." : undefined}
           >
             <Chips

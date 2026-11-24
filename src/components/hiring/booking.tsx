@@ -413,7 +413,7 @@ export function Layout({ top, main, side }: { top: ReactNode; main: ReactNode; s
 }
 
 /** What the visit is: the test, then the mock teaching if the candidate passes. Plain text, not tabs (Fable r2). */
-const VisitPlan = () => (
+const VisitPlan = ({ place }: { place?: string }) => (
   <ol className={cs.plan}>
     <li>
       <b>Test</b>
@@ -423,6 +423,13 @@ const VisitPlan = () => (
       <b>Mock teaching</b>
       <span>1 hour, only if you pass</span>
     </li>
+    {/* Where "onsite" is, before the questions (Sol r24). */}
+    {place && (
+      <li>
+        <b>Where</b>
+        <span>{place}</span>
+      </li>
+    )}
   </ol>
 );
 
@@ -576,8 +583,8 @@ export function VisitBooking({
             top={
               <>
                 <Steps at={0} />
-                <VisitPlan />
-                <p className={c.note}>Then book both times, on one day or two.</p>
+                <VisitPlan place={view.location} />
+                <p className={c.note}>Then book both times.</p>
               </>
             }
           />
@@ -791,6 +798,8 @@ export function VisitBooking({
                       // Short, so "Next: …" fits on one line beside the button at 390 px (Opus r22).
                       [!start, "test time", "times-start"],
                       [unchanged, "change the test time, the mock teaching time, or both", "times-start"],
+                      // No mock time after the chosen test: the way on is an earlier test (Sol r24).
+                      [view.twoDay && !!slot && !laterMocks.length, "an earlier test time", "times-start"],
                       [view.twoDay && !mock, "mock time", "mock-start"],
                       [!onsite, "the address box", "check-address"],
                       [!commitment, "the hours box", "check-hours"],

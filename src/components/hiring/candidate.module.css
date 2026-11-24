@@ -1294,45 +1294,6 @@
 span.qTitle {
   margin-bottom: 0;
 }
-/* "Bangkok time" and the how-to disclosure on one line above the grid (Sol r23). */
-.gridHead {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0 12px;
-}
-.gridHead .hint {
-  margin: 0;
-}
-.how[open] {
-  flex-basis: 100%;
-}
-.how summary {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink);
-  text-decoration: underline;
-  text-decoration-color: var(--accent);
-  text-underline-offset: 3px;
-  cursor: pointer;
-  list-style: none;
-}
-.how summary::-webkit-details-marker {
-  display: none;
-}
-.how summary:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
-}
-.how p {
-  margin: 0 0 8px;
-  font-size: 13px;
-  color: var(--muted);
-}
 
 /* Short equal choices (weekly hours) in equal columns (Opus r22). */
 .chips[data-even] {
@@ -1356,4 +1317,36 @@ span.qTitle {
 .qTitle,
 .hint {
   text-wrap: pretty;
+}
+
+/* Day names stay in view while a phone scrolls through the evening hours (Sol r24). */
+.dayHead,
+.grid > span:first-child {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-top: 6px;
+  background: var(--card);
+}
+/* Wide screens: the three quick fills in equal columns, the hours under each name (Sol r24). */
+@media (min-width: 640px) {
+  .presets {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .preset {
+    display: grid;
+    grid-template-columns: auto auto;
+    justify-content: center;
+    align-content: center;
+    column-gap: 6px;
+    padding: 6px 10px;
+    border-radius: 16px;
+    white-space: nowrap;
+  }
+  .preset small {
+    grid-column: 1 / -1;
+    margin-left: 0;
+    text-align: center;
+  }
 }

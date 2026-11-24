@@ -138,8 +138,9 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   }
   function up(e?: PointerEvent<HTMLDivElement>) {
     if (e && !e.isPrimary) return;
-    if (e) lastPointer.current = e.timeStamp;
     const wait = pending.current;
+    // Only a pointer that changed a cell blocks the click after it; a cancelled tap leaves the click to work (code review r24).
+    if (e && (wait || drag.current)) lastPointer.current = e.timeStamp;
     if (wait) {
       // A tap: one hour on or off.
       clearTimeout(wait.timer);
@@ -192,14 +193,8 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   return (
     <div className={s.week}>
       {/* The rule, fixed above the grid; the live ticks stay under it, where their changes move nothing (Sol r18). */}
-      {/* The how-to waits behind a disclosure; the hours themselves are the cue (Sol r23). */}
-      <div className={s.gridHead}>
-        <p className={s.hint}>Bangkok time</p>
-        <details className={s.how}>
-          <summary>How to choose hours</summary>
-          <p>Tap an hour. To fill a block, hold, then drag. Start on a chosen hour to clear.</p>
-        </details>
-      </div>
+      {/* One visible line: holding to drag is not something a phone user finds alone (settled after Sol r23/r24). */}
+      <p className={s.hint}>Tap, or hold and drag. Bangkok time.</p>
       <div className={s.presets} role="group" aria-label="Quick fill">
         {PRESETS.map((p) => {
           // Add only; a check once every hour of it is in the week (Sol r6).
