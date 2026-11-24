@@ -63,6 +63,24 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   const firstScore = useRef<HTMLInputElement>(null);
   const sendBar = useRef<HTMLDivElement>(null);
   const sentTotal = lastSent?.editCount === editCount ? lastSent.total : null;
+  // The first score slider hidden under the send bar, so a laptop head sees that more scores follow (Sol review, round 15).
+  const [below, setBelow] = useState<HTMLInputElement | null>(null);
+  useEffect(() => {
+    const check = () => {
+      const bar = sendBar.current;
+      if (!bar) return setBelow(null);
+      const top = bar.getBoundingClientRect().top;
+      const ranges = [...(bar.closest("form")?.querySelectorAll<HTMLInputElement>('input[type="range"]') ?? [])];
+      setBelow(ranges.find((range) => range.getBoundingClientRect().bottom > top) ?? null);
+    };
+    check();
+    window.addEventListener("scroll", check, { capture: true, passive: true });
+    window.addEventListener("resize", check);
+    return () => {
+      window.removeEventListener("scroll", check, { capture: true });
+      window.removeEventListener("resize", check);
+    };
+  }, [editing, sentTotal]);
   useEffect(() => {
     if (state !== "sent" && !error) {
       if (editing && sentTotal !== null) firstScore.current?.focus();
@@ -294,10 +312,14 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
         ) : (
           <>
             <div className={c.field}>
-              <p role="status" className={checksMissing || lastSent ? undefined : c.note}>{checksMissing
-                ? "Answer the required checks to send."
-                : lastSent ? "Score changes not sent."
-                  : `${scored} of ${RUBRIC_ITEMS.length} scored`}</p>
+              <div className={b.countRow}>
+                <p role="status" className={checksMissing || lastSent ? undefined : c.note}>{checksMissing
+                  ? "Answer the required checks to send."
+                  : lastSent ? "Score changes not sent."
+                    : `${scored} of ${RUBRIC_ITEMS.length} scored`}</p>
+                {below && <button type="button" className={b.moreBelow} onClick={() => below.scrollIntoView({ block: "center",
+                  behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })}>More scores below ↓</button>}
+              </div>
               <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
             </div>
             <div className={b.sendEnd}>

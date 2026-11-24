@@ -259,10 +259,10 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       const html = await response.text();
       const head = /<head\b[^>]*>/i;
       const base = '<base target="_blank">';
-      // In a srcdoc frame "#offer" resolves against the outer page and empties the frame; about:srcdoc keeps it inside.
+      // In a srcdoc frame "#…" resolves against the outer page and empties the frame; about:srcdoc keeps it inside.
       // Beside Gift's decision the packet gets a shorter masthead (data-inline), so the score tiles fit on a laptop.
       // Beside the decision, a standard offer's terms already show by Approve, so the packet hides its copy (data-terms).
-      const inFrame = html.replaceAll('href="#offer"', 'href="about:srcdoc#offer"').replace("<html ", remember ? "<html " : packet?.offerType ? "<html data-inline data-terms " : "<html data-inline ");
+      const inFrame = html.replaceAll('href="#', 'href="about:srcdoc#').replace("<html ", remember ? "<html " : packet?.offerType ? "<html data-inline data-terms " : "<html data-inline ");
       const source = head.test(inFrame) ? inFrame.replace(head, `$&${base}`) : inFrame.replace(/<html\b[^>]*>/i, `$&<head>${base}`);
       if (source === inFrame) throw new Error();
       const titleTag = html.match(/<title>[^<]*<\/title>/i)?.[0] ?? "";
@@ -286,7 +286,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "preview", behavioral, offerType }) });
       if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? "Could not open the preview. Try again.");
       // Without the tag, a file link opens inside the preview frame.
-      setDraftHtml((await response.text()).replaceAll('href="#offer"', 'href="about:srcdoc#offer"').replace(/<head\b[^>]*>/i, '$&<base target="_blank">'));
+      setDraftHtml((await response.text()).replaceAll('href="#', 'href="about:srcdoc#').replace(/<head\b[^>]*>/i, '$&<base target="_blank">'));
     } catch (error) {
       setError({ text: (error instanceof Error && error.message) || "Could not open the preview. Try again." });
     } finally {

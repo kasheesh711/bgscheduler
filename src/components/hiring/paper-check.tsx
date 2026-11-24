@@ -185,8 +185,10 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
         </ol>
         <label className={c.field}>
           {/* A comment already on the result is the marker's; the head may keep or change it, and it saves with the marks. */}
-          <span>{view.comment ? "Existing marking comment (saved with your marks)" : "Comment (optional)"}</span>
-          <textarea className={c.input} rows={3} maxLength={4000} value={comment} onChange={(event) => setComment(event.target.value)} />
+          <span>{view.comment ? "Existing marking comment" : "Comment (optional)"}</span>
+          {view.comment && <span id={`${view.id}-comment-help`} className={c.note}>Saved with your marks.</span>}
+          <textarea className={c.input} rows={3} maxLength={4000} value={comment} aria-describedby={view.comment ? `${view.id}-comment-help` : undefined}
+            onChange={(event) => setComment(event.target.value)} />
         </label>
         </div>
         {more !== null && (

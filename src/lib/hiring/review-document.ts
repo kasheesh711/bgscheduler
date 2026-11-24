@@ -147,7 +147,7 @@ export async function reviewDocument(packet: ReviewPacket, resume: string, paper
 :root{--page:#f7f3ec;--surface:#fffcf7;--ink:#17243b;--muted:#515e6d;--line:#ded8ce;--accent:#ff7518}
 *{box-sizing:border-box}body{max-width:800px;margin:0 auto;padding:40px 24px 56px;background:var(--page);color:var(--ink);font:15px/1.5 Geist,Arial,sans-serif;overflow-wrap:anywhere}
 header{padding-bottom:22px;border-bottom:1px solid var(--line)}
-[data-inline] body{padding:14px 20px 40px}[data-inline] header{padding-bottom:10px}[data-inline] img{width:104px}[data-inline] .eyebrow{margin-top:8px}[data-inline] h1{font-size:30px;margin:6px 0 2px}[data-inline] .candidate{display:none}[data-inline] section{padding:16px 0}[data-terms] .offerLink,[data-terms] #offer{display:none}
+[data-inline] body{padding:14px 20px 40px}[data-inline] header{padding-bottom:10px}[data-inline] img{width:104px}[data-inline] .eyebrow{margin-top:8px}[data-inline] h1{font-size:30px;margin:6px 0 2px}[data-inline] .candidate{display:none}[data-inline] section{padding:16px 0}[data-terms] .offerLink,[data-terms] #offer{display:none}.files .jump{display:none}[data-inline] .files .jump{display:inline-flex}
 img{width:145px;height:auto}h1{font-size:clamp(32px,7vw,53px);font-weight:400;line-height:1.08;letter-spacing:-.035em;margin:16px 0 8px}em{font-style:normal}
 .candidate{font-size:21px}h2{font-size:22px;margin:0 0 12px;break-after:avoid}h3{font-size:15px;margin:0;break-after:avoid}
 p{margin:7px 0}section{padding:22px 0;border-bottom:1px solid var(--line)}
@@ -258,7 +258,7 @@ ${paperTarget === null ? "" : `<p class="paper-detail meta">Pass mark ${escape(p
 <div class="tile"><h3>Mock</h3>${gauge(mockTotals.percent, "%")}${mockTotals.max === 100 ? "" : `<p class="paper-detail num">${escape(mockTotals.total)} / ${escape(mockTotals.max)}</p>`}</div>
 <div class="tile head-tile"><h3>Head</h3><p><strong>Yes</strong> · ${escape(recommendation.head)}</p></div>
 </div><p class="guide"><span role="group" aria-label="Score guide">Strong ≥80 · Fair 60 to under 80 · Low &lt;60</span></p>${recommendation.reason ? `<p class="copy">${escape(recommendation.reason)}</p>` : ""}
-<div class="files"><a href="${escape(resume)}">Original résumé</a><a href="${escape(paper)}">Marked exam</a></div></section>
+<div class="files"><a href="${escape(resume)}">Original résumé</a><a href="${escape(paper)}">Marked exam</a><a class="jump" href="#paper-results" target="_self">Paper results ↓</a><a class="jump" href="#mock-scores" target="_self">Mock scores ↓</a></div></section>
 <section><h2>${breakdown ? "ATS breakdown" : "Initial ATS assessment"}</h2>
 ${breakdown || `${radar(ats.criteria)}
 <div class="evidence-list">
@@ -271,12 +271,12 @@ ${ats.criteria.map(({ id, result, evidence }) => {
     ? `<div><details><summary>${title} evidence${status}</summary><p class="copy">${escape(evidence)}</p></details></div>`
     : `<div><strong>${title}</strong>${status}</div>`;
 }).join("")}</div>`}</section>
-<section><h2>Paper by level</h2>
+<section id="paper-results"><h2>Paper by level</h2>
 ${levels.map((level) => `<div class="metric">
 <p class="label"><span>${escape(level.level)}</span><span class="num">${escape(level.scored)} / ${escape(level.max)} · ${escape(level.percent)}%</span></p>
 ${bullet(level.scored / level.max * 100, level.passPercent)}
 <p class="paperNote">${chip(level.result)}${level.passPercent === null ? "" : `<span class="meta num">Pass mark ${escape(level.passPercent)}%</span>`}</p></div>`).join("")}</section>
-<section class="mock-section"><h2>Mock teaching rubric</h2>
+<section id="mock-scores" class="mock-section"><h2>Mock teaching rubric</h2>
 <div class="mock-row mock-axis" aria-hidden="true"><div class="axis-labels">
 ${mockTicks.map((tick) => `<span style="left:${mockX(tick) / 120 * 100}%">${tick}</span>`).join("")}</div></div>
 ${RUBRIC.filter(({ items }) => items.some(([id]) => mockUsed.has(id))).map(({ part, items }) => {

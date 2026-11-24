@@ -532,6 +532,8 @@ function ItemLink({ item, selected, onSelect, wide, readOnly, paneId }: { item: 
       <span className={r.itemTime}>
         {item.time}
         <span>{item.day}</span>
+        {/* The open row on a laptop says so, so a head does not click it again (Sol review, round 15). */}
+        {selected && wide && <span className={r.itemOpen}>Open</span>}
       </span>
       <span className={r.itemMain}>
         <span className={r.itemName}>{item.name}</span>
@@ -544,6 +546,8 @@ function ItemLink({ item, selected, onSelect, wide, readOnly, paneId }: { item: 
           </span>
         )}
       </span>
+      {/* Every row opens something. */}
+      {!(selected && wide) && <span className={r.itemGo} aria-hidden="true">›</span>}
     </>
   );
   // On a phone the list is the page, so the link opens the brief or the paper check itself.
@@ -646,6 +650,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const key = fixedHead ?? (chosen && heads.includes(chosen) ? chosen : null);
   const [picked, setPicked] = useState<string | null>(open ? `review-${open}` : null);
   const [signedItems, setSignedItems] = useState<HeadItem[]>([]);
+  const [paneRun, setPaneRun] = useState(0);
   const keepSigned = (item: HeadItem, stage: "hired" | "rejected") => {
     setPicked(item.id);
     setSignedItems((current) => [...current.filter((kept) => kept.id !== item.id),
@@ -794,7 +799,11 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
       {items.map((item) => (
         <li key={item.id} id={`row-${item.id}`}>
           <ItemLink item={item} wide={wide} readOnly={readOnly} paneId={`${paneId}-${item.id}`} selected={selected?.id === item.id}
-            onSelect={() => setPicked(!wide && picked === item.id ? null : item.id)} />
+            onSelect={() => {
+              // Opening the open row again loads it afresh, at the part the row now names (Recommend after the mock) (Sol review, round 15).
+              if (wide && selected?.id === item.id) setPaneRun((run) => run + 1);
+              setPicked(!wide && picked === item.id ? null : item.id);
+            }} />
           {!wide && picked === item.id && (!item.href || readOnly) && (
             <div id={`${paneId}-${item.id}`} className={r.inlinePane} role="region" aria-label={item.name}>
               <ItemPane item={item} data={data} readOnly={readOnly} reload={reload} onSigned={keepSigned} />
@@ -854,7 +863,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
       </nav>
       {wide && (
         <section id="open-item" tabIndex={-1} className={r.pane} aria-label={selected ? `${selected.task}: ${selected.name}` : key && !all.length ? "Nothing to do" : "Nothing open"}>
-          {selected ? <ItemPane key={selected.id} item={selected} data={data} readOnly={readOnly || (!fixedHead && !chosen)} reload={reload} onSigned={keepSigned} />
+          {selected ? <ItemPane key={`${selected.id}:${paneRun}`} item={selected} data={data} readOnly={readOnly || (!fixedHead && !chosen)} reload={reload} onSigned={keepSigned} />
             : key && !all.length ? <div className={r.paneFacts}><h2 className={r.paneName}>Nothing to do</h2>
               <p className={r.quiet}>{givesMocks ? "We send you a LINE message when a mock or a paper needs you." : "We send you a LINE message when a paper needs you."}</p></div>
             : null}
