@@ -88,7 +88,7 @@ export function PdfPages({ src, title, runtime = RUNTIME, maxPages = MAX_PAGES }
 
   if (error) return <p role="alert" className={css.errorText}>{error}</p>;
   return (
-    <div ref={box} className={css.pdfPages} aria-label={title}>
+    <div ref={box} className={css.pdfPages} role="region" aria-label={title} tabIndex={0}>
       {!pdf && <p role="status" className={css.inspectorMeta}>Opening the file…</p>}
       {Array.from({ length: count }, (_, i) => (
         <canvas key={i} ref={(el) => void (sheets.current[i] = el)} role="img" aria-label={`${title}, page ${i + 1} of ${pdf?.numPages}`} />

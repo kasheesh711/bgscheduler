@@ -554,7 +554,10 @@ function ItemLink({ item, selected, onSelect, wide, readOnly, paneId }: { item: 
     </a>
   ) : (
     <button type="button" className={r.item} aria-current={selected ? "true" : undefined} aria-expanded={wide ? undefined : selected}
-      aria-controls={!wide && selected ? paneId : undefined} data-urgent={item.urgent ? "" : undefined} onClick={onSelect}>
+      aria-controls={!wide && selected ? paneId : undefined} data-urgent={item.urgent ? "" : undefined} onClick={(event) => {
+        onSelect();
+        if (wide && event.detail === 0) window.setTimeout(() => document.getElementById("open-item")?.focus());
+      }}>
       {body}
     </button>
   );
@@ -750,7 +753,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const selected = wide ? found ?? keep ?? (mockNow ? nextItem : undefined) ?? all.find((item) => item.urgent) ?? nextItem ?? all[0] : found;
   if ((selected?.id ?? null) !== (shown?.id ?? null)) setShown(selected ?? null);
   useEffect(() => {
-    openNameRef.current = selected ? { id: selected.id, text: `${selected.task === "Check paper" ? "Marks saved" : "Scores sent"} for ${selected.name}` } : null;
+    openNameRef.current = selected ? { id: selected.id, text: `${selected.task === "Check paper" ? "Marks saved" : "Saved"} for ${selected.name}` } : null;
   }, [selected]);
   const paneId = useId();
   // Gift's review link: on a phone the row may sit below the fold.
@@ -803,7 +806,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
               {group.title}
               {group.items.length > 1 && <span className={r.count}>{group.items.length}</span>}
             </h2>
-            {group.title === "To do" && savedFor && selected?.id === savedFor.id && <p role="status" className={r.saved}>{savedFor.text}</p>}
+            {group.title === "To do" && savedFor && selected?.id === savedFor.id && <p className={r.saved}>{savedFor.text}</p>}
             {group.items.length ? list(group.items) : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "Nothing to score or sign now." : "Nothing to do now.") : "No mock booked. New bookings also come by LINE."}</p>}
           </section>
         ))}

@@ -39,7 +39,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
   // Marks not sent yet stay in this browser, so opening another row and coming back loses nothing. The link token is
   // signed again on each list load, so the draft is keyed by the result, and kept only while the AI marks are the same.
   // On a wide pane the questions scroll in their own area; the cue shows while some are still below it.
-  const questionList = useRef<HTMLOListElement>(null);
+  const questionList = useRef<HTMLDivElement>(null);
   const [more, setMore] = useState(false);
   const checkMore = () => {
     const list = questionList.current;
@@ -136,7 +136,9 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
       </section>
       <section className={`${c.facts} ${k.marks}`}>
         <h2 className={c.stepTitle}>Your marks <span className={c.note}>{view.questions.length} questions · half marks allowed</span></h2>
-        <ol className={k.questions} ref={questionList} onScroll={checkMore}>
+        {/* The questions and the comment scroll together, so the score and Submit below them stay in view. */}
+        <div className={k.questions} ref={questionList} onScroll={checkMore}>
+        <ol className={k.questionList}>
           {view.questions.map((q) => (
             <li key={q.id} className={k.question}>
               <div className={k.head}>
@@ -163,11 +165,12 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
             </li>
           ))}
         </ol>
-        {more && <p className={k.more} aria-hidden="true">More questions below ↓</p>}
         <label className={c.field}>
           <span>Comment (optional)</span>
           <textarea className={c.input} rows={3} maxLength={4000} value={comment} onChange={(event) => setComment(event.target.value)} />
         </label>
+        </div>
+        {more && <p className={k.more} aria-hidden="true">More below ↓</p>}
         {/* The score and the send stay in view while the head works down the questions. */}
         <div className={k.submit}>
           <p className={k.total} role="status">

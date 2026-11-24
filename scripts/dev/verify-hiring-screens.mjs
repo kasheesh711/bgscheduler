@@ -227,7 +227,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   // The Capacity tab reads its own payload, which this fixture does not hold.
   if (String(input).includes("capacity=1")) return new Response(JSON.stringify({ error: "Not in this fixture." }), { status: 503 });
   const url = new URL(String(input), location.origin);
-  if (url.pathname.startsWith("/api/hiring/brief/sample-token/")) {
+  // The brief's files (résumé, paper, pdf.js runtime) come from the server; only the brief's sends are answered here.
+  if (url.pathname.startsWith("/api/hiring/brief/sample-token/") && init?.method === "POST") {
     if (url.pathname.endsWith("/rubric") && location.search.includes("sendFailed=1"))
       return new Response(JSON.stringify({ error: "The scores were not saved. Try again." }), { status: 503 });
     const body = JSON.parse(String(init?.body ?? "{}"));

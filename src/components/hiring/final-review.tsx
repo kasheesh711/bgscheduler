@@ -256,8 +256,10 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       const html = await response.text();
       const head = /<head\b[^>]*>/i;
       const base = '<base target="_blank">';
-      const source = head.test(html) ? html.replace(head, `$&${base}`) : html.replace(/<html\b[^>]*>/i, `$&<head>${base}`);
-      if (source === html) throw new Error();
+      // In a srcdoc frame "#offer" resolves against the outer page and empties the frame; about:srcdoc keeps it inside.
+      const inFrame = html.replaceAll('href="#offer"', 'href="about:srcdoc#offer"');
+      const source = head.test(inFrame) ? inFrame.replace(head, `$&${base}`) : inFrame.replace(/<html\b[^>]*>/i, `$&<head>${base}`);
+      if (source === inFrame) throw new Error();
       const titleTag = html.match(/<title>[^<]*<\/title>/i)?.[0] ?? "";
       const name = new DOMParser().parseFromString(titleTag, "text/html").title.replace(/^Hiring review \| /, "");
       // The Back button closes a reader the head opened; the packet that opens by itself in Gift's screen has no reader to close.
@@ -279,7 +281,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "preview", behavioral, offerType }) });
       if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? "Could not open the preview. Try again.");
       // Without the tag, a file link opens inside the preview frame.
-      setDraftHtml((await response.text()).replace(/<head\b[^>]*>/i, '$&<base target="_blank">'));
+      setDraftHtml((await response.text()).replaceAll('href="#offer"', 'href="about:srcdoc#offer"').replace(/<head\b[^>]*>/i, '$&<base target="_blank">'));
     } catch (error) {
       setError({ text: (error instanceof Error && error.message) || "Could not open the preview. Try again." });
     } finally {
