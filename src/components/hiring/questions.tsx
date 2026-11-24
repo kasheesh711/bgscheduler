@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { ANSWER_CHOICES, answersSchema, SUBJECTS, TEST_SUBJECT_QUESTION, WRITTEN_MIN, type Subject } from "@/lib/hiring/model";
+import { upload } from "@vercel/blob/client";
+import { ANSWER_CHOICES, answersSchema, MAX_PORTFOLIO_BYTES, PORTFOLIO_TYPES, SUBJECTS, TEST_SUBJECT_QUESTION, type Subject } from "@/lib/hiring/model";
 import { VisitConfirm } from "./booking";
 import c from "./booking.module.css";
 
@@ -60,7 +61,7 @@ function Pills<T extends string>({
  * The pre-screening questions on the booking page. The server checks the answers again, saves them once, and decides
  * whether the times open. After a send the page reloads its view.
  */
-export function PreScreenQuestions({ token, reload }: { token: string; reload: () => Promise<void> }) {
+export function PreScreenQuestions({ token, filePath, reload }: { token: string; filePath: string; reload: () => Promise<void> }) {
   const [degree, setDegree] = useState<(typeof ANSWER_CHOICES.degree)[number][]>([]),
     [field, setField] = useState(""),
     [subjects, setSubjects] = useState<Subject[]>([]),
@@ -76,7 +77,29 @@ export function PreScreenQuestions({ token, reload }: { token: string; reload: (
     [motivation, setMotivation] = useState(""),
     [teachingApproach, setTeachingApproach] = useState(""),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    // The name of the portfolio file that is now in storage, and the state of the upload.
+    [fileName, setFileName] = useState(""),
+    [fileNote, setFileNote] = useState("");
+  async function choose(file: File | undefined) {
+    if (!file) return;
+    if (!(PORTFOLIO_TYPES as readonly string[]).includes(file.type)) return setFileNote("Choose a PDF, a JPEG or a PNG file.");
+    if (file.size > MAX_PORTFOLIO_BYTES) return setFileNote("Choose a file smaller than 25 MB.");
+    setBusy(true);
+    setFileNote("Uploading…");
+    try {
+      // Browser to private storage, because a function request body is limited to 4.5 MB. The server gives a
+      // token only for the path of this link's candidate.
+      await upload(filePath, file, { access: "private", handleUploadUrl: `/api/hiring/book/${token}`, contentType: file.type });
+      setFileName(file.name);
+      setFileNote("");
+    } catch {
+      // The storage library hides the server's reason.
+      setFileNote("The upload failed. Please try again, or add a link to your portfolio.");
+    } finally {
+      setBusy(false);
+    }
+  }
   // A test subject that is no longer ticked is no longer chosen.
   const chosenTest = testSubject.filter((s) => subjects.includes(s));
   const answers = {
@@ -97,6 +120,8 @@ export function PreScreenQuestions({ token, reload }: { token: string; reload: (
   };
   async function send() {
     const parsed = answersSchema.safeParse(answers);
+    if (parsed.success && subjects.includes(ART) && !fileName && !portfolio.trim())
+      return setError("Upload your Art & Design portfolio, or add a link to it.");
     if (!parsed.success) {
       // One plain sentence. A missing single choice has no message of its own.
       const issue = parsed.error.issues[0];
@@ -130,9 +155,6 @@ export function PreScreenQuestions({ token, reload }: { token: string; reload: (
   const long = (label: string, value: string, set: (v: string) => void) => (
     <label className={c.field}>
       <span className={c.stepTitle}>{label}</span>
-      <span className={c.note}>
-        At least {WRITTEN_MIN} characters. {value.trim().length < WRITTEN_MIN ? `${value.trim().length} so far.` : ""}
-      </span>
       <textarea className={c.input} rows={5} value={value} maxLength={5000} disabled={busy} onChange={(e) => set(e.target.value)} />
     </label>
   );
@@ -150,7 +172,24 @@ export function PreScreenQuestions({ token, reload }: { token: string; reload: (
           <Pills name="testSubject" choices={subjects} value={chosenTest} onChange={setTestSubject} disabled={busy} />
         </Group>
       )}
-      {subjects.includes(ART) && text("Link to your Art & Design portfolio", portfolio, setPortfolio, 500, "A link that we can open without a password.")}
+      {subjects.includes(ART) && (
+        <Group title="Your Art & Design portfolio" hint="Upload one PDF, JPEG or PNG file of up to 25 MB. You can add a link too, or a link only.">
+          <input
+            className={c.input}
+            type="file"
+            aria-label="Portfolio file"
+            accept={PORTFOLIO_TYPES.join(",")}
+            disabled={busy}
+            onChange={(e) => choose(e.target.files?.[0])}
+          />
+          {(fileNote || fileName) && (
+            <p className={c.note} role="status">
+              {fileNote || `Uploaded: ${fileName}`}
+            </p>
+          )}
+          {text("Link to your portfolio (optional)", portfolio, setPortfolio, 500, "A link that we can open without a password.")}
+        </Group>
+      )}
       <Group title="Which curricula do you have experience teaching?">
         <Pills name="curricula" choices={ANSWER_CHOICES.curricula} value={curricula} onChange={setCurricula} many disabled={busy} />
       </Group>

@@ -31,6 +31,7 @@ const view = (patch = {}) => ({
   twoDay: false,
   mockSlots: [] as { date: string; start: string; end: string }[],
   waiting: null as "answers" | "checking" | "held" | null,
+  portfolioPath: null as string | null,
   ...patch,
 });
 const page = (patch = {}) => renderToStaticMarkup(<VisitBooking token="t" view={view(patch)} reload={async () => {}} />);

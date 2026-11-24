@@ -296,7 +296,7 @@ export function VisitBooking({
           </p>
         </div>
         <VisitNotice text={view.notice ?? ""} />
-        {view.waiting === "answers" && <PreScreenQuestions token={token} reload={reload} />}
+        {view.waiting === "answers" && <PreScreenQuestions token={token} filePath={view.portfolioPath ?? ""} reload={reload} />}
         <Help />
       </>
     );

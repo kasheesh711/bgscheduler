@@ -27,6 +27,7 @@ import {
   instant,
   isVisitBooking,
   PRE_SCREEN_URL,
+  portfolioPath,
   answersSchema,
   answersToPreScreen,
   normalizeSubjects,
@@ -60,6 +61,7 @@ import { googleConnectionStatus, readHrBusy } from "./google";
 import { visitClashes } from "./head-schedule";
 import { bookingToken, readBookingToken, VISIT_LINK_DAYS } from "./tokens";
 import { storedResume } from "./resume-files";
+import { portfolioUploaded } from "./portfolio";
 import { blockingLimit, headWeekMocks, releaseQueue, type Funnel, type LimitName, type QueueHold } from "./limits";
 import {
   allowed,
@@ -491,7 +493,10 @@ export const preScreenEmail = (name: string, email: string, reminder: boolean, v
         hero: "next",
         name,
         paragraphs: reminder
-          ? ["We have not yet received your pre-screening answers. If you are still interested in joining BeGifted, please answer them on the page below. Then you can book your test and your mock teaching on the same page."]
+          ? [
+              "We have not received your answers yet. If you still want to join BeGifted, please open your page and answer the questions. They take about 5–7 minutes.",
+              "After the last question, you choose your test time and your mock teaching time on the same page.",
+            ]
           : hrLeft
             ? [
                 "Thank you for your interest in joining BeGifted, and for your patience.",
@@ -1565,6 +1570,14 @@ const ANSWERS_FIRST: Record<Waiting, string> = {
   held: "Thank you for your answers. We have them. Our team reads every answer. If we can invite you to a test and a mock teaching, we email you.",
 };
 
+/** The candidate of a link whose questions are still open. For the portfolio upload, which comes before the answers. */
+export async function questionsOpen(token: string, db: Database = getDb(), now = new Date()) {
+  const cap = visitToken(token, now);
+  if (answersFirst(await candidateById(db, cap.id), cap) !== "answers")
+    throw new HiringError(409, "The questions of this link are closed.");
+  return cap.id;
+}
+
 /**
  * The questions on the booking page (Kevin, 24 Nov 2026). The answers are stored in the Google Form's shape, the hard
  * stops run at once, and a pass opens booking on this same link when the AI score is not a gate (pass score 0) and
@@ -1574,6 +1587,12 @@ const ANSWERS_FIRST: Record<Waiting, string> = {
 export async function answerPreScreen(token: string, value: unknown, db: Database = getDb(), now = new Date()) {
   const answers = answersSchema.parse(value);
   const cap = visitToken(token, now);
+  // Art & Design needs a portfolio: a file uploaded on the page, or a link. Storage is read before the locks.
+  const art = answers.subjects.includes("Art & Design Technology");
+  const file = art && (await portfolioUploaded(cap.id))
+    ? `Uploaded file: ${new URL(`/api/hiring/portfolio/${cap.id}`, process.env.APP_BASE_URL || "https://bgscheduler.vercel.app")}`
+    : "";
+  if (art && !file && !answers.portfolio) throw new HiringError(400, "Upload your Art & Design portfolio, or add a link to it.");
   return withDatabaseTransaction(db, async (tx) => {
     // The lock order is queue, then candidate, as in `inviteToVisit`.
     await lockQueue(tx);
@@ -1581,7 +1600,7 @@ export async function answerPreScreen(token: string, value: unknown, db: Databas
     if (!row) throw new HiringError(404, onLine("This booking link is no longer active."));
     // A second send, or a Google Form answer that came first: the page reloads and shows what is true now.
     if (answersFirst(row, cap) !== "answers") return { opened: false, candidateId: cap.id };
-    const preScreen = answersToPreScreen(answers, now);
+    const preScreen = answersToPreScreen(answers, now, file);
     const [saved] = await tx
       .update(s.hiringCandidates)
       .set({ preScreen, preScreenRepliedAt: now, stage: "pre_screen", revision: row.revision + 1, updatedAt: now })
@@ -1710,6 +1729,8 @@ export async function visitView(token: string, db: Database = getDb(), now = new
       notice: ANSWERS_FIRST[waiting],
       checkedAt: null,
       waiting: waiting as Waiting | null,
+      // Where the page uploads an Art & Design portfolio while the questions are open.
+      portfolioPath: waiting === "answers" ? portfolioPath(cap.id) : null,
     };
   const { subject, rows } = await openVisit(db, cap, config, now);
   const enabled = bookable(config, cap.id);
@@ -1768,6 +1789,7 @@ export async function visitView(token: string, db: Database = getDb(), now = new
     // When the times were checked against live Wise. Null means the 30-minute Wise copy was used.
     checkedAt: live?.checkedAt ?? null,
     waiting: null as Waiting | null,
+    portfolioPath: null as string | null,
   };
 }
 

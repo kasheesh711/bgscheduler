@@ -45,22 +45,29 @@ describe("answersSchema (the questions on the booking page)", () => {
     // A weekend day and a late weekday give half; the 11-20 band gives 60% of the other half.
     expect(availabilityFraction(pre)).toBeCloseTo(0.8);
   });
-  it("refuses a missing choice, a short written answer and a value that is not a choice", () => {
+  it("refuses a missing choice, an empty written answer and a value that is not a choice; a short answer is accepted", () => {
     const bad = (patch: object) => answersSchema.safeParse({ ...good, ...patch }).success;
     expect(bad({ degree: [] })).toBe(false);
     expect(bad({ subjects: [] })).toBe(false);
     expect(bad({ availability: [] })).toBe(false);
     expect(bad({ english: undefined })).toBe(false);
     expect(bad({ english: "Fluent" })).toBe(false);
-    expect(bad({ motivation: "Teaching" })).toBe(false);
+    // No minimum length (Kevin, 24 Nov 2026).
+    expect(bad({ motivation: "Teaching" })).toBe(true);
+    expect(bad({ motivation: "" })).toBe(false);
     expect(bad({ teachingApproach: " ".repeat(80) })).toBe(false);
     expect(bad({ extra: "x" })).toBe(false);
   });
-  it("needs a test subject from the ticked subjects, and a portfolio link for Art", () => {
+  it("needs a test subject from the ticked subjects, and stores the portfolio link and the uploaded file together", () => {
     const first = (patch: object) => answersSchema.safeParse({ ...good, ...patch }).error?.issues[0]?.message;
     expect(first({ testSubject: "History" })).toMatch(/test subject/);
-    expect(first({ subjects: ["Art & Design Technology"], testSubject: "Art & Design Technology" })).toMatch(/portfolio/);
-    expect(first({ subjects: ["Art & Design Technology"], testSubject: "Art & Design Technology", portfolio: "https://example.com/p" })).toBeUndefined();
+    const art = answersSchema.parse({ ...good, subjects: ["Art & Design Technology"], testSubject: "Art & Design Technology", portfolio: "https://example.com/p" });
+    const now = new Date("2026-11-24T05:00:00Z");
+    expect(answersToPreScreen(art, now, "Uploaded file: https://app.test/api/hiring/portfolio/x").portfolio).toBe("https://example.com/p · Uploaded file: https://app.test/api/hiring/portfolio/x");
+    expect(answersToPreScreen({ ...art, portfolio: "" }, now, "Uploaded file: u").portfolio).toBe("Uploaded file: u");
+    // With no file and no link, Art fails the portfolio hard stop even if the server check is passed by.
+    const bare = answersToPreScreen({ ...art, portfolio: "" }, now);
+    expect(hardStops(bare, ACCEPTED, normalizeSubjects(bare.subjects), config).stops).toHaveLength(1);
   });
   it("lets every hard stop read the page's own choices", () => {
     expect(stops({ degree: ["Below Bachelor's"] })).toEqual(["No completed bachelor's degree."]);

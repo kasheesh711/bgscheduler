@@ -473,12 +473,14 @@ export const ANSWER_CHOICES = {
   ],
   weeklyHours: ["1-10", "11-20", "20-40", "40+"],
 } as const;
-/** A written answer shorter than this says nothing a person or the AI can read. */
-export const WRITTEN_MIN = 50;
+/** The Art & Design portfolio file of the booking page: one PDF or picture in private storage (`portfolio.ts`). */
+export const PORTFOLIO_TYPES = ["application/pdf", "image/jpeg", "image/png"] as const;
+export const MAX_PORTFOLIO_BYTES = 25 * 1024 * 1024;
+export const portfolioPath = (candidateId: string) => `hiring-portfolios/${candidateId}`;
 const ticks = <T extends readonly [string, ...string[]]>(choices: T, message: string) =>
   z.array(z.enum(choices)).min(1, message).max(choices.length);
-const written = (question: string) =>
-  z.string().trim().min(WRITTEN_MIN, `Write at least ${WRITTEN_MIN} characters for the question "${question}".`).max(5000);
+// No minimum length (Kevin, 24 Nov 2026). An answer is still needed.
+const written = (question: string) => z.string().trim().min(1, `Answer the question "${question}".`).max(5000);
 export const answersSchema = z
   .object({
     degree: ticks(ANSWER_CHOICES.degree, "Choose your degree level."),
@@ -490,6 +492,7 @@ export const answersSchema = z
     english: z.enum(ANSWER_CHOICES.english),
     englishEvidence: z.string().trim().max(500),
     experience: z.enum(ANSWER_CHOICES.experience),
+    // An optional link. The file upload is checked on the server (`answerPreScreen`).
     portfolio: z.string().trim().max(500),
     availability: ticks(ANSWER_CHOICES.availability, "Choose at least one time."),
     weeklyHours: z.enum(ANSWER_CHOICES.weeklyHours),
@@ -500,13 +503,12 @@ export const answersSchema = z
   .superRefine((value, ctx) => {
     if (!value.subjects.includes(value.testSubject))
       ctx.addIssue({ code: "custom", path: ["testSubject"], message: "Choose a test subject from the subjects you can teach." });
-    if (value.subjects.includes("Art & Design Technology") && !value.portfolio)
-      ctx.addIssue({ code: "custom", path: ["portfolio"], message: "Add a link to your Art & Design portfolio." });
   });
 export type Answers = z.infer<typeof answersSchema>;
 /** Page answers in the stored shape of a Google Form answer, so every later check reads one format. */
-export const answersToPreScreen = (answers: Answers, now: Date): PreScreen => ({
+export const answersToPreScreen = (answers: Answers, now: Date, portfolioFile = ""): PreScreen => ({
   ...answers,
+  portfolio: [answers.portfolio, portfolioFile].filter(Boolean).join(" · "),
   sourceRow: 0,
   submittedAt: now.toISOString(),
   degree: answers.degree.join(", "),

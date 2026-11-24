@@ -32,6 +32,8 @@ import {
 
 vi.mock("../availability", () => ({ availableSlots: vi.fn(async () => []), availableVisitSlots: vi.fn(async () => []), verifyLiveSlot: vi.fn(), readLiveBusy: vi.fn(async () => { throw new Error("no Wise in tests"); }) }));
 vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
+// No portfolio file is in storage unless a test says so.
+vi.mock("../portfolio", () => ({ portfolioUploaded: vi.fn(async () => false) }));
 // The grant cannot read HR's calendar unless a test says so, so no call booking link leaves in the other tests.
 vi.mock("../google", () => ({
   deliverCalendar: vi.fn().mockResolvedValue({ id: "calendar-event" }),
@@ -1063,7 +1065,10 @@ describe("the questions on the booking page (Kevin, 24 Nov 2026)", () => {
   it("refuses answers that are not valid, and keeps a Google Form answer that came first", async () => {
     await setConfig({ preScreenThreshold: 0 });
     const { row, token } = await holder();
-    await expect(answerPreScreen(token, { ...answers, motivation: "Teaching" }, db)).rejects.toThrow();
+    await expect(answerPreScreen(token, { ...answers, motivation: " " }, db)).rejects.toThrow();
+    // Art & Design with no uploaded file and no link.
+    await expect(answerPreScreen(token, { ...answers, subjects: ["Art & Design Technology"], testSubject: "Art & Design Technology" }, db))
+      .rejects.toMatchObject({ status: 400, message: expect.stringMatching(/portfolio/) });
     expect((await candidate(row.id)).preScreen).toBeNull();
     const form = await holder({ preScreen: pre, preScreenRepliedAt: now });
     expect(await answerPreScreen(form.token, answers, db)).toMatchObject({ opened: false });
