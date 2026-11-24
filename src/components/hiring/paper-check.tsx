@@ -111,9 +111,9 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
       <dl className={`${c.answers} ${c.briefDetails}`}>
         <div><dt className={c.factLabel}>Subject</dt><dd>{view.subject}</dd></div>
         <div><dt className={c.factLabel}>AI score</dt><dd>{view.aiPercent}%{view.passMark !== null && ` (pass mark ${view.passMark}%)`}</dd></div>
+        {outcome && <div><dt className={c.factLabel}>Your score</dt><dd>{percent}%</dd></div>}
         <div><dt className={c.factLabel}>Mock teaching</dt><dd>{view.mock ?? "Not booked yet"}</dd></div>
       </dl>
-      <a className={`${c.ghost} ${c.jumpLink}`} href={`/api/hiring/paper-check/${token}/paper`} target="_blank" rel="noreferrer">Open marked paper</a>
       <p className={c.note}>Personal data. Do not share.</p>
     </section>
   );
@@ -140,7 +140,9 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
       <div className={k.split}>
       {/* The paper beside the marks on a wide screen, above them on a phone. Drawn on the page: a PDF frame is blank on Safari and phones. */}
       <section className={k.paper} aria-label="Marked paper">
-        <h2 className={c.stepTitle}>Marked paper</h2>
+        <h2 className={`${c.stepTitle} ${k.paperHead}`}>Marked paper
+          <a className={k.fullPaper} href={`/api/hiring/paper-check/${token}/paper`} target="_blank" rel="noreferrer">View full paper ↗</a>
+        </h2>
         <PdfPages src={`/api/hiring/paper-check/${token}/paper`} runtime={`/api/hiring/paper-check/${token}/runtime`} title={`Marked paper of ${view.name}`} maxPages={40} />
       </section>
       <section className={`${c.facts} ${k.marks}`}>

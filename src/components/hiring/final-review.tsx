@@ -257,7 +257,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       const head = /<head\b[^>]*>/i;
       const base = '<base target="_blank">';
       // In a srcdoc frame "#offer" resolves against the outer page and empties the frame; about:srcdoc keeps it inside.
-      const inFrame = html.replaceAll('href="#offer"', 'href="about:srcdoc#offer"');
+      // Beside Gift's decision the packet gets a shorter masthead (data-inline), so the score tiles fit on a laptop.
+      const inFrame = html.replaceAll('href="#offer"', 'href="about:srcdoc#offer"').replace("<html ", remember ? "<html " : "<html data-inline ");
       const source = head.test(inFrame) ? inFrame.replace(head, `$&${base}`) : inFrame.replace(/<html\b[^>]*>/i, `$&<head>${base}`);
       if (source === inFrame) throw new Error();
       const titleTag = html.match(/<title>[^<]*<\/title>/i)?.[0] ?? "";

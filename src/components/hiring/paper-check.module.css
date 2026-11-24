@@ -161,3 +161,6 @@
     min-height: 0;
   }
 }
+
+.paperHead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.fullPaper { display: inline-flex; align-items: center; min-height: 44px; font-family: var(--sans, inherit); font-size: 15px; font-weight: 600; }

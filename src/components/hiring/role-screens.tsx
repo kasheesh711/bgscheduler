@@ -642,7 +642,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const keepSigned = (item: HeadItem) => {
     setPicked(item.id);
     setSignedItems((current) => [...current.filter((kept) => kept.id !== item.id),
-      { ...item, urgent: false, action: undefined, time: "Packet", day: "signed", tags: [{ text: "Signed", tone: "hire" }] }]);
+      { ...item, urgent: false, action: undefined, time: "Packet", day: "signed", tags: [] }]);
   };
   const choose = (value: string) => {
     setChosen(value);
@@ -740,15 +740,16 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   // A signed review leaves the data on reload; keep its row, marked Signed, while it is still the open row.
   const stillSigned = signedItems.filter((item) => item.id === picked && !reviews.some((review) => review.id === item.id));
   const groups = [
-    { title: "To do", items: [...checks, ...actionVisits, ...reviews.filter((item) => item.urgent), ...stillSigned]
+    { title: "To do", items: [...checks, ...actionVisits, ...reviews.filter((item) => item.urgent)]
       .sort((a, b) => Number(!!b.urgent) - Number(!!a.urgent)) },
+    { title: "Just finished", items: stillSigned },
     { title: mockNow ? "Mock now" : "Next mock", items: nextItem ? [nextItem] : [] },
     { title: "Coming up", items: coming.map((visit) => visitItem(visit, today)) },
     // Rows where the head can only wait: admin is checking the scores, or the packet is not ready.
     { title: "Waiting", items: [...checking, ...reviews.filter((item) => !item.urgent)] },
   ];
   // A mock in progress leads the list.
-  if (mockNow) groups.unshift(...groups.splice(1, 1));
+  if (mockNow) groups.unshift(...groups.splice(2, 1));
   const papers = paperTests.map((visit) => visitItem(visit, today));
   const reviewer = !!key && key === data.finalReviewer;
   const past = ended.filter((visit) => !visit.needsAction).slice(0, 6).map((visit) => visitItem(visit, today));
