@@ -193,6 +193,8 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   const late = value.slice(0, 5).some((hours) => hours.some((h) => h >= 15));
   return (
     <div className={s.week}>
+      {/* The rule, fixed above the grid; the live ticks stay under it, where their changes move nothing (Sol r18). */}
+      <p className={s.hint}>Include a weekend hour and a weekday hour at or after 15:00.</p>
       <div className={s.presets} role="group" aria-label="Quick fill">
         {PRESETS.map((p) => {
           // Add only; a check once every hour of it is in the week (Sol r6).
@@ -311,11 +313,11 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
           {/* Status, not actions: neutral until met, then a green tick (Opus r6). */}
           <span data-ok={weekend || undefined}>
             {weekend && <Check aria-hidden size={14} />}
-            {weekend ? "Saturday or Sunday" : "Needs a Saturday or Sunday"}
+            Weekend
           </span>
           <span data-ok={late || undefined}>
             {late && <Check aria-hidden size={14} />}
-            {late ? "A weekday from 15:00" : "Needs a weekday from 15:00"}
+            Weekday from 15:00
           </span>
         </p>
       </div>

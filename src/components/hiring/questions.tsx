@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { upload } from "@vercel/blob/client";
-import { Check, ChevronDown, Pencil, Upload } from "lucide-react";
+import { Check, ChevronDown, Circle, CircleDot, Pencil, Upload } from "lucide-react";
 import { ANSWER_CHOICES, answersSchema, MAX_PORTFOLIO_BYTES, PORTFOLIO_TYPES, SUBJECTS, type Subject } from "@/lib/hiring/model";
 import type { KnownDegree } from "@/lib/hiring/profile-degree";
 import { emptyWeek, weekHoursCount, type WeekHours } from "@/lib/hiring/week-hours";
@@ -88,7 +88,7 @@ function Chips<T extends string>({
   return (
     <div className={s.chips}>
       {choices.map((choice) => (
-        <label key={choice} className={s.chip}>
+        <label key={choice} className={s.chip} data-one={many ? undefined : ""}>
           <input
             className={c.hidden}
             type={many ? "checkbox" : "radio"}
@@ -97,7 +97,8 @@ function Chips<T extends string>({
             checked={value.includes(choice)}
             onChange={(e) => onChange(many ? (e.target.checked ? [...value, choice] : value.filter((v) => v !== choice)) : [choice])}
           />
-          <Check aria-hidden size={14} />
+          {/* Checks for "all that apply", radio dots for "choose one" (Opus r18). */}
+          {many ? <Check aria-hidden size={14} /> : value.includes(choice) ? <CircleDot aria-hidden size={14} /> : <Circle aria-hidden size={14} />}
           {SHORT[choice] ?? choice}
         </label>
       ))}
@@ -270,7 +271,7 @@ export function PreScreenQuestions({
         {degreeMode !== "ask" && knownDegree ? (
           <div className={s.known} id="q-degree" tabIndex={-1} data-ok={degreeMode === "confirmed" || undefined}>
             <p>
-              <small>From your résumé</small>
+              <small>Your degree · from your résumé</small>
               <b>
                 {knownDegree.degree} · {knownDegree.field}
               </b>
@@ -322,7 +323,8 @@ export function PreScreenQuestions({
         </Q>
       </Section>
       <Section title="What you teach">
-        <Q id="q-subjects" title="Subjects you teach confidently" tag="all that apply">
+        <p className={c.note}>Choose all that apply.</p>
+        <Q id="q-subjects" title="Subjects you teach confidently">
           <Chips name="subjects" choices={shownSubjects} value={subjects} onChange={setSubjects} many disabled={busy} />
           {rest.length > 0 && (
             <div>
@@ -333,6 +335,12 @@ export function PreScreenQuestions({
             </div>
           )}
         </Q>
+        {/* The page chose the only possible subject: say so here, not first on Times (Sol r6). */}
+        {test && (subjects.length === 1 || testable.length === 1) && !(subjects.length > 1 && testChoices.length > 1) && (
+          <p className={c.note} role="status">
+            Test and mock teaching subject: <b>{test}</b>
+          </p>
+        )}
         {/* The page chose the only possible subject: say so here, not first on Times (Sol r6). */}
         {test && (subjects.length === 1 || testable.length === 1) && !(subjects.length > 1 && testChoices.length > 1) && (
           <p className={c.note} role="status">
@@ -352,7 +360,7 @@ export function PreScreenQuestions({
               <Upload aria-hidden size={18} />
               <span>
                 <b>{fileName || "Upload portfolio"}</b>
-                <small>{fileName ? "Uploaded. Choose again to replace it." : "PDF, JPG or PNG, up to 25 MB"}</small>
+                <small>{fileName ? "Uploaded. Choose again to replace it." : "PDF, JPG or PNG, max 25 MB"}</small>
               </span>
             </label>
             {fileNote && (
@@ -388,14 +396,14 @@ export function PreScreenQuestions({
         </Q>
       </Section>
       <Section title="Availability">
-        <Q id="q-hours" title="Tap your hours, or hold and drag" tag="Bangkok time">
+        <Q id="q-hours" title="Tap hours, or hold and drag" tag="Bangkok time">
           <WeekGrid value={week} onChange={setWeek} disabled={busy} />
         </Q>
-        <Q id="q-weekly" title="Weekly hours to commit">
+        <Q id="q-weekly" title="Weekly hours">
           <Chips name="weeklyHours" choices={ANSWER_CHOICES.weeklyHours} value={weeklyHours} onChange={setWeeklyHours} disabled={busy} />
         </Q>
       </Section>
-      <Section title="In your words">
+      <Section title="Your words">
         {long("q-why", "Why do you want to tutor with BeGifted?", motivation, setMotivation)}
         {long("q-approach", "A bright student is losing motivation and their grades are slipping. How would you approach it?", teachingApproach, setTeachingApproach)}
       </Section>

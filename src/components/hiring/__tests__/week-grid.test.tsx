@@ -17,10 +17,10 @@ describe("WeekGrid", () => {
     const html = renderToStaticMarkup(<WeekGrid value={week} onChange={() => {}} disabled={false} />);
     expect(html).toMatch(/data-cell="0,17"[^>]*aria-pressed="true"/);
     expect(html).toContain("Mon 17–19 · Sat 09–10");
-    expect(html).toContain("Saturday or Sunday");
-    expect(html).toContain("A weekday from 15:00");
+    expect(html).toContain("Weekend");
+    expect(html).toContain("Weekday from 15:00");
     expect(html).toContain("3 h");
     const none = renderToStaticMarkup(<WeekGrid value={emptyWeek()} onChange={() => {}} disabled={false} />);
-    expect(none).toContain("Needs a Saturday or Sunday");
+    expect(none).toContain("Include a weekend hour and a weekday hour at or after 15:00.");
   });
 });

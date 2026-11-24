@@ -1151,7 +1151,7 @@
 @media (min-width: 640px) {
   .legs > div {
     display: grid;
-    grid-row: span 4;
+    grid-row: span 5;
     grid-template-rows: subgrid;
   }
 }
@@ -1185,5 +1185,42 @@
   .hourEnd {
     font-size: 9px;
     padding-right: 1px;
+  }
+}
+
+.ruleMet {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--ok);
+}
+/* The visit ticket has no date stub: one column of rows. */
+.ticketRows {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Radio dots are always shown on single-choice chips. */
+.chip[data-one] svg {
+  visibility: visible;
+}
+/* The selected week as an inset ring: it takes no content width (Opus r18). */
+.dateWeek[aria-pressed="true"] {
+  border: 1px solid var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+@media (max-width: 359px) {
+  .dateWeek {
+    padding: 6px 4px;
+  }
+}
+
+@media (max-width: 359px) {
+  .dateWeek b {
+    font-size: 12px;
+    letter-spacing: -0.01em;
+  }
+  .dateWeek span {
+    font-size: 10px;
   }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { BookOpen, Check, CircleCheck, FileSignature, Info, MapPin, Video } from "lucide-react";
 import { mockCanFollow, phoneSchema, type Subject, type Slot } from "@/lib/hiring/model";
 import type { bookingView, callView, contractView, visitView } from "@/lib/hiring/service";
@@ -223,6 +223,23 @@ function Picker<T extends { date: string }>({
   useEffect(() => {
     if (week !== weeks[0]) scrollToWeek(week, false);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- once, to open on the chosen or booked week
+  // A resize or a rotation can reset the strip: bring the chosen day's week back (Opus r18).
+  const shownWeek = useRef(week);
+  useLayoutEffect(() => {
+    shownWeek.current = active ? mondayOf(active) : week;
+  });
+  useEffect(() => {
+    const el = strip.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let width = el.clientWidth;
+    const watch = new ResizeObserver(() => {
+      if (el.clientWidth === width) return;
+      width = el.clientWidth;
+      scrollToWeek(shownWeek.current, false);
+    });
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- one observer for the strip's life
   if (!days.length) return null;
   const shown = items.filter((i) => i.date === active);
   const label = (date: string, options: Intl.DateTimeFormatOptions) => part(NOON(date), options);
@@ -252,15 +269,20 @@ function Picker<T extends { date: string }>({
               }}
             >
               {/* A range, not a date tile, so it never reads as the chosen day (Opus r13). */}
-              <b>
-                {label(w, { day: "numeric" })}–{label(plusDays(w, 6), { day: "numeric" })}
-              </b>
-              {/* Both months when the week crosses one (Sol r16). */}
-              <span>
-                {label(w, { month: "short" }) === label(plusDays(w, 6), { month: "short" })
-                  ? label(w, { month: "short" })
-                  : `${label(w, { month: "short" })}–${label(plusDays(w, 6), { month: "short" })}`}
-              </span>
+              {/* A week inside one month: "23–29 / Nov". Across two: "30 Nov / 6 Dec", each day with its month (Sol r18). */}
+              {label(w, { month: "short" }) === label(plusDays(w, 6), { month: "short" }) ? (
+                <>
+                  <b>
+                    {label(w, { day: "numeric" })}–{label(plusDays(w, 6), { day: "numeric" })}
+                  </b>
+                  <span>{label(w, { month: "short" })}</span>
+                </>
+              ) : (
+                <>
+                  <b>{label(w, { day: "numeric", month: "short" })}</b>
+                  <span>{label(plusDays(w, 6), { day: "numeric", month: "short" })}</span>
+                </>
+              )}
             </button>
           ))}
         </div>
@@ -435,7 +457,8 @@ function Checks({
   return (
     <div className={c.checks}>
       {row("check-address", onsite, setOnsite, "I will come to this address.")}
-      {row("check-hours", commitment, setCommitment, "I can teach onsite on a Saturday or Sunday and a weekday from 15:00.", fromAnswers && commitment ? "From your answers." : undefined)}
+      {/* Saved answers that already meet the rule need no second confirmation: the line under the boxes says so (Sol r18). */}
+      {!fromAnswers && row("check-hours", commitment, setCommitment, "I can teach onsite on a Saturday or Sunday and a weekday at or after 15:00.")}
     </div>
   );
 }
@@ -538,7 +561,7 @@ export function VisitBooking({
               <>
                 <Steps at={0} />
                 <VisitPlan />
-                <p className={c.note}>After these questions, book both times. They can be on different days.</p>
+                <p className={c.note}>Then book both times, on one day or two.</p>
               </>
             }
           />
@@ -590,16 +613,8 @@ export function VisitBooking({
                     <Check aria-hidden size={14} /> {moving ? "Current booking" : "Confirmed"}
                   </span>
                 </div>
-                <div className={c.ticket}>
-                  <div className={c.ticketDate}>
-                    <span>{part(view.visit.examStart, { weekday: "short" })}</span>
-                    <b>{part(view.visit.examStart, { day: "numeric" })}</b>
-                    <span>{part(view.visit.examStart, { month: "short" })}</span>
-                    {/* A two-day visit shows its second day on the stub too (Opus r4). */}
-                    {view.visit.mockStart && short(view.visit.mockStart) !== short(view.visit.examStart) && (
-                      <i className={cs.stubSecond}>& {part(view.visit.mockStart, { day: "numeric", month: "short" })}</i>
-                    )}
-                  </div>
+                {/* Each part on its own row with its own date: no date stub that names only the first day (Sol r18). */}
+                <div className={`${c.ticket} ${cs.ticketRows}`}>
                   <div className={cs.legs}>
                     <div>
                       <span>Test</span>
@@ -609,6 +624,7 @@ export function VisitBooking({
                           {time(view.visit.examStart)}–{time(view.visit.examEnd)}
                         </span>
                       </small>
+                      <small aria-hidden />
                       <small aria-hidden />
                     </div>
                     {view.visit.mockStart && view.visit.mockEnd && (
@@ -629,6 +645,8 @@ export function VisitBooking({
                   </div>
                 </div>
                 {!view.canMove && !notice && <p className={c.note}>This visit can no longer be moved online.</p>}
+                {/* The way back sits right under the booking (Sol r18). */}
+                {showForm && keep}
                 {view.canMove && !moving && (
                   <div className={c.move}>
                     <p className={c.note}>You can move this visit once, up to 24 hours before your test.</p>
@@ -702,11 +720,12 @@ export function VisitBooking({
               <Picker
                 zoneNote={false}
                 id="mock-start"
+                checkedAt={view.checkedAt}
+                liveDates={view.liveDates}
                 currentKey={moving ? (view.visit?.mockStart ?? undefined) : undefined}
                 currentOpen
                 legend={moving ? "New mock teaching time" : "Mock teaching time"}
                 hint="1 hour, if you pass."
-                checkedAt={null}
                 items={laterMocks}
                 keyOf={(m) => m.start}
                 startOf={(m) => m.start}
@@ -736,8 +755,12 @@ export function VisitBooking({
           showForm && (
             <>
               <Checks onsite={onsite} commitment={commitment} setOnsite={setOnsite} setCommitment={setCommitment} fromAnswers={view.timeRuleMet} />
-              {moving && <p className={c.note}>You can move this visit once. Your current times stay booked until you confirm.</p>}
-              {keep}
+              {view.timeRuleMet && (
+                <p className={cs.ruleMet} role="status">
+                  <Check aria-hidden size={14} /> Your hours meet the weekend and 15:00 rule.
+                </p>
+              )}
+              {moving && <p className={c.note}>Your current times stay booked until you confirm.</p>}
               <VisitConfirm
                 compact={!slot}
                 error={error}
