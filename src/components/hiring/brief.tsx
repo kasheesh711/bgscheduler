@@ -148,7 +148,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
           {earlyRecommendation && recommendation}
           {!blocked && (
             <section id="scores" className={b.panel} tabIndex={-1}>
-              <h2 className="sr-only">Mock lesson scores</h2>
+              <h2 className={b.panelTitle}>Mock scores</h2>
               <BriefRubric
                 saved={brief.rubric}
                 form={brief.form}

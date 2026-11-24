@@ -51,7 +51,9 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
     if (!list) return setMore(null);
     // The first question whose box ends below the visible area, else the comment if it is below it; nothing when all show.
     const bottom = list.getBoundingClientRect().bottom + 1;
-    const next = [...list.querySelectorAll<HTMLLIElement>("li[data-question]")].find((item) => item.getBoundingClientRect().bottom > bottom);
+    // A question counts as in view when its label, mark field and AI note are, not its card's padding (Sol review, round 14).
+    const shownBottom = (item: HTMLLIElement) => Math.max(...[...item.querySelectorAll("label, input, p")].map((part) => part.getBoundingClientRect().bottom));
+    const next = [...list.querySelectorAll<HTMLLIElement>("li[data-question]")].find((item) => shownBottom(item) > bottom);
     if (next) return setMore(next.dataset.question ?? null);
     const comment = list.querySelector("textarea");
     // Only when the comment's label and first line are hidden, not for a box that is nearly all in view.
@@ -183,7 +185,8 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
           ))}
         </ol>
         <label className={c.field}>
-          <span>Comment (optional)</span>
+          {/* A comment already on the result is the marker's; the head may keep or change it, and it saves with the marks. */}
+          <span>{view.comment ? "Existing marking comment (saved with your marks)" : "Comment (optional)"}</span>
           <textarea className={c.input} rows={3} maxLength={4000} value={comment} onChange={(event) => setComment(event.target.value)} />
         </label>
         </div>

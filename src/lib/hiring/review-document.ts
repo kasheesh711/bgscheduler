@@ -147,7 +147,7 @@ export async function reviewDocument(packet: ReviewPacket, resume: string, paper
 :root{--page:#f7f3ec;--surface:#fffcf7;--ink:#17243b;--muted:#515e6d;--line:#ded8ce;--accent:#ff7518}
 *{box-sizing:border-box}body{max-width:800px;margin:0 auto;padding:40px 24px 56px;background:var(--page);color:var(--ink);font:15px/1.5 Geist,Arial,sans-serif;overflow-wrap:anywhere}
 header{padding-bottom:22px;border-bottom:1px solid var(--line)}
-[data-inline] body{padding:14px 20px 40px}[data-inline] header{padding-bottom:10px}[data-inline] img{width:104px}[data-inline] .eyebrow{margin-top:8px}[data-inline] h1{font-size:30px;margin:6px 0 2px}[data-inline] .candidate{display:none}[data-inline] section{padding:16px 0}
+[data-inline] body{padding:14px 20px 40px}[data-inline] header{padding-bottom:10px}[data-inline] img{width:104px}[data-inline] .eyebrow{margin-top:8px}[data-inline] h1{font-size:30px;margin:6px 0 2px}[data-inline] .candidate{display:none}[data-inline] section{padding:16px 0}[data-terms] .offerLink,[data-terms] #offer{display:none}
 img{width:145px;height:auto}h1{font-size:clamp(32px,7vw,53px);font-weight:400;line-height:1.08;letter-spacing:-.035em;margin:16px 0 8px}em{font-style:normal}
 .candidate{font-size:21px}h2{font-size:22px;margin:0 0 12px;break-after:avoid}h3{font-size:15px;margin:0;break-after:avoid}
 p{margin:7px 0}section{padding:22px 0;border-bottom:1px solid var(--line)}
@@ -249,7 +249,7 @@ summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details 
 <p class="eyebrow">Confidential</p>
 <h1>Hiring <em>review</em></h1>
 <p class="candidate">${escape(value.name)}</p><p>${escape(value.subject)} tutor</p><p class="meta">${packet.id === "draft" ? "Preview. Not sent to Gift." : `Submitted ${date(packet.at)} by ${escape(packet.author)}`}</p>
-<p><a href="#offer" target="_self">View offer terms ↓</a></p></header>
+<p class="offerLink"><a href="#offer" target="_self">View offer terms ↓</a></p></header>
 <section><h2>Assessment summary</h2><div class="tiles">
 <div class="tile"><h3>ATS</h3>${gauge(atsValue, " / 100", null, atsScore)}</div>
 <div class="tile"><h3>Paper</h3>${gauge(paperPercent, "%", paperTarget)}

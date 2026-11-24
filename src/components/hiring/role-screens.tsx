@@ -492,16 +492,16 @@ function visitItem(visit: ReturnType<typeof headVisit>, today: string, live = fa
     id: row.visitId,
     name: candidate?.name ?? "Needs review: candidate record not found",
     candidate,
-    time: row.mockStart ?? row.paperStart,
-    day: row.date === today ? "Today" : row.date === shiftDate(today, 1) ? "Tomorrow" : shortDay(row.date),
-    // The end time too, so the head knows how long the mock takes without opening the brief (Sol review, round 13).
-    detail: `${row.subject ?? "Subject not recorded"} · ${mock ? (end ? `Mock until ${end}` : "Mock") : "Paper test"}`,
+    // The whole appointment in one place: the time range and the calendar date (Sol review, rounds 13–14).
+    time: row.mockStart && end ? `${row.mockStart}–${end}` : row.mockStart ?? row.paperStart,
+    day: row.date === today ? "Today" : shortDay(row.date),
+    detail: `${row.subject ?? "Subject not recorded"} · ${mock ? "Mock" : "Paper test"}`,
     tags: [
       ...(status ? [{ text: status }] : []),
       ...(scored && !decision && !due ? [{ text: "Scores sent", tone: "hire" as const }] : []),
       ...(decision ? [{ text: `Recommendation: ${decision.decision === "hire" ? "Yes" : "No"}`, tone: decision.decision }] : []),
     ],
-    action: due && open ? (scored ? "Recommend Yes or No" : "Score mock") : live && open && !scored ? "Score mock"
+    action: due && open ? (scored ? "Recommend" : "Score mock") : live && open && !scored ? "Score mock"
       : checkingScores ? undefined
       : needsCheck ? "Ask admin: check scores"
       : mock && !path && !status && missingOutcome ? "Ask admin: outcome missing" : undefined,
@@ -771,7 +771,9 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const found = picked ? all.find((item) => item.id === picked) : undefined;
   const keep = shown && (!picked || picked === shown.id) ? all.find((item) => item.id === shown.id) ?? shown : undefined;
   // On arrival: a mock in progress (Kevin, 24 Nov 2026), else the first job that needs the head, else the next mock.
-  const selected = wide ? found ?? keep ?? (mockNow ? nextItem : undefined) ?? all.find((item) => item.urgent) ?? nextItem ?? all[0] : found;
+  // A mock that starts while the head has not chosen a row takes the pane; a row the head chose stays open. Paper marks and
+  // mock scores are kept as drafts, so nothing typed is lost (Sol review, rounds 11–14).
+  const selected = wide ? found ?? (mockNow && !picked ? nextItem : undefined) ?? keep ?? all.find((item) => item.urgent) ?? nextItem ?? all[0] : found;
   if ((selected?.id ?? null) !== (shown?.id ?? null)) setShown(selected ?? null);
   // "Saved for …" sits in the group that holds the saved row, or under To do once the row has left the list.
   const savedIn = savedFor && selected?.id === savedFor.id

@@ -261,7 +261,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       const base = '<base target="_blank">';
       // In a srcdoc frame "#offer" resolves against the outer page and empties the frame; about:srcdoc keeps it inside.
       // Beside Gift's decision the packet gets a shorter masthead (data-inline), so the score tiles fit on a laptop.
-      const inFrame = html.replaceAll('href="#offer"', 'href="about:srcdoc#offer"').replace("<html ", remember ? "<html " : "<html data-inline ");
+      // Beside the decision, a standard offer's terms already show by Approve, so the packet hides its copy (data-terms).
+      const inFrame = html.replaceAll('href="#offer"', 'href="about:srcdoc#offer"').replace("<html ", remember ? "<html " : packet?.offerType ? "<html data-inline data-terms " : "<html data-inline ");
       const source = head.test(inFrame) ? inFrame.replace(head, `$&${base}`) : inFrame.replace(/<html\b[^>]*>/i, `$&<head>${base}`);
       if (source === inFrame) throw new Error();
       const titleTag = html.match(/<title>[^<]*<\/title>/i)?.[0] ?? "";
