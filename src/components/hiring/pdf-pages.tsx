@@ -15,7 +15,7 @@ const FAILED = "This PDF could not be drawn here. Use Download to open it.";
  * The pages of a PDF, drawn on the page itself. The browser's own PDF viewer is not used: Safari, phones and a
  * sandboxed response each show it blank, and a frame takes the drag that moves a card.
  */
-/** `runtime`: where the pdf.js files come from; a page with no session passes its own token-checked path. */
+/** `runtime` is the folder of the pdf.js files. A page with no staff session gives its own (the interviewer brief, the paper check). */
 export function PdfPages({ src, title, runtime = RUNTIME, maxPages = MAX_PAGES }: { src: string; title: string; runtime?: string; maxPages?: number }) {
   const box = useRef<HTMLDivElement>(null);
   const sheets = useRef<(HTMLCanvasElement | null)[]>([]);

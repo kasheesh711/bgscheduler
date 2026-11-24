@@ -65,8 +65,8 @@ describe("InterviewerBrief", () => {
     for (const { part, items } of RUBRIC) {
       expect(page).toContain(part);
       for (const [, label] of items) {
-        expect(page).toContain(`<legend>${label}</legend>`);
-        expect(page).toContain(`aria-label="Guide: what each score means for ${label}">Guide</summary>`);
+        expect(page).toContain(`role="radiogroup" aria-label="${label}"`);
+        expect(page).toContain(`aria-label="${label}: what each level means"`);
       }
     }
     expect(page.match(/type="radio"/g)).toHaveLength(ITEM_MAX * RUBRIC_ITEMS.length + 2);
@@ -74,7 +74,10 @@ describe("InterviewerBrief", () => {
     expect(page).not.toContain("Suggested score");
     expect(page).toContain("School&#x27;s required checks completed");
     expect(page).toContain("0 of 14 scored");
-    expect(page).toContain("Interviewer guide");
+    // The level names show once, above the bars, and no level text shows until the head opens an item.
+    expect(page.split("Needs improvement (4)")).toHaveLength(2);
+    expect(page).not.toContain("All information provided is accurate");
+    expect(page).toContain("Question bank");
     expect(page).toContain("19% on their most recent physics test");
     expect(page).toContain("Send scores");
     expect(page).not.toContain("Scores sent");
@@ -121,6 +124,17 @@ describe("InterviewerBrief", () => {
     );
     expect(page).toMatch(/<p role="status"[^>]*>Sending recommendation…<\/p>/);
     expect(page).toMatch(/<textarea[^>]*\bdisabled=""/);
+  });
+
+  it("shows the résumé score in parts only when the candidate has one, and the paper tab only with a graded paper", () => {
+    const page = html({ ats: { score: 72.5, parts: [{ name: "Degree", earned: 7.5, max: 15 }, { name: "University", earned: 15, max: 15 }], penalty: 5 }, gradedPaper: true });
+    expect(page).toContain("<strong>72.5/100</strong>");
+    expect(page).toContain(">7.5/15<");
+    expect(page).toContain(">−5<");
+    expect(page).toContain(">Paper</button>");
+    expect(html()).not.toContain("ATS score");
+    expect(html()).not.toContain(">Paper</button>");
+    expect(html({ ats: { score: 80, parts: [], penalty: 0 } })).not.toContain("Work rights");
   });
 
   it("gives one message for a dead link", () => {

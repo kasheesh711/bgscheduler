@@ -1,0 +1,399 @@
+/* The interviewer's brief: one wide score sheet with the candidate's files beside it. Colours come from .page in booking.module.css. */
+.wrap {
+  display: grid;
+  gap: 16px;
+  width: 100%;
+  max-width: 1560px;
+  margin: 0 auto;
+  padding: 16px 12px 0;
+}
+.top,
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+}
+.top {
+  display: grid;
+  gap: 16px;
+  padding: 16px 20px;
+}
+.eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.name {
+  margin: 0 0 8px;
+  font-family: var(--serif);
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 24px;
+  margin: 0;
+}
+.facts dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.facts dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+/* ATS score: one small bar for each part. */
+.ats {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+.atsHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+}
+.atsHead strong {
+  font-family: var(--mono);
+  font-size: 22px;
+}
+.atsParts {
+  display: grid;
+  gap: 4px 20px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+.atsParts li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px auto;
+  gap: 8px;
+  align-items: center;
+}
+.atsParts .num {
+  font-family: var(--mono);
+}
+.atsBar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--line);
+}
+.atsBar > span {
+  display: block;
+  height: 100%;
+  background: var(--ink-2);
+}
+.penalty {
+  color: var(--err);
+}
+
+.cols {
+  display: grid;
+  gap: 16px;
+  align-items: start;
+}
+.sheet {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.panel {
+  padding: 16px 20px;
+}
+.panel:focus {
+  outline: none;
+}
+.panelTitle {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* Score rows: the level names show once, above the bars. */
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px 12px;
+  align-items: center;
+  padding: 2px 0;
+}
+.scale {
+  display: none;
+  grid-template-columns: 2fr 3fr 3fr 2fr;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: center;
+}
+.part {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.part > legend {
+  padding: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.item {
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.item:hover {
+  text-decoration: underline;
+}
+.barLine {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2ch;
+  gap: 10px;
+  align-items: center;
+}
+.bar {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 3px;
+}
+.cell {
+  position: relative;
+  height: 28px;
+  border-radius: 4px;
+  background: var(--line);
+  cursor: pointer;
+}
+/* The gap after 2, 5 and 8 marks where one level ends. */
+.cell:is(:nth-child(2), :nth-child(5), :nth-child(8)) {
+  margin-right: 4px;
+}
+.cell:hover {
+  background: #cfc5b0;
+}
+.cell:has(input:focus-visible) {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.bar[data-band="0"] .cell[data-on] {
+  background: var(--err);
+}
+.bar[data-band="1"] .cell[data-on] {
+  background: #c9861a;
+}
+.bar[data-band="2"] .cell[data-on] {
+  background: #3a62ad;
+}
+.bar[data-band="3"] .cell[data-on] {
+  background: var(--ok);
+}
+.value {
+  font-family: var(--mono);
+  font-weight: 600;
+  text-align: right;
+}
+.levels {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--paper);
+  font-size: 14px;
+}
+.levels dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.levels dd {
+  margin: 0;
+}
+.ticks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  align-items: center;
+  padding-bottom: 6px;
+  font-size: 14px;
+}
+.ticks label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-height: 32px;
+}
+.extra {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.choices {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.choices legend {
+  float: left;
+  margin-right: 12px;
+  padding: 0;
+}
+.choice {
+  /* Holds the hidden radio, so it cannot add height to the document. */
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 64px;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+}
+.choice:has(input:checked) {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+.choice:has(input:focus-visible) {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.sendEnd {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+.total {
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 600;
+}
+
+/* Candidate files */
+.docs {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.tabs {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.tab {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tab[aria-pressed="true"] {
+  background: var(--ink);
+  color: #fff;
+}
+.open {
+  margin-left: auto;
+  padding: 0 8px;
+  font-size: 14px;
+}
+.pane {
+  max-height: 80vh;
+  padding: 12px;
+  overflow-y: auto;
+  background: #ece6d8;
+}
+.pane canvas {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  background: #fff;
+}
+.text {
+  padding: 4px 8px;
+  background: none;
+}
+
+@media (min-width: 700px) {
+  .top {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 440px);
+    align-items: start;
+  }
+  .atsParts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .row {
+    grid-template-columns: minmax(150px, 230px) minmax(0, 1fr);
+  }
+  .scale {
+    display: grid;
+    /* The same column as the bars, less the score number. */
+    margin-right: calc(2ch + 10px);
+  }
+  .levels {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .ticks {
+    grid-column: 2;
+  }
+}
+@media (min-width: 1100px) {
+  .wrap {
+    padding: 16px 20px 0;
+  }
+  .cols {
+    grid-template-columns: minmax(0, 11fr) minmax(0, 9fr);
+  }
+  .docs {
+    position: sticky;
+    top: 16px;
+    height: calc(100dvh - 32px);
+  }
+  .pane {
+    max-height: none;
+  }
+}
+
+/* Forced colours remove backgrounds, so each selected state takes a system colour. */
+@media (forced-colors: active) {
+  .cell {
+    border: 1px solid CanvasText;
+  }
+  .bar .cell[data-on],
+  .tab[aria-pressed="true"],
+  .choice:has(input:checked) {
+    background: Highlight;
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
+}
