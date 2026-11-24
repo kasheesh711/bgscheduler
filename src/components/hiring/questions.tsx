@@ -86,8 +86,7 @@ function Chips<T extends string>({
   off?: readonly T[];
 }) {
   return (
-    // A group with any long label stacks on a narrow phone, so no chip sits alone in a half row (Sol r13).
-    <div className={s.chips} data-stack={choices.some((choice) => (SHORT[choice] ?? choice).length > 16) || undefined}>
+    <div className={s.chips}>
       {choices.map((choice) => (
         <label key={choice} className={s.chip}>
           <input
@@ -306,7 +305,7 @@ export function PreScreenQuestions({
         <Q id="q-english" title="English level">
           <Chips name="english" choices={ANSWER_CHOICES.english} value={english} onChange={setEnglish} disabled={busy} />
           <label className={s.small} htmlFor="english-proof">
-            English proof <small>optional · e.g. IELTS</small>
+            English proof <small>(optional)</small>
           </label>
           <input
             id="english-proof"
@@ -366,8 +365,8 @@ export function PreScreenQuestions({
         {subjects.length > 1 && testChoices.length > 0 && (
           <Q
             id="q-test"
-            title="Test and mock subject"
-            tag="one from above"
+            title="Subject for your test and mock teaching"
+            tag="choose one"
             hint={testable.length && testable.length < subjects.length ? "Greyed: not tested." : undefined}
           >
             <Chips

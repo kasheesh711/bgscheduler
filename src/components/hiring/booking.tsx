@@ -255,7 +255,12 @@ function Picker<T extends { date: string }>({
               <b>
                 {label(w, { day: "numeric" })}–{label(plusDays(w, 6), { day: "numeric" })}
               </b>
-              <span>{label(plusDays(w, 6), { month: "short" })}</span>
+              {/* Both months when the week crosses one (Sol r16). */}
+              <span>
+                {label(w, { month: "short" }) === label(plusDays(w, 6), { month: "short" })
+                  ? label(w, { month: "short" })
+                  : `${label(w, { month: "short" })}–${label(plusDays(w, 6), { month: "short" })}`}
+              </span>
             </button>
           ))}
         </div>
@@ -310,8 +315,13 @@ function Picker<T extends { date: string }>({
           );
         })}
       </div>
-      {/* Under the chosen day, so it is clear which times it speaks for (Sol r11). */}
-      {checkedAt && active && <Live at={checkedAt} live={liveDates.includes(active)} />}
+      {/* The chosen day right above its times, so a time is never chosen without its date in view (Sol r16). */}
+      {active && (
+        <p className={cs.chosenDay}>
+          <b className={cs.dateLabel}>{label(active, { weekday: "long", day: "numeric", month: "long" })}</b>
+          {checkedAt && <Live at={checkedAt} live={liveDates.includes(active)} />}
+        </p>
+      )}
       {PARTS.map((p, n) => {
         const times = shown.filter((i) => hourOf(startOf(i)) < p.until && hourOf(startOf(i)) >= (PARTS[n - 1]?.until ?? 0));
         if (!times.length) return null;
@@ -731,7 +741,7 @@ export function VisitBooking({
                   (
                     [
                       [!start, "choose a test time", "times-start"],
-                      [unchanged, "choose times that differ from your booking", "times-start"],
+                      [unchanged, "change the test time, the mock teaching time, or both", "times-start"],
                       [view.twoDay && !mock, "choose a mock teaching time", "mock-start"],
                       [!onsite, "tick the address box", "check-address"],
                       [!commitment, "tick the Saturday or Sunday box", "check-hours"],
