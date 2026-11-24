@@ -323,7 +323,7 @@ const embed = location.search.includes("embed=1");
 // A new page load of the list starts the fixture fresh.
 if (!embed) { try { localStorage.removeItem("fixture:paper-sent"); } catch {} }
 const PAPER_VIEW = { id: "pc1", name: "Sample Joy", subject: "Physics", head: "Kru Ek", aiPercent: 67.5, passMark: 70, mock: null, updatedAt: "2026-11-24T03:00:00.000Z", done: null, open: true,
-  comment: "Good mechanics. Lost marks on units.", questions: [1, 2, 3, 4].map((n) => ({ id: "q" + n, level: "IGCSE / GCSE", max: 10, marks: n === 4 ? 6 : 7, reason: n === 4 ? "Wrong units in the final answer." : "Method and answer correct." })) };
+  comment: "Good mechanics. Lost marks on units.", questions: [1, 2, 3, 4].map((n) => ({ id: String(n), level: "IGCSE / GCSE", max: 10, marks: n === 4 ? 6 : 7, reason: n === 4 ? "Wrong units in the final answer." : "Method and answer correct." })) };
 const recommendationBlock = briefState === "checking" || briefState === "admin" ? briefState : null;
 const briefFor = new URLSearchParams(location.search);
 const BRIEF = { decision: null, name: briefFor.get("name") ?? "Sample Dao", subject: briefFor.get("subject") ?? "Mathematics", gradedPaper: true, exam: briefFor.get("mock") ? null : "Sat 28 Nov, 10:00–11:30", mock: briefFor.get("mock") ?? "Sat 28 Nov, 12:00–12:45",
@@ -1077,7 +1077,8 @@ try {
     const frameReady = (text) => () => page.frameLocator("iframe").getByText(text).first().waitFor();
     for (const [width, height, size] of [[1440, 900, "desktop"], [1280, 800, "laptop"]]) {
       await at(width, height, "roles=1&me=Ek", `heads-ws-ek-${size}`, frameReady("Sample Joy"));
-      await at(width, height, "roles=1&me=Gift&gift=1&live=1", `heads-ws-gift-${size}`, () => page.getByRole("button", { name: /Read review packet/ }).first().waitFor());
+      // The packet opens by itself beside Gift's decision.
+      await at(width, height, "roles=1&me=Gift&gift=1&live=1", `heads-ws-gift-${size}`, () => page.locator("iframe[title^='Review packet']").waitFor());
     }
     await at(1440, 900, "roles=1&me=Ek", "heads-ws-ek-brief-desktop", async () => {
       await page.getByRole("link", { name: /^Interview brief: .*Reply Low/ }).click();
@@ -1153,7 +1154,7 @@ try {
     const group = (title) => page.locator("section").filter({ has: page.getByRole("heading", { name: new RegExp(`^${title}`) }) });
     for (const [title, name, note] of [
       ["Waiting", "Sample Lek", "Admin checking scores"],
-      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => ["To do", name, "Ask admin to check"]),
+      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => ["To do", name, "to check the scores"]),
     ]) {
       const line = group(title).getByRole("listitem").filter({ hasText: name });
       await line.getByText(note, { exact: true }).waitFor();

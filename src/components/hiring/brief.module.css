@@ -485,7 +485,7 @@
   grid-template-columns: auto 32px auto;
   gap: 6px;
 }
-@media (min-width: 700px) {
+@media (min-width: 1000px) {
   .top[data-compact] {
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;

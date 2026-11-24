@@ -46,8 +46,11 @@ function subscribeToPhoneReader(change: () => void) {
   return () => query.removeEventListener("change", change);
 }
 
-export function FinalReview({ id, signing = false, autoLoad = false, hideHeading = false, approveBlock, rejectBlock, pausedStatus, onChanged }: {
+export function FinalReview({ id, signing = false, autoLoad = false, hideHeading = false, inline = false, approveBlock, rejectBlock, pausedStatus, onChanged }: {
   id: string;
+  /** Gift's Hiring screen: on a wide screen the packet opens at once beside her decision, so she reads and writes together
+   * (Kevin, 24 Nov 2026). Opening it is still what unlocks sign-off. A phone keeps the full-screen reader. */
+  inline?: boolean;
   signing?: boolean;
   autoLoad?: boolean;
   hideHeading?: boolean;
@@ -110,6 +113,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   useEffect(() => {
     if (signedStage) outcome.current?.focus();
   }, [signedStage]);
+  const autoOpened = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (!openPage || !phone) return;
     packetDialog.current?.showModal();
@@ -169,7 +173,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   useEffect(() => {
     if (!openPage) return;
     function onKeyDown(event: KeyboardEvent) {
-      if (!phone && event.key === "Escape" && !event.defaultPrevented) {
+      if (!phone && !inline && event.key === "Escape" && !event.defaultPrevented) {
         event.preventDefault();
         closePacket();
       }
@@ -180,7 +184,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       window.removeEventListener("popstate", closeReader);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [openPage, phone, closeReader, closePacket]);
+  }, [openPage, phone, inline, closeReader, closePacket]);
 
   async function act(body?: ReviewAction) {
     setBusy(body?.action === "sign" ? "sign" : "review");
@@ -234,7 +238,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
     }
   }
 
-  async function readPacket(packetId: string) {
+  async function readPacket(packetId: string, remember = true) {
     setBusy("packet");
     setError(undefined);
     try {
@@ -254,7 +258,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       if (source === html) throw new Error();
       const titleTag = html.match(/<title>[^<]*<\/title>/i)?.[0] ?? "";
       const name = new DOMParser().parseFromString(titleTag, "text/html").title.replace(/^Hiring review \| /, "");
-      window.history.pushState({ hiringReviewPacket: controlId }, "");
+      // The Back button closes a reader the head opened; the packet that opens by itself in Gift's screen has no reader to close.
+      if (remember) window.history.pushState({ hiringReviewPacket: controlId }, "");
       setPacketPage({ id: packetId, html: source, name: name || "candidate" });
     } catch (error) {
       setError({ text: (error instanceof Error && error.message) || "Could not open the packet. Try again.", packetLoad: true });
@@ -304,6 +309,13 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   // Announce readiness when the phone dialog closes and the page is no longer inert.
   const ready = viewed && !sharedBlock && !error?.retry && !(phone && openPage);
   const packetTitle = openPage && `Review packet for ${openPage.name}`;
+  const besideDecision = inline && !phone;
+  useEffect(() => {
+    if (!besideDecision || !packet || stale || !review?.access.gift || openPage || busy || autoOpened.current === packet.id) return;
+    autoOpened.current = packet.id;
+    void readPacket(packet.id, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- readPacket is a plain function; the guard runs it once per packet.
+  }, [besideDecision, packet, stale, review, openPage, busy]);
   const packetFrame = openPage && (
     <iframe title={packetTitle} srcDoc={openPage.html}
       className={phone ? "block h-full min-h-0 w-full border-0" : undefined}
@@ -311,7 +323,9 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       onLoad={() => void checkPacket(openPage.id)} />
   );
   return (
-    <section className={signing ? css.finalReview : `${css.inspectorSection} ${css.finalReview}`} id={`review-${id}`} aria-label={signing ? "Contract signing" : "Final hiring review"}>
+    <section className={signing ? css.finalReview : `${css.inspectorSection} ${css.finalReview}`} id={`review-${id}`} aria-label={signing ? "Contract signing" : "Final hiring review"}
+      data-inline={besideDecision ? "" : undefined}>
+      {besideDecision && openPage && <div className={css.inlinePacket} id={`${controlId}-packet`}>{packetFrame}</div>}
       {!signing && !hideHeading && <h3 className={css.inspectorHeading}>Final hiring review</h3>}
       {!review && !error && (autoLoad || busy
         ? <p className={css.inspectorMeta} role="status">Loading the review…</p>
@@ -325,14 +339,14 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       </>}
       {!signing && review && packet && (
         <div className={`${css.decisionActions} ${css.packetActions}`}>
-          {review.access.gift ? (
+          {besideDecision && openPage ? null : review.access.gift ? (
             <button type="button" className={viewed ? css.secondary : css.primary} ref={readButton} disabled={stale && awaitingSignOff} aria-expanded={!!openPage} aria-disabled={!!busy || !!openPage || (stale && awaitingSignOff)}
               aria-controls={openPage ? `${controlId}-packet` : undefined}
               onClick={() => { if (!busy && !openPage) void readPacket(packet.id); }}>{viewed ? "Read packet again" : "Read review packet"}</button>
           ) : <a className={css.secondary} href={`${url}?file=html`} target="_blank" rel="noreferrer">Read review packet</a>}
           {busy === "packet" && <p role="status" className={css.inspectorMeta}>Opening packet…</p>}
           {error?.packetLoad && <p role="alert" className={css.errorText}>{error.text}</p>}
-          {openPage && (phone ? (
+          {openPage && !besideDecision && (phone ? (
             <dialog ref={packetDialog} id={`${controlId}-packet`} aria-label={packetTitle}
               className="fixed inset-0 m-0 h-dvh max-h-none w-full max-w-none grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-0 bg-white p-0 open:grid"
               onCancel={(event) => { event.preventDefault(); closePacket(); }}>

@@ -137,15 +137,14 @@ summary.groupTitle { min-height: 44px; cursor: pointer; }
 .skip:focus { position: static; align-self: flex-start; padding: 8px 12px; border-radius: 8px; background: var(--role-navy); color: #fff; font-weight: 600; }
 .pane:focus-visible { outline: 2px solid var(--role-navy); outline-offset: -2px; }
 .workspace .count { font-size: 13px; }
-/* Gift's review: the decision on the left, the candidate's résumé on the right. */
-@media (min-width: 1200px) {
-  .reviewPane { display: grid; grid-template-columns: minmax(360px, 5fr) minmax(0, 6fr); gap: 24px; align-items: start; }
-}
 .reviewMain { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.reviewResume { min-width: 0; }
-.reviewResume iframe { width: 100%; height: calc(100dvh - 160px); }
 .itemAction { color: var(--warn); font-size: 15px; font-weight: 700; }
 .item[aria-current="true"] .itemAction { color: #ffd9a8; }
 :global(.dark) .item[aria-current="true"] .itemAction { color: var(--warn); }
-.reviewResume a, .paneFacts a { display: inline-flex; align-items: center; min-height: 44px; color: var(--role-navy); }
-:global(.dark) :is(.reviewResume, .paneFacts) a { color: var(--ink); }
+.paneFacts a { display: inline-flex; align-items: center; min-height: 44px; color: var(--role-navy); }
+:global(.dark) .paneFacts a { color: var(--ink); }
+/* A closed group shows it can open. */
+summary.groupTitle { list-style: none; }
+summary.groupTitle::-webkit-details-marker { display: none; }
+summary.groupTitle::after { content: "▸"; margin-left: auto; color: var(--muted); font-family: var(--sans); font-size: 14px; }
+details[open] > summary.groupTitle::after { content: "▾"; }

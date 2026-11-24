@@ -450,6 +450,7 @@
 .subjectPicker input, .subjectChecks input, .checkList input { accent-color: var(--ink); }
 .fieldLabel { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; color: var(--muted); }
 .textarea { width: 100%; padding: 6px 8px; resize: vertical; }
+.textarea:disabled { background: var(--tint); color: var(--muted); cursor: not-allowed; }
 .decisionActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .callActions { flex-wrap: nowrap; white-space: nowrap; }
 .surface .primary, .surface .secondary { padding: 6px 14px; border-radius: 999px; font-weight: 500; transition: background-color 150ms; }
@@ -838,3 +839,12 @@
 @media (min-width: 1200px) { .widestOnly { display: table-cell; } }
 /* Lower-value columns (pre-screen score, university, flags, updated) leave room for Next action and Owner below 1360px. */
 @media (min-width: 720px) and (max-width: 1359px) { .surface .xwide { display: none; } }
+
+/* Gift's review in her Hiring screen: her decision on the left, the packet open on the right (Kevin, 24 Nov 2026).
+   The last row is flexible, so the tall packet does not spread the controls apart. */
+@media (min-width: 720px) {
+  .finalReview[data-inline] { display: grid; grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); grid-template-rows: repeat(20, auto) 1fr; column-gap: 24px; align-content: start; }
+  .finalReview[data-inline] > * { grid-column: 1; }
+  .finalReview[data-inline] > .inlinePacket { grid-column: 2; grid-row: 1 / -1; }
+}
+.inlinePacket iframe { display: block; width: 100%; height: calc(100dvh - 150px); min-height: 480px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }

@@ -83,7 +83,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
       <>
         {header}
         <p role="status" className={outcome === "rejected" || view.done?.passed === false ? c.notice : c.success}>
-          {outcome ? RESULT[outcome] : `${view.done!.head}'s check is recorded: ${view.done!.percent}%, ${view.done!.passed ? "pass" : "not passed"}.`}
+          {outcome ? `Marks saved: ${percent}%. ${RESULT[outcome]}` : `${view.done!.head}'s check is recorded: ${view.done!.percent}%, ${view.done!.passed ? "pass" : "not passed"}.`}
         </p>
       </>
     );
@@ -112,7 +112,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
                 <label htmlFor={`q-${q.id}`} className={k.label}>Question {q.id}</label>
                 <span className={k.level}>{q.level}</span>
               </div>
-              {q.reason && <p className={k.reason}>AI: {q.reason}</p>}
+              {q.reason && <p id={`q-${q.id}-ai`} className={k.reason}>AI: {q.reason}</p>}
               <div className={k.markRow}>
                 <input
                   id={`q-${q.id}`}
@@ -124,9 +124,10 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
                   step={0.5}
                   value={marks[q.id]}
                   aria-invalid={bad.includes(q) || undefined}
+                  aria-describedby={[q.reason && `q-${q.id}-ai`, `q-${q.id}-max`].filter(Boolean).join(" ")}
                   onChange={(event) => setMarks({ ...marks, [q.id]: event.target.value })}
                 />
-                <span className={k.max}>of {q.max}{q.marks !== null && ` · AI gave ${q.marks}`}</span>
+                <span id={`q-${q.id}-max`} className={k.max}>of {q.max}{q.marks !== null && ` · AI gave ${q.marks}`}</span>
               </div>
             </li>
           ))}

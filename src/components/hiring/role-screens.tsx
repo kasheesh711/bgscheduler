@@ -485,12 +485,13 @@ function visitItem(visit: ReturnType<typeof headVisit>, today: string): HeadItem
       ...(scored && !decision && !due ? [{ text: "Scores sent", tone: "hire" as const }] : []),
       ...(decision ? [{ text: `Recommendation: ${decision.decision === "hire" ? "Yes" : "No"}`, tone: decision.decision }] : []),
     ],
-    action: due && open ? (scored ? "Recommend Yes or No" : "Score mock") : undefined,
+    action: due && open ? (scored ? "Recommend Yes or No" : "Score mock")
+      : !checkingScores && (needsCheck || (mock && !path && !status && missingOutcome)) ? "Ask admin" : undefined,
     note: checkingScores ? "Admin checking scores"
-      : needsCheck ? "Ask admin to check"
-      : mock && !path && !status ? (missingOutcome ? "Ask admin to record" : "No brief yet.")
+      : needsCheck ? "to check the scores"
+      : mock && !path && !status ? (missingOutcome ? "to record the outcome" : "No brief yet.")
       : path && !active ? "The interview brief is closed."
-      : candidate?.resumeState === "none" ? "No résumé file is stored."
+      : candidate?.resumeState === "none" ? "No résumé"
       : candidate?.resumeState === "deleted" ? "The résumé file was deleted."
       : null,
     href: open ? (due ? `${path}#${scored ? "recommendation" : "scores"}` : path) : null,
@@ -550,7 +551,7 @@ function ItemPane({ item, data, readOnly, reload }: { item: HeadItem; data: Hiri
   // Only Gift signs. A preview or another account sees the facts and the résumé.
   if (item.review && data.reviewAccess?.gift && !readOnly) {
     return (
-      <div className={`${r.paneFacts} ${r.reviewPane}`}>
+      <div className={r.paneFacts}>
         <div className={r.reviewMain}>
           <h2 className={r.paneName}>{item.name}</h2>
           <p className={r.meta}>
@@ -558,10 +559,9 @@ function ItemPane({ item, data, readOnly, reload }: { item: HeadItem; data: Hiri
             {item.review.head} · {item.review.reason || "No reason given"}
           </p>
           {item.review.draftProblem && <p className={r.warn}>No email draft yet: {item.review.draftProblem}</p>}
-          <FinalReview id={item.review.candidateId!} autoLoad hideHeading {...reviewBlocks(data.writeGate, data.config, item.review.candidateId!)}
+          <FinalReview id={item.review.candidateId!} autoLoad hideHeading inline {...reviewBlocks(data.writeGate, data.config, item.review.candidateId!)}
             onChanged={reload && (async () => reload())} />
         </div>
-        {item.candidate && <div className={r.reviewResume}><ResumePeek candidate={item.candidate} months={data.config.resumeRetentionMonths} /></div>}
       </div>
     );
   }
@@ -613,6 +613,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const choose = (value: string) => {
     setChosen(value);
     setPicked(null);
+    setShown(null);
     if (readOnly) return;
     try {
       window.localStorage.setItem(HEAD_KEY, value);
@@ -706,7 +707,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const found = picked ? all.find((item) => item.id === picked) : undefined;
   const keep = shown && (!picked || picked === shown.id) ? all.find((item) => item.id === shown.id) ?? shown : undefined;
   // On arrival: the first job that needs the head, else the next mock, else the first row.
-  const selected = found ?? keep ?? (wide ? all.find((item) => item.urgent) ?? nextItem ?? all[0] : undefined);
+  const selected = wide ? found ?? keep ?? all.find((item) => item.urgent) ?? nextItem ?? all[0] : found;
   if ((selected?.id ?? null) !== (shown?.id ?? null)) setShown(selected ?? null);
   const paneId = useId();
   const name = key ? headName(key, data.tutors) : null;

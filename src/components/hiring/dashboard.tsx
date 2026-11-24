@@ -132,6 +132,8 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
   const [busy, setBusy] = useState(false);
   const search = useSearchParams();
   const param = search.get("view");
+  // ?head=Ek: staff open that head's screen as the head sees it.
+  const headParam = search.get("head");
   // Demo mode (?demo=1): a made-up candidate, and every hiring request is answered in the browser. See demo.ts.
   const demo = search.get("demo") === "1";
   // Before any child effect can send a request. The call does nothing after the first time.
@@ -147,7 +149,7 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
   const giftOnly = !!data?.reviewAccess?.gift && !data.reviewAccess.hr;
   const linkedReview = data?.reviewAccess?.gift ? reviewLink : undefined;
   // Gift's review email link opens her Heads screen with that review open, when she is a head; else the review screen.
-  const view: HiringView = giftOnly && linkedReview ? ((data?.viewerHead ?? head) ? "heads" : "review") : param && Object.hasOwn(VIEWS, param) ? (param as HiringView) : (data?.viewerHead ?? head ?? search.get("head")) ? "heads" : "overview";
+  const view: HiringView = giftOnly && linkedReview ? ((data?.viewerHead ?? head) ? "heads" : "review") : param && Object.hasOwn(VIEWS, param) ? (param as HiringView) : (data?.viewerHead ?? head ?? headParam) ? "heads" : "overview";
   const giftReview = view === "review" && giftOnly;
   const loaded = !!data;
   // Next.js keeps useSearchParams in step with pushState, and this does not reload the page.
@@ -162,14 +164,14 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
     if (demo || hash === null || (reviewLink && (!loaded || giftOnly))) return;
     if (isRoleView(param)) return remember(param);
     // A signed-in head always opens on their own list, never on a role screen the browser saved.
-    if (param || head) return;
+    if (param || head || headParam) return;
     try {
       const saved = window.localStorage.getItem(ROLE_KEY);
       if (isRoleView(saved)) window.history.replaceState(null, "", `?view=${saved}`);
     } catch {
       // As in remember().
     }
-  }, [demo, param, hash, reviewLink, loaded, giftOnly, head]);
+  }, [demo, param, hash, reviewLink, loaded, giftOnly, head, headParam]);
   const [selected, setSelected] = useState<string | null>(null);
   const [assessmentVisit, setAssessmentVisit] = useState<string | null>(null);
   // The candidate whose résumé viewer is open. It loads the file only on request.
