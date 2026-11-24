@@ -17,6 +17,7 @@ const brief = {
   resume: "pdf",
   rubric: null,
   form: "open",
+  mockEnded: true,
 } as unknown as Parameters<typeof InterviewerBrief>[0]["brief"];
 const html = (patch: Partial<typeof brief> = {}) =>
   renderToStaticMarkup(<InterviewerBrief brief={{ ...brief, ...patch }} resumeUrl="/api/hiring/brief/t/resume" rubricUrl="/api/hiring/brief/t/rubric" decisionUrl="/api/hiring/brief/t/decision" />);
@@ -50,11 +51,17 @@ describe("InterviewerBrief", () => {
     expect(html({ answers: null })).toContain("no pre-screen reply");
   });
 
-  it("shows the score form only after the mock ends, with score choices for each item", () => {
-    const wait = html({ form: "wait" });
-    expect(wait).toContain("Scores open after the mock.");
+  it("shows the score form before and during the mock, and the recommendation only after it, with score choices for each item", () => {
+    const wait = html({ form: "wait", mockEnded: false });
+    expect(wait).toContain('type="radio"');
+    expect(wait).toContain("Your recommendation opens when the mock ends.");
+    expect(wait).not.toContain("Yes, send for final review");
     expect(wait.indexOf("Check again")).toBeLessThan(wait.indexOf("Candidate files"));
-    expect(wait).not.toContain('type="radio"');
+    // Closed early by admin: no "ask admin" alarm, the same wait for the recommendation.
+    const closedEarly = html({ form: "closed", mockEnded: false, recommendationBlock: null });
+    expect(closedEarly).not.toContain("Ask BeGifted admin");
+    expect(closedEarly).toContain("Your recommendation opens when the mock ends.");
+    expect(closedEarly).not.toContain("Yes, send for final review");
     const closed = html({ form: "closed", recommendationReady: true });
     expect(closed).toContain("Scores are recorded. Ask admin to edit scores.");
     expect(closed).not.toContain('type="radio"');
