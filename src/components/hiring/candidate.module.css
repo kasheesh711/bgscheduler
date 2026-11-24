@@ -76,8 +76,10 @@
   font-size: 15px;
   font-weight: 650;
   line-height: 1.35;
+  text-wrap: balance;
 }
 .qTitle small {
+  white-space: nowrap;
   margin-left: 6px;
   font-size: 13px;
   font-weight: 500;
@@ -737,17 +739,12 @@
   color: var(--muted);
 }
 
-/* Questions still open, as jump links in the desktop rail. */
+/* The next open question as a jump link, in the bar on a phone and in the rail on a wide screen (Opus r10). */
 .open {
-  display: none;
-}
-@media (min-width: 1024px) {
-  .open {
-    display: block;
-    font-size: 13px;
-    line-height: 1.7;
-    color: var(--muted);
-  }
+  display: block;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--muted);
 }
 .rules span:not([data-ok]) {
   color: var(--muted);
@@ -1004,26 +1001,34 @@
   text-transform: uppercase;
   color: var(--muted);
 }
+/* Same look as the day row: month above a large day number. */
 .dateWeek {
   display: grid;
   justify-items: center;
   align-content: center;
-  min-height: 48px;
+  gap: 2px;
+  min-height: 56px;
   min-width: 0;
-  padding: 4px 2px;
+  padding: 6px 2px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 14px;
   background: #fff;
   color: var(--ink);
-  font-size: 14px;
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
   cursor: pointer;
 }
 .dateWeek span {
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--muted);
+}
+.dateWeek b {
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 .dateWeek[aria-pressed="true"] {
   border-color: var(--ink);
@@ -1074,5 +1079,22 @@
   }
   .chip[data-long] {
     grid-column: 1 / -1;
+  }
+}
+
+/* The wide ticket: test and mock teaching side by side (Opus r10). */
+@media (min-width: 640px) {
+  .legs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 24px;
+  }
+  .legs .zone {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 359px) {
+  .chip {
+    justify-content: center;
+    text-align: center;
   }
 }

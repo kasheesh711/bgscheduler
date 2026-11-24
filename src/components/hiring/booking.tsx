@@ -227,7 +227,8 @@ function Picker<T extends { date: string }>({
               aria-label={`Week of ${label(w, { day: "numeric", month: "long" })}`}
               onClick={() => setWeek(w)}
             >
-              {label(w, { day: "numeric", month: "short" })}
+              <span>{label(w, { month: "short" })}</span>
+              <b>{label(w, { day: "numeric" })}</b>
             </button>
           ))}
         </div>
@@ -325,7 +326,7 @@ const VisitPlan = () => (
     </li>
     <li>
       <b>Mock teaching</b>
-      <span>1 hour</span>
+      <span>1 hour, only if you pass</span>
     </li>
   </ol>
 );
@@ -367,7 +368,7 @@ function Checks({
   return (
     <div className={c.checks}>
       {row("check-address", onsite, setOnsite, "I will come to this address.")}
-      {row("check-hours", commitment, setCommitment, "I can teach onsite on weekends and a weekday from 15:00.")}
+      {row("check-hours", commitment, setCommitment, "I can teach onsite on a Saturday or Sunday and a weekday from 15:00.")}
     </div>
   );
 }
@@ -470,7 +471,7 @@ export function VisitBooking({
               <>
                 <Steps at={0} />
                 <VisitPlan />
-                <p className={c.note}>Book both times now. You teach the mock lesson only if you pass the test.</p>
+                <p className={c.note}>After these questions, book both times. They can be on different days.</p>
               </>
             }
           />
@@ -487,7 +488,8 @@ export function VisitBooking({
       <Layout
         top={
           <>
-            {view.twoDay && <Steps at={view.visit ? (moving ? 2 : 3) : 1} />}
+            {/* While moving, the candidate is choosing times again (Opus r10). */}
+            {view.twoDay && <Steps at={view.visit && !moving ? 3 : 1} />}
             {saved && <Saved>{saved}</Saved>}
             <div className={c.facts}>
               <Fact icon={<BookOpen aria-hidden />} label="Subject">
@@ -542,12 +544,7 @@ export function VisitBooking({
                         <b>{short(view.visit.mockStart)}</b>
                         <small>
                           {time(view.visit.mockStart)}–{time(view.visit.mockEnd)}
-                          {view.visit.head && (
-                            <>
-                              {" · "}
-                              <span className={cs.nowrap}>{view.visit.head}</span>
-                            </>
-                          )}
+                          {view.visit.head && <span className={cs.nowrap}>{` · ${view.visit.head}`}</span>}
                         </small>
                         <small>If you pass the test</small>
                       </div>
@@ -619,7 +616,7 @@ export function VisitBooking({
                 <h2 className={c.stepTitle} id="mock-wait">
                   Mock teaching time
                 </h2>
-                <p className={c.note}>1 hour, if you pass.</p>
+                <p className={c.note}>1 hour, if you pass. Its times show once you choose a test time.</p>
               </section>
             )}
             {showForm && view.twoDay && slot && (
@@ -669,7 +666,7 @@ export function VisitBooking({
                       [unchanged, "choose times that differ from your booking", "times-start"],
                       [view.twoDay && !mock, "choose a mock teaching time", "mock-start"],
                       [!onsite, "tick the address box", "check-address"],
-                      [!commitment, "tick the teaching hours box", "check-hours"],
+                      [!commitment, "tick the Saturday or Sunday box", "check-hours"],
                     ] as [boolean, string, string][]
                   )
                     .filter(([open]) => open)

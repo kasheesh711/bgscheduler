@@ -178,9 +178,10 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
     setFocus([nd, nh]);
     e.currentTarget.closest("[data-week-grid]")?.querySelector<HTMLButtonElement>(`[data-cell="${nd},${nh}"]`)?.focus();
   }
-  // A quick fill only adds hours (Opus r4: one selected style on the page); Clear and drag remove them.
+  // A quick fill adds its hours; when all of them are in, a second tap removes them (Opus r10).
   function preset(p: (typeof PRESETS)[number]) {
-    paint(p.days.flatMap((d) => p.hours.map((h) => [d, h] as [number, number])), true);
+    const cells = p.days.flatMap((d) => p.hours.map((h) => [d, h] as [number, number]));
+    paint(cells, !cells.every((cell) => has(current.current, ...cell)));
   }
   const count = weekHoursCount(value);
   const weekend = value[5].length + value[6].length > 0;
@@ -197,7 +198,8 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
               type="button"
               className={s.preset}
               data-full={full || undefined}
-              aria-label={`Add ${p.label.toLowerCase()}: ${p.title}${full ? " (added)" : ""}`}
+              aria-pressed={full}
+              aria-label={`${full ? "Remove" : "Add"} ${p.label.toLowerCase()}: ${p.title}`}
               title={p.title}
               disabled={disabled}
               onClick={() => preset(p)}
@@ -280,7 +282,6 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
           </p>
         )}
         {/* The line is always there, so the grid below never moves when the first hour is chosen. */}
-        {count === 0 && !undo && <p className={s.readline} aria-hidden />}
         {count === 0 && undo && (
           <p className={s.readline}>
             <span>Cleared.</span>

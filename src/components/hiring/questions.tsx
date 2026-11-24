@@ -15,7 +15,7 @@ const ART: Subject = "Art & Design Technology";
 // Shorter words on the chips (Fable r1). The stored value stays the Google Form's text, which the import and scoring read.
 const SHORT: Record<string, string> = {
   "IB (MYP/ DP)": "IB",
-  "British (IGCSE/ GCSE/ A-level)": "British (IGCSE, A-level)",
+  "British (IGCSE/ GCSE/ A-level)": "British (IGCSE, A‑level)",
   "American (US High School/ AP)": "American (AP)",
   "Thai National Curriculum": "Thai national",
   "Year 2-6 (Primary)": "Year 2–6",
@@ -355,14 +355,14 @@ export function PreScreenQuestions({
                 {fileNote}
               </p>
             )}
-            {text("Public portfolio link", portfolio, setPortfolio, 500, "A link that opens without a password")}
+            {text("Portfolio link", portfolio, setPortfolio, 500, "A link that opens without a password")}
           </Q>
         )}
         {subjects.length > 1 && testChoices.length > 0 && (
           <Q
             id="q-test"
             title="Test and mock teaching subject"
-            tag="choose one"
+            tag="pick one from above"
             hint={testable.length && testable.length < subjects.length ? "Greyed: no test now." : undefined}
           >
             <Chips
@@ -383,7 +383,7 @@ export function PreScreenQuestions({
         </Q>
       </Section>
       <Section title="When you can teach onsite">
-        <Q id="q-hours" title="Tap the hours you can teach, or hold and drag">
+        <Q id="q-hours" title="Tap your hours, or hold and drag">
           <WeekGrid value={week} onChange={setWeek} disabled={busy} />
         </Q>
         <Q id="q-weekly" title="Weekly hours you can commit">
@@ -411,7 +411,7 @@ export function PreScreenQuestions({
             <>
               <div className={s.progress}>
                 <span>
-                  {answered} of {done.length} answered
+                  {answered}/{done.length} answered
                 </span>
                 <span className={s.progressBar} aria-hidden>
                   <i style={{ width: `${(answered / done.length) * 100}%` }} />

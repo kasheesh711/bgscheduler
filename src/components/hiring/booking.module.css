@@ -69,6 +69,8 @@
 }
 .title {
   margin-top: 18px;
+  /* Lining figures, so "R1" never reads as "Rı" in Cormorant (Opus r10). */
+  font-variant-numeric: lining-nums;
   font-family: var(--serif);
   font-size: clamp(38px, 9vw, 56px);
   font-weight: 500;
@@ -935,5 +937,19 @@ input[type="file"].input {
 @media (max-width: 359px) {
   .title {
     font-size: 34px;
+  }
+}
+
+/* A bar that ends the card fills to the card's bottom edge: no rule over an empty strip (Opus r10). */
+@media (max-width: 1023px) {
+  .card > [data-wide-layout]:last-child [data-confirm]:last-child {
+    margin-bottom: -22px;
+    border-bottom: 0;
+    border-radius: 0 0 24px 24px;
+  }
+}
+@media (min-width: 640px) and (max-width: 1023px) {
+  .card > [data-wide-layout]:last-child [data-confirm]:last-child {
+    margin-bottom: -32px;
   }
 }
