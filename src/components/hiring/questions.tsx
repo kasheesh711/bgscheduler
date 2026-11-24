@@ -160,7 +160,7 @@ export function PreScreenQuestions({
     }
   }
   // Subjects a visit can be in come first; the rest open on request (Mobbin: Meetup "popular" first, Bumble "show more").
-  const first = testSubjects.length ? SUBJECTS.filter((v) => testSubjects.includes(v)) : [...SUBJECTS];
+  const first = testSubjects.length ? testSubjects.filter((v) => SUBJECTS.includes(v)) : [...SUBJECTS];
   const rest = SUBJECTS.filter((v) => !first.includes(v));
   const showRest = moreOpen || subjects.some((v) => rest.includes(v));
   // The test subject is one of the ticked subjects that a visit can be in; with none of those, any ticked subject.
@@ -191,8 +191,8 @@ export function PreScreenQuestions({
     ["q-english", "English level", !!answers.english],
     ["q-experience", "Experience", !!answers.experience],
     ["q-subjects", "Subjects", subjects.length > 0],
-    // Asked only when there is a choice; one testable subject is chosen for the candidate.
-    ...(testChoices.length > 1 ? [["q-test", "Test subject", !!test] as [string, string, boolean]] : []),
+    // Always counted, so the total stays 11; asked only when there is a choice (one subject is chosen for the candidate).
+    [testChoices.length > 1 ? "q-test" : "q-subjects", "Test subject", !!test],
     ["q-curricula", "Curricula", curricula.length > 0],
     ["q-years", "Year groups", yearGroups.length > 0],
     ["q-hours", "Teaching hours", weekHoursCount(week) > 0],
@@ -288,10 +288,13 @@ export function PreScreenQuestions({
         )}
         <Q id="q-english" title="English level">
           <Chips name="english" choices={ANSWER_CHOICES.english} value={english} onChange={setEnglish} disabled={busy} />
+          <label className={s.small} htmlFor="english-proof">
+            English proof <small>optional</small>
+          </label>
           <input
+            id="english-proof"
             className={c.input}
-            aria-label="Proof of your English level (optional)"
-            placeholder="Proof, e.g. IELTS 8.0 (optional)"
+            placeholder="e.g. IELTS 8.0"
             value={englishEvidence}
             maxLength={500}
             disabled={busy}
@@ -341,12 +344,8 @@ export function PreScreenQuestions({
         {testChoices.length > 1 && (
           <Q
             id="q-test"
-            title="Your test subject"
-            hint={
-              testable.length && testable.length < subjects.length
-                ? "Choose one. Only the subjects we test in now are listed."
-                : "Choose one. Your test and mock lesson are in it."
-            }
+            title="Subject for your test and mock lesson"
+            hint="Choose one. You take the test and teach the mock lesson in this subject."
           >
             <Chips name="testSubject" choices={testChoices} value={chosenTest} onChange={setTestSubject} disabled={busy} />
           </Q>
@@ -362,7 +361,7 @@ export function PreScreenQuestions({
         <Q id="q-hours" title="Hours you can teach onsite" hideTitle>
           <WeekGrid value={week} onChange={setWeek} disabled={busy} />
         </Q>
-        <Q id="q-weekly" title="Hours a week">
+        <Q id="q-weekly" title="Hours you can commit each week">
           <Chips name="weeklyHours" choices={ANSWER_CHOICES.weeklyHours} value={weeklyHours} onChange={setWeeklyHours} disabled={busy} />
         </Q>
       </Section>

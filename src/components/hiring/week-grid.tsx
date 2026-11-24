@@ -1,14 +1,29 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { Check, Plus } from "lucide-react";
 import { GRID_HOURS, hourRanges, WEEK_DAYS, weekHoursCount, type WeekHours } from "@/lib/hiring/week-hours";
 import s from "./candidate.module.css";
 
+/** "Mon–Fri 17–21 · Sat 09–10, 11–12": days with the same hours next to each other are said once (Opus r4). */
+export function readback(week: WeekHours) {
+  const text = week.map((hours) => hourRanges(hours).replaceAll(":00", "").replace(/-/g, "–").replace(/ & /g, ", "));
+  const out: string[] = [];
+  for (let d = 0; d < 7; ) {
+    let e = d;
+    while (e + 1 < 7 && text[e + 1] === text[d]) e++;
+    if (text[d]) out.push(`${WEEK_DAYS[d]}${e > d ? `–${WEEK_DAYS[e]}` : ""} ${text[d]}`);
+    d = e + 1;
+  }
+  return out.join(" · ");
+}
+
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const HOLD_MS = 350;
+const SLOP = 8;
 const hh = (hour: number) => `${String(hour).padStart(2, "0")}:00`;
 const range = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => from + i);
-// Quick fills (Mobbin: User Interviews working-hours presets). A second tap on a full preset clears it.
+// Quick fills (Mobbin: User Interviews working-hours presets). They only add hours.
 const PRESETS = [
   { label: "After school", days: [0, 1, 2, 3, 4], hours: range(15, 17), title: "Monday to Friday, 15:00 to 17:00" },
   { label: "Weeknights", days: [0, 1, 2, 3, 4], hours: range(17, 21), title: "Monday to Friday, 17:00 to 21:00" },
@@ -46,23 +61,51 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
     const cell = el?.closest<HTMLElement>("[data-cell]");
     return cell ? (cell.dataset.cell!.split(",").map(Number) as [number, number]) : null;
   };
-  function down(e: PointerEvent<HTMLDivElement>) {
-    const cell = cellOf(e.target as Element);
-    if (!cell || disabled || e.button > 0) return;
-    e.preventDefault();
+  // A finger first: a tap chooses one hour, a quick swipe scrolls the page (cells allow vertical panning), and a hold
+  // starts a drag (code review r4: a full-width grid must not trap the page's scroll on a phone). A mouse or pen drags at once.
+  const pending = useRef<{ cell: [number, number]; x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  function start(cell: [number, number], target: Element | null) {
     const fill = !has(current.current, ...cell);
     // The default focus of a pressed button can scroll the page; focus it without that.
-    (e.target as HTMLElement).closest<HTMLElement>("[data-cell]")?.focus({ preventScroll: true });
+    target?.closest<HTMLElement>("[data-cell]")?.focus({ preventScroll: true });
     drag.current = { fill, from: cell, before: current.current };
     setFocus(cell);
     paint([cell], fill);
-    // Touch already sends the moves to this element; capture keeps a mouse drag that leaves the grid.
+  }
+  function down(e: PointerEvent<HTMLDivElement>) {
+    const cell = cellOf(e.target as Element);
+    if (!cell || disabled || e.button > 0) return;
+    if (e.pointerType === "touch") {
+      const target = e.target as Element;
+      pending.current = {
+        cell,
+        x: e.clientX,
+        y: e.clientY,
+        timer: setTimeout(() => {
+          pending.current = null;
+          start(cell, target);
+          navigator.vibrate?.(8);
+        }, HOLD_MS),
+      };
+      return;
+    }
+    e.preventDefault();
+    start(cell, e.target as Element);
+    // Capture keeps a mouse drag that leaves the grid.
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {}
   }
   function move(e: PointerEvent<HTMLDivElement>) {
+    const wait = pending.current;
+    if (wait) {
+      // Moved before the hold: this is a scroll, not a choice.
+      if (Math.hypot(e.clientX - wait.x, e.clientY - wait.y) > SLOP) cancel();
+      return;
+    }
     if (!drag.current) return;
+    // A mouse released outside the window leaves no pointerup here.
+    if (e.pointerType === "mouse" && e.buttons === 0) return up();
     const cell = cellOf(document.elementFromPoint(e.clientX, e.clientY));
     if (!cell) return;
     const { fill, from, before } = drag.current;
@@ -81,9 +124,34 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
     current.current = next;
     onChange(next);
   }
-  const up = () => {
+  function up() {
+    const wait = pending.current;
+    if (wait) {
+      // A tap: one hour on or off.
+      clearTimeout(wait.timer);
+      pending.current = null;
+      setFocus(wait.cell);
+      paint([wait.cell], !has(current.current, ...wait.cell));
+      return;
+    }
     drag.current = null;
-  };
+  }
+  function cancel() {
+    if (pending.current) clearTimeout(pending.current.timer);
+    pending.current = null;
+    drag.current = null;
+  }
+  // While a held drag runs, the finger paints instead of scrolling the page.
+  const gridRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    const stop = (e: TouchEvent) => {
+      if (drag.current && e.cancelable) e.preventDefault();
+    };
+    grid.addEventListener("touchmove", stop, { passive: false });
+    return () => grid.removeEventListener("touchmove", stop);
+  }, []);
   function key(e: KeyboardEvent<HTMLButtonElement>, d: number, h: number) {
     const moves: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
     if (e.key === " " || e.key === "Enter") {
@@ -99,31 +167,23 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
     setFocus([nd, nh]);
     e.currentTarget.closest("[data-week-grid]")?.querySelector<HTMLButtonElement>(`[data-cell="${nd},${nh}"]`)?.focus();
   }
+  // A quick fill only adds hours (Opus r4: one selected style on the page); Clear and drag remove them.
   function preset(p: (typeof PRESETS)[number]) {
-    const cells = p.days.flatMap((d) => p.hours.map((h) => [d, h] as [number, number]));
-    paint(cells, !cells.every((c) => has(value, ...c)));
+    paint(p.days.flatMap((d) => p.hours.map((h) => [d, h] as [number, number])), true);
   }
   const count = weekHoursCount(value);
   const weekend = value[5].length + value[6].length > 0;
   const late = value.slice(0, 5).some((hours) => hours.some((h) => h >= 15));
   return (
     <div className={s.week}>
-      <p className={s.hint}>Tap or drag. Start on a filled hour to clear.</p>
+      <p className={s.hint}>Tap an hour to choose it. To fill or clear a block, hold, then drag.</p>
       <div className={s.presets} role="group" aria-label="Quick fill">
-        {PRESETS.map((p) => {
-          const on = p.days.every((d) => p.hours.every((h) => has(value, d, h)));
-          return (
-            <button key={p.label} type="button" className={s.preset} aria-pressed={on} aria-label={`${p.label}: ${p.title}`} title={p.title} disabled={disabled} onClick={() => preset(p)}>
-              {on && <Check aria-hidden size={14} />}
-              {p.label}
-            </button>
-          );
-        })}
-        {count > 0 && (
-          <button type="button" className={s.clear} disabled={disabled} onClick={() => onChange(WEEK_DAYS.map(() => []))}>
-            Clear
+        {PRESETS.map((p) => (
+          <button key={p.label} type="button" className={s.preset} aria-label={`Add ${p.label.toLowerCase()}: ${p.title}`} title={p.title} disabled={disabled} onClick={() => preset(p)}>
+            <Plus aria-hidden size={14} />
+            {p.label}
           </button>
-        )}
+        ))}
       </div>
       <div
         className={s.grid}
@@ -133,9 +193,9 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
         aria-disabled={disabled || undefined}
         onPointerDown={down}
         onPointerMove={move}
+        ref={gridRef}
         onPointerUp={up}
-        onPointerCancel={up}
-        onLostPointerCapture={up}
+        onPointerCancel={cancel}
       >
         <span aria-hidden />
         {WEEK_DAYS.map((day, d) => (
@@ -168,7 +228,12 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
       </div>
       <div className={s.readback} aria-live="polite">
         {count > 0 && (
-          <p>{value.flatMap((hours, d) => (hours.length ? [`${WEEK_DAYS[d]} ${hourRanges(hours).replaceAll(":00", "").replace(/-/g, "–")}`] : [])).join(" · ")}</p>
+          <p className={s.readline}>
+            <span>{readback(value)}</span>
+            <button type="button" className={s.clear} disabled={disabled} onClick={() => onChange(WEEK_DAYS.map(() => []))}>
+              Clear
+            </button>
+          </p>
         )}
         <p className={s.rules}>
           {/* What the booking asks for: a note to add, then a tick once the grid has it (Sol r2: not radio-like). */}
@@ -180,7 +245,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
             {late ? <Check aria-hidden size={14} /> : <Plus aria-hidden size={14} />}
             {late ? "A weekday after 15:00" : "Add a weekday after 15:00"}
           </span>
-          {count > 0 && <b>{count} hours a week</b>}
+          {count > 0 && <b>{count} hours available</b>}
         </p>
       </div>
     </div>

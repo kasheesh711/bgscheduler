@@ -24,6 +24,10 @@ describe("profileDegree (the résumé's degree for the one-tap confirm)", () => 
     expect(read("BACHELOR OF ARTS Assumption University Finished 2021")).toBeNull();
     expect(read("Bachelor of Science University of Mines and Technology")).toBeNull();
   });
+  it("does not read a professional doctorate as a PhD", () => {
+    expect(read("Doctor of Medicine (MD), Mahidol University")).toBeNull();
+    expect(read("Doctor of Veterinary Medicine (DVM) Bahauddin Zakariya University")).toBeNull();
+  });
   it("ignores a degree that is not complete, and reads nothing from no assessment", () => {
     expect(read(["MSc in Physics, in progress", false], "B.Sc. Mathematics, Mandalay")).toEqual({ degree: "Bachelor's", field: "Mathematics" });
     expect(profileDegree(null)).toBeNull();

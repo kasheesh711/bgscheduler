@@ -35,6 +35,7 @@ const view = (patch = {}) => ({
   knownDegree: null as { degree: "Bachelor's" | "Master's" | "PhD"; field: string } | null,
   testSubjects: [] as "Mathematics"[],
   timeRuleMet: false,
+  liveDates: ["2026-11-03"] as string[],
   ...patch,
 });
 const page = (patch = {}) => renderToStaticMarkup(<VisitBooking token="t" view={view(patch)} reload={async () => {}} />);
@@ -84,7 +85,9 @@ describe("VisitBooking", () => {
     expect(html).not.toContain("Peat");
     // The live-check line shows only when the list came from a live Wise read.
     expect(html).not.toContain("checked live");
-    expect(page({ checkedAt: "2026-11-02T02:05:00.000Z" })).toContain("Next 5 days checked live, 09:05");
+    expect(page({ checkedAt: "2026-11-02T02:05:00.000Z" })).toContain("Checked live, 09:05");
+    // A day outside the live read never says "checked live".
+    expect(page({ checkedAt: "2026-11-02T02:05:00.000Z", liveDates: ["2026-11-04"] })).not.toContain("Checked live");
   });
   it("shows the notice and the LINE contact, and no form, for an empty list or a stale snapshot", () => {
     const html = page({ slots: [], notice: `Times cannot be shown. Contact BeGifted on LINE: ${LINE}` });

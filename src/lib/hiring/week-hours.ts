@@ -69,7 +69,8 @@ export function parseWeekHours(text: string): WeekHours | null {
       }
     }
   }
-  return week;
+  // Hand-edited text can repeat or reorder hours.
+  return week.map((hours) => [...new Set(hours)].sort((a, b) => a - b));
 }
 
 /** Whole hours chosen in the week. */

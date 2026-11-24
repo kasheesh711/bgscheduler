@@ -78,6 +78,12 @@ export function profileDegree(assessment: Pick<Assessment, "universities"> | nul
       if (rank >= bestRank) return;
       const match = text.match(word) ?? text.match(abbreviation);
       if (!match || match.index === undefined) return;
+      // A professional doctorate (medicine, pharmacy, veterinary, dental) is not a PhD: ask the questions instead.
+      if (degree === "PhD" && /doctor of (?:medicine|pharmacy|veterinary|dental|optometry)|\b(?:MD|PharmD|DVM|DDS)\b/i.test(text)) {
+        bestRank = rank;
+        best = null;
+        return;
+      }
       const field = fieldAfter(text.slice(match.index + match[0].length));
       // The highest level decides. Its field must be known, or the line is not a confirmation.
       bestRank = rank;

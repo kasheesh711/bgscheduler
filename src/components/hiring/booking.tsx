@@ -90,7 +90,7 @@ export function VisitConfirm({
       {missing && !error && <p className={c.note}>Still needed: {missing}.</p>}
       {error && (
         <p role="alert" className={c.alert}>
-          {error}
+          <Linked text={error} />
         </p>
       )}
       <button type="button" className={c.button} disabled={disabled} onClick={onConfirm}>
@@ -118,7 +118,7 @@ const Fact = ({ icon, label, children }: { icon: ReactNode; label: string; child
 );
 
 /** When the times were checked against live Wise. Nothing shows when the list came from the Wise copy. */
-const Live = ({ at }: { at: string | null }) => (at ? <span className={c.live}>Next 5 days checked live, {time(at)}</span> : null);
+const Live = ({ at }: { at: string | null }) => (at ? <span className={c.live}>Checked live, {time(at)}</span> : null);
 
 const NOON = (date: string) => `${date}T12:00:00+07:00`;
 const plusDays = (date: string, n: number) => new Date(Date.parse(NOON(date)) + n * 86_400_000).toISOString().slice(0, 10);
@@ -149,7 +149,10 @@ function Picker<T extends { date: string }>({
   compact,
   initialDate,
   zoneNote = true,
+  liveDates = [],
 }: {
+  /** The dates the live Wise read covered; only these say "checked live". */
+  liveDates?: string[];
   /** "Bangkok time" under the week; said once on a page with two lists. */
   zoneNote?: boolean;
   /** The day to open on, such as the booked test day while moving. */
@@ -185,7 +188,7 @@ function Picker<T extends { date: string }>({
     <fieldset className={c.step} id={id} tabIndex={-1}>
       <legend className={c.stepHead}>
         <span className={c.stepTitle}>{legend}</span>
-        <Live at={checkedAt && days.slice(0, 5).includes(active) ? checkedAt : null} />
+        <Live at={checkedAt && liveDates.includes(active) ? checkedAt : null} />
       </legend>
       {hint && <p className={c.note}>{hint}</p>}
       {weeks.length > 1 && (
@@ -233,6 +236,7 @@ function Picker<T extends { date: string }>({
                 <label key={keyOf(item)} className={cs.time}>
                   <input type="radio" name={legend} className={c.hidden} checked={selected === keyOf(item)} onChange={() => onSelect(item)} />
                   {tile(item)}
+                  <Check aria-hidden size={16} className={cs.timeCheck} />
                 </label>
               ))}
             </div>
@@ -244,10 +248,11 @@ function Picker<T extends { date: string }>({
 }
 
 /** Bring a part of the page into view, smoothly unless the candidate asked for less motion. */
-export function reveal(id: string, focus = false) {
+export function reveal(id: string, focus = false, tries = 20) {
   requestAnimationFrame(() => {
     const el = document.getElementById(id);
-    if (!el) return;
+    // The part may render a frame or two after a reload.
+    if (!el) return void (tries > 0 && reveal(id, focus, tries - 1));
     el.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     if (focus) el.focus({ preventScroll: true });
   });
@@ -284,7 +289,7 @@ const VisitPlan = () => (
 );
 
 /** Questions → Times → Booked, so a candidate always sees where they are. */
-function Steps({ at }: { at: 0 | 1 | 2 }) {
+function Steps({ at }: { at: 0 | 1 | 2 | 3 }) {
   return (
     <ol className={cs.steps} aria-label="Steps">
       {["Questions", "Times", "Booked"].map((name, i) => (
@@ -373,8 +378,8 @@ export function VisitBooking({
       await reload();
       setSaved(
         view.visit
-          ? "Your visit has moved. The new times are below. A confirmation email and calendar invitations will follow."
-          : "Your visit is confirmed. The details are below. A confirmation email and calendar invitations will follow.",
+          ? "Moved. Email and calendar invites are on their way."
+          : "Booked. Email and calendar invites are on their way.",
       );
       setMoving(false);
       setStart("");
@@ -426,7 +431,6 @@ export function VisitBooking({
             }
           />
         )}
-        <Help />
       </>
     );
   const short = (value: string) => part(value, { weekday: "short", day: "numeric", month: "short" });
@@ -435,7 +439,7 @@ export function VisitBooking({
       <Layout
         top={
           <>
-            {view.twoDay && <Steps at={view.visit ? 2 : 1} />}
+            {view.twoDay && <Steps at={view.visit ? (moving ? 2 : 3) : 1} />}
             {saved && <Saved>{saved}</Saved>}
             <div className={c.facts}>
               <Fact icon={<BookOpen aria-hidden />} label="Subject">
@@ -470,6 +474,10 @@ export function VisitBooking({
                     <span>{part(view.visit.examStart, { weekday: "short" })}</span>
                     <b>{part(view.visit.examStart, { day: "numeric" })}</b>
                     <span>{part(view.visit.examStart, { month: "short" })}</span>
+                    {/* A two-day visit shows its second day on the stub too (Opus r4). */}
+                    {view.visit.mockStart && short(view.visit.mockStart) !== short(view.visit.examStart) && (
+                      <i className={cs.stubSecond}>+ {part(view.visit.mockStart, { day: "numeric", month: "short" })}</i>
+                    )}
                   </div>
                   <div className={cs.legs}>
                     <div>
@@ -481,11 +489,11 @@ export function VisitBooking({
                     </div>
                     {view.visit.mockStart && view.visit.mockEnd && (
                       <div>
-                        <span>Mock teaching, if you pass</span>
+                        <span>Mock teaching</span>
                         <b>{short(view.visit.mockStart)}</b>
                         <small>
                           {time(view.visit.mockStart)}–{time(view.visit.mockEnd)}
-                          {view.visit.head && ` · ${view.visit.head}`}
+                          {view.visit.head && ` · ${view.visit.head}`} · if you pass
                         </small>
                       </div>
                     )}
@@ -524,9 +532,11 @@ export function VisitBooking({
             {showForm && (
               <Picker
                 id="times-start"
+                hint={view.twoDay ? "2 hours" : undefined}
                 initialDate={view.visit ? part(view.visit.examStart, { year: "numeric", month: "2-digit", day: "2-digit" }).split("/").reverse().join("-") : undefined}
                 legend={view.visit ? "New test time" : view.twoDay ? "Test time" : "Choose a time"}
                 checkedAt={view.checkedAt}
+                liveDates={view.liveDates}
                 items={view.slots}
                 keyOf={(s) => s.examStart}
                 startOf={(s) => s.examStart}
@@ -551,7 +561,7 @@ export function VisitBooking({
                 <h2 className={c.stepTitle} id="mock-wait">
                   Mock teaching time
                 </h2>
-                <p className={c.note}>Choose a test time first.</p>
+                <p className={c.note}>1 hour, if you pass. Choose a test time first.</p>
               </section>
             )}
             {showForm && view.twoDay && slot && (
@@ -559,7 +569,7 @@ export function VisitBooking({
                 zoneNote={false}
                 id="mock-start"
                 legend="Mock teaching time"
-                hint="Monday to Friday, after your test"
+                hint="1 hour, if you pass · Monday to Friday, after your test"
                 checkedAt={null}
                 items={laterMocks}
                 keyOf={(m) => m.start}
@@ -579,6 +589,7 @@ export function VisitBooking({
           showForm && (
             <>
               <Checks onsite={onsite} commitment={commitment} setOnsite={setOnsite} setCommitment={setCommitment} />
+              {moving && <p className={c.note}>This is your one move.</p>}
               {keep}
               <VisitConfirm
                 error={error}
@@ -684,7 +695,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
         <Fact icon={contract ? <FileSignature aria-hidden /> : <Video aria-hidden />} label={contract ? "Contract signing" : "R1: HR Interview"}>
           {view.minutes} minutes {contract ? "with our team" : "on Google Meet with our HR team"}
         </Fact>
-        {view.kind === "contract" ? <Fact icon={<MapPin aria-hidden />} label="Where">{view.location}</Fact> : <p className={c.note}>A video call. Google Calendar sends you an invitation with the Google Meet link. All times are Bangkok time.</p>}
+        {view.kind === "contract" ? <Fact icon={<MapPin aria-hidden />} label="Where">{view.location}</Fact> : <p className={c.note}>Google Calendar sends you the Google Meet link.</p>}
       </div>
       {view.call && (
         <section>
@@ -797,7 +808,18 @@ export const BookingLoading = () => (
   </div>
 );
 
-export function BookingShell({ kind, children, bare = false }: { kind?: "visit" | "mock" | "paper" | "brief" | "call" | "contract" | "onboarding" | "paper-check"; children: ReactNode; bare?: boolean }) {
+export function BookingShell({
+  kind,
+  children,
+  bare = false,
+  booked = false,
+}: {
+  kind?: "visit" | "mock" | "paper" | "brief" | "call" | "contract" | "onboarding" | "paper-check";
+  children: ReactNode;
+  bare?: boolean;
+  /** Booked: the title says "Your …", not "Book your …". */
+  booked?: boolean;
+}) {
   return (
     <main className={c.page} data-brief={kind === "brief" || kind === "paper-check" ? "" : undefined} data-bare={bare ? "" : undefined}>
       {/* `bare`: the page is open inside the head's Hiring screen, which has its own header. */}
@@ -805,7 +827,7 @@ export function BookingShell({ kind, children, bare = false }: { kind?: "visit" 
         <div className={c.heroInner}>
           <p className={c.brand}>BeGifted Education</p>
           <h1 className={c.title}>
-            {kind === "onboarding" ? "Tutor " : kind === "brief" ? "Interview " : kind === "paper-check" ? "Paper " : kind ? "Book your " : "Your "}
+            {kind === "onboarding" ? "Tutor " : kind === "brief" ? "Interview " : kind === "paper-check" ? "Paper " : kind && !booked ? "Book your " : "Your "}
             <em>{kind === "onboarding" ? "onboarding" : kind === "brief" ? "brief" : kind === "paper-check" ? "check" : kind === "contract" ? "contract signing" : kind === "call" ? "R1: HR Interview" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "booking"}</em>
           </h1>
         </div>
@@ -897,7 +919,7 @@ export function HiringBooking({ token }: { token: string }) {
     !!old && subjects.some((subject) => old.bookings.some((booking) => booking.kind === old.kind && booking.subjects.includes(subject)));
   const form = !!old && old.enabled && !selectionBooked;
   return (
-    <BookingShell kind={view?.kind}>
+    <BookingShell kind={view?.kind} booked={!!view && (("visit" in view && !!view.visit) || ("call" in view && !!view.call))}>
       {/* With the form on the page, the error shows above its button. */}
       {error && !form && (
         <p role="alert" className={c.alert}>
@@ -912,7 +934,8 @@ export function HiringBooking({ token }: { token: string }) {
           <BookingLoading />
         )
       ) : view.kind === "visit" ? (
-        <VisitBooking token={token} view={view} reload={() => load()} />
+        // A new key when the questions give way to the times, so the times start from the fresh view (code review r4).
+        <VisitBooking key={view.waiting ?? "times"} token={token} view={view} reload={() => load()} />
       ) : (view.kind === "call" || view.kind === "contract") ? (
         <CallBooking token={token} view={view} reload={() => load()} />
       ) : (

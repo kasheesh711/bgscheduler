@@ -33,6 +33,15 @@ describe("week hours (the booking page grid)", () => {
     expect(weekHoursSchema.safeParse([[21], [], [], [], [], [], []]).success).toBe(false);
     expect(weekHoursSchema.safeParse([[], [], [], [], [], []]).success).toBe(false);
   });
+  it("sorts and de-duplicates hand-edited text", () => {
+    expect(parseWeekHours("Weekdays: Mon 13:00-14:00 & 10:00-11:00 & 10:00-12:00")?.[0]).toEqual([10, 11, 13]);
+  });
+  it("needs a weekday hour that starts at 15:00 or later: one that ends at 15:00 does not count", () => {
+    const config = configSchema.parse({ acceptedWorkRights: ["yes"], interviewers: [] });
+    const stops = (week: number[][]) => hardStops(pre(weekHoursText(week)), "yes", ["Mathematics"], config).stops;
+    expect(stops([[12, 13, 14], [], [], [], [], [9], []])).toContain("Needs a weekend day and a weekday after 15:00.");
+    expect(stops([[12, 13, 14, 15], [], [], [], [], [9], []])).not.toContain("Needs a weekend day and a weekday after 15:00.");
+  });
   it("is not confused with a Google Form answer", () => {
     expect(parseWeekHours("Weekday Evening (17:00-21:00), Weekend Morning (before 12:00)")).toBeNull();
     expect(parseWeekHours("Weekdays: Sat 09:00-10:00")).toBeNull();
@@ -59,5 +68,7 @@ describe("week hours (the booking page grid)", () => {
     expect(old(weekHoursText([[17, 18], [], [], [], [], [9], []]))).toEqual({ weekend: true, weekdayLate: true });
     expect(old(weekHoursText([[9, 10], [], [], [], [], [], [9]]))).toEqual({ weekend: true, weekdayLate: false });
     expect(old(weekHoursText([[17], [], [], [], [], [], []]))).toEqual({ weekend: false, weekdayLate: true });
+    // Known gap until the Mac worker runs this code: the old reader sees "15:00" at the end of a 12:00-15:00 range as late.
+    expect(old(weekHoursText([[12, 13, 14], [], [], [], [], [9], []])).weekdayLate).toBe(true);
   });
 });

@@ -231,10 +231,6 @@
   font-weight: 550;
   cursor: pointer;
 }
-.preset[aria-pressed="true"] {
-  border-color: var(--ink);
-  background: #eef1f7;
-}
 .clear {
   border-color: transparent;
   background: transparent;
@@ -282,7 +278,9 @@
   border-radius: 8px;
   background: #fff;
   cursor: pointer;
-  touch-action: none;
+  /* A finger can still scroll the page up and down over the grid; a hold starts a drag (week-grid.tsx). */
+  touch-action: pan-y;
+  -webkit-touch-callout: none;
   transition: background 0.08s;
 }
 .cell[data-weekend] {
@@ -467,7 +465,9 @@
   border-color: var(--line);
   background: #fff;
 }
-.date[aria-pressed="true"] {
+/* Stronger than the hover rule, so the chosen day stays navy under the pointer. */
+.date[aria-pressed="true"],
+.date:not(:disabled)[aria-pressed="true"]:hover {
   border-color: var(--ink);
   background: var(--ink);
   color: #fbf7ee;
@@ -769,4 +769,45 @@
 
 .booked h2:focus {
   outline: none;
+}
+
+.small {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.small small {
+  margin-left: 4px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.readline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.readline .clear {
+  flex: none;
+  min-height: 44px;
+  padding: 0 4px;
+}
+.stubSecond {
+  margin-top: 6px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+.timeCheck {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: none;
+}
+.time:has(input:checked) .timeCheck {
+  display: block;
 }

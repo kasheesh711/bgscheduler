@@ -1790,6 +1790,7 @@ export async function visitView(token: string, db: Database = getDb(), now = new
         .filter((p) => p.hiring && config.interviewers.some((i) => i.subjects.includes(p.subject)))
         .map((p) => p.subject) as Subject[],
       timeRuleMet: false,
+      liveDates: [] as string[],
     };
   const { subject, rows } = await openVisit(db, cap, config, now);
   const enabled = bookable(config, cap.id);
@@ -1853,6 +1854,8 @@ export async function visitView(token: string, db: Database = getDb(), now = new
     testSubjects: [] as Subject[],
     // The saved answers already give a weekend hour and a weekday hour from 15:00: the page ticks that box for the candidate.
     timeRuleMet: !!candidate.preScreen && meetsTimeRule(candidate.preScreen.availability),
+    // The dates the live Wise read covered (liveForList): the page says "checked live" on these only (code review r4).
+    liveDates: live ? businessDates(now, config.holidays, 5) : ([] as string[]),
   };
 }
 
