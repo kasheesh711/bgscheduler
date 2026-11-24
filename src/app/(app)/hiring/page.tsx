@@ -16,9 +16,16 @@ async function Body() {
       redirect("/login?callbackUrl=%2Fhiring");
     return <p className="p-6">Hiring access is required.</p>;
   }
-  // A head sees their own screen while the data loads, not the full dashboard (Kevin, 24 Nov 2026).
-  const { config } = await settings(getDb());
-  return <HiringDashboard head={await headKeyFor(email, headKeys(config))} />;
+  // A head sees their own screen while the data loads, not the full dashboard (Kevin, 24 Nov 2026). This is a
+  // shortcut only: if the settings cannot be read here, the dashboard still opens and reports the problem itself.
+  let head: string | null = null;
+  try {
+    const { config } = await settings(getDb());
+    head = await headKeyFor(email, headKeys(config));
+  } catch (error) {
+    console.error("[hiring] head shortcut skipped", error instanceof Error ? error.name : "UnknownError");
+  }
+  return <HiringDashboard head={head} />;
 }
 export default function Page() {
   return (
