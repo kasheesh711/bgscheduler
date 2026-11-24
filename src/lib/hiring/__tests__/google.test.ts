@@ -114,6 +114,8 @@ it("titles a visit's two private events, and only the mock invites the head", as
   // A paper row outside a visit (old flow, delivery test) keeps no staff guests.
   await deliverCalendar({ ...row("paper", "00000000-0000-4000-8000-000000000004", null), visitId: null }, candidate, "BeGifted", db, false, heads);
   expect(events[2].attendees).toEqual([{ email: "candidate@example.com" }]);
+  // Visit events are free time, so HR as a guest keeps the R1 call times. The old-flow paper stays busy.
+  expect(events.map((e) => e.transparency)).toEqual(["transparent", "transparent", undefined]);
   expect(String(events[1].description)).toContain("Candidate");
 });
 
@@ -133,6 +135,7 @@ it("adds staff to an existing mock once, preserving guests and their responses",
   expect(fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1);
   expect(new Headers(fetcher.mock.calls.find(([, init]) => init?.method === "PATCH")?.[1].headers).get("if-match")).toBe("version-1");
   expect(event.attendees[0]).toEqual({ email: "candidate@example.com", responseStatus: "accepted" });
+  expect((event as { transparency?: string }).transparency).toBe("transparent");
   expect(event.attendees.map(a => a.email)).toContain("people@begiftededucation.com");
 });
 
