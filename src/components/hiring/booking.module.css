@@ -781,6 +781,12 @@ input[type="file"].input {
   color: var(--muted);
   text-align: center;
 }
+/* The LINE link is a full 44 px target, also when it stands alone on its line (Sol r29). */
+.help a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
 
 /* Booked visit: a ticket. */
 .ticket {
