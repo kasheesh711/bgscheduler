@@ -57,7 +57,7 @@ const isOnsiteInvite = sql`${o.payload}->>'workflowStage' = 'onsite_invited' and
 /** Every release, click and follow-up takes this one lock, so they cannot share out the same place. */
 export const lockQueue = (tx: Database) => tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-queue'))`);
 // Rows queued while delivery is paused would all leave in one delivery call, so nothing is queued then.
-export const allowed = (config: HiringConfig) =>
+const allowed = (config: HiringConfig) =>
   config.enabled && config.deliveryEnabled && config.rubricApproved && runtimeWritesAllowed();
 
 /**
@@ -207,9 +207,7 @@ export function replyCheck(
 ): { kind: "hold"; reason: string } | { kind: "wait" } | { kind: "ready"; subject: Subject; score: number } {
   const hold = (reason: string) => ({ kind: "hold" as const, reason });
   const { preScreen: pre, preScreenAssessment: assessment, workRightsAnswer: answer } = candidate;
-  // The AI score is not a gate while the pass score is 0, so an unscored answer from the booking page can pass (Kevin,
-  // 24 Nov 2026). The onsite queue still reads scored rows only.
-  if (!pre || (!assessment && config.preScreenThreshold !== 0)) return { kind: "wait" };
+  if (!pre || !assessment) return { kind: "wait" };
   // In either direction: after a person changes the score, only the Invite button can send the visit email.
   if (candidate.preScreenOverride) return hold("A person changed this score. A person decides.");
   const { stops } = hardStops(pre, answer, normalizeSubjects(pre.subjects), config);
@@ -224,7 +222,7 @@ export function replyCheck(
   if (candidate.preScreenRepliedAt < sentAt) return hold("This response is older than the form send. A person decides.");
   if (!["pre_screen", "no_reply"].includes(candidate.stage)) return hold("This stage needs a person to decide.");
   if (config.preScreenThreshold === null) return { kind: "wait" };
-  const score = assessment ? preScreenTotal(candidate, config) : 0;
+  const score = preScreenTotal(candidate, config);
   if (score < config.preScreenThreshold)
     return hold(`The pre-screen score ${score} is below the pass score ${config.preScreenThreshold}.`);
   // Opening the subject or adding a head cures this.

@@ -78,7 +78,8 @@ describe("preScreenEmail with a visit link (Next steps)", () => {
       expect(part).not.toContain(PRE_SCREEN_URL);
       expect(part).toContain(visit);
       expect(part).toContain("which subject you want to be tested on");
-      expect(part).toContain("we email you when booking opens");
+      expect(part).toContain("Then you choose your two times on the same page");
+      expect(part).not.toMatch(/when booking opens/i);
       // Two-day visit (Kevin, 24 Nov 2026): the test first, the mock teaching on a later day. No HR interview.
       expect(part).toContain("the test first, and the mock teaching on the same day or a later day");
       expect(part).not.toContain("HR");

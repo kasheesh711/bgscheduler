@@ -4,7 +4,7 @@ import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
 import { answerPreScreen, questionsOpen, bookCall, bookContract, contractView, bookInterview, bookingView, bookVisit, callView, visitView } from "@/lib/hiring/service";
 import { portfolioUploadHandler } from "@/lib/hiring/portfolio";
 import { readBookingToken } from "@/lib/hiring/tokens";
-import { deliverBookingMessages, deliverVisitInvite } from "@/lib/hiring/worker";
+import { deliverBookingMessages } from "@/lib/hiring/worker";
 export const maxDuration = 120;
 const headers = {
   "Cache-Control": "private, no-store",
@@ -46,12 +46,10 @@ export async function POST(
     // The token step of the portfolio upload, from the browser to private storage, while the questions are open.
     if (visit && body?.type === "blob.generate-client-token")
       return NextResponse.json(await portfolioUploadHandler(request, body, await questionsOpen(token)), { headers });
-    // The questions step of a "Next steps" link. The page reloads the view, which shows the times or the reason for none.
+    // The questions step of a "Next steps" link. The page reloads the view, which then shows the times.
     if (visit && body && typeof body === "object" && "answers" in body) {
-      const { opened, candidateId } = await answerPreScreen(token, body.answers);
-      // The "booking is open" email leaves at once, so the candidate holds the link and the weekly count stays true.
-      if (opened) after(() => deliverVisitInvite(candidateId));
-      return NextResponse.json({ opened }, { headers });
+      await answerPreScreen(token, body.answers);
+      return NextResponse.json({ ok: true }, { headers });
     }
     const book = visit ? bookVisit : kind === "call" ? bookCall : kind === "contract" ? bookContract : bookInterview;
     const booking = await book(token, body);

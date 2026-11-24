@@ -775,16 +775,6 @@ export async function visitHead(db: Database, booking: typeof s.hiringBookings.$
 }
 
 /** Booking and final review messages can leave without the Mac. The cron retries failures. */
-/** Sends the one invitation that `answerPreScreen` queued. The worker's cycle sends it if this fails. */
-export async function deliverVisitInvite(candidateId: string, db: Database = getDb()) {
-  try {
-    const { config } = await settings(db);
-    return await deliverOutbox(db, config, 1, false, `${candidateId}:visit-invite`);
-  } catch (error) {
-    console.error("Hiring visit invitation delivery failed", error instanceof Error ? error.name : "UnknownError");
-    return 0;
-  }
-}
 export async function deliverBookingMessages(db: Database = getDb()) {
   try {
     const { config } = await settings(db);

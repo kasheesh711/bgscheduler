@@ -30,7 +30,7 @@ const view = (patch = {}) => ({
   checkedAt: null as string | null,
   twoDay: false,
   mockSlots: [] as { date: string; start: string; end: string }[],
-  waiting: null as "answers" | "checking" | "held" | null,
+  waiting: null as "answers" | null,
   portfolioPath: null as string | null,
   ...patch,
 });
@@ -45,9 +45,6 @@ describe("VisitBooking", () => {
       expect(html).toContain(question);
     expect(html).toContain("1 hour, if you pass");
     expect(html).not.toContain("I will attend onsite");
-    const checking = page({ waiting: "checking", slots: [], enabled: false, subject: "", notice: "Thank you for your answers. We are checking them now." });
-    expect(checking).toContain("We are checking them now");
-    expect(checking).not.toContain("Answer the pre-screening questions");
   });
   it("a two-day link asks for the test time first and says the mock teaching is on the same day or a later day", () => {
     const html = page({ twoDay: true, mockSlots: [{ date: "2026-11-03", start: "2026-11-03T04:00:00.000Z", end: "2026-11-03T05:00:00.000Z" }] });

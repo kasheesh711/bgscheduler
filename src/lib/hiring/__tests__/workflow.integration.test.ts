@@ -868,6 +868,42 @@ describe("hiring workflow persistence", () => {
       expect(notices).toHaveLength(1);
       expect(notices[0].notice).toBe("booked");
     });
+    it("a Next steps link asks for the answers first, then books whatever they say, also after a hard stop moved the candidate to review (Kevin, 24 Nov 2026)", async () => {
+      // Kevin: the answers never gate booking, but the candidate answers first. The subject comes from the answers, else from the CV.
+      const real = await vi.importActual<typeof import("../availability")>("../availability");
+      vi.mocked(availableSlots).mockImplementation((...args) => real.availableSlots(...args));
+      await setVisit();
+      const unanswered = await invited({ stage: "pre_screen", visitSubject: null, preScreen: null, preScreenAssessment: null, preScreenRepliedAt: null });
+      const morningsOnly = { ...pre, availability: "Weekday Morning (before 12:00), Weekend Morning (before 12:00)" };
+      const stopped = await invited({ stage: "review", visitSubject: null, preScreen: morningsOnly, reviewNote: "Needs a weekend day and a weekday after 15:00." });
+      // Before any answer the page asks the questions, and a booking is refused with the same words.
+      const early = bookingToken(unanswered.id, "two-day", unanswered.inviteExpiresAt!);
+      expect(await visitView(early, db)).toMatchObject({ waiting: "answers", slots: [] });
+      await expect(bookVisit(early, choice("2026-11-07T03:00:00.000Z", { mockStart: "2026-11-09T03:00:00.000Z" }), db))
+        .rejects.toMatchObject({ status: 409, message: expect.stringMatching(/answer the questions on this page first/) });
+      // Answers that name no usable subject: the CV subject is used.
+      await db.update(s.hiringCandidates).set({ preScreen: { ...pre, subjects: "", testSubject: undefined } }).where(eq(s.hiringCandidates.id, unanswered.id));
+      for (const row of [unanswered, stopped]) {
+        const token = bookingToken(row.id, "two-day", row.inviteExpiresAt!);
+        const view = await visitView(token, db);
+        expect(view).toMatchObject({ waiting: null, subject: "Mathematics", enabled: true });
+        // The first test time, and the first mock hour on a later day.
+        const test = view.slots[0];
+        const mock = view.mockSlots.find((slot) => slot.date > test.examStart.slice(0, 10))!;
+        await bookVisit(token, choice(test.examStart, { mockStart: mock.start }), db);
+        expect(await read(row.id)).toMatchObject({ stage: "onsite_booked", visitSubject: "Mathematics" });
+        // The booked visit shows on the same link, as for any invited candidate.
+        expect((await visitView(token, db)).visit).not.toBeNull();
+      }
+      // After a cancel, staff can send a new link with no passing answers: it keeps the visit's subject.
+      await click(unanswered.id, "cancel_visit");
+      expect((await read(unanswered.id)).stage).toBe("no_booking");
+      await click(unanswered.id, "send_new_link");
+      expect(await read(unanswered.id)).toMatchObject({ stage: "onsite_invited", visitSubject: "Mathematics" });
+      // A paper-only link is not a Next steps link: it still needs a person's invitation.
+      const other = await invited({ stage: "pre_screen", visitSubject: null });
+      await expect(visitView(bookingToken(other.id, "paper-visit", other.inviteExpiresAt!), db)).rejects.toMatchObject({ status: 404 });
+    });
     it("a two-day link books the test (a Sunday too) and the mock teaching on a later weekday, and a counted fail cancels that mock", async () => {
       // Kevin, 24 Nov 2026: the test, Monday to Sunday, then the final-round mock teaching, Monday to Friday, booked together.
       const real = await vi.importActual<typeof import("../availability")>("../availability");
