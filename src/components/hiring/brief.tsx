@@ -92,7 +92,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   };
   useEffect(() => {
     if (checking || asked.current === null) return;
-    const target = asked.current ? document.getElementById(asked.current) : null;
+    const target = (asked.current ? document.getElementById(asked.current) : null)
+      ?? (asked.current === "recommendation" && !document.activeElement?.closest("[data-check]") ? document.getElementById("recommendation-state") : null);
     asked.current = null;
     target?.scrollIntoView({ block: "start" });
     target?.focus({ preventScroll: true });
@@ -184,12 +185,13 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
       <div className={b.cols}>
         <div className={b.sheet}>
           {blocked && (
-            <div className={`${b.panel} ${c.field}`}>
+            // A check that ends here, with no recommendation to open, puts focus on this panel (critic review, round 20).
+            <div id="recommendation-state" tabIndex={-1} className={`${b.panel} ${c.field}`}>
               <p role="status">{checking ? "Checking scores…" : brief.recommendationBlock === "checking" ? "Scores are being checked."
                 : "Ask BeGifted admin to check the scores."}</p>
               {/* Stays focusable while it checks; when the recommendation opens, focus moves to it (Sol review, round 19). */}
               {brief.recommendationBlock === "checking" && (
-                <button type="button" className={c.button} aria-disabled={checking || undefined} onClick={() => { if (!checking) refresh("recommendation"); }}>Check again</button>
+                <button type="button" className={c.button} data-check="" aria-disabled={checking || undefined} onClick={() => { if (!checking) refresh("recommendation"); }}>Check again</button>
               )}
             </div>
           )}
@@ -199,7 +201,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
               <h2 className={b.panelTitle}>Mock scores</h2>
               {!brief.mockEnded && brief.form !== "closed" && !decision && <p className={c.note}>Send scores during the mock.</p>}
               <BriefRubric
-                key={brief.rubric ? "sent" : "new"}
+                key={serverRubric ?? "new"}
                 saved={brief.rubric}
                 form={brief.form}
                 url={rubricUrl}
@@ -209,6 +211,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
                 pending={pending}
                 setPending={setPending}
                 onEdit={() => setEditCount((count) => count + 1)}
+                // Discard is not a send: the bar shows the sent scores again, and the list is not told anything (critic, round 20).
+                onDiscard={() => setLastSent((sent) => sent && { ...sent, editCount })}
                 onSent={(total) => {
                   setLastSent({ total, max: RUBRIC_ITEMS.length * ITEM_MAX, editCount });
                   tellHiringList();
@@ -220,7 +224,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
           {wait && (
             <div className={`${b.panel} ${c.field}`}>
               <p role="status">{checking ? "Checking…" : checked ? "Not open yet. Recommend after the mock ends." : "Recommend after the mock ends."}</p>
-              <button type="button" className={c.button} aria-disabled={checking || undefined} onClick={() => { if (!checking) refresh("recommendation"); }}>Check recommendation</button>
+              <button type="button" className={c.button} data-check="" aria-disabled={checking || undefined} onClick={() => { if (!checking) refresh("recommendation"); }}>Check recommendation</button>
             </div>
           )}
         </div>

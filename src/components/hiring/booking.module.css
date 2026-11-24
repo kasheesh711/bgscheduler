@@ -724,6 +724,10 @@ input[type="file"].input {
 .ghost:hover:not(:disabled) {
   background: #f1ebde;
 }
+.button[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: progress;
+}
 .button:disabled,
 .ghost:disabled {
   border-color: #d9d2c2;

@@ -12,7 +12,7 @@ const LEVELS = BAND_LABELS.map((label, index) => ({ label, index })).reverse();
 type Draft = { items: Partial<Record<RubricItem, number>>; comments: string; ticks: StressTicks; checksDone: boolean | null };
 
 /** The interviewer's score form for one mock. The server checks the scores again and calculates the total. */
-export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSent, pending, setPending, onEdit, onSent }: {
+export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSent, pending, setPending, onEdit, onSent, onDiscard }: {
   saved: MockRubric | null;
   form: "wait" | "open" | "closed";
   url: string;
@@ -23,6 +23,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   setPending: (pending: BriefPending) => void;
   onEdit: () => void;
   onSent: (total: number) => void;
+  onDiscard: () => void;
 }) {
   const rubricId = useId();
   const [items, setItems] = useState<Partial<Record<RubricItem, number>>>(() => Object.fromEntries(RUBRIC_ITEMS.flatMap((id) => (saved?.items[id] ? [[id, saved.items[id]]] : []))));
@@ -98,7 +99,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
     }
     setEditing(false);
     setState("sent");
-    if (lastSent) onSent(lastSent.total);
+    onDiscard();
   };
   // Unscored sliders (value 0), read afresh on each click. The button shows while any score is blank and goes to the
   // first one in the form, so none is skipped, and focuses it (Sol review, rounds 15–18).
