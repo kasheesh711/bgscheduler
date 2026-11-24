@@ -467,7 +467,11 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
                 setRetrying(true);
                 load(true).then(() => {
                   setError("");
-                  window.requestAnimationFrame(() => document.getElementById("hiring-list")?.focus());
+                  // The list, or the open area when an empty list hides it on a laptop (Sol review, round 21).
+                  window.requestAnimationFrame(() => {
+                    const list = document.getElementById("hiring-list");
+                    (list && list.offsetParent !== null ? list : document.getElementById("open-item"))?.focus();
+                  });
                 }).catch((e) => setError(e.message)).finally(() => setRetrying(false));
               }}>Try again</button>
               <p role="status">{retrying ? "Loading your hiring list…" : "If it fails again, ask BeGifted admin."}</p>

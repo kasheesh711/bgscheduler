@@ -866,7 +866,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
               {group.items.length > 1 && <span className={r.count}>{group.items.length}</span>}
             </h2>
             {group.title === savedIn && <p role="status" className={r.saved}>{savedFor?.text}</p>}
-            {group.items.length ? list(group.items) : group.title === savedIn ? null : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "Nothing to score or sign now." : "Nothing to do now.") : "No mock booked. New bookings also come by LINE."}</p>}
+            {group.items.length ? list(group.items) : group.title === savedIn ? null : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "Nothing to score or sign now." : nextItem?.note === "Prepare" ? "No marks or recommendations due." : "Nothing to do now.") : "No mock booked. New bookings also come by LINE."}</p>}
           </section>
         ))}
         {!heads.length ? <p className={r.quiet}>No heads are set up. Add interviewers in Rules and setup.</p>

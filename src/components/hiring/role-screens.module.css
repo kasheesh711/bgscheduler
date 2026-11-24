@@ -140,7 +140,7 @@ summary.groupTitle { min-height: 44px; cursor: pointer; }
 .item .tag { font-size: 13px; white-space: normal; border-radius: 8px; } /* wraps in its column; never widens the list */
 .skip { position: absolute; left: -9999px; }
 .skip:focus { position: static; align-self: flex-start; padding: 8px 12px; border-radius: 8px; background: var(--role-navy); color: #fff; font-weight: 600; }
-.pane:focus-visible { outline: 2px solid var(--role-navy); outline-offset: -2px; }
+.pane:focus-visible, .rail:focus-visible { outline: 2px solid var(--role-navy); outline-offset: -2px; }
 .workspace .count { font-size: 13px; }
 .reviewMain { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .itemAction { color: var(--warn); font-size: 15px; font-weight: 700; }
