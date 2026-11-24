@@ -49,7 +49,7 @@ describe("VisitBooking", () => {
     for (const question of ["Highest degree", "Field of study", "Subjects you can teach confidently", "English level", "Hours you can teach onsite", "Why do you want to tutor with BeGifted?", "Save and see times"])
       expect(html).toContain(question);
     expect(html).toContain("1 hour, if you pass");
-    expect(html).not.toContain("I will come to the address above.");
+    expect(html).not.toContain("I will come to this address.");
   });
   it("shows the résumé's degree as one line to confirm, in place of the two degree questions", () => {
     const html = page({ waiting: "answers", slots: [], enabled: false, subject: "", knownDegree: { degree: "Bachelor's", field: "English" } });
@@ -70,7 +70,7 @@ describe("VisitBooking", () => {
     expect(html).toContain("Test time");
     expect(html).toContain("Confirm both times");
     // The mock teaching list opens after a test time is chosen; until then its section says what comes first.
-    expect(html).toContain("1 hour, if you pass.");
+    expect(html).toContain("Choose a test time first.");
     expect(html).not.toContain('id="mock-start"');
     expect(page({ twoDay: true, waiting: "answers", formUrl: "https://forms.gle/x", slots: [], enabled: false, subject: "", notice: "Answer first." })).toContain("Save and see times");
   });
@@ -80,20 +80,20 @@ describe("VisitBooking", () => {
     expect(html).toContain("10:00");
     expect(html).toContain("10:00–13:00");
     expect(html).toContain("with mock teaching");
-    expect(html).toContain("I will come to the address above.");
+    expect(html).toContain("I will come to this address.");
     expect(html).toContain("I can teach onsite");
     expect(html).not.toContain("Peat");
     // The live-check line shows only when the list came from a live Wise read.
-    expect(html).not.toContain("Updated");
-    expect(page({ checkedAt: "2026-11-02T02:05:00.000Z" })).toContain("Updated 09:05");
+    expect(html).not.toContain("Checked at");
+    expect(page({ checkedAt: "2026-11-02T02:05:00.000Z" })).toContain("Checked at 09:05");
     // A day outside the live read never says "checked live".
-    expect(page({ checkedAt: "2026-11-02T02:05:00.000Z", liveDates: ["2026-11-04"] })).not.toContain("Updated");
+    expect(page({ checkedAt: "2026-11-02T02:05:00.000Z", liveDates: ["2026-11-04"] })).not.toContain("Checked at");
   });
   it("shows the notice and the LINE contact, and no form, for an empty list or a stale snapshot", () => {
     const html = page({ slots: [], notice: `Times cannot be shown. Contact BeGifted on LINE: ${LINE}` });
     expect(html).toContain("Times cannot be shown");
     expect(html).toContain(`href="${LINE}"`);
-    expect(html).not.toContain("I will come to the address above.");
+    expect(html).not.toContain("I will come to this address.");
     expect(html).not.toContain("Confirm visit");
   });
   it("makes the address in a notice a real link, with no second link in the footer, and renders no HTML from the text", () => {
@@ -130,7 +130,7 @@ describe("VisitBooking", () => {
     expect(html).toContain("Peat");
     expect(html).toContain("Move this visit");
     // The times to choose stay hidden until the candidate presses Move.
-    expect(html).not.toContain("I will come to the address above.");
+    expect(html).not.toContain("I will come to this address.");
     expect(html).not.toContain("You cannot move it now");
   });
   it("does not open Move when the only open time is the booked one", () => {

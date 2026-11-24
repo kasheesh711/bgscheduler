@@ -262,7 +262,7 @@ export function PreScreenQuestions({
         {degreeMode !== "ask" && knownDegree ? (
           <div className={s.known} id="q-degree" tabIndex={-1} data-ok={degreeMode === "confirmed" || undefined}>
             <p>
-              <small>Your degree, from your résumé</small>
+              <small>From your résumé</small>
               <b>
                 {knownDegree.degree} · {knownDegree.field}
               </b>
@@ -332,7 +332,7 @@ export function PreScreenQuestions({
           </p>
         )}
         {subjects.includes(ART) && (
-          <Q title="Art & Design Technology portfolio" tag="file or link">
+          <Q title="Portfolio" tag="file or link">
             <label className={s.drop}>
               <input
                 className={c.hidden}
@@ -343,7 +343,7 @@ export function PreScreenQuestions({
               />
               <Upload aria-hidden size={18} />
               <span>
-                <b>{fileName || "Choose a file"}</b>
+                <b>{fileName || "Upload a portfolio"}</b>
                 <small>{fileName ? "Uploaded. Choose again to replace it." : "PDF, JPG or PNG · 25 MB"}</small>
               </span>
             </label>
@@ -352,13 +352,13 @@ export function PreScreenQuestions({
                 {fileNote}
               </p>
             )}
-            {text("Or a link", portfolio, setPortfolio, 500, "A link that opens without a password")}
+            {text("Public portfolio link", portfolio, setPortfolio, 500, "A link that opens without a password")}
           </Q>
         )}
         {subjects.length > 1 && testChoices.length > 0 && (
           <Q
             id="q-test"
-            title="Subject for your test and mock teaching"
+            title="Your test and mock teaching subject"
             tag="choose one"
             hint={testable.length && testable.length < subjects.length ? "Greyed subjects have no test now." : undefined}
           >
@@ -372,10 +372,10 @@ export function PreScreenQuestions({
             />
           </Q>
         )}
-        <Q id="q-curricula" title="Curricula you have taught">
+        <Q id="q-curricula" title="Curricula taught">
           <Chips name="curricula" choices={ANSWER_CHOICES.curricula} value={curricula} onChange={setCurricula} many disabled={busy} />
         </Q>
-        <Q id="q-years" title="Year groups you can teach">
+        <Q id="q-years" title="Year groups">
           <Chips name="yearGroups" choices={ANSWER_CHOICES.yearGroups} value={yearGroups} onChange={setYearGroups} many disabled={busy} />
         </Q>
       </Section>

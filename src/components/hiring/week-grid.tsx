@@ -322,11 +322,11 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
       <p id="week-grid-keys" className={s.srOnly}>
         Arrow keys move between hours. Space or Enter chooses or clears an hour.
       </p>
-      {taps >= 2 && (
-        <p className={s.hint} role="status">
-          Tip: hold an hour, then drag to fill a block.
-        </p>
-      )}
+      {/* On a touch screen the hold is not discoverable: say it from the start, below the grid (Sol r8). A mouse
+          drags at once, so the line is hidden for a fine pointer unless the candidate has tapped twice. */}
+      <p className={s.touchTip} data-shown={taps >= 2 || undefined}>
+        Hold an hour, then drag to fill a block.
+      </p>
     </div>
   );
 }

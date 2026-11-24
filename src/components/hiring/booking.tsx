@@ -121,7 +121,7 @@ const Fact = ({ icon, label, children }: { icon: ReactNode; label: string; child
 );
 
 /** When the times were checked against live Wise. Nothing shows when the list came from the Wise copy. */
-const Live = ({ at }: { at: string | null }) => (at ? <span className={c.live}>Updated {time(at)}</span> : null);
+const Live = ({ at }: { at: string | null }) => (at ? <span className={c.live}>Checked at {time(at)}</span> : null);
 
 const NOON = (date: string) => `${date}T12:00:00+07:00`;
 const plusDays = (date: string, n: number) => new Date(Date.parse(NOON(date)) + n * 86_400_000).toISOString().slice(0, 10);
@@ -281,12 +281,11 @@ export function reveal(id: string, focus = false, tries = 20) {
  */
 export function Layout({ top, main, side }: { top: ReactNode; main: ReactNode; side: ReactNode }) {
   return (
+    // Reading order is the visual order on a phone: top, main, side (Sol r8: a screen reader read the plan last).
     <div className={cs.layout} data-wide-layout="">
+      <div className={cs.top}>{top}</div>
       <div className={cs.main}>{main}</div>
-      <div className={cs.rail}>
-        <div className={cs.top}>{top}</div>
-        {side && <div className={cs.side}>{side}</div>}
-      </div>
+      {side && <div className={cs.side}>{side}</div>}
     </div>
   );
 }
@@ -341,8 +340,8 @@ function Checks({
   );
   return (
     <div className={c.checks}>
-      {row(onsite, setOnsite, "I will come to the address above.")}
-      {row(commitment, setCommitment, "I can teach onsite at weekends and on a weekday after 15:00.")}
+      {row(onsite, setOnsite, "I will come to this address.")}
+      {row(commitment, setCommitment, "I can teach onsite on weekends and a weekday after 15:00.")}
     </div>
   );
 }
@@ -531,7 +530,7 @@ export function VisitBooking({
                 {!view.canMove && !notice && <p className={c.note}>This visit can no longer be moved online.</p>}
                 {view.canMove && !moving && (
                   <div className={c.move}>
-                    <p className={c.note}>You can move this visit once, up to 24 hours before it starts.</p>
+                    <p className={c.note}>You can move this visit once, up to 24 hours before your test.</p>
                     <button
                       type="button"
                       className={c.ghost}
@@ -591,7 +590,7 @@ export function VisitBooking({
                 <h2 className={c.stepTitle} id="mock-wait">
                   Mock teaching time
                 </h2>
-                <p className={c.note}>1 hour, if you pass.</p>
+                <p className={c.note}>1 hour, if you pass. Choose a test time first.</p>
               </section>
             )}
             {showForm && view.twoDay && slot && (
@@ -633,7 +632,7 @@ export function VisitBooking({
               {keep}
               <VisitConfirm
                 error={error}
-                missing={[!start && "a test time", unchanged && "times that differ from your booking", view.twoDay && !mock && "a mock teaching time", !onsite && !commitment ? "both boxes" : !onsite ? "the onsite box" : !commitment && "the teaching box"].filter(Boolean).join(", ")}
+                missing={[!start && "a test time", unchanged && "times that differ from your booking", view.twoDay && !mock && "a mock teaching time", !onsite && !commitment ? "both boxes" : !onsite ? "the address box" : !commitment && "the teaching hours box"].filter(Boolean).join(", ")}
                 disabled={busy || !start || (view.twoDay && !mock) || !onsite || !commitment || unchanged}
                 label={busy ? "Confirming…" : view.visit ? (view.twoDay ? "Confirm new times" : "Confirm new time") : view.twoDay ? "Confirm both times" : "Confirm visit"}
                 onConfirm={book}
