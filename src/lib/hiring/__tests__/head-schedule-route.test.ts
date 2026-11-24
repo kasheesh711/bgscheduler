@@ -5,6 +5,8 @@ import { hiringCapacity } from "../demand";
 import { headWeek } from "../head-schedule";
 import { GET } from "@/app/api/hiring/route";
 import { cacheTag } from "next/cache";
+import { dashboard } from "../service";
+import { resolveTeacherCanonicalKeys } from "@/lib/progress-tests/teacher-access";
 
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({ cacheLife: vi.fn(), cacheTag: vi.fn() }));
@@ -18,9 +20,11 @@ vi.mock("../worker", () => ({ deliverBookingMessages: vi.fn() }));
 vi.mock("../google", () => ({ googleConnectionStatus: vi.fn() }));
 vi.mock("../head-schedule", () => ({ headWeek: vi.fn() }));
 vi.mock("../demand", () => ({ hiringCapacity: vi.fn() }));
+vi.mock("@/lib/progress-tests/teacher-access", () => ({ resolveTeacherCanonicalKeys: vi.fn() }));
 vi.mock("../service", () => ({
   settings: vi.fn(async () => ({ config: configSchema.parse({}) })),
   dashboard: vi.fn(),
+  callCalendarState: vi.fn(async () => "readable"),
   candidateById: vi.fn(),
   reviewCandidate: vi.fn(),
   saveSettings: vi.fn(),
@@ -94,5 +98,22 @@ describe("GET /api/hiring?capacity=1", () => {
     expect(vi.mocked(hiringCapacity).mock.calls[0][0]).toEqual(configSchema.parse({}).subjectPriority);
     // Kept in the snapshot cache, so a Wise sync clears it.
     expect(cacheTag).toHaveBeenCalledWith("snapshot");
+  });
+});
+
+describe("GET /api/hiring", () => {
+  const config = configSchema.parse({ interviewers: [{ canonicalKey: "Gift", subjects: ["History"], email: "gift@example.test" }] });
+  it("names the head who is signed in, and no head for other staff", async () => {
+    admin({ allowedPages: ["/hiring"] });
+    vi.mocked(dashboard).mockResolvedValue({ config } as never);
+    vi.mocked(resolveTeacherCanonicalKeys).mockResolvedValueOnce(["Gift"]);
+    expect((await (await get("")).json()).viewerHead).toBe("Gift");
+    // Tito checks the English papers by default, so he has a Heads screen with no mocks.
+    vi.mocked(resolveTeacherCanonicalKeys).mockResolvedValueOnce(["Tito"]);
+    expect((await (await get("")).json()).viewerHead).toBe("Tito");
+    // Kevin is a tutor but not a head.
+    vi.mocked(resolveTeacherCanonicalKeys).mockResolvedValueOnce(["Kevin"]);
+    expect((await (await get("")).json()).viewerHead).toBeNull();
+    expect(resolveTeacherCanonicalKeys).toHaveBeenCalledWith("staff@example.com");
   });
 });

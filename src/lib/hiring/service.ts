@@ -754,6 +754,7 @@ export async function dashboard(db: Database = getDb()) {
     onsiteRead,
     headDecisionRows,
     paperCheckRows,
+    packetRows,
   ] = await Promise.all([
     settings(db),
     db
@@ -830,6 +831,8 @@ export async function dashboard(db: Database = getDb()) {
       .orderBy(desc(s.hiringAudit.createdAt))
       .limit(200),
     paperChecks(db, now),
+    // Who has a final review packet, so Gift's list holds the reviews she can sign now. Never the packet itself.
+    db.select({ candidateId: s.hiringAudit.candidateId }).from(s.hiringAudit).where(eq(s.hiringAudit.action, "final-review-packet")),
   ]);
   // The visit screens never see an HR call. The Calls tab reads `calls`.
   const bookings = allBookings.filter(isVisitBooking);
@@ -964,6 +967,7 @@ export async function dashboard(db: Database = getDb()) {
       draftProblem: typeof row.detail.draftProblem === "string" ? row.detail.draftProblem : null,
       at: row.at,
     })),
+    reviewPackets: [...new Set(packetRows.flatMap((packet) => (packet.candidateId ? [packet.candidateId] : [])))],
     // Near-miss papers sent to a head for a check (Kevin, 24 Nov 2026), with the head's link while open.
     // `headLabel` and `done.head` are display names; `head` stays the key the Heads screen matches.
     paperChecks: paperCheckRows.map((check) => {

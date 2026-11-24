@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { BookingShell } from "@/components/hiring/booking";
-import { BriefGone, BriefLoading } from "@/components/hiring/brief";
+import { BriefGone, BriefLoading, ScheduleLink } from "@/components/hiring/brief";
 import { PaperCheck } from "@/components/hiring/paper-check";
 import { HiringError } from "@/lib/hiring/model";
 import { paperCheckView } from "@/lib/hiring/paper-check";
@@ -13,24 +13,36 @@ export const metadata = {
   referrer: "no-referrer" as const,
 };
 
-async function Body({ params }: { params: Promise<{ token: string }> }) {
-  const { token } = await params;
+type Props = { params: Promise<{ token: string }>; searchParams: Promise<{ embed?: string }> };
+
+async function Body({ params, searchParams }: Props) {
+  const [{ token }, { embed }] = await Promise.all([params, searchParams]);
   let view: Awaited<ReturnType<typeof paperCheckView>>;
   try {
     view = await paperCheckView(token);
   } catch (error) {
     if (!(error instanceof HiringError)) throw error;
-    return <BriefGone />;
+    return <>{embed !== "1" && <ScheduleLink />}<BriefGone /></>;
   }
-  return <PaperCheck view={view} token={token} />;
+  return <>{embed !== "1" && <ScheduleLink />}<PaperCheck view={view} token={token} /></>;
 }
 
-export default function Page(props: { params: Promise<{ token: string }> }) {
+// The head's Hiring screen opens this page inside itself with embed=1, under its own header.
+async function Shell(props: Props) {
+  const { embed } = await props.searchParams;
   return (
-    <BookingShell kind="paper-check">
+    <BookingShell kind="paper-check" bare={embed === "1"}>
       <Suspense fallback={<BriefLoading />}>
         <Body {...props} />
       </Suspense>
     </BookingShell>
+  );
+}
+
+export default function Page(props: Props) {
+  return (
+    <Suspense fallback={<BriefLoading />}>
+      <Shell {...props} />
+    </Suspense>
   );
 }

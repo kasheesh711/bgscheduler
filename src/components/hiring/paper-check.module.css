@@ -44,6 +44,7 @@
 
 .mark {
   width: 6rem;
+  border-color: #948a73;
   font-variant-numeric: tabular-nums;
 }
 
@@ -68,7 +69,8 @@
   min-width: 0;
 }
 
-@media (min-width: 1024px) {
+/* 700: the check also opens beside the head's list in Hiring, in a pane 740–1,140px wide. */
+@media (min-width: 700px) {
   .split {
     grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);
     align-items: start;
@@ -83,4 +85,19 @@
   .paper > div {
     height: calc(100dvh - 80px);
   }
+}
+
+.submit {
+  position: sticky;
+  bottom: 0;
+  display: grid;
+  gap: 6px;
+  padding: 10px 0 12px;
+  background: var(--card, #fffdf8);
+  border-top: 1px solid var(--line, #e6decd);
+}
+
+/* A focused mark never hides under the sticky score and submit. */
+.mark {
+  scroll-margin-bottom: 200px;
 }

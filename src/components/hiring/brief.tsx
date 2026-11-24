@@ -15,11 +15,23 @@ type Brief = Awaited<ReturnType<typeof briefView>>;
 export type BriefPending = "scores" | "recommendation" | null;
 
 /** The brief has its own wide page. The booking pages keep the narrow card. */
-export const BriefShell = ({ children }: { children: ReactNode }) => (
-  <main className={c.page} data-brief="">
+export const BriefShell = ({ children, bare = false }: { children: ReactNode; bare?: boolean }) => (
+  <main className={c.page} data-brief="" data-bare={bare ? "" : undefined}>
     <div className={b.wrap}>{children}</div>
   </main>
 );
+
+/** From a LINE link to the head's whole list (Kevin, 24 Nov 2026). /hiring asks for a sign-in first. */
+export const ScheduleLink = () => (
+  <a className={b.back} href="/hiring?view=heads">
+    ← My hiring list
+  </a>
+);
+
+/** Inside the head's Hiring screen (a frame), a save tells the list beside it to reload. Same origin only. */
+export function tellHiringList() {
+  if (window.parent !== window) window.parent.postMessage({ type: "hiring-saved" }, window.location.origin);
+}
 
 export const BriefLoading = () => (
   <p role="status" className={c.note}>
@@ -42,7 +54,8 @@ const points = (value: number) => String(Math.round(value * 10) / 10);
  * The interviewer's page: the score sheet for the mock, with the candidate's résumé and graded paper beside it and the
  * résumé score in parts. No contact details outside the résumé itself.
  */
-export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdfRuntime }: { brief: Brief; resumeUrl: string; rubricUrl: string; decisionUrl: string; /** The demo gives the staff copy of the pdf.js files: its link has no real token. */ pdfRuntime?: string }) {
+export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdfRuntime, compact = false }: { brief: Brief; resumeUrl: string; rubricUrl: string; decisionUrl: string; /** The demo gives the staff copy of the pdf.js files: its link has no real token. */ pdfRuntime?: string;
+  /** Inside the head's Hiring screen: a short header, so the scores and the résumé lead (Kevin, 24 Nov 2026). */ compact?: boolean }) {
   const [pending, setPending] = useState<BriefPending>(null);
   const [editCount, setEditCount] = useState(0);
   const [lastSent, setLastSent] = useState(() => brief.rubric ? { total: rubricTotals(brief.rubric).total, max: rubricTotals(brief.rubric).max, editCount: 0 } : null);
@@ -54,19 +67,22 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   const earlyRecommendation = brief.form === "closed" && brief.recommendationReady;
   const paperUrl = resumeUrl.replace(/resume$/, "paper");
   const runtime = pdfRuntime ?? resumeUrl.replace(/resume$/, "pdf-runtime");
+  // The head is the interviewer and the place does not change, so the short header keeps the subject and the time.
   const facts: [string, string][] = [
     ["Subject", brief.subject],
-    ["Mock teaching", `${brief.mock} (Bangkok)`],
-    ...(brief.exam ? ([["Exam", brief.exam]] as [string, string][]) : []),
-    ["Place", brief.location],
-    ["Interviewer", brief.interviewer ?? "To be confirmed"],
+    ["Mock teaching", compact ? brief.mock : `${brief.mock} (Bangkok)`],
+    ...(brief.exam && !compact ? ([["Exam", brief.exam]] as [string, string][]) : []),
+    ...(compact ? [] : ([["Place", brief.location], ["Interviewer", brief.interviewer ?? "To be confirmed"]] as [string, string][])),
   ];
   const recommendation = (
     <section id="recommendation" className={b.panel} tabIndex={-1}>
       <h2 className={decision ? "sr-only" : b.panelTitle}>Your recommendation</h2>
       <BriefDecision
         sent={decision}
-        onSent={setDecision}
+        onSent={(sent) => {
+          setDecision(sent);
+          tellHiringList();
+        }}
         url={decisionUrl}
         hasScores={lastSent !== null || brief.form === "closed"}
         unsent={unsent}
@@ -79,9 +95,9 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   const fileUrl = doc === "resume" && brief.resume ? resumeUrl : doc === "paper" ? paperUrl : null;
   return (
     <>
-      <header className={b.top}>
+      <header className={b.top} data-compact={compact ? "" : undefined}>
         <div>
-          <p className={b.eyebrow}>Interview brief</p>
+          {!compact && <p className={b.eyebrow}>Interview brief</p>}
           <h1 className={b.name}>{brief.name}</h1>
           <dl className={b.facts}>
             {facts.map(([label, value]) => (
@@ -142,7 +158,10 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
                 pending={pending}
                 setPending={setPending}
                 onEdit={() => setEditCount((count) => count + 1)}
-                onSent={(total) => setLastSent({ total, max: RUBRIC_ITEMS.length * ITEM_MAX, editCount })}
+                onSent={(total) => {
+                  setLastSent({ total, max: RUBRIC_ITEMS.length * ITEM_MAX, editCount });
+                  tellHiringList();
+                }}
               />
             </section>
           )}

@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { isRoleView, openHeadDecisions, weekCalls, workWeek } from "../role-views";
+import { headKeys, isRoleView, nickname, openHeadDecisions, weekCalls, workWeek } from "../role-views";
 
 describe("role views", () => {
+  it("lists each head once: interviewers first, then a paper checker who gives no mocks", () => {
+    const interviewers = [{ canonicalKey: "Gift" }, { canonicalKey: "Ek" }] as never;
+    expect(headKeys({ interviewers })).toEqual(["Gift", "Ek", "Tito"]);
+    expect(headKeys({ interviewers, paperCheckers: [{ subject: "History", canonicalKey: "Gift" }] as never })).toEqual(["Gift", "Ek"]);
+  });
+  it("shortens a head's name to the nickname in brackets", () => {
+    expect(nickname("Wanwisa (Gift) Montrikittiphant")).toBe("Gift");
+    expect(nickname("Kru Ek")).toBe("Kru Ek");
+    expect(nickname("Odd ( ) name")).toBe("Odd ( ) name");
+  });
   it("knows the role screens by name", () => {
     expect(["hr", "admin", "heads"].every(isRoleView)).toBe(true);
     expect([null, "overview", "HR"].some(isRoleView)).toBe(false);

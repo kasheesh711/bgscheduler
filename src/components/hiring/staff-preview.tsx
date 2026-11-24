@@ -6,7 +6,7 @@ import type { HiringData } from "./dashboard";
 import { AdminScreen, HeadsScreen, HrScreen } from "./role-screens";
 import css from "./dashboard.module.css";
 
-export function HiringStaffPreview({ role }: { role: RoleView }) {
+export function HiringStaffPreview({ role, head }: { role: RoleView; head?: string | null }) {
   const [data, setData] = useState<HiringData | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -23,7 +23,7 @@ export function HiringStaffPreview({ role }: { role: RoleView }) {
     <div className={`${css.surface} ${css.previewSurface}`}>
       {role === "hr" && <HrScreen data={data} command={async () => false} onOpenResults={() => {}} busy={false} readOnly />}
       {role === "admin" && <AdminScreen data={data} reload={async () => {}} readOnly />}
-      {role === "heads" && <HeadsScreen data={data} readOnly />}
+      {role === "heads" && <HeadsScreen data={data} head={head} readOnly />}
     </div>
   );
 }
