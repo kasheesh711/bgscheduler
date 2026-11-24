@@ -350,25 +350,31 @@ function Checks({
   commitment,
   setOnsite,
   setCommitment,
+  fromAnswers = false,
 }: {
+  /** The teaching hours box was ticked from the saved answers: say so beside it (Sol r13). */
+  fromAnswers?: boolean;
   onsite: boolean;
   commitment: boolean;
   setOnsite: (v: boolean) => void;
   setCommitment: (v: boolean) => void;
 }) {
-  const row = (id: string, checked: boolean, set: (v: boolean) => void, text: string) => (
+  const row = (id: string, checked: boolean, set: (v: boolean) => void, text: string, note?: string) => (
     <label className={c.check}>
       <input id={id} type="checkbox" className={c.hidden} checked={checked} onChange={(e) => set(e.target.checked)} />
       <span className={c.box} aria-hidden>
         <Check />
       </span>
-      <span>{text}</span>
+      <span>
+        {text}
+        {note && <small className={cs.fromAnswers}>{note}</small>}
+      </span>
     </label>
   );
   return (
     <div className={c.checks}>
       {row("check-address", onsite, setOnsite, "I will come to this address.")}
-      {row("check-hours", commitment, setCommitment, "I can teach onsite on a Saturday or Sunday and a weekday from 15:00.")}
+      {row("check-hours", commitment, setCommitment, "I can teach onsite on a Saturday or Sunday and a weekday from 15:00.", fromAnswers && commitment ? "From your answers." : undefined)}
     </div>
   );
 }
@@ -639,9 +645,10 @@ export function VisitBooking({
               />
             )}
             {/* While a time is still missing: once both are chosen, nothing is blocked. */}
-            {showForm && (!slot || (view.twoDay && !mock) || !onsite || !commitment) && (
+            {/* Until the booking is confirmed, a way to ask stays on the page (Sol r13). */}
+            {showForm && (
               <p className={c.help}>
-                {slot && view.twoDay && !mock ? "No mock time works?" : "No time works?"}{" "}
+                {!slot ? "No time works? " : view.twoDay && !mock ? "No mock time works? " : ""}
                 <a href={LINE_URL} rel="noreferrer">
                   Contact BeGifted on LINE
                 </a>
@@ -653,7 +660,7 @@ export function VisitBooking({
         side={
           showForm && (
             <>
-              <Checks onsite={onsite} commitment={commitment} setOnsite={setOnsite} setCommitment={setCommitment} />
+              <Checks onsite={onsite} commitment={commitment} setOnsite={setOnsite} setCommitment={setCommitment} fromAnswers={view.timeRuleMet} />
               {moving && <p className={c.note}>This is your one move.</p>}
               {keep}
               <VisitConfirm

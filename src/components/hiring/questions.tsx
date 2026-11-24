@@ -85,9 +85,10 @@ function Chips<T extends string>({
   off?: readonly T[];
 }) {
   return (
-    <div className={s.chips}>
+    // A group with any long label stacks on a narrow phone, so no chip sits alone in a half row (Sol r13).
+    <div className={s.chips} data-stack={choices.some((choice) => (SHORT[choice] ?? choice).length > 16) || undefined}>
       {choices.map((choice) => (
-        <label key={choice} className={s.chip} data-long={(SHORT[choice] ?? choice).length > 16 || undefined}>
+        <label key={choice} className={s.chip}>
           <input
             className={c.hidden}
             type={many ? "checkbox" : "radio"}
@@ -197,8 +198,9 @@ export function PreScreenQuestions({
     ["q-degree", "Degree", !!answers.degree && !!answers.field.trim()],
     ["q-english", "English level", !!answers.english],
     ["q-experience", "Experience", !!answers.experience],
-    // Art & Design needs its portfolio (a file or a link) before this counts (Sol r6).
-    ["q-subjects", "Subjects", subjects.length > 0 && (!subjects.includes(ART) || !!fileName || !!portfolio.trim())],
+    ["q-subjects", "Subjects", subjects.length > 0],
+    // Art & Design needs its portfolio (a file or a link): its own step, so "Next" names it (Sol r13).
+    ...(subjects.includes(ART) ? [["q-portfolio", "Portfolio", !!fileName || !!portfolio.trim()] as [string, string, boolean]] : []),
     // Always counted, so the total stays 11; asked only when there is a choice (one subject is chosen for the candidate).
     [subjects.length > 1 ? "q-test" : "q-subjects", "Test subject", !!test],
     ["q-curricula", "Curricula", curricula.length > 0],
@@ -305,7 +307,6 @@ export function PreScreenQuestions({
           <input
             id="english-proof"
             className={c.input}
-            placeholder="e.g. IELTS 8.0"
             value={englishEvidence}
             maxLength={500}
             disabled={busy}
