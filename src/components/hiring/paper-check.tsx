@@ -186,15 +186,13 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
         <label className={c.field}>
           {/* A comment already on the result is the marker's; the head may keep or change it, and it saves with the marks. */}
           <span>{view.comment ? "Existing marking comment" : "Comment (optional)"}</span>
-          <textarea className={c.input} rows={3} maxLength={4000} value={comment} aria-describedby={view.comment ? `${view.id}-comment-help` : undefined}
-            onChange={(event) => setComment(event.target.value)} />
+          <textarea className={c.input} rows={3} maxLength={4000} value={comment} onChange={(event) => setComment(event.target.value)} />
         </label>
-        {/* Outside the label, so a screen reader reads it once, as the description. */}
-        {view.comment && <p id={`${view.id}-comment-help`} className={c.note}>Saved with your marks.</p>}
         </div>
         {more !== null && (
           <button type="button" className={k.more} onClick={() => {
-            const target = more ? questionList.current?.querySelector<HTMLElement>(`li[data-question="${CSS.escape(more)}"]`) : questionList.current?.lastElementChild;
+            // The question, or the comment field's label (Sol review, round 17); focus goes to its field.
+            const target = more ? questionList.current?.querySelector<HTMLElement>(`li[data-question="${CSS.escape(more)}"]`) : questionList.current?.querySelector("textarea")?.closest("label");
             target?.scrollIntoView({ block: "nearest" });
             target?.querySelector<HTMLElement>("input, textarea")?.focus({ preventScroll: true });
           }}>{more ? `Go to question ${more} ↓` : "Go to the comment ↓"}</button>

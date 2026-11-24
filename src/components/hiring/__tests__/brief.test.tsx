@@ -1,5 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The brief fetches itself again with the router; a server render here has no router to give it.
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }));
 import { ITEM_MAX, RUBRIC, RUBRIC_ITEMS, type MockRubric } from "@/lib/hiring/marking-sheet";
 import { ANSWER_LABELS } from "@/lib/hiring/model";
 import { BriefGone, InterviewerBrief } from "../brief";
@@ -82,7 +85,7 @@ describe("InterviewerBrief", () => {
     expect(page.match(/type="checkbox"/g)).toHaveLength(3);
     expect(page).not.toContain("Suggested score");
     expect(page).toContain("School&#x27;s required checks completed");
-    expect(page).toContain("0 of 14 scored");
+    expect(page).toContain("0/14 scored");
     // The level names show once, above the bars, and no level text shows until the head opens an item.
     expect(page.split("Needs improvement (4)")).toHaveLength(2);
     expect(page).not.toContain("All information provided is accurate");

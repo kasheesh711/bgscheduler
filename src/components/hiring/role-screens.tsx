@@ -738,7 +738,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     .map((d) => {
       const candidate = byId.get(d.candidateId!);
       const ready = packets.has(d.candidateId!);
-      return { id: `review-${d.candidateId}`, name: candidate?.name ?? "Candidate", candidate, time: ready ? "For decision" : "Packet",
+      return { id: `review-${d.candidateId}`, name: candidate?.name ?? "Candidate", candidate, time: ready ? "Your decision" : "Packet",
         day: ready ? "" : "not ready", detail: `${candidate?.visitSubject ?? candidate?.subjects[0] ?? "Subject not recorded"} · Yes from ${d.head}`,
         tags: [], note: d.draftProblem && "No email draft yet", href: null, task: "Final review",
         action: ready ? "Review packet" : undefined, urgent: ready, review: d };
@@ -805,9 +805,14 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
         <li key={item.id} id={`row-${item.id}`}>
           <ItemLink item={item} wide={wide} readOnly={readOnly} paneId={`${paneId}-${item.id}`} selected={selected?.id === item.id}
             onSelect={() => {
-              // The open row loads again only when it now points elsewhere (Recommend after the mock), never for the same
-              // part, where a reload could drop edits made after a send (Sol review, rounds 15–16).
-              if (wide && selected?.id === item.id && hashOf(item.href) !== paneAt?.hash) setPaneRun((run) => run + 1);
+              // The open row that now points elsewhere (Recommend after the mock) asks its page to fetch itself again in
+              // place, so the open tab and unsent edits stay; a page with no frame loads again (Sol review, rounds 15–17).
+              if (wide && selected?.id === item.id && paneAt && hashOf(item.href) !== paneAt.hash) {
+                const frame = document.querySelector<HTMLIFrameElement>("#open-item iframe")?.contentWindow;
+                if (frame) frame.postMessage({ type: "hiring-refresh", part: hashOf(item.href) }, window.location.origin);
+                else setPaneRun((run) => run + 1);
+                setPaneAt({ key: paneAt.key, hash: hashOf(item.href) });
+              }
               setPicked(!wide && picked === item.id ? null : item.id);
             }} />
           {!wide && picked === item.id && (!item.href || readOnly) && (

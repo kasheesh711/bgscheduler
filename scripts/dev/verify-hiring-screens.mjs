@@ -362,6 +362,8 @@ const push = window.history.pushState.bind(window.history);
 window.history.pushState = (...args) => { push(...args); window.dispatchEvent(new Event(change)); };
 const subscribe = (fn) => { window.addEventListener(change, fn); window.addEventListener("popstate", fn); return () => { window.removeEventListener(change, fn); window.removeEventListener("popstate", fn); }; };
 export const useSearchParams = () => new URLSearchParams(useSyncExternalStore(subscribe, () => location.search));
+// The synthetic page has no server to fetch again; refresh keeps the page as it is.
+export const useRouter = () => ({ refresh() {}, push() {}, replace() {} });
 `;
 // The real review packet HTML (src/lib/hiring/review-document.ts) for a synthetic packet, so Gift's in-page packet is the real layout.
 const packetModule = await build({ entryPoints: [path.join(ROOT, "src/lib/hiring/review-document.ts")], bundle: true, write: false, platform: "node", format: "esm", tsconfig: path.join(ROOT, "tsconfig.json"), logLevel: "error" });
@@ -1216,7 +1218,7 @@ try {
     await page.getByRole("heading", { name: "Mock scores" }).waitFor();
     const sliders = page.getByRole("slider");
     for (const i of [0, 1, 2]) await sliders.nth(i).fill("7");
-    await page.getByRole("button", { name: "Next unscored ↓" }).click();
+    await page.getByRole("button", { name: "Next unscored" }).click();
     const landed = await page.evaluate(() => {
       const active = document.activeElement;
       const ranges = [...document.querySelectorAll('input[type="range"]')];
@@ -1290,7 +1292,7 @@ try {
     const tiles = page.getByRole("slider");
     assert.equal(await tiles.count(), 14);
     assert.equal(await page.locator("#scores select").count(), 0);
-    await page.getByRole("status").filter({ hasText: /^0 of 14 scored$/ }).waitFor();
+    await page.getByRole("status").filter({ hasText: /^0\/14 scored$/ }).waitFor();
     assert.equal(await page.getByText(/^Suggested score/).count(), 0);
     const tick = page.getByRole("checkbox").first();
     await tick.check();

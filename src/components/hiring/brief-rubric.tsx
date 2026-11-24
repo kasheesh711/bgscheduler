@@ -316,13 +316,13 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                 <p role="status" className={checksMissing || lastSent ? undefined : c.note}>{checksMissing
                   ? "Answer the required checks to send."
                   : lastSent ? "Score changes not sent."
-                    : `${scored} of ${RUBRIC_ITEMS.length} scored`}</p>
+                    : `${scored}/${RUBRIC_ITEMS.length} scored`}</p>
                 {below && <button type="button" className={b.moreBelow} onClick={() => {
                   const next = unscored()[0];
                   if (!next) return setBelow(false);
                   (next.closest("[data-score-row]") ?? next).scrollIntoView({ block: "center" });
                   next.focus({ preventScroll: true });
-                }}>Next unscored ↓</button>}
+                }}>Next unscored</button>}
               </div>
               <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
             </div>
