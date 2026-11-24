@@ -4,6 +4,7 @@ import { Suspense } from "react";
 import { AppNav, AppNavSkeleton } from "@/components/layout/app-nav";
 import { StaleSnapshotBanner } from "@/components/layout/stale-snapshot-banner";
 import { PreviewBanner } from "@/components/layout/preview-banner";
+import { MemeEntrySound } from "@/components/layout/meme-entry-sound";
 import { auth } from "@/lib/auth";
 import { isSuperAdminEmail } from "@/lib/admin-users/policy";
 import { getLearningPlansAccess } from "@/lib/learning-plans/access";
@@ -32,17 +33,22 @@ async function AppNavWithAccess() {
     session?.user?.email ? canUseClassCapture() : Promise.resolve(false),
   ]);
   return (
-    <AppNav
-      allowedPages={session?.user?.allowedPages ?? null}
-      creditControlEnabled={creditControlActive()}
-      attendanceAccess={attendanceAccess}
-      sitInAccess={sitInAccess}
-      classCaptureAccess={classCaptureAccess}
-      learningPlansAccess={learningPlansAccess}
-      postClassFeedbackAccess={capabilities.includes("viewer")}
-      unearnedRevenueAccess={unearnedRevenueCapabilities.includes("viewer")}
-      ownerAccess={session?.user?.role === "admin" && isSuperAdminEmail(session.user.email)}
-    />
+    <>
+      {session?.user?.email?.trim().toLowerCase() === "aoengnatchasmith@gmail.com" && (
+        <MemeEntrySound />
+      )}
+      <AppNav
+        allowedPages={session?.user?.allowedPages ?? null}
+        creditControlEnabled={creditControlActive()}
+        attendanceAccess={attendanceAccess}
+        sitInAccess={sitInAccess}
+        classCaptureAccess={classCaptureAccess}
+        learningPlansAccess={learningPlansAccess}
+        postClassFeedbackAccess={capabilities.includes("viewer")}
+        unearnedRevenueAccess={unearnedRevenueCapabilities.includes("viewer")}
+        ownerAccess={session?.user?.role === "admin" && isSuperAdminEmail(session.user.email)}
+      />
+    </>
   );
 }
 
