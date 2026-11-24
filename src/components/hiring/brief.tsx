@@ -30,8 +30,9 @@ export const ScheduleLink = () => (
 );
 
 /** Inside the head's Hiring screen (a frame), a save tells the list beside it to reload. Same origin only. */
-export function tellHiringList() {
-  if (window.parent !== window) window.parent.postMessage({ type: "hiring-saved" }, window.location.origin);
+/** Tells the head's list what was saved, so it reloads and names the save (Sol review, round 22). */
+export function tellHiringList(kind: "scores" | "recommendation" | "marks") {
+  if (window.parent !== window) window.parent.postMessage({ type: "hiring-saved", kind }, window.location.origin);
 }
 
 export const BriefLoading = () => (
@@ -130,7 +131,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
         sent={decision}
         onSent={(sent) => {
           setDecision(sent);
-          tellHiringList();
+          tellHiringList("recommendation");
         }}
         url={decisionUrl}
         hasScores={lastSent !== null || brief.form === "closed"}
@@ -146,7 +147,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
     <>
       <header className={b.top} data-compact={compact ? "" : undefined}>
         <div>
-          {!compact && <p className={b.eyebrow}>Interview brief</p>}
+          {/* Also in the head's pane, so the open page names itself (Sol review, round 22). */}
+          <p className={b.eyebrow}>Interview brief</p>
           <h1 className={b.name}>{brief.name}</h1>
           <dl className={b.facts}>
             {facts.map(([label, value]) => (
@@ -199,7 +201,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
           {earlyRecommendation && recommendation}
           {!blocked && (
             <section id="scores" className={b.panel} tabIndex={-1}>
-              <h2 className={b.panelTitle}>Mock scores</h2>
+              <h2 className={b.panelTitle}>Mock scores <span className={c.note}>· {RUBRIC_ITEMS.length} items</span></h2>
               {!brief.mockEnded && brief.form !== "closed" && !decision && <p className={c.note}>Send scores during the mock.</p>}
               <BriefRubric
                 key={serverRubric ?? "new"}
@@ -216,7 +218,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
                 onDiscard={() => setLastSent((sent) => sent && { ...sent, editCount })}
                 onSent={(total) => {
                   setLastSent({ total, max: RUBRIC_ITEMS.length * ITEM_MAX, editCount });
-                  tellHiringList();
+                  tellHiringList("scores");
                 }}
               />
             </section>

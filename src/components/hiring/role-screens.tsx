@@ -675,7 +675,9 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const loadedAt = useRef(0);
   // "Saved for …" stays under To do until another row opens, so the head sees the save where they started.
   const [savedFor, setSavedFor] = useState<{ id: string; text: string } | null>(null);
-  const openNameRef = useRef<{ id: string; text: string } | null>(null);
+  const openNameRef = useRef<{ id: string; name: string } | null>(null);
+  // What the one status line says after a save; emptied first, so the same words are read again (Sol review, round 22).
+  const [announce, setAnnounce] = useState("");
   // The dashboard passes a new function on each render; the listeners use the latest one without subscribing again.
   const reloadRef = useRef(reload);
   useEffect(() => {
@@ -696,7 +698,12 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
       // Only the open pane's own page may report a save.
       if (event.origin !== window.location.origin || event.data?.type !== "hiring-saved"
         || event.source !== document.querySelector<HTMLIFrameElement>("#open-item iframe")?.contentWindow) return;
-      setSavedFor(openNameRef.current);
+      const open = openNameRef.current;
+      const kind = event.data.kind;
+      const text = open && `${kind === "marks" ? "Marks saved" : kind === "recommendation" ? "Recommendation saved" : kind === "scores" ? "Scores saved" : "Saved"} for ${open.name}`;
+      setSavedFor(open && text ? { id: open.id, text } : null);
+      setAnnounce("");
+      if (text) window.setTimeout(() => setAnnounce(text), 100);
       loadedAt.current = Date.now();
       void reloadRef.current?.().catch(() => {});
     };
@@ -811,7 +818,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const savedIn = savedFor && selected?.id === savedFor.id
     ? groups.find((group) => group.items.some((item) => item.id === savedFor.id))?.title ?? "To do" : null;
   useEffect(() => {
-    openNameRef.current = selected ? { id: selected.id, text: `${selected.task === "Re-mark paper" ? "Marks saved" : "Saved"} for ${selected.name}` } : null;
+    openNameRef.current = selected ? { id: selected.id, name: selected.name } : null;
   }, [selected]);
   const paneId = useId();
   // Gift's review link: on a phone the row may sit below the fold.
@@ -849,6 +856,10 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   return (
     <div className={r.workspace} data-heads-review="" data-empty={key && fixedHead && !all.length ? "" : undefined}>
       {/* The list is navigation at every width; on a phone the open row's form is a labelled region inside it. */}
+      {/* One status that is always there and outside the list (which hides when empty on a laptop), so saves are announced
+          (critic and Sol reviews, rounds 21–22). */}
+      <p className="sr-only" role="status">{announce || (name && `${name} · ${nextMock
+          ? `${mockNow ? "mock now" : "next mock"} ${shortDay(nextMock.row.date)}, ${nextMock.row.mockStart}` : "no mock booked"}`)}</p>
       <nav id="hiring-list" tabIndex={-1} className={r.rail} aria-label={name ? `${nickname(name)}'s hiring list` : "Hiring list"}>
         {!fixedHead && (
           <label className={r.headMenu}>
@@ -866,9 +877,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
             document.getElementById("open-item")?.focus();
           }}>Skip to open item</a>
         )}
-        {/* One status that is always there, so the save receipt is announced too (critic review, round 21). */}
-        <p className="sr-only" role="status">{savedIn && savedFor ? savedFor.text : name && `${name} · ${nextMock
-          ? `${mockNow ? "mock now" : "next mock"} ${shortDay(nextMock.row.date)}, ${nextMock.row.mockStart}` : "no mock booked"}`}</p>
+
         {groups.map((group) => (group.items.length > 0 || (group.title === "Next mock" && givesMocks) || (group.title === "To do" && (savedIn === "To do" || (!ready.length && (givesMocks || reviewer))))) && (
           <section key={group.title} className={r.group} data-tone={(group.title === "To do" || group.title === "Final review") && group.items.length ? "todo" : undefined}>
             <h2 className={r.groupTitle}>
@@ -876,7 +885,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
               {group.items.length > 1 && <span className={r.count}>{group.items.length}</span>}
             </h2>
             {group.title === savedIn && <p className={r.saved}>{savedFor?.text}</p>}
-            {group.items.length ? list(group.items) : group.title === savedIn ? null : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "Nothing to score or sign now." : nextItem?.note === "Prepare" ? "No marks or recommendations due." : "Nothing to do now.") : "No mock booked. New bookings also come by LINE."}</p>}
+            {group.items.length ? list(group.items) : group.title === savedIn ? null : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? (unsigned.length ? "No assessment tasks. No hires ready for approval." : "No assessment tasks. No hires to approve.") : nextItem?.note === "Prepare" ? "No marks or recommendations due." : "Nothing to do now.") : "No mock booked. New bookings also come by LINE."}</p>}
           </section>
         ))}
         {!heads.length ? <p className={r.quiet}>No heads are set up. Add interviewers in Rules and setup.</p>

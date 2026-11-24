@@ -107,7 +107,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
       const body = (await response.json().catch(() => ({}))) as { error?: string; outcome?: Outcome };
       if (response.ok && body.outcome) {
         setOutcome(body.outcome);
-        tellHiringList();
+        tellHiringList("marks");
       }
       else setError(body.error ?? "Your marks were not saved. Try again.");
     } catch {
