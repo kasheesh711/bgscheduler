@@ -761,7 +761,7 @@ export function HiringBooking({ token }: { token: string }) {
             <p className={c.note}>
               All times are Bangkok time.{" "}
               {view.kind === "mock"
-                ? "Choose one subject for each one-hour session. Times cover the next five business days, Monday–Friday, 10:00–16:00."
+                ? "Choose one subject for each one-hour session. Times cover the next four weeks, Monday–Friday, 10:00–16:00."
                 : "Allow two hours for each subject. Choose your subjects before you choose a time."}
             </p>
           </div>

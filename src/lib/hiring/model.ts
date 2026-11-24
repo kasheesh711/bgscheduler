@@ -607,16 +607,19 @@ export function normalizeSubjects(value: string): Subject[] {
   ];
 }
 
+// Kevin, 24 Nov 2026: candidates said no times were free, so booking opens four weeks (20 business days), not five days.
+export const BOOKING_BUSINESS_DAYS = 20;
+
 export function businessDates(
   now: Date,
   holidays: string[] = [],
-  count = 5,
+  count = BOOKING_BUSINESS_DAYS,
   // The test (Kevin, 24 Nov 2026): a candidate with a full-time job can sit it on a Saturday or Sunday. The weekend
   // days between the business dates are added; they do not use up the count.
   weekends = false,
 ): string[] {
   const dates: string[] = [];
-  // Today is excluded. Every candidate receives five complete future business dates.
+  // Today is excluded. Every candidate receives `count` complete future business dates.
   const cursor = new Date(`${localDate(now)}T12:00:00Z`);
   for (let i = 0, business = 0; business < count && i < 400; i++) {
     cursor.setUTCDate(cursor.getUTCDate() + 1);

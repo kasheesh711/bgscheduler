@@ -47,7 +47,7 @@ describe("callSlots", () => {
   });
 
   it("gets its dates from the business calendar: no weekend, no closed date, not today", () => {
-    const dates = businessDates(now, ["2026-11-06"]);
+    const dates = businessDates(now, ["2026-11-06"], 5);
     expect(dates).toEqual(["2026-11-05", "2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12"]);
     expect(new Set(callSlots(dates, [], now).map((slot) => slot.date))).toEqual(new Set(dates));
   });

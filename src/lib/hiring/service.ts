@@ -1023,7 +1023,9 @@ async function liveForList(db: Database, config: HiringConfig, subjects: Subject
     return await readLiveBusy(
       db,
       config.interviewers.filter((h) => subjects.every((v) => h.subjects.includes(v))).map((h) => h.canonicalKey),
-      businessDates(now, config.holidays),
+      // The page's live read stays on the first five business dates so the Wise load does not grow. Later dates use the
+      // 30-minute Wise copy, and the confirm step always reads the chosen date live.
+      businessDates(now, config.holidays, 5),
       { cacheMs: 60_000, deadlineMs: 12_000 },
     );
   } catch (error) {

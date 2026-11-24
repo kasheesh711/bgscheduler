@@ -395,16 +395,14 @@
     box-shadow: 0 0 0 8px rgb(31 122 77 / 0);
   }
 }
+/* Four weeks of dates wrap into rows, so no date is hidden off-screen. */
 .days {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
   gap: 8px;
-  margin: 0 -18px;
-  padding: 2px 18px 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
+  padding: 2px 0 6px;
 }
 .day {
-  flex: 1 0 56px;
   display: grid;
   justify-items: center;
   gap: 0;
@@ -663,10 +661,6 @@ input[type="file"].input {
   .confirm {
     margin: 0 -32px;
     padding: 18px 32px;
-  }
-  .days {
-    margin: 0;
-    padding: 2px 0 6px;
   }
 }
 .summary {
