@@ -662,6 +662,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     setChosen(value);
     setPicked(null);
     setShown(null);
+    setSignedItems([]);
     if (readOnly) return;
     try {
       window.localStorage.setItem(HEAD_KEY, value);
@@ -692,7 +693,9 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     };
     // A save in the open brief or paper check reloads the list at once, so the row leaves To do.
     const saved = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin || event.data?.type !== "hiring-saved") return;
+      // Only the open pane's own page may report a save.
+      if (event.origin !== window.location.origin || event.data?.type !== "hiring-saved"
+        || event.source !== document.querySelector<HTMLIFrameElement>("#open-item iframe")?.contentWindow) return;
       setSavedFor(openNameRef.current);
       loadedAt.current = Date.now();
       void reloadRef.current?.().catch(() => {});
@@ -860,7 +863,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
               {group.label ?? group.title}
               {group.items.length > 1 && <span className={r.count}>{group.items.length}</span>}
             </h2>
-            {group.title === savedIn && <p className={r.saved}>{savedFor?.text}</p>}
+            {group.title === savedIn && <p role="status" className={r.saved}>{savedFor?.text}</p>}
             {group.items.length ? list(group.items) : group.title === savedIn ? null : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "Nothing to score or sign now." : "Nothing to do now.") : "No mock booked. New bookings also come by LINE."}</p>}
           </section>
         ))}
@@ -881,7 +884,8 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
         )}
       </nav>
       {wide && (
-        <section id="open-item" tabIndex={-1} className={r.pane} aria-label={selected ? `${selected.task}: ${selected.name}` : key && !all.length ? "Nothing to do" : "Nothing open"}>
+        // Work in the open pane makes it the head's choice, so a mock that starts does not take it away (code review, round 20).
+        <section id="open-item" tabIndex={-1} className={r.pane} onFocus={() => { if (!picked && selected) setPicked(selected.id); }} aria-label={selected ? `${selected.task}: ${selected.name}` : key && !all.length ? "Nothing to do" : "Nothing open"}>
           {selected ? <ItemPane key={paneKey!} item={selected} data={data} readOnly={readOnly || (!fixedHead && !chosen)} reload={reload} onSigned={keepSigned} />
             : key && !all.length ? <div className={r.paneFacts}><h2 className={r.paneName}>Nothing to do</h2>
               <p className={r.quiet}>{givesMocks ? "We send you a LINE message when a mock or a paper needs you." : "We send you a LINE message when a paper needs you."}</p></div>

@@ -83,6 +83,8 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   const [error, setError] = useState<{ text: string; retry?: boolean; packetLoad?: boolean }>();
   const packet = review?.packet;
   const openPage = packetPage?.id === packet?.id ? packetPage : undefined;
+  // A standard letter's third paragraph is its terms ("Dear …", "We are pleased …", terms, …); offer-letters.ts builds it so.
+  const offerTerms = packet?.offerType && packet.offerType in OFFER_LETTERS ? packet.offer.split(/\n\s*\n/)[2]?.trim() || null : null;
   // A signed or closed review never shows the stale alert; the contract-signing card neither.
   const stale = !!packet && !signing && !["hired", "rejected", "stopped"].includes(review?.stage ?? "") && review?.packetValid !== true;
   const viewed = !!packet && !stale && packet.id === viewedId;
@@ -262,7 +264,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       // In a srcdoc frame "#…" resolves against the outer page and empties the frame; about:srcdoc keeps it inside.
       // Beside Gift's decision the packet gets a shorter masthead (data-inline), so the score tiles fit on a laptop.
       // Beside the decision, a standard offer's terms already show by Approve, so the packet hides its copy (data-terms).
-      const inFrame = html.replaceAll('href="#', 'href="about:srcdoc#').replace("<html ", remember ? "<html " : packet?.offerType ? "<html data-inline data-terms " : "<html data-inline ");
+      const inFrame = html.replaceAll('href="#', 'href="about:srcdoc#').replace("<html ", remember ? "<html " : offerTerms ? "<html data-inline data-terms " : "<html data-inline ");
       const source = head.test(inFrame) ? inFrame.replace(head, `$&${base}`) : inFrame.replace(/<html\b[^>]*>/i, `$&<head>${base}`);
       if (source === inFrame) throw new Error();
       const titleTag = html.match(/<title>[^<]*<\/title>/i)?.[0] ?? "";
@@ -402,8 +404,9 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       )}
       {awaitingSignOff && (packet ? (
         <>
-          {/* What Gift approves, beside the button: the letter's terms (Sol review, rounds 11–12). An older packet's letter is only in the packet. */}
-          {packet.offerType && <p className={css.inspectorMeta}><strong>Proposed offer:</strong> {OFFER_LETTERS[packet.offerType].terms}</p>}
+          {/* What Gift approves, beside the button: the terms paragraph of the stored letter, the text the candidate is sent
+              (Sol review, rounds 11–12; code review, round 20). Without one, the letter is only in the packet. */}
+          {offerTerms && <p className={css.inspectorMeta}><strong>Proposed offer:</strong> {offerTerms}</p>}
           <div className={css.signOffActions}>
             <div>
               <button type="button" ref={approveButton} className={css.primary} disabled={signOffDisabled || !!approveBlock} aria-describedby={[pauseReason, instruction, approveReason].filter(Boolean).join(" ")} onClick={() => {

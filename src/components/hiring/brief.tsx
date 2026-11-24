@@ -62,6 +62,18 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   const [editCount, setEditCount] = useState(0);
   const [lastSent, setLastSent] = useState(() => brief.rubric ? { total: rubricTotals(brief.rubric).total, max: rubricTotals(brief.rubric).max, editCount: 0 } : null);
   const [decision, setDecision] = useState(brief.decision);
+  // An in-place refresh can bring scores or a recommendation sent from another device (the phone). They replace what
+  // this page showed, so it never asks for scores again over sent ones (code review, round 20).
+  const serverRubric = brief.rubric ? JSON.stringify(brief.rubric) : null;
+  const [seenRubric, setSeenRubric] = useState(serverRubric);
+  if (serverRubric !== seenRubric) {
+    setSeenRubric(serverRubric);
+    if (brief.rubric && !lastSent) {
+      const sent = rubricTotals(brief.rubric);
+      setLastSent({ total: sent.total, max: sent.max, editCount });
+    }
+  }
+  if (brief.decision && !decision) setDecision(brief.decision);
   const [doc, setDoc] = useState<Doc>("resume");
   const [paperOpened, setPaperOpened] = useState(false);
   const unsent = lastSent !== null && lastSent.editCount !== editCount;
@@ -87,7 +99,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   }, [checking]);
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin || event.data?.type !== "hiring-refresh") return;
+      if (event.origin !== window.location.origin || event.source !== window.parent || event.data?.type !== "hiring-refresh") return;
       asked.current = typeof event.data.part === "string" ? event.data.part : "";
       // A refresh at mock start is not a question about the recommendation, so it says nothing (critic review, round 19).
       if (asked.current === "recommendation") setChecked(true);
@@ -187,6 +199,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
               <h2 className={b.panelTitle}>Mock scores</h2>
               {!brief.mockEnded && brief.form !== "closed" && !decision && <p className={c.note}>Send scores during the mock.</p>}
               <BriefRubric
+                key={brief.rubric ? "sent" : "new"}
                 saved={brief.rubric}
                 form={brief.form}
                 url={rubricUrl}

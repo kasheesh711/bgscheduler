@@ -68,21 +68,26 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
   }, []);
   const draftKey = `hiring-paper-draft:${view.id}`;
   const [restored, setRestored] = useState(false);
+  // The marks and comment as the page opened, so a copy is kept only after a change.
+  const [start] = useState(() => JSON.stringify({ marks, comment }));
   useEffect(() => {
+    // For this tab only (sessionStorage), and only after a change: marks and comments do not stay on a shared device
+    // (code review, round 20).
     try {
       if (!restored) {
         setRestored(true);
-        const draft = JSON.parse(localStorage.getItem(draftKey) ?? "null") as { updatedAt?: string; marks?: Record<string, string>; comment?: string } | null;
+        localStorage.removeItem(draftKey);
+        const draft = JSON.parse(sessionStorage.getItem(draftKey) ?? "null") as { updatedAt?: string; marks?: Record<string, string>; comment?: string } | null;
         if (draft?.updatedAt === view.updatedAt && draft.marks) {
           setMarks((current) => Object.fromEntries(Object.keys(current).map((id) => [id, typeof draft.marks?.[id] === "string" ? draft.marks[id] : current[id]])));
           if (typeof draft.comment === "string") setComment(draft.comment);
         }
-      } else if (outcome || view.done || !view.open) localStorage.removeItem(draftKey);
-      else localStorage.setItem(draftKey, JSON.stringify({ updatedAt: view.updatedAt, marks, comment }));
+      } else if (outcome || view.done || !view.open || JSON.stringify({ marks, comment }) === start) sessionStorage.removeItem(draftKey);
+      else sessionStorage.setItem(draftKey, JSON.stringify({ updatedAt: view.updatedAt, marks, comment }));
     } catch {
       // Private mode or a full store: the page still works, without the copy.
     }
-  }, [draftKey, restored, outcome, view.done, view.open, view.updatedAt, marks, comment]);
+  }, [draftKey, restored, start, outcome, view.done, view.open, view.updatedAt, marks, comment]);
   const bad = view.questions.filter((q) => {
     const value = Number(marks[q.id]);
     return marks[q.id] === "" || !Number.isFinite(value) || value < 0 || value > q.max;
@@ -147,9 +152,11 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
       <div className={k.split}>
       {/* The paper beside the marks on a wide screen, above them on a phone. Drawn on the page: a PDF frame is blank on Safari and phones. */}
       <section className={k.paper} aria-label="Marked paper">
-        <h2 className={`${c.stepTitle} ${k.paperHead}`}>Marked paper
+        {/* The link sits beside the heading, not in it, so it is not part of the heading's name (code review, round 20). */}
+        <div className={k.paperHead}>
+          <h2 className={c.stepTitle}>Marked paper</h2>
           <a className={k.fullPaper} href={`/api/hiring/paper-check/${token}/paper`} target="_blank" rel="noreferrer">View full paper ↗</a>
-        </h2>
+        </div>
         <PdfPages src={`/api/hiring/paper-check/${token}/paper`} runtime={`/api/hiring/paper-check/${token}/runtime`} title={`Marked paper of ${view.name}`} maxPages={40} />
       </section>
       <section className={`${c.facts} ${k.marks}`}>

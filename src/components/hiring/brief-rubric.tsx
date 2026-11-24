@@ -62,8 +62,9 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       if (!restored.current) {
         restored.current = true;
         const edit = read(sessionStorage);
-        // Only over scores that were sent; with none on the server the copy is stale (critic review, round 19).
-        if (edit && lastSent) {
+        // Only over scores that were sent, and only while they can still change: with none on the server, a sent
+        // recommendation or a closed form, the copy is stale (critic and code reviews, rounds 19–20).
+        if (edit && lastSent && !decisionSent && form !== "closed") {
           apply(edit);
           setEditing(true);
           onEdit();
@@ -220,7 +221,8 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                     {/* One slider per item (Kevin, 24 Nov 2026). Its first stop is "not scored", then 1–10 with the numbers under it. */}
                     <div className={b.slider} data-band={selected ? band(selected) : undefined} onClick={(event) => {
                       // iOS Safari moves a range input only by dragging the thumb. A tap (not a scroll) fires click.
-                      if (event.target instanceof HTMLInputElement && event.detail === 0) return;
+                      // No change while a send is in flight; the fieldset disables only the input itself (code review, round 20).
+                      if (pending || (event.target instanceof HTMLInputElement && event.detail === 0)) return;
                       const box = event.currentTarget.getBoundingClientRect();
                       selectScore(id, Math.max(0, Math.min(ITEM_MAX, Math.round(((event.clientX - box.left - 14) / (box.width - 28)) * ITEM_MAX))));
                     }}>

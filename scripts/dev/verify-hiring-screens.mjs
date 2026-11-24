@@ -38,6 +38,7 @@ import { HiringStaffPreview } from "@/components/hiring/staff-preview";
 import { BookingShell } from "@/components/hiring/booking";
 import { BriefShell, InterviewerBrief, ScheduleLink } from "@/components/hiring/brief";
 import { PaperCheck } from "@/components/hiring/paper-check";
+import { OFFER_LETTERS } from "@/lib/hiring/offer-letters";
 
 const assessment = (summary: string) => ({
   summary, briefSummary: summary, subjects: [{ subject: "Mathematics", relevant: true, evidence: "Taught IGCSE", reason: "Named in the resume" }],
@@ -267,7 +268,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       return new Response(JSON.stringify({ ok: true }));
     }
     return new Response(JSON.stringify({ access: GIFT ? payload.reviewAccess : { hr: true, gift: false }, stage: GIFT ? "review" : "mock_booked",
-      callNotes: "Gave a specific example of adapting a lesson.", packet: GIFT ? { id: "packet", behavioral: "Gave a specific example of adapting a lesson.", offer: "Hourly rate 600 THB, 10 hours a week.", offerType: "part_time" } : reviewPacket,
+      callNotes: "Gave a specific example of adapting a lesson.", packet: GIFT ? { id: "packet", behavioral: "Gave a specific example of adapting a lesson.", offer: OFFER_LETTERS.part_time.text("Reply Passed", "Mathematics"), offerType: "part_time" } : reviewPacket,
       packetValid: new URLSearchParams(location.search).get("stale") === "unknown" ? null : !location.search.includes("stale=1"), appointment: null }));
   }
   if (url.pathname === "/api/hiring/marking") {
