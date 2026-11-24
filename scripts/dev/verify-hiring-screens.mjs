@@ -1213,19 +1213,30 @@ try {
     assert.ok(await page.getByRole("navigation", { name: /hiring list/ }).evaluate((nav) => nav.scrollWidth <= nav.clientWidth), "the list scrolls sideways");
   });
   await check("the brief's Next unscored button lands on the first unscored slider, clear of the send bar", async () => {
+    // Inside the Heads workspace at 1280, where the form is narrowest on a laptop (critic review, round 17).
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto(`${origin}/hiring/brief/sample-token?brief=open&embed=1`);
-    await page.getByRole("heading", { name: "Mock scores" }).waitFor();
-    const sliders = page.getByRole("slider");
-    for (const i of [0, 1, 2]) await sliders.nth(i).fill("7");
-    await page.getByRole("button", { name: "Next unscored" }).click();
-    const landed = await page.evaluate(() => {
+    await page.goto(`${origin}/?roles=1&me=Ek`);
+    await page.getByRole("navigation", { name: /hiring list/ }).getByRole("link", { name: /Reply Low/ }).click();
+    const frame = page.frameLocator("#open-item iframe");
+    await frame.getByRole("heading", { name: "Mock scores" }).waitFor();
+    for (const i of [0, 1, 2]) await frame.getByRole("slider").nth(i).fill("7");
+    await frame.getByRole("button", { name: "Next unscored" }).click();
+    const brief = page.frames().find((candidate) => candidate.url().includes("/hiring/brief/"));
+    const landed = await brief.evaluate(() => {
       const active = document.activeElement;
       const ranges = [...document.querySelectorAll('input[type="range"]')];
       const bar = document.querySelector("[data-sticky]").getBoundingClientRect();
       return { index: ranges.indexOf(active), value: active?.value, clear: active.getBoundingClientRect().bottom <= bar.top };
     });
     assert.deepEqual(landed, { index: 3, value: "0", clear: true });
+  });
+  await check("the paper check's comment jump puts focus in the comment field", async () => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/?roles=1&me=Ek`);
+    const frame = page.frameLocator("#open-item iframe");
+    await frame.getByRole("button", { name: "Go to the comment ↓" }).click();
+    const paper = page.frames().find((candidate) => candidate.url().includes("/hiring/paper-check/"));
+    assert.equal(await paper.evaluate(() => document.activeElement?.tagName), "TEXTAREA");
   });
   await check("Gift signs from her list on a phone and focus stays on the receipt", async () => {
     await page.setViewportSize({ width: 390, height: 844 });

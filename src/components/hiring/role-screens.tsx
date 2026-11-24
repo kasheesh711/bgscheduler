@@ -495,7 +495,8 @@ function visitItem(visit: ReturnType<typeof headVisit>, today: string, live = fa
     // The whole appointment in one place: the time range and the calendar date (Sol review, rounds 13–14).
     time: row.mockStart && end ? `${row.mockStart}–${end}` : row.mockStart ?? row.paperStart,
     day: row.date === today ? "Today" : shortDay(row.date),
-    detail: `${row.subject ?? "Subject not recorded"} · ${mock ? "Mock" : "Paper test"}`,
+    // A no-break space keeps the dot with the subject when the line wraps.
+    detail: `${row.subject ?? "Subject not recorded"}\u00a0· ${mock ? "Mock" : "Paper test"}`,
     tags: [
       ...(status ? [{ text: status }] : []),
       ...(scored && !decision && !due ? [{ text: "Scores sent", tone: "hire" as const }] : []),
