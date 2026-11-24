@@ -50,6 +50,7 @@ import {
   preScreenPoints,
   highSchoolFraction,
   highSchoolMatch,
+  profileParts,
   profileScore,
   workRightsPenalty,
   supportedVisitSubjects,
@@ -1383,7 +1384,25 @@ export async function briefMock(token: string, db: Database, now: Date, kinds: (
 export async function briefCandidateId(token: string, db: Database = getDb(), now = new Date()) {
   return (await briefMock(token, db, now, ["mock", "call"])).candidateId;
 }
-/** What the interviewer sees. No contact details and no scores (Kevin's decision, 12 Nov 2026). */
+/** The résumé (ATS) score in parts, with the same numbers as the final review. Null before the résumé is assessed. */
+function briefAts(
+  candidate: Pick<typeof s.hiringCandidates.$inferSelect, "profileAssessment" | "universityAssessment" | "workRightsAnswer">,
+  config: HiringConfig,
+) {
+  if (!candidate.profileAssessment) return null;
+  const prestige = candidate.universityAssessment?.fraction ?? 0;
+  const school = highSchoolFraction(candidate.profileAssessment, config);
+  const penalty = workRightsPenalty(candidate.workRightsAnswer, config);
+  return {
+    score: profileScore(candidate.profileAssessment, config.profileWeights, prestige, penalty, school),
+    parts: profileParts(candidate.profileAssessment, config.profileWeights, prestige, school),
+    penalty,
+  };
+}
+/**
+ * What the interviewer sees. No contact details. The résumé score breakdown shows (Kevin, 24 Nov 2026; before that,
+ * no AI score showed: Kevin, 12 Nov 2026). The paper marks and other people's mock scores stay off the page.
+ */
 export async function briefView(token: string, db: Database = getDb(), now = new Date()) {
   const mock = await briefMock(token, db, now);
   const [candidate] = await db
@@ -1392,6 +1411,9 @@ export async function briefView(token: string, db: Database = getDb(), now = new
       preScreen: s.hiringCandidates.preScreen,
       resumePath: s.hiringCandidates.resumePath,
       resumeType: s.hiringCandidates.resumeType,
+      profileAssessment: s.hiringCandidates.profileAssessment,
+      universityAssessment: s.hiringCandidates.universityAssessment,
+      workRightsAnswer: s.hiringCandidates.workRightsAnswer,
     })
     .from(s.hiringCandidates)
     .where(eq(s.hiringCandidates.id, mock.candidateId));
@@ -1431,6 +1453,7 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     interviewer: mock.interviewerKey,
     location: config.location,
     answers: candidate.preScreen,
+    ats: briefAts(candidate, config),
     resume: storedResume(mock.candidateId, candidate.resumePath, candidate.resumeType)?.extension ?? null,
     // The interviewer's own scores for this mock, to show again. Never an AI score or another person's.
     rubric: own.rubric,

@@ -3,9 +3,13 @@ import { ITEM_MAX, RUBRIC, RUBRIC_ITEMS, stressSuggestion, type MockRubric, type
 import { BAND_LABELS, RUBRIC_GUIDE, STRESS_ELEMENTS } from "@/lib/hiring/rubric-guide";
 import type { BriefPending } from "./brief";
 import c from "./booking.module.css";
+import b from "./brief.module.css";
 
-const TILE_SCORES = Array.from({ length: ITEM_MAX }, (_, index) => ITEM_MAX - index);
-const BAND_SCORES = [10, 7, 4, 1];
+const SCORES = Array.from({ length: ITEM_MAX }, (_, index) => index + 1);
+// The printed levels are 1, 4, 7 and 10. A score between two levels takes the colour of the nearer one.
+const band = (score: number) => (score >= 9 ? 3 : score >= 6 ? 2 : score >= 3 ? 1 : 0);
+const LEVELS = BAND_LABELS.map((label, index) => ({ label, index })).reverse();
+type Draft = { items: Partial<Record<RubricItem, number>>; comments: string; ticks: StressTicks; checksDone: boolean | null };
 
 /** The interviewer's score form for one mock. The server checks the scores again and calculates the total. */
 export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSent, pending, setPending, onEdit, onSent }: {
@@ -29,6 +33,31 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   const [state, setState] = useState<"idle" | "sent">("idle");
   const [editing, setEditing] = useState(!lastSent);
   const [error, setError] = useState("");
+  const [open, setOpen] = useState<RubricItem | null>(null);
+  // Scores that are not sent yet stay in this browser, so a reload in the middle of a mock does not lose them.
+  const draftKey = `hiring-brief-draft:${url}`;
+  const restored = useRef(false);
+  useEffect(() => {
+    try {
+      // Sent scores come from the server. A copy left from an edit after a send must not stay on a shared device.
+      if (saved) localStorage.removeItem(draftKey);
+      else if (!restored.current) {
+        restored.current = true;
+        const draft = JSON.parse(localStorage.getItem(draftKey) ?? "null") as Partial<Draft> | null;
+        if (draft && typeof draft.items === "object" && draft.items) {
+          const score = (id: RubricItem) => Number(draft.items?.[id]);
+          setItems(Object.fromEntries(RUBRIC_ITEMS.filter((id) => Number.isInteger(score(id)) && score(id) >= 1 && score(id) <= ITEM_MAX).map((id) => [id, score(id)])));
+          setComments(typeof draft.comments === "string" ? draft.comments : "");
+          const kept = { listens: !!draft.ticks?.listens, explains: !!draft.ticks?.explains, plan: !!draft.ticks?.plan };
+          setTicks(kept);
+          setTicksUsed(Object.values(kept).some(Boolean));
+          setChecksDone(typeof draft.checksDone === "boolean" ? draft.checksDone : null);
+        }
+      } else if (state !== "sent") localStorage.setItem(draftKey, JSON.stringify({ items, comments, ticks, checksDone } satisfies Draft));
+    } catch {
+      // Private mode or a full store: the form still works, without the copy.
+    }
+  }, [draftKey, saved, state, items, comments, ticks, checksDone]);
   const feedback = useRef<HTMLParagraphElement>(null);
   const summary = useRef<HTMLDivElement>(null);
   const firstScore = useRef<HTMLInputElement>(null);
@@ -71,6 +100,11 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       const body = (await response.json().catch(() => ({}))) as { total?: number; error?: string };
       if (!response.ok || typeof body.total !== "number") setError(body.error ?? "The scores were not saved. Try again.");
       else {
+        try {
+          localStorage.removeItem(draftKey);
+        } catch {
+          // No store, so no copy to remove.
+        }
         setEditing(false);
         setState("sent");
         onSent(body.total);
@@ -106,7 +140,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       onFocus={(event) => {
         const bar = sendBar.current;
         if (!bar || bar.contains(event.target)) return;
-        const row = event.target.closest(`.${c.scoreRow}, label`) ?? event.target;
+        const row = event.target.closest(`.${b.row}, label`) ?? event.target;
         const bounds = row.getBoundingClientRect();
         const sticky = bar.getBoundingClientRect();
         // A browser can skip its focus scroll when a control is already in the viewport.
@@ -119,77 +153,87 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
         if (!disabled) void send();
       }}
     >
+      <div className={b.row} aria-hidden="true">
+        <span />
+        <div className={b.scale}>
+          {LEVELS.map(({ label }) => <span key={label}>{label}</span>)}
+        </div>
+      </div>
       {RUBRIC.map(({ part, items: partItems }) => (
-        <fieldset key={part} className={c.rubricPart} disabled={!!pending}>
-          <legend className={c.factLabel}>{part}</legend>
+        <fieldset key={part} className={b.part} disabled={!!pending}>
+          <legend>{part}</legend>
           {partItems.map(([id, label]) => {
-            const labelId = `${rubricId}-${id}`;
             const selected = items[id] ?? 0;
             return (
-              <fieldset key={id} className={c.criterionScore}>
-                <legend>{label}</legend>
-                <details className={c.note}>
-                  <summary aria-label={`Guide: what each score means for ${label}`}>Guide</summary>
-                  {RUBRIC_GUIDE[id].hint && <p><em>{RUBRIC_GUIDE[id].hint}</em></p>}
-                  {id === "stress" && <p>The ticks suggest a score. You choose the score.</p>}
-                  <dl>
-                    {RUBRIC_GUIDE[id].bands.map((band, index) => (
-                      <div key={BAND_LABELS[index]}>
-                        <dt className={c.factLabel}>{BAND_LABELS[index]}</dt>
-                        <dd>{band}</dd>
+              <div key={id}>
+                <div className={b.row}>
+                  <button type="button" className={b.item} aria-expanded={open === id} aria-label={`${label}: what each level means`} onClick={() => setOpen(open === id ? null : id)}>
+                    {label}
+                  </button>
+                  <div className={b.barLine}>
+                    <div className={b.bar} role="radiogroup" aria-label={label} data-band={selected ? band(selected) : undefined}>
+                      {SCORES.map((score) => (
+                        <label key={score} className={b.cell} data-on={score <= selected ? "" : undefined} title={String(score)}>
+                          <input
+                            type="radio"
+                            // Edit scores puts focus on the first item's own score, so a key press does not change it.
+                            ref={id === RUBRIC_ITEMS[0] && score === (selected || 1) ? firstScore : undefined}
+                            name={`${rubricId}-${id}`}
+                            value={score}
+                            aria-label={String(score)}
+                            className={c.hidden}
+                            checked={selected === score}
+                            onChange={() => selectScore(id, score)}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                    <output className={b.value}>{selected || "–"}</output>
+                  </div>
+                  {id === "stress" && (
+                    <div className={b.ticks}>
+                      {STRESS_ELEMENTS.map(({ key, label: element }) => (
+                        <label key={key}>
+                          <input
+                            type="checkbox"
+                            checked={ticks[key]}
+                            onChange={(event) => {
+                              setTicks({ ...ticks, [key]: event.target.checked });
+                              setTicksUsed(true);
+                              changed();
+                            }}
+                          />
+                          {element}
+                        </label>
+                      ))}
+                      {/* Before the head uses the ticks, "Suggested score: 1" reads as advice. It stays once a box was touched, also when all are clear again. */}
+                      <span className={c.note} aria-live="polite">
+                        {ticksUsed && `Suggested score: ${stressSuggestion(ticks)}.`}
+                      </span>
+                    </div>
+                  )}
+                </div>
+                {open === id && (
+                  <dl className={b.levels}>
+                    {LEVELS.map(({ label: level, index }) => (
+                      <div key={level}>
+                        <dt>{level}</dt>
+                        <dd>{RUBRIC_GUIDE[id].bands[index]}</dd>
                       </div>
                     ))}
+                    {RUBRIC_GUIDE[id].hint && <p className={c.note}><em>{RUBRIC_GUIDE[id].hint}</em></p>}
                   </dl>
-                </details>
-                {id === "stress" && (
-                  <div className={c.field}>
-                    {STRESS_ELEMENTS.map(({ key, label: element }) => (
-                      <label key={key}>
-                        <input
-                          type="checkbox"
-                          checked={ticks[key]}
-                          onChange={(event) => {
-                            setTicks({ ...ticks, [key]: event.target.checked });
-                            setTicksUsed(true);
-                            changed();
-                          }}
-                        />{" "}
-                        {element}
-                      </label>
-                    ))}
-                    {/* Before the head uses the ticks, "Suggested score: 1" reads as advice. It stays once a box was touched, also when all are clear again. */}
-                    <p className={`${c.note} empty:absolute`} aria-live="polite">
-                      {ticksUsed && `Suggested score: ${stressSuggestion(ticks)}.`}
-                    </p>
-                  </div>
                 )}
-                <div className={`${c.scoreRow} ${c.scoreTiles}`}>
-                  {TILE_SCORES.map((score) => (
-                    <label key={score} className={c.scoreTile} data-band={BAND_SCORES.includes(score) ? "" : undefined}>
-                      <input
-                        type="radio"
-                        ref={id === RUBRIC_ITEMS[0] && score === ITEM_MAX ? firstScore : undefined}
-                        name={labelId}
-                        value={score}
-                        className={c.hidden}
-                        checked={selected === score}
-                        onChange={() => selectScore(id, score)}
-                      />
-                      {score}
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
+              </div>
             );
           })}
         </fieldset>
       ))}
-      <fieldset className={c.rubricPart} disabled={!!pending}>
-        <legend className={c.factLabel}>School&apos;s required checks completed</legend>
-        <p className={c.note}>Not scored. Must be Yes to hire.</p>
-        <div className={c.scoreTiles}>
+      <div className={b.extra}>
+        <fieldset className={b.choices} disabled={!!pending}>
+          <legend>School&apos;s required checks completed <span className={c.note}>(must be Yes to hire)</span></legend>
           {([[true, "Yes"], [false, "No"]] as const).map(([value, text]) => (
-            <label key={text} className={c.scoreTile}>
+            <label key={text} className={b.choice}>
               <input
                 type="radio"
                 name={`${rubricId}-checks`}
@@ -203,23 +247,23 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
               {text}
             </label>
           ))}
-        </div>
-      </fieldset>
-      <label className={c.field}>
-        Comments
-        <textarea
-          className={c.input}
-          rows={3}
-          maxLength={4000}
-          disabled={!!pending}
-          value={comments}
-          onChange={(event) => {
-            setComments(event.target.value);
-            onEdit();
-            if (state === "sent") setState("idle");
-          }}
-        />
-      </label>
+        </fieldset>
+        <label className={c.field}>
+          Comments
+          <textarea
+            className={c.input}
+            rows={2}
+            maxLength={4000}
+            disabled={!!pending}
+            value={comments}
+            onChange={(event) => {
+              setComments(event.target.value);
+              onEdit();
+              if (state === "sent") setState("idle");
+            }}
+          />
+        </label>
+      </div>
       {state === "sent" && <p ref={feedback} role="status" className={c.success} tabIndex={-1}>{sentMessage}</p>}
       {saveError}
       <div ref={sendBar} className={c.field} data-sticky="">
@@ -241,9 +285,12 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                   : `${scored} of ${RUBRIC_ITEMS.length} scored`}</p>
               <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
             </div>
-            <button type="submit" className={c.button} disabled={disabled}>
-              {pending === "scores" ? "Sending…" : "Send scores"}
-            </button>
+            <div className={b.sendEnd}>
+              <span className={b.total} aria-label="Total so far">{RUBRIC_ITEMS.reduce((sum, id) => sum + (items[id] ?? 0), 0)}/{RUBRIC_ITEMS.length * ITEM_MAX}</span>
+              <button type="submit" className={c.button} disabled={disabled}>
+                {pending === "scores" ? "Sending…" : "Send scores"}
+              </button>
+            </div>
           </>
         )}
       </div>

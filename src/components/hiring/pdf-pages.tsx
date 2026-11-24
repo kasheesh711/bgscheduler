@@ -14,7 +14,8 @@ const FAILED = "This PDF could not be drawn here. Use Download to open it.";
  * The pages of a PDF, drawn on the page itself. The browser's own PDF viewer is not used: Safari, phones and a
  * sandboxed response each show it blank, and a frame takes the drag that moves a card.
  */
-export function PdfPages({ src, title }: { src: string; title: string }) {
+/** `runtime` is the folder of the pdf.js files. A page with no staff session gives its own (the interviewer brief). */
+export function PdfPages({ src, title, runtime = RUNTIME }: { src: string; title: string; runtime?: string }) {
   const box = useRef<HTMLDivElement>(null);
   const sheets = useRef<(HTMLCanvasElement | null)[]>([]);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
@@ -40,8 +41,8 @@ export function PdfPages({ src, title }: { src: string; title: string }) {
       // The legacy build: HR opens the cards on Safari and on older phones.
       const lib = await import("pdfjs-dist/legacy/build/pdf.mjs");
       if (stopped) return;
-      lib.GlobalWorkerOptions.workerSrc = `${RUNTIME}/worker-legacy.mjs?v=${lib.version}`;
-      task = lib.getDocument({ data, cMapUrl: `${RUNTIME}/`, cMapPacked: true, standardFontDataUrl: `${RUNTIME}/`, wasmUrl: `${RUNTIME}/` });
+      lib.GlobalWorkerOptions.workerSrc = `${runtime}/worker-legacy.mjs?v=${lib.version}`;
+      task = lib.getDocument({ data, cMapUrl: `${runtime}/`, cMapPacked: true, standardFontDataUrl: `${runtime}/`, wasmUrl: `${runtime}/` });
       const opened = await task.promise;
       if (!stopped) setPdf(opened);
     })().catch(() => {
@@ -54,7 +55,7 @@ export function PdfPages({ src, title }: { src: string; title: string }) {
       // Safari on a phone frees a canvas late and has a total limit, so each one gives its memory back now.
       for (const canvas of holder?.querySelectorAll("canvas") ?? []) canvas.width = canvas.height = 0;
     };
-  }, [src]);
+  }, [src, runtime]);
 
   const count = pdf ? Math.min(pdf.numPages, MAX_PAGES) : 0;
   useEffect(() => {
