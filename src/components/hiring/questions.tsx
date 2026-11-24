@@ -218,7 +218,8 @@ export function PreScreenQuestions({
     if (!parsed.success) {
       // One plain sentence, and the first open question comes into view. A missing single choice has no message of its own.
       const issue = parsed.error.issues[0];
-      setError(open.length ? `Please answer: ${open.map((c) => c[1]).join(", ")}.` : issue.code === "custom" || issue.code === "too_small" ? issue.message : "Please answer every question.");
+      // Short, so the sticky bar stays small (Opus r8); the page jumps to the first open question.
+      setError(open.length ? `Please answer ${open[0][1]}${open.length > 1 ? ` and ${open.length - 1} more` : ""}.` : issue.code === "custom" || issue.code === "too_small" ? issue.message : "Please answer every question.");
       if (open.length) reveal(open[0][0], true);
       return;
     }
@@ -360,7 +361,7 @@ export function PreScreenQuestions({
             id="q-test"
             title="Your test and mock teaching subject"
             tag="choose one"
-            hint={testable.length && testable.length < subjects.length ? "Greyed subjects have no test now." : undefined}
+            hint={testable.length && testable.length < subjects.length ? "Greyed: no test now." : undefined}
           >
             <Chips
               name="testSubject"
@@ -380,7 +381,7 @@ export function PreScreenQuestions({
         </Q>
       </Section>
       <Section title="When you can teach onsite">
-        <Q id="q-hours" title="Hours you can teach onsite" hideTitle>
+        <Q id="q-hours" title="Tap the hours you can teach, or hold and drag">
           <WeekGrid value={week} onChange={setWeek} disabled={busy} />
         </Q>
         <Q id="q-weekly" title="Hours you can commit each week">

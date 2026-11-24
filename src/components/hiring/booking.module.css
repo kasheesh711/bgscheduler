@@ -798,6 +798,7 @@ input[type="file"].input {
   background: rgb(255 255 255 / 0.06);
 }
 .ticketDate b {
+  font-variant-numeric: lining-nums tabular-nums;
   font-family: var(--serif);
   font-size: 46px;
   font-weight: 600;

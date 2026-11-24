@@ -49,8 +49,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   const [undo, setUndo] = useState<WeekHours | null>(null);
   const undoRef = useRef<HTMLButtonElement>(null);
   const clearRef = useRef<HTMLButtonElement>(null);
-  // Single taps by finger. After the second, one tip shows how to fill a block (Sol r7: help only when it is useful).
-  const [taps, setTaps] = useState(0);
+
   const has = (week: WeekHours, d: number, h: number) => week[d].includes(h);
   function paint(cells: [number, number][], fill: boolean) {
     const next = current.current.map((hours, d) => {
@@ -137,7 +136,6 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
       // A tap: one hour on or off.
       clearTimeout(wait.timer);
       pending.current = null;
-      setTaps((n) => n + 1);
       setFocus(wait.cell);
       paint([wait.cell], !has(current.current, ...wait.cell));
       return;
@@ -282,11 +280,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
           </p>
         )}
         {/* The line is always there, so the grid below never moves when the first hour is chosen. */}
-        {count === 0 && !undo && (
-          <p className={s.readline}>
-            <span className={s.empty}>No hours chosen yet.</span>
-          </p>
-        )}
+        {count === 0 && !undo && <p className={s.readline} aria-hidden />}
         {count === 0 && undo && (
           <p className={s.readline}>
             <span>Cleared.</span>
@@ -322,11 +316,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
       <p id="week-grid-keys" className={s.srOnly}>
         Arrow keys move between hours. Space or Enter chooses or clears an hour.
       </p>
-      {/* On a touch screen the hold is not discoverable: say it from the start, below the grid (Sol r8). A mouse
-          drags at once, so the line is hidden for a fine pointer unless the candidate has tapped twice. */}
-      <p className={s.touchTip} data-shown={taps >= 2 || undefined}>
-        Hold an hour, then drag to fill a block.
-      </p>
+
     </div>
   );
 }

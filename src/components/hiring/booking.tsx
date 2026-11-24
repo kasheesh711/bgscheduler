@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { BookOpen, Check, ChevronLeft, ChevronRight, CircleCheck, FileSignature, Info, MapPin, Video } from "lucide-react";
+import { BookOpen, Check, CircleCheck, FileSignature, Info, MapPin, Video } from "lucide-react";
 import { mockCanFollow, phoneSchema, type Subject, type Slot } from "@/lib/hiring/model";
 import type { bookingView, callView, contractView, visitView } from "@/lib/hiring/service";
 import { PreScreenQuestions } from "./questions";
@@ -90,7 +90,7 @@ export function VisitConfirm({
   return (
     <div className={c.confirm} data-confirm="" data-compact={compact || undefined}>
       {summary}
-      {missing && !error && <p className={c.note}>Still needed: {missing}.</p>}
+      {missing && !error && <p className={c.note}>Next: {missing}.</p>}
       {error && (
         <p role="alert" className={c.alert}>
           <Linked text={error} />
@@ -187,7 +187,6 @@ function Picker<T extends { date: string }>({
   const inWeek = days.filter((d) => mondayOf(d) === week && items.some((i) => i.date === d && keyOf(i) !== currentKey));
   const active = inWeek.includes(picked) ? picked : chosenDate && inWeek.includes(chosenDate) ? chosenDate : inWeek[0];
   if (!days.length) return null;
-  const at = weeks.indexOf(week);
   const shown = items.filter((i) => i.date === active);
   const label = (date: string, options: Intl.DateTimeFormatOptions) => part(NOON(date), options);
   return (
@@ -197,22 +196,29 @@ function Picker<T extends { date: string }>({
         <Live at={checkedAt && liveDates.includes(active) ? checkedAt : null} />
       </legend>
       {hint && <p className={c.note}>{hint}</p>}
-      {/* The week label always shows; the arrows only when there is more than one week (Sol r6). */}
-      {/* The week label always shows, so each list says which week it is (Sol r7); arrows only for several weeks. */}
-      {(
-        <div className={cs.weekNav} data-single={weeks.length > 1 ? undefined : ""}>
-          <button type="button" className={cs.arrow} aria-label="Previous week" disabled={at <= 0} hidden={weeks.length < 2} onClick={() => setWeek(weeks[at - 1])}>
-            <ChevronLeft aria-hidden size={20} />
-          </button>
-          <b aria-live="polite">
-            {label(week, { day: "numeric", month: "short" })} – {label(plusDays(week, 6), { day: "numeric", month: "short" })}
-            {zoneNote && <small>Bangkok time</small>}
-          </b>
-          <button type="button" className={cs.arrow} aria-label="Next week" disabled={at >= weeks.length - 1} hidden={weeks.length < 2} onClick={() => setWeek(weeks[at + 1])}>
-            <ChevronRight aria-hidden size={20} />
-          </button>
+      {/* One button per week, so a later week is one tap away (Sol r9), and the shown week is named. */}
+      {weeks.length > 1 ? (
+        <div className={cs.weeks} role="group" aria-label="Week">
+          {weeks.map((w) => (
+            <button
+              key={w}
+              type="button"
+              className={cs.dateWeek}
+              aria-pressed={w === week}
+              aria-label={`Week of ${label(w, { day: "numeric", month: "long" })}`}
+              onClick={() => setWeek(w)}
+            >
+              <span aria-hidden>Week of</span>
+              {label(w, { day: "numeric", month: "short" })}
+            </button>
+          ))}
         </div>
+      ) : (
+        <p className={cs.dateWeek} data-label="">
+          {label(week, { day: "numeric", month: "short" })} – {label(plusDays(week, 6), { day: "numeric", month: "short" })}
+        </p>
       )}
+      {zoneNote && <p className={c.note}>Bangkok time</p>}
       <div className={cs.dates}>
         {Array.from({ length: 7 }, (_, i) => plusDays(week, i)).map((date) => {
           // The booked time while moving is not open, so it does not make its day open either (Sol r7).
@@ -423,6 +429,7 @@ export function VisitBooking({
         setMoving(false);
         setStart("");
         setError("");
+        reveal("move-visit", true);
       }}
     >
       {view.twoDay ? "Keep my current times" : "Keep my current time"}
@@ -443,7 +450,7 @@ export function VisitBooking({
               <>
                 <Steps at={0} />
                 <VisitPlan />
-                <p className={c.note}>After these questions, you choose both times.</p>
+                <p className={c.note}>Then choose both times. They can be on different days.</p>
               </>
             }
           />
@@ -532,13 +539,14 @@ export function VisitBooking({
                   <div className={c.move}>
                     <p className={c.note}>You can move this visit once, up to 24 hours before your test.</p>
                     <button
+                      id="move-visit"
                       type="button"
                       className={c.ghost}
                       disabled={busy || !otherTimes}
                       onClick={() => {
                         setMoving(true);
                         setSaved("");
-                        reveal("times-start");
+                        reveal("times-start", true);
                       }}
                     >
                       Move this visit
@@ -598,7 +606,7 @@ export function VisitBooking({
                 zoneNote={false}
                 id="mock-start"
                 legend="Mock teaching time"
-                hint="1 hour, if you pass"
+                hint="1 hour, if you pass."
                 checkedAt={null}
                 items={laterMocks}
                 keyOf={(m) => m.start}
@@ -613,7 +621,7 @@ export function VisitBooking({
               />
             )}
             {/* While a time is still missing: once both are chosen, nothing is blocked. */}
-            {showForm && (!slot || (view.twoDay && !mock)) && (
+            {showForm && (!slot || (view.twoDay && !mock) || !onsite || !commitment) && (
               <p className={c.help}>
                 No time works?{" "}
                 <a href={LINE_URL} rel="noreferrer">
@@ -632,7 +640,8 @@ export function VisitBooking({
               {keep}
               <VisitConfirm
                 error={error}
-                missing={[!start && "a test time", unchanged && "times that differ from your booking", view.twoDay && !mock && "a mock teaching time", !onsite && !commitment ? "both boxes" : !onsite ? "the address box" : !commitment && "the teaching hours box"].filter(Boolean).join(", ")}
+                // One next step at a time (Sol r9).
+                missing={[!start && "choose a test time", unchanged && "choose times that differ from your booking", view.twoDay && !mock && "choose a mock teaching time", !onsite && !commitment ? "tick both boxes" : !onsite ? "tick the address box" : !commitment && "tick the teaching hours box"].filter(Boolean)[0] || ""}
                 disabled={busy || !start || (view.twoDay && !mock) || !onsite || !commitment || unchanged}
                 label={busy ? "Confirming…" : view.visit ? (view.twoDay ? "Confirm new times" : "Confirm new time") : view.twoDay ? "Confirm both times" : "Confirm visit"}
                 onConfirm={book}
@@ -642,13 +651,13 @@ export function VisitBooking({
                       <div>
                         <span>Test</span>
                         <b>
-                          {part(slot.examStart, { day: "numeric", month: "short" })}, {time(slot.examStart)}
+                          {short(slot.examStart)}, {time(slot.examStart)}
                         </b>
                       </div>
                       {view.twoDay && (
                         <div>
                           <span>Mock, if you pass</span>
-                          <b>{mock ? `${part(mock.start, { day: "numeric", month: "short" })}, ${time(mock.start)}` : "Choose a time"}</b>
+                          <b>{mock ? `${short(mock.start)}, ${time(mock.start)}` : "Choose a time"}</b>
                         </div>
                       )}
                     </div>
@@ -812,7 +821,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
           {keep}
           <VisitConfirm
             error={error}
-            missing={[!start && "a time", !phoneOk && "your phone number"].filter(Boolean).join(", ")}
+            missing={[!start && "choose a time", !phoneOk && "add your phone number"].filter(Boolean)[0] || ""}
             disabled={busy || !start || !phoneOk}
             label={busy ? "Confirming…" : view.call ? "Confirm new time" : `Confirm ${appointment}`}
             onConfirm={book}

@@ -46,7 +46,7 @@ describe("VisitBooking", () => {
     expect(html).toContain("Questions");
     expect(html).toContain('aria-current="step"');
     expect(html).not.toContain("docs.google.com");
-    for (const question of ["Highest degree", "Field of study", "Subjects you can teach confidently", "English level", "Hours you can teach onsite", "Why do you want to tutor with BeGifted?", "Save and see times"])
+    for (const question of ["Highest degree", "Field of study", "Subjects you can teach confidently", "English level", "Tap the hours you can teach", "Why do you want to tutor with BeGifted?", "Save and see times"])
       expect(html).toContain(question);
     expect(html).toContain("1 hour, if you pass");
     expect(html).not.toContain("I will come to this address.");

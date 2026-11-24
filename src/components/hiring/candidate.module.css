@@ -112,11 +112,17 @@
 .chip:hover {
   border-color: #b8ae98;
 }
-/* The check keeps its space when hidden, so a chip does not grow when chosen (Sol r7). */
+/* The check sits in the chip's own padding, so the label stays centred and the width never changes (Sol r7, Opus r8). */
+.chip {
+  position: relative;
+  padding: 0 22px;
+}
 .chip svg {
-  flex: none;
+  position: absolute;
+  left: 6px;
+  width: 12px;
+  height: 12px;
   visibility: hidden;
-  margin-left: -4px;
 }
 .chip:has(input:checked) {
   border-color: var(--ink);
@@ -273,7 +279,7 @@
 .hour {
   align-self: start;
   transform: translateY(-7px);
-  font-family: var(--mono);
+  font-variant-numeric: lining-nums tabular-nums;
   font-size: 11px;
   color: var(--muted);
   text-align: right;
@@ -453,6 +459,7 @@
   color: var(--muted);
 }
 .date b {
+  font-variant-numeric: lining-nums tabular-nums;
   font-family: var(--serif);
   font-size: 24px;
   font-weight: 600;
@@ -869,7 +876,7 @@
 .hourEnd {
   grid-column: 1;
   height: 0;
-  font-family: var(--mono);
+  font-variant-numeric: lining-nums tabular-nums;
   font-size: 11px;
   color: var(--muted);
   text-align: right;
@@ -981,5 +988,66 @@
 @media (pointer: coarse) {
   .touchTip {
     display: block;
+  }
+}
+
+/* Week buttons: one tap to any week (Sol r9). */
+.weeks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+  gap: 6px;
+}
+.dateWeek {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  min-height: 48px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.dateWeek span {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.dateWeek[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fbf7ee;
+}
+.dateWeek[aria-pressed="true"] span {
+  color: #d9d4c8;
+}
+.dateWeek:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.dateWeek[data-label] {
+  display: block;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: center;
+  cursor: default;
+}
+/* Narrow phones: choices in two even columns, so a long label wraps instead of taking a row each (Sol r9). */
+@media (max-width: 359px) {
+  .chips {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .chip {
+    justify-content: flex-start;
+    white-space: normal;
+    line-height: 1.2;
+    padding: 6px 12px 6px 22px;
   }
 }
