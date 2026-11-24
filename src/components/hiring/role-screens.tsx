@@ -663,6 +663,8 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     setPicked(null);
     setShown(null);
     setSignedItems([]);
+    setSavedFor(null);
+    setAnnounce("");
     if (readOnly) return;
     try {
       window.localStorage.setItem(HEAD_KEY, value);
@@ -834,6 +836,11 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
         <li key={item.id} id={`row-${item.id}`}>
           <ItemLink item={item} wide={wide} readOnly={readOnly} paneId={`${paneId}-${item.id}`} selected={selected?.id === item.id}
             onSelect={() => {
+              // Another row: the save receipt and its announcement belong to the row left behind (Sol review, round 23).
+              if (selected?.id !== item.id) {
+                setSavedFor(null);
+                setAnnounce("");
+              }
               // The open row that now points elsewhere (Recommend after the mock) asks its page to fetch itself again in
               // place, so the open tab and unsent edits stay; a page with no frame loads again (Sol review, rounds 15–17).
               if (wide && selected?.id === item.id && paneAt && hashOf(item.href) !== paneAt.hash) {
@@ -856,9 +863,9 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   return (
     <div className={r.workspace} data-heads-review="" data-empty={key && fixedHead && !all.length ? "" : undefined}>
       {/* The list is navigation at every width; on a phone the open row's form is a labelled region inside it. */}
-      {/* One status that is always there and outside the list (which hides when empty on a laptop), so saves are announced
-          (critic and Sol reviews, rounds 21–22). */}
-      <p className="sr-only" role="status">{announce || (name && `${name} · ${nextMock
+      {/* One status that is always there and outside the list (which hides when empty on a laptop). While the saved row is
+          open it holds the save, empty during the reset so a repeat is read; otherwise the schedule (reviews, rounds 21–23). */}
+      <p className="sr-only" role="status">{savedIn ? announce : (name && `${name} · ${nextMock
           ? `${mockNow ? "mock now" : "next mock"} ${shortDay(nextMock.row.date)}, ${nextMock.row.mockStart}` : "no mock booked"}`)}</p>
       <nav id="hiring-list" tabIndex={-1} className={r.rail} aria-label={name ? `${nickname(name)}'s hiring list` : "Hiring list"}>
         {!fixedHead && (

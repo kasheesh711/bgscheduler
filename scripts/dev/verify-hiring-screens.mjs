@@ -1336,6 +1336,14 @@ try {
     await page.frameLocator("#open-item iframe").getByRole("heading", { name: /Mock scores/ }).waitFor();
     assert.equal(await list.getByText(/^Nothing to (do|score)/).count(), 0);
   });
+  await check("the list announces a save once and returns to the schedule when another row opens", async () => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/?roles=1&me=Ek`);
+    await page.frameLocator("#open-item iframe").getByRole("button", { name: "Submit my marks" }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll('p.sr-only[role="status"]')].some((p) => p.textContent === "Marks saved for Sample Joy"));
+    await page.getByRole("navigation", { name: /hiring list/ }).getByRole("link", { name: /Reply Low/ }).click();
+    await page.waitForFunction(() => ![...document.querySelectorAll('p.sr-only[role="status"]')].some((p) => p.textContent?.startsWith("Marks saved")));
+  });
   await check("the paper check's comment jump puts focus in the comment field", async () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`${origin}/?roles=1&me=Ek`);
