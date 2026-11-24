@@ -183,8 +183,11 @@ export function setWorkRightsPenalty(config: HiringConfig, answer: string, point
 export const HEAD_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"] as const;
 export const DEFAULT_WINDOW = { start: "10:00", end: "16:00" };
 export type HeadDayState = {
-  /** `fallback`: no attendance record, hours live in Hiring settings. `ended`: the attendance enrollment is switched off. */
-  state: "enrolled" | "ended" | "fallback";
+  /**
+   * `fallback`: no attendance record, hours live in Hiring settings. `ended`: the attendance enrollment is switched off.
+   * `wise`: no attendance record, hours are the head's onsite Wise working hours.
+   */
+  state: "enrolled" | "ended" | "fallback" | "wise";
   week: Week | null;
   /** The date the newest saved schedule starts. Null for a fallback head. */
   from: string | null;
@@ -198,14 +201,48 @@ export function weekWith(days: boolean[], current: Week | null | undefined): Wee
 }
 /** A head with no weekday hours gets no visit times. Visits are Monday to Friday only. */
 export const hasSavedHours = (week: Week | null | undefined) => daysOf(week).some(Boolean);
+type WiseWindow = { weekday: number; startMinute: number; endMinute: number; modality: string };
+const clock = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+/**
+ * Onsite Wise working hours as a week (index 0 is Sunday, as in Wise windows). Mocks are in person, so online
+ * windows do not count. A week holds one window a day: with two onsite windows on a day the longer one is used,
+ * so a mock never falls in the gap between them.
+ */
+export function wiseWeek(windows: WiseWindow[]): Week {
+  const longest: (WiseWindow | undefined)[] = [];
+  for (const w of windows) {
+    if (w.modality !== "onsite" || !(w.weekday >= 0 && w.weekday <= 6) || !Number.isFinite(w.startMinute) || !(w.endMinute > w.startMinute)) continue;
+    const best = longest[w.weekday];
+    const gain = best ? w.endMinute - w.startMinute - (best.endMinute - best.startMinute) : 1;
+    // Equal lengths: the earlier window wins, so the screen and the slot check agree whatever the row order.
+    if (gain > 0 || (gain === 0 && w.startMinute < best!.startMinute)) longest[w.weekday] = w;
+  }
+  return Array.from({ length: 7 }, (_, i) => {
+    const w = longest[i];
+    // A window to midnight ends at 23:59, the last time a saved week can hold.
+    return w ? { start: clock(w.startMinute), end: clock(Math.min(w.endMinute, 1439)) } : null;
+  });
+}
+/**
+ * The head as the hour checks see it. A head set to use Wise hours gets its onsite Wise week as its fallback week;
+ * no Wise data gives no hours. An enrolled head still follows Tutor Attendance, which ignores the fallback week.
+ */
+export const withWiseHours = <H extends { hoursFromWise?: boolean; fallbackWeek?: Week }>(
+  head: H,
+  windows: WiseWindow[] | null | undefined,
+): H => (head.hoursFromWise ? { ...head, fallbackWeek: windows ? wiseWeek(windows) : undefined } : head);
+
 /** The newest saved schedule counts, even one that starts tomorrow, so the screen shows what was last saved. */
 export function headDayState(
-  head: { canonicalKey: string; fallbackWeek?: Week },
+  head: { canonicalKey: string; fallbackWeek?: Week; hoursFromWise?: boolean },
   enrollments: { canonicalKey: string; active: boolean; endDate?: string | null }[],
   schedules: { id: string; canonicalKey: string; effectiveFrom: string; week: Week; revision: number }[],
   today = localDate(new Date()),
+  wiseWindows?: WiseWindow[],
 ): HeadDayState {
   const enrollment = enrollments.find((e) => e.canonicalKey === head.canonicalKey);
+  if (!enrollment && head.hoursFromWise)
+    return { state: "wise", week: withWiseHours(head, wiseWindows).fallbackWeek ?? null, from: null };
   if (!enrollment) return { state: "fallback", week: head.fallbackWeek ?? null, from: null };
   const version = applicableSchedule("9999-12-31", head.canonicalKey, schedules);
   // headOfficeWindow gives no hours after the end date, so a past end date is ended too.

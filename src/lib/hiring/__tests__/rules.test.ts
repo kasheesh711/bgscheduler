@@ -16,6 +16,7 @@ import {
   fullPriority,
   hasSavedHours,
   headDayState,
+  wiseWeek,
   headDaysNotice,
   LIMIT_FIELDS,
   minutesToTime,
@@ -329,6 +330,20 @@ describe("head days", () => {
     expect(headDayState(head, [past], [], "2026-11-01").state).toBe("ended");
     expect(headDayState(head, [past], [], "2026-10-31").state).toBe("enrolled");
     expect(headDayState(head, [{ ...past, endDate: null }], [], "2026-11-01").state).toBe("enrolled");
+  });
+  it("turns onsite Wise windows into a week for a head set to hours from Wise", () => {
+    const w = (weekday: number, startMinute: number, endMinute: number, modality = "onsite") => ({ weekday, startMinute, endMinute, modality });
+    // Online windows do not count; of two onsite windows the longer wins; a window to midnight ends at 23:59.
+    const week = wiseWeek([w(1, 930, 1110), w(1, 1020, 1140, "online"), w(2, 540, 600), w(2, 840, 960), w(5, 1200, 1440)]);
+    expect(week).toEqual([null, { start: "15:30", end: "18:30" }, { start: "14:00", end: "16:00" }, null, null, { start: "20:00", end: "23:59" }, null]);
+    // A tie goes to the earlier window; a bad time from Wise is skipped.
+    expect(wiseWeek([w(3, 840, 960), w(3, 600, 720), w(4, NaN, 960)])[3]).toEqual({ start: "10:00", end: "12:00" });
+    expect(wiseWeek([w(4, NaN, 960)])[4]).toBeNull();
+    const kev = { canonicalKey: "Kevin", hoursFromWise: true, fallbackWeek: MON_FRI };
+    expect(headDayState(kev, [], [], undefined, [w(1, 930, 1110)])).toEqual({ state: "wise", week: wiseWeek([w(1, 930, 1110)]), from: null });
+    expect(headDayState(kev, [], [])).toEqual({ state: "wise", week: null, from: null });
+    // Tutor Attendance still wins for an enrolled head.
+    expect(headDayState(kev, [{ canonicalKey: "Kevin", active: true }], []).state).toBe("enrolled");
   });
   it("lists the heads whose ticks are not saved, by name", () => {
     const heads = { Peat: { state: "enrolled" as const, week: MON_FRI, from: null }, Gift: { state: "fallback" as const, week: null, from: null } };

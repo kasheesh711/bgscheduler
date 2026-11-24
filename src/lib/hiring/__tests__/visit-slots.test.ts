@@ -165,6 +165,23 @@ describe("visit slots", () => {
     ).not.toContain("2026-11-06");
   });
 
+  it("uses onsite Wise working hours for a head set to hours from Wise", async () => {
+    const wise = (weekday: number, startMinute: number, endMinute: number, modality = "onsite") => ({
+      weekday,
+      startMinute,
+      endMinute,
+      modality,
+      wiseTeacherId: "w",
+    });
+    // Monday 12:00–16:00 onsite fits mocks at 12:15, 13:15 and 14:15. Tuesday is online only. The saved week is ignored.
+    const gift = head("Gift", { hoursFromWise: true, fallbackWeek: week([1, 2, 3, 4, 5]) });
+    const windows = [wise(1, 720, 960), wise(2, 600, 960, "online")];
+    const slots = await run({ interviewers: [gift] }, { groups: [group("Gift", { availabilityWindows: windows })] });
+    expect(slots.map((x) => x.examStart)).toEqual([600, 660, 720].map((m) => instant("2026-11-02", m).toISOString()));
+    // No Wise windows: no hours, so nothing is offered.
+    expect(await run({ interviewers: [gift] }, { groups: [group("Gift")] })).toEqual([]);
+  });
+
   it("needs no Wise working hours, but a class or leave blocks the mock hour", async () => {
     const cfg = { interviewers: [head("Ek")] };
     const times = (g: IndexedTutorGroup) =>

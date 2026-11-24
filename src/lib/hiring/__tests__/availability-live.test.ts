@@ -142,6 +142,16 @@ describe("availableSlots (legacy mock)", () => {
     expect(slots).toHaveLength(5 * 6); // 5 dates, 10:00 to 15:00 starts
     expect(slots.every((x) => x.interviewerKey === "Peat")).toBe(true);
   });
+  it("uses onsite Wise working hours for a head set to hours from Wise", async () => {
+    // Tuesday 14:00–16:00 onsite: the 14:00 and 15:00 mocks. The online window and the saved week are ignored.
+    const windows = [
+      { weekday: 2, startMinute: 840, endMinute: 960, modality: "onsite", wiseTeacherId: "t1" },
+      { weekday: 3, startMinute: 600, endMinute: 960, modality: "online", wiseTeacherId: "t1" },
+    ];
+    vi.mocked(ensureIndex).mockResolvedValue(index(group({ availabilityWindows: windows }), new Date(NOW.getTime() - 60_000)));
+    const slots = await run({ hoursFromWise: true, fallbackWeek: week });
+    expect(slots.map((x) => x.start)).toEqual([840, 900].map((m) => instant("2026-11-03", m).toISOString()));
+  });
   it("offers none to a head with no saved hours", async () => {
     expect(await run({})).toEqual([]);
   });

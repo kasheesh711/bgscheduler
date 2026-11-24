@@ -298,6 +298,8 @@ export const baseConfigSchema = z
             subjects: z.array(subjectSchema).min(1),
             email: emailSchema,
             fallbackWeek: weekSchema.optional(),
+            /** Kevin, 24 Nov 2026: this head's hours are their onsite Wise working hours, read at each check. */
+            hoursFromWise: z.boolean().optional(),
           })
           .strict(),
       )

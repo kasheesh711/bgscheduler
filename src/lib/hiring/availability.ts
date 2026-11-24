@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { ensureIndex, type IndexedTutorGroup } from "@/lib/search/index";
@@ -35,6 +35,7 @@ import {
 } from "./model";
 
 import { headWeekMocks } from "./limits";
+import { withWiseHours } from "./rules";
 
 const MAX_SOURCE_AGE = 90 * 60 * 1000;
 // Real data_issue_type values are alias, modality, tag, completeness, conflict_model and sync.
@@ -87,7 +88,7 @@ export function snapshotBusy(group: Pick<IndexedTutorGroup, "leaves" | "sessionB
   return busy;
 }
 
-// Saved office hours decide when a head is in. Wise working hours are not used (Kevin's instruction).
+// Saved office hours decide when a head is in. Wise working hours are used only for a head set to `hoursFromWise`.
 export function indexedSlotAvailable(
   group: IndexedTutorGroup,
   date: string,
@@ -104,6 +105,30 @@ export function indexedSlotAvailable(
       overlap(range, { start: b.startTime, end: b.endTime }),
     )
   );
+}
+
+/**
+ * The active snapshot's Wise working-hour windows for these heads, by head. The dashboard shows them; the slot
+ * checks read the same rows from the warm index instead. A head with no windows gets an empty list (no hours).
+ */
+export async function readWiseWindows(db: Database, keys: string[]) {
+  const out: Record<string, { weekday: number; startMinute: number; endMinute: number; modality: string }[]> =
+    Object.fromEntries(keys.map((key) => [key, []]));
+  if (!keys.length) return out;
+  const rows = await db
+    .select({
+      key: s.tutorIdentityGroups.canonicalKey,
+      weekday: s.recurringAvailabilityWindows.weekday,
+      startMinute: s.recurringAvailabilityWindows.startMinute,
+      endMinute: s.recurringAvailabilityWindows.endMinute,
+      modality: s.recurringAvailabilityWindows.modality,
+    })
+    .from(s.recurringAvailabilityWindows)
+    .innerJoin(s.tutorIdentityGroups, eq(s.tutorIdentityGroups.id, s.recurringAvailabilityWindows.groupId))
+    .innerJoin(s.snapshots, and(eq(s.snapshots.id, s.recurringAvailabilityWindows.snapshotId), eq(s.snapshots.active, true)))
+    .where(inArray(s.tutorIdentityGroups.canonicalKey, keys));
+  for (const { key, ...window } of rows) out[key]?.push(window);
+  return out;
 }
 
 export type OfficeContext = {
@@ -273,7 +298,7 @@ export async function availableSlots(
           (g) => g.canonicalKey === interviewer.canonicalKey,
         );
         if (!group || !indexedSlotAvailable(group, date, start, end)) continue;
-        if (!headInOffice(interviewer, date, start, end, calendar)) continue;
+        if (!headInOffice(withWiseHours(interviewer, group.availabilityWindows), date, start, end, calendar)) continue;
         if (!liveFree(live, interviewer.canonicalKey, range)) continue;
         if (
           bookings.some(
@@ -366,7 +391,7 @@ export async function availableVisitSlots(
           !!group &&
           weekMocks(head.canonicalKey, date) < config.onsiteLimits.perHeadPerWeek &&
           indexedSlotAvailable(group, date, exam + MOCK_START, exam + MOCK_END) &&
-          headInOffice(head, date, exam + MOCK_START, exam + MOCK_END, calendar) &&
+          headInOffice(withWiseHours(head, group.availabilityWindows), date, exam + MOCK_START, exam + MOCK_END, calendar) &&
           liveFree(live, head.canonicalKey, mock) &&
           !bookings.some(
             (b) =>
