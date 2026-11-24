@@ -240,6 +240,11 @@ function timeSlots(availability: string) {
     ),
   };
 }
+/** The booking's time rule: a Saturday or Sunday hour, and a weekday hour from 15:00. */
+export const meetsTimeRule = (availability: string) => {
+  const { weekend, weekdayLate } = timeSlots(availability);
+  return weekend && weekdayLate;
+};
 /**
  * Availability fraction, 0 to 1. Half comes from the time-slot rule (a weekend day and a weekday after 15:00).
  * The other half comes from weekly hours. The form offers "1-10" (20%), "11-20" (60%), "20-40" (100%) and "40+" (100%).

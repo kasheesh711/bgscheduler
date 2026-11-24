@@ -20,9 +20,9 @@ const part = (value: string | Date, options: Intl.DateTimeFormatOptions) =>
   new Date(value).toLocaleDateString("en-GB", { ...ZONE, ...options });
 const Help = () => (
   <p className={c.help}>
-    For help or changes,{" "}
+    Need help?{" "}
     <a href={LINE_URL} rel="noreferrer">
-      contact BeGifted on LINE
+      Contact BeGifted on LINE
     </a>
     .
   </p>
@@ -74,16 +74,20 @@ export function VisitConfirm({
   label,
   onConfirm,
   summary,
+  missing,
 }: {
   error: string;
   disabled: boolean;
   label: string;
   onConfirm: () => void;
   summary?: ReactNode;
+  /** What still stops the button, said beside it (Fable r3). */
+  missing?: string;
 }) {
   return (
     <div className={c.confirm} data-confirm="">
       {summary}
+      {missing && !error && <p className={c.note}>Still needed: {missing}.</p>}
       {error && (
         <p role="alert" className={c.alert}>
           {error}
@@ -144,7 +148,10 @@ function Picker<T extends { date: string }>({
   tile,
   compact,
   initialDate,
+  zoneNote = true,
 }: {
+  /** "Bangkok time" under the week; said once on a page with two lists. */
+  zoneNote?: boolean;
   /** The day to open on, such as the booked test day while moving. */
   initialDate?: string;
   /** The page can focus or scroll to this list. */
@@ -188,7 +195,7 @@ function Picker<T extends { date: string }>({
           </button>
           <b aria-live="polite">
             {label(week, { day: "numeric", month: "short" })} – {label(plusDays(week, 6), { day: "numeric", month: "short" })}
-            <small>Bangkok time</small>
+            {zoneNote && <small>Bangkok time</small>}
           </b>
           <button type="button" className={cs.arrow} aria-label="Next week" disabled={at >= weeks.length - 1} onClick={() => setWeek(weeks[at + 1])}>
             <ChevronRight aria-hidden size={20} />
@@ -331,7 +338,8 @@ export function VisitBooking({
   const [moving, setMoving] = useState(false),
     [chosen, setStart] = useState(""),
     [onsite, setOnsite] = useState(false),
-    [commitment, setCommitment] = useState(false),
+    // Ticked for the candidate when the saved answers already meet the rule; it stays editable (Fable r3).
+    [commitment, setCommitment] = useState(view.timeRuleMet),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [saved, setSaved] = useState("");
@@ -370,6 +378,8 @@ export function VisitBooking({
       );
       setMoving(false);
       setStart("");
+      // The ticket replaces the lists: start the candidate at their booked visit (Sol r3).
+      reveal("booked-visit", true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not confirm.");
       // That time may be gone, so the candidate chooses again from the fresh list.
@@ -425,7 +435,7 @@ export function VisitBooking({
       <Layout
         top={
           <>
-            {view.twoDay && <Steps at={view.visit && !moving ? 2 : 1} />}
+            {view.twoDay && <Steps at={view.visit ? 2 : 1} />}
             {saved && <Saved>{saved}</Saved>}
             <div className={c.facts}>
               <Fact icon={<BookOpen aria-hidden />} label="Subject">
@@ -448,9 +458,11 @@ export function VisitBooking({
             {view.visit && (
               <section className={cs.booked}>
                 <div className={c.stepHead}>
-                  <h2 className={c.stepTitle}>Your booked visit</h2>
+                  <h2 className={c.stepTitle} id="booked-visit" tabIndex={-1}>
+                    Your booked visit
+                  </h2>
                   <span className={c.badge}>
-                    <Check aria-hidden size={14} /> Confirmed
+                    <Check aria-hidden size={14} /> {moving ? "Current booking" : "Confirmed"}
                   </span>
                 </div>
                 <div className={c.ticket}>
@@ -534,8 +546,17 @@ export function VisitBooking({
                 )}
               />
             )}
+            {showForm && view.twoDay && !slot && (
+              <section className={c.step} aria-labelledby="mock-wait">
+                <h2 className={c.stepTitle} id="mock-wait">
+                  Mock teaching time
+                </h2>
+                <p className={c.note}>Choose a test time first.</p>
+              </section>
+            )}
             {showForm && view.twoDay && slot && (
               <Picker
+                zoneNote={false}
                 id="mock-start"
                 legend="Mock teaching time"
                 hint="Monday to Friday, after your test"
@@ -561,6 +582,8 @@ export function VisitBooking({
               {keep}
               <VisitConfirm
                 error={error}
+                // Said once something is chosen; before that, the empty mock section already says what comes first.
+                missing={start ? [view.twoDay && !mock && "a mock teaching time", (!onsite || !commitment) && "both boxes"].filter(Boolean).join(", ") : ""}
                 disabled={busy || !start || (view.twoDay && !mock) || !onsite || !commitment}
                 label={busy ? "Confirming…" : view.visit ? (view.twoDay ? "Confirm new times" : "Confirm new time") : view.twoDay ? "Confirm both times" : "Confirm visit"}
                 onConfirm={book}

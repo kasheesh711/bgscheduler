@@ -10,9 +10,9 @@ const hh = (hour: number) => `${String(hour).padStart(2, "0")}:00`;
 const range = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => from + i);
 // Quick fills (Mobbin: User Interviews working-hours presets). A second tap on a full preset clears it.
 const PRESETS = [
-  { label: "Weekday evenings", days: [0, 1, 2, 3, 4], hours: range(17, 21) },
-  { label: "Weekday afternoons", days: [0, 1, 2, 3, 4], hours: range(15, 17) },
-  { label: "Weekends", days: [5, 6], hours: range(9, 17) },
+  { label: "After school", days: [0, 1, 2, 3, 4], hours: range(15, 17), title: "Monday to Friday, 15:00 to 17:00" },
+  { label: "Weeknights", days: [0, 1, 2, 3, 4], hours: range(17, 21), title: "Monday to Friday, 17:00 to 21:00" },
+  { label: "Weekends", days: [5, 6], hours: range(9, 17), title: "Saturday and Sunday, 09:00 to 17:00" },
 ];
 
 /**
@@ -108,12 +108,12 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   const late = value.slice(0, 5).some((hours) => hours.some((h) => h >= 15));
   return (
     <div className={s.week}>
-      <p className={s.hint}>Tap or drag to select. Start on a selected hour to clear.</p>
+      <p className={s.hint}>Tap or drag. Start on a filled hour to clear.</p>
       <div className={s.presets} role="group" aria-label="Quick fill">
         {PRESETS.map((p) => {
           const on = p.days.every((d) => p.hours.every((h) => has(value, d, h)));
           return (
-            <button key={p.label} type="button" className={s.preset} aria-pressed={on} disabled={disabled} onClick={() => preset(p)}>
+            <button key={p.label} type="button" className={s.preset} aria-pressed={on} aria-label={`${p.label}: ${p.title}`} title={p.title} disabled={disabled} onClick={() => preset(p)}>
               {on && <Check aria-hidden size={14} />}
               {p.label}
             </button>

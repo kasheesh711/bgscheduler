@@ -56,6 +56,7 @@ import {
   workRightsPenalty,
   supportedVisitSubjects,
   topHiringSubject,
+  meetsTimeRule,
   visitSubject,
   workRightsAccepted,
 } from "./scoring";
@@ -1788,6 +1789,7 @@ export async function visitView(token: string, db: Database = getDb(), now = new
       testSubjects: config.subjectPriority
         .filter((p) => p.hiring && config.interviewers.some((i) => i.subjects.includes(p.subject)))
         .map((p) => p.subject) as Subject[],
+      timeRuleMet: false,
     };
   const { subject, rows } = await openVisit(db, cap, config, now);
   const enabled = bookable(config, cap.id);
@@ -1849,6 +1851,8 @@ export async function visitView(token: string, db: Database = getDb(), now = new
     portfolioPath: null as string | null,
     knownDegree: null as KnownDegree | null,
     testSubjects: [] as Subject[],
+    // The saved answers already give a weekend hour and a weekday hour from 15:00: the page ticks that box for the candidate.
+    timeRuleMet: !!candidate.preScreen && meetsTimeRule(candidate.preScreen.availability),
   };
 }
 

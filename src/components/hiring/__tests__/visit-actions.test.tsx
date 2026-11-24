@@ -34,6 +34,7 @@ const view = (patch = {}) => ({
   portfolioPath: null as string | null,
   knownDegree: null as { degree: "Bachelor's" | "Master's" | "PhD"; field: string } | null,
   testSubjects: [] as "Mathematics"[],
+  timeRuleMet: false,
   ...patch,
 });
 const page = (patch = {}) => renderToStaticMarkup(<VisitBooking token="t" view={view(patch)} reload={async () => {}} />);

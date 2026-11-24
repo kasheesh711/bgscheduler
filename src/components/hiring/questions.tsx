@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { upload } from "@vercel/blob/client";
-import { Check, ChevronDown, Pencil } from "lucide-react";
+import { Check, ChevronDown, Pencil, Upload } from "lucide-react";
 import { ANSWER_CHOICES, answersSchema, MAX_PORTFOLIO_BYTES, PORTFOLIO_TYPES, SUBJECTS, type Subject } from "@/lib/hiring/model";
 import type { KnownDegree } from "@/lib/hiring/profile-degree";
 import { emptyWeek, weekHoursCount, type WeekHours } from "@/lib/hiring/week-hours";
@@ -33,10 +33,25 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function Q({ id, title, hint, optional, children }: { id?: string; title: string; hint?: string; optional?: boolean; children: ReactNode }) {
+function Q({
+  id,
+  title,
+  hint,
+  optional,
+  hideTitle,
+  children,
+}: {
+  id?: string;
+  title: string;
+  hint?: string;
+  optional?: boolean;
+  /** The section title already says it on screen; screen readers still get the question. */
+  hideTitle?: boolean;
+  children: ReactNode;
+}) {
   return (
     <fieldset className={s.q} id={id} tabIndex={-1}>
-      <legend className={s.qTitle}>
+      <legend className={hideTitle ? c.hidden : s.qTitle}>
         {title}
         {optional && <small>optional</small>}
       </legend>
@@ -176,7 +191,8 @@ export function PreScreenQuestions({
     ["q-english", "English level", !!answers.english],
     ["q-experience", "Experience", !!answers.experience],
     ["q-subjects", "Subjects", subjects.length > 0],
-    ["q-test", "Test subject", !!test],
+    // Asked only when there is a choice; one testable subject is chosen for the candidate.
+    ...(testChoices.length > 1 ? [["q-test", "Test subject", !!test] as [string, string, boolean]] : []),
     ["q-curricula", "Curricula", curricula.length > 0],
     ["q-years", "Year groups", yearGroups.length > 0],
     ["q-hours", "Teaching hours", weekHoursCount(week) > 0],
@@ -264,7 +280,7 @@ export function PreScreenQuestions({
           </div>
         ) : (
           <>
-            <Q id="q-degree" title="Highest completed degree">
+            <Q id="q-degree" title="Highest degree">
               <Chips name="degree" choices={ANSWER_CHOICES.degree} value={degree} onChange={setDegree} disabled={busy} />
             </Q>
             {text("Field of study", field, setField, 200, "For example: Chemistry")}
@@ -272,45 +288,51 @@ export function PreScreenQuestions({
         )}
         <Q id="q-english" title="English level">
           <Chips name="english" choices={ANSWER_CHOICES.english} value={english} onChange={setEnglish} disabled={busy} />
+          <input
+            className={c.input}
+            aria-label="Proof of your English level (optional)"
+            placeholder="Proof, e.g. IELTS 8.0 (optional)"
+            value={englishEvidence}
+            maxLength={500}
+            disabled={busy}
+            onChange={(e) => setEnglishEvidence(e.target.value)}
+          />
         </Q>
-        <input
-          className={c.input}
-          aria-label="Proof of your English level (optional)"
-          placeholder="Proof, such as IELTS 8.0 (optional)"
-          value={englishEvidence}
-          maxLength={500}
-          disabled={busy}
-          onChange={(e) => setEnglishEvidence(e.target.value)}
-        />
         <Q id="q-experience" title="Teaching experience">
           <Chips name="experience" choices={ANSWER_CHOICES.experience} value={experience} onChange={setExperience} disabled={busy} />
         </Q>
       </Section>
       <Section title="What you teach">
-        <Q id="q-subjects" title="Subjects you can teach confidently">
+        <Q id="q-subjects" title="Subjects you can teach confidently" hint="Choose all that apply.">
           <Chips name="subjects" choices={showRest ? [...first, ...rest] : first} value={subjects} onChange={setSubjects} many disabled={busy} />
-          {!showRest && rest.length > 0 && (
+          {rest.length > 0 && !subjects.some((v) => rest.includes(v)) && (
             <div>
-              <button type="button" className={s.more} aria-expanded={false} onClick={() => setMoreOpen(true)}>
-                <ChevronDown aria-hidden size={16} />
-                {rest.length} more subjects
+              <button type="button" className={s.more} aria-expanded={showRest} onClick={() => setMoreOpen(!showRest)}>
+                <ChevronDown aria-hidden size={16} style={showRest ? { transform: "rotate(180deg)" } : undefined} />
+                {showRest ? "Fewer subjects" : `${rest.length} more subjects`}
               </button>
             </div>
           )}
         </Q>
         {subjects.includes(ART) && (
-          <Q title="Art & Design portfolio">
-            <input
-              className={`${c.input} ${s.file}`}
-              type="file"
-              aria-label="Portfolio file (PDF, JPEG or PNG, up to 25 MB)"
-              accept={PORTFOLIO_TYPES.join(",")}
-              disabled={busy}
-              onChange={(e) => choose(e.target.files?.[0])}
-            />
-            {(fileNote || fileName) && (
+          <Q title="Art & Design Technology portfolio">
+            <label className={s.drop}>
+              <input
+                className={c.hidden}
+                type="file"
+                accept={PORTFOLIO_TYPES.join(",")}
+                disabled={busy}
+                onChange={(e) => choose(e.target.files?.[0])}
+              />
+              <Upload aria-hidden size={18} />
+              <span>
+                <b>{fileName || "Choose a file"}</b>
+                <small>{fileName ? "Uploaded. Choose again to replace it." : "PDF, JPEG or PNG, up to 25 MB"}</small>
+              </span>
+            </label>
+            {fileNote && (
               <p className={c.note} role="status">
-                {fileNote || `Uploaded: ${fileName}`}
+                {fileNote}
               </p>
             )}
             {text("Or a link to it", portfolio, setPortfolio, 500, "A link that opens without a password", true)}
@@ -322,8 +344,8 @@ export function PreScreenQuestions({
             title="Your test subject"
             hint={
               testable.length && testable.length < subjects.length
-                ? "Your test and mock lesson are in this subject. We test in the subjects shown."
-                : "Your test and mock lesson are in this subject."
+                ? "Choose one. Only the subjects we test in now are listed."
+                : "Choose one. Your test and mock lesson are in it."
             }
           >
             <Chips name="testSubject" choices={testChoices} value={chosenTest} onChange={setTestSubject} disabled={busy} />
@@ -336,11 +358,11 @@ export function PreScreenQuestions({
           <Chips name="yearGroups" choices={ANSWER_CHOICES.yearGroups} value={yearGroups} onChange={setYearGroups} many disabled={busy} />
         </Q>
       </Section>
-      <Section title="When you can teach">
-        <Q id="q-hours" title="Hours you can teach onsite">
+      <Section title="When you can teach onsite">
+        <Q id="q-hours" title="Hours you can teach onsite" hideTitle>
           <WeekGrid value={week} onChange={setWeek} disabled={busy} />
         </Q>
-        <Q id="q-weekly" title="Hours a week you can commit">
+        <Q id="q-weekly" title="Hours a week">
           <Chips name="weeklyHours" choices={ANSWER_CHOICES.weeklyHours} value={weeklyHours} onChange={setWeeklyHours} disabled={busy} />
         </Q>
       </Section>
@@ -372,21 +394,16 @@ export function PreScreenQuestions({
               </div>
               {open.length > 0 && (
                 <p className={s.open}>
-                  Still to answer:{" "}
-                  {open.map(([id, name], i) => (
-                    <span key={id}>
-                      {i > 0 && ", "}
-                      <a
-                        href={`#${id}`}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          reveal(id, true);
-                        }}
-                      >
-                        {name}
-                      </a>
-                    </span>
-                  ))}
+                  Next:{" "}
+                  <a
+                    href={`#${open[0][0]}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      reveal(open[0][0], true);
+                    }}
+                  >
+                    {open[0][1]}
+                  </a>
                 </p>
               )}
             </>

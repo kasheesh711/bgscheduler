@@ -244,10 +244,10 @@
 }
 .grid {
   display: grid;
-  grid-template-columns: 26px repeat(7, minmax(0, 1fr));
+  grid-template-columns: 22px repeat(7, minmax(0, 1fr));
   gap: 2px;
-  /* The grid reaches the card edges on a phone, so a cell keeps 44 px at 390 px. */
-  margin: 0 -14px;
+  /* The hour labels sit in the card's left padding, so the cells keep 44 px at 390 px and end at the content edge. */
+  margin: 0 0 0 -14px;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -277,7 +277,8 @@
   height: 44px;
   min-width: 0;
   padding: 0;
-  border: 1px solid #ece4d3;
+  /* 3:1 against every cell background (WCAG 1.4.11). */
+  border: 1px solid #958b76;
   border-radius: 8px;
   background: #fff;
   cursor: pointer;
@@ -351,8 +352,8 @@
 @media (max-width: 359px) {
   .grid {
     grid-template-columns: 20px repeat(7, minmax(0, 1fr));
-    gap: 2px;
-    margin: 0 -14px;
+    gap: 1px;
+    margin: 0 -8px 0 -14px;
   }
   .dates {
     margin: 0 -14px;
@@ -731,5 +732,41 @@
 .q:focus,
 .known:focus,
 .section :global(label):focus {
+  outline: none;
+}
+
+/* Art portfolio: a file box that matches the page, not the browser's own control. */
+.drop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 12px 16px;
+  border: 1.5px dashed #b8ae98;
+  border-radius: 16px;
+  background: #fff;
+  cursor: pointer;
+}
+.drop:hover {
+  border-color: var(--ink);
+}
+.drop:has(input:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.drop span {
+  display: grid;
+  min-width: 0;
+}
+.drop b {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.drop small {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.booked h2:focus {
   outline: none;
 }
