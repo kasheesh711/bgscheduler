@@ -258,7 +258,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       </div>
       {state === "sent" && <p ref={feedback} role="status" className={c.success} tabIndex={-1}>{sentMessage}</p>}
       {saveError}
-      <div ref={sendBar} className={c.field} data-sticky="">
+      <div ref={sendBar} className={`${c.field} ${b.sendBar}`} data-sticky="">
         {/* The one answer besides the scores sits beside Send scores, so the head sees both (Sol review, 24 Nov 2026). It stays after Edit scores, so a wrong answer can be changed alone. */}
         <fieldset className={b.choices} disabled={!!pending}>
           <legend>School&apos;s required checks completed <span className={c.note}>(must be Yes to hire)</span></legend>

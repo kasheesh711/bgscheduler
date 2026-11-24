@@ -795,7 +795,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     </ul>
   );
   return (
-    <div className={r.workspace} data-heads-review="">
+    <div className={r.workspace} data-heads-review="" data-empty={key && fixedHead && !all.length && !givesMocks ? "" : undefined}>
       {/* Navigation beside the open page; on a phone a region, because it also holds the open row's form. */}
       <Rail className={r.rail} aria-label={name ? `${nickname(name)}'s hiring list` : "Hiring list"}>
         {!fixedHead && (
@@ -843,7 +843,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
         )}
       </Rail>
       {wide && (
-        <section id="open-item" tabIndex={-1} className={r.pane} aria-label={selected ? `${selected.task}: ${selected.name}` : "Nothing open"}>
+        <section id="open-item" tabIndex={-1} className={r.pane} aria-label={selected ? `${selected.task}: ${selected.name}` : key && !all.length ? "Nothing to do" : "Nothing open"}>
           {selected ? <ItemPane key={selected.id} item={selected} data={data} readOnly={readOnly || (!fixedHead && !chosen)} reload={reload} onSigned={keepSigned} />
             : key && !all.length ? <div className={r.paneFacts}><h2 className={r.paneName}>Nothing to do</h2>
               <p className={r.quiet}>{givesMocks ? "New bookings and papers to check also come by LINE." : "New papers to check also come by LINE."}</p></div>

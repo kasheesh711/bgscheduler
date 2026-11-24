@@ -101,6 +101,9 @@
 @media (min-width: 1024px) {
   .workspace { grid-template-columns: clamp(280px, 21vw, 340px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); flex: 1 0 640px; }
   .rail { overflow-y: auto; border-right: 1px solid var(--line); }
+  /* Nothing in a head's list: the message takes the whole width, with no empty list column. */
+  .workspace[data-empty] { grid-template-columns: minmax(0, 1fr); }
+  .workspace[data-empty] .rail { display: none; }
 }
 .headMenu { display: flex; align-items: center; gap: 10px; color: var(--support); font-size: 14px; }
 .headMenu select { flex: 1; min-width: 0; min-height: 44px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); font-size: 16px; font-weight: 600; }
