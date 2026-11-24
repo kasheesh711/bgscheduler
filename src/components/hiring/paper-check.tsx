@@ -51,9 +51,8 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
     if (!list) return setMore(null);
     // The first question whose box ends below the visible area, else the comment if it is below it; nothing when all show.
     const bottom = list.getBoundingClientRect().bottom + 1;
-    // A question counts as in view when its label, mark field and AI note are, not its card's padding (Sol review, round 14).
-    const shownBottom = (item: HTMLLIElement) => Math.max(...[...item.querySelectorAll("label, input, p")].map((part) => part.getBoundingClientRect().bottom));
-    const next = [...list.querySelectorAll<HTMLLIElement>("li[data-question]")].find((item) => shownBottom(item) > bottom);
+    // A question counts as hidden only when its mark field is cut off, not its card's padding (reviews, round 14).
+    const next = [...list.querySelectorAll<HTMLLIElement>("li[data-question]")].find((item) => (item.querySelector("input") ?? item).getBoundingClientRect().bottom > bottom);
     if (next) return setMore(next.dataset.question ?? null);
     const comment = list.querySelector("textarea");
     // Only when the comment's label and first line are hidden, not for a box that is nearly all in view.

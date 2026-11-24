@@ -132,7 +132,8 @@
 }
 /* A link to #scores or #recommendation focuses the panel; a keyboard user sees where it landed (Sol review, round 13). */
 .panel:focus-visible {
-  outline: 2px solid var(--ink);
+  /* Soft, because Chrome also shows it when a click opens the brief at this panel. */
+  outline: 2px solid color-mix(in oklch, var(--ink) 35%, transparent);
   outline-offset: 2px;
 }
 .panelTitle {

@@ -108,6 +108,8 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
         }
         setEditing(false);
         setState("sent");
+        // Back to the top of the brief, so its header (when to recommend) shows above the short receipt (critic review, round 14).
+        sendBar.current?.closest("main")?.scrollTo({ top: 0 });
         onSent(body.total);
       }
     } catch {

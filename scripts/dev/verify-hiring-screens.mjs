@@ -1196,6 +1196,17 @@ try {
     assert.ok(await dashboardFits(), "Heads scrolls sideways at 320px");
     await page.setViewportSize({ width: 1440, height: 900 });
   });
+  await check("the Heads workspace never scrolls the whole page", async () => {
+    // Hidden row text once escaped the list and made the page taller than the window; opening a row then moved the page.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/?roles=1&me=Peat`);
+    await page.getByRole("navigation", { name: /hiring list/ }).waitFor();
+    const fits = () => page.evaluate(() => [document.documentElement.scrollHeight <= innerHeight, scrollY, document.querySelector("#root")?.scrollTop ?? 0]);
+    assert.deepEqual(await fits(), [true, 0, 0]);
+    await page.getByRole("navigation", { name: /hiring list/ }).getByRole("link", { name: /Sample Noi/ }).click();
+    await page.frameLocator("iframe").first().getByRole("heading", { name: "Mock scores" }).waitFor();
+    assert.deepEqual(await fits(), [true, 0, 0]);
+  });
   await check("Gift signs from her list on a phone and focus stays on the receipt", async () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${origin}/?roles=1&me=Gift&gift=1&live=1`);
