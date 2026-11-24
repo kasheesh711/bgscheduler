@@ -47,6 +47,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   const [focus, setFocus] = useState<[number, number]>([0, GRID_HOURS[0]]);
   // The week before the last Clear, for one Undo; any new choice forgets it.
   const [undo, setUndo] = useState<WeekHours | null>(null);
+  const undoRef = useRef<HTMLButtonElement>(null);
   const has = (week: WeekHours, d: number, h: number) => week[d].includes(h);
   function paint(cells: [number, number][], fill: boolean) {
     const next = current.current.map((hours, d) => {
@@ -153,7 +154,12 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
       if (drag.current && e.cancelable) e.preventDefault();
     };
     grid.addEventListener("touchmove", stop, { passive: false });
-    return () => grid.removeEventListener("touchmove", stop);
+    const hold = pending;
+    return () => {
+      grid.removeEventListener("touchmove", stop);
+      // A hold still waiting when the questions close must not paint afterwards.
+      if (hold.current) clearTimeout(hold.current.timer);
+    };
   }, []);
   function key(e: KeyboardEvent<HTMLButtonElement>, d: number, h: number) {
     const moves: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
@@ -179,17 +185,79 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   const late = value.slice(0, 5).some((hours) => hours.some((h) => h >= 15));
   return (
     <div className={s.week}>
-      <p className={s.hint}>Tap an hour to choose it. To fill or clear a block, hold, then drag.</p>
       <div className={s.presets} role="group" aria-label="Quick fill">
-        {PRESETS.map((p) => (
-          <button key={p.label} type="button" className={s.preset} aria-label={`Add ${p.label.toLowerCase()}: ${p.title}`} title={p.title} disabled={disabled} onClick={() => preset(p)}>
-            <Plus aria-hidden size={14} />
-            {p.label}
-            {/* The hours it adds, before the tap (Sol r5). */}
-            <small aria-hidden>{p.short}</small>
-          </button>
-        ))}
+        {PRESETS.map((p) => {
+          // Add only; a check once every hour of it is in the week (Sol r6).
+          const full = p.days.every((d) => p.hours.every((h) => has(value, d, h)));
+          return (
+            <button
+              key={p.label}
+              type="button"
+              className={s.preset}
+              data-full={full || undefined}
+              aria-label={`Add ${p.label.toLowerCase()}: ${p.title}${full ? " (added)" : ""}`}
+              title={p.title}
+              disabled={disabled}
+              onClick={() => preset(p)}
+            >
+              {full ? <Check aria-hidden size={14} /> : <Plus aria-hidden size={14} />}
+              {p.label}
+              {/* The hours it adds, before the tap (Sol r5). */}
+              <small aria-hidden>{p.short}</small>
+            </button>
+          );
+        })}
       </div>
+      <div className={s.readback} aria-live="polite">
+        {count > 0 && (
+          <p className={s.readline}>
+            <span>{readback(value)}</span>
+            <button
+              type="button"
+              className={s.clear}
+              disabled={disabled}
+              onClick={() => {
+                setUndo(value);
+                onChange(WEEK_DAYS.map(() => []));
+                // The Clear button goes away: keyboard focus moves to Undo (Sol r6).
+                requestAnimationFrame(() => undoRef.current?.focus());
+              }}
+            >
+              Clear
+            </button>
+          </p>
+        )}
+        {/* The line is always there, so the grid below never moves when the first hour is chosen. */}
+        {count === 0 && !undo && (
+          <p className={s.readline}>
+            <span className={s.empty}>No hours chosen yet.</span>
+          </p>
+        )}
+        {count === 0 && undo && (
+          <p className={s.readline}>
+            <span>Cleared.</span>
+            <button ref={undoRef} type="button" className={s.clear} disabled={disabled} onClick={() => (onChange(undo), setUndo(null))}>
+              Undo
+            </button>
+          </p>
+        )}
+        <p className={s.rules}>
+          {/* What the booking asks for: a note to add, then a tick once the grid has it (Sol r2: not radio-like). */}
+          <span data-ok={weekend || undefined}>
+            {weekend ? <Check aria-hidden size={14} /> : <Plus aria-hidden size={14} />}
+            {weekend ? "Saturday or Sunday" : "Add a Saturday or Sunday"}
+          </span>
+          <span data-ok={late || undefined}>
+            {late ? <Check aria-hidden size={14} /> : <Plus aria-hidden size={14} />}
+            {late ? "A weekday after 15:00" : "Add a weekday after 15:00"}
+          </span>
+          {count > 0 && <b>{count} hours available</b>}
+        </p>
+      </div>
+      <details className={s.help}>
+        <summary>How to fill the grid</summary>
+        <p>Tap an hour to choose it, or tap it again to clear it. To fill or clear a block, hold an hour, then drag. With a keyboard, use the arrow keys and Space.</p>
+      </details>
       <div
         className={s.grid}
         data-week-grid=""
@@ -234,44 +302,6 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
         <span aria-hidden className={s.hourEnd}>
           21
         </span>
-      </div>
-      <div className={s.readback} aria-live="polite">
-        {count > 0 && (
-          <p className={s.readline}>
-            <span>{readback(value)}</span>
-            <button
-              type="button"
-              className={s.clear}
-              disabled={disabled}
-              onClick={() => {
-                setUndo(value);
-                onChange(WEEK_DAYS.map(() => []));
-              }}
-            >
-              Clear
-            </button>
-          </p>
-        )}
-        {count === 0 && undo && (
-          <p className={s.readline}>
-            <span>Cleared.</span>
-            <button type="button" className={s.clear} disabled={disabled} onClick={() => (onChange(undo), setUndo(null))}>
-              Undo
-            </button>
-          </p>
-        )}
-        <p className={s.rules}>
-          {/* What the booking asks for: a note to add, then a tick once the grid has it (Sol r2: not radio-like). */}
-          <span data-ok={weekend || undefined}>
-            {weekend ? <Check aria-hidden size={14} /> : <Plus aria-hidden size={14} />}
-            {weekend ? "Saturday or Sunday" : "Add a Saturday or Sunday"}
-          </span>
-          <span data-ok={late || undefined}>
-            {late ? <Check aria-hidden size={14} /> : <Plus aria-hidden size={14} />}
-            {late ? "A weekday after 15:00" : "Add a weekday after 15:00"}
-          </span>
-          {count > 0 && <b>{count} hours available</b>}
-        </p>
       </div>
     </div>
   );

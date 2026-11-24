@@ -123,14 +123,19 @@ describe("VisitBooking", () => {
     mockEnd: slot.mockEnd,
     head: "Peat",
   };
+  const later = { ...slot, date: "2026-11-04", examStart: "2026-11-04T03:00:00.000Z", examEnd: "2026-11-04T05:00:00.000Z", mockStart: "2026-11-04T05:00:00.000Z", mockEnd: "2026-11-04T06:00:00.000Z" };
   it("shows the current booking with a Move button while a move is open", () => {
-    const html = page({ visit: booked, canMove: true });
+    const html = page({ visit: booked, canMove: true, slots: [slot, later] });
     expect(html).toContain("Your booked visit");
     expect(html).toContain("Peat");
     expect(html).toContain("Move this visit");
     // The times to choose stay hidden until the candidate presses Move.
     expect(html).not.toContain("I will come to the address above.");
     expect(html).not.toContain("You cannot move it now");
+  });
+  it("does not open Move when the only open time is the booked one", () => {
+    const html = page({ visit: booked, canMove: true, slots: [slot] });
+    expect(html).toMatch(/disabled[^>]*>Move this visit<\/button><p[^>]*>You cannot move it now/);
   });
   it("gives the reason beside a disabled Move button", () => {
     const html = page({ visit: booked, canMove: true, slots: [], notice: `Try again later. Contact BeGifted on LINE: ${LINE}` });

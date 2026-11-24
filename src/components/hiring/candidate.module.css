@@ -882,3 +882,57 @@
     padding: 8px 10px;
   }
 }
+
+.preset[data-full] {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.preset[data-full] small {
+  color: var(--ok);
+}
+.help {
+  font-size: 13px;
+  color: var(--muted);
+}
+.help summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+.help summary:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.help p {
+  max-width: 60ch;
+}
+.weekNav[data-single] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.steps li {
+  gap: 6px;
+}
+@media (max-width: 359px) {
+  [data-confirm][data-compact] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-confirm][data-compact] > button {
+    grid-column: 1;
+    grid-row: auto;
+    width: 100%;
+  }
+}
+
+.arrow[hidden] {
+  display: none;
+}
+
+.readline {
+  min-height: 44px;
+}
+.empty {
+  color: var(--muted);
+}

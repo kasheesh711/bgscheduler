@@ -197,16 +197,17 @@ function Picker<T extends { date: string }>({
         <Live at={checkedAt && liveDates.includes(active) ? checkedAt : null} />
       </legend>
       {hint && <p className={c.note}>{hint}</p>}
-      {weeks.length > 1 && (
-        <div className={cs.weekNav}>
-          <button type="button" className={cs.arrow} aria-label="Previous week" disabled={at <= 0} onClick={() => setWeek(weeks[at - 1])}>
+      {/* The week label always shows; the arrows only when there is more than one week (Sol r6). */}
+      {(weeks.length > 1 || zoneNote) && (
+        <div className={cs.weekNav} data-single={weeks.length > 1 ? undefined : ""}>
+          <button type="button" className={cs.arrow} aria-label="Previous week" disabled={at <= 0} hidden={weeks.length < 2} onClick={() => setWeek(weeks[at - 1])}>
             <ChevronLeft aria-hidden size={20} />
           </button>
           <b aria-live="polite">
             {label(week, { day: "numeric", month: "short" })} – {label(plusDays(week, 6), { day: "numeric", month: "short" })}
             {zoneNote && <small>Bangkok time</small>}
           </b>
-          <button type="button" className={cs.arrow} aria-label="Next week" disabled={at >= weeks.length - 1} onClick={() => setWeek(weeks[at + 1])}>
+          <button type="button" className={cs.arrow} aria-label="Next week" disabled={at >= weeks.length - 1} hidden={weeks.length < 2} onClick={() => setWeek(weeks[at + 1])}>
             <ChevronRight aria-hidden size={20} />
           </button>
         </div>
@@ -308,7 +309,7 @@ function Steps({ at }: { at: 0 | 1 | 2 | 3 }) {
     <ol className={cs.steps} aria-label="Steps">
       {["Questions", "Times", "Booked"].map((name, i) => (
         <li key={name} data-state={i < at ? "done" : i === at ? "now" : undefined} aria-current={i === at ? "step" : undefined}>
-          {i < at ? <Check aria-hidden size={14} /> : <span aria-hidden>{i + 1}</span>}
+          {i < at && <Check aria-hidden size={14} />}
           {name}
         </li>
       ))}
@@ -448,6 +449,8 @@ export function VisitBooking({
       </>
     );
   const short = (value: string) => part(value, { weekday: "short", day: "numeric", month: "short" });
+  // Move opens only when a test time other than the booked one is open (Sol r6).
+  const otherTimes = view.slots.some((s) => s.examStart !== view.visit?.examStart);
   // A move to the same times would use up the one move for nothing (Sol r5).
   const unchanged = !!view.visit && moving && start === view.visit.examStart && (!view.twoDay || mock?.start === view.visit.mockStart);
   return (
@@ -523,7 +526,7 @@ export function VisitBooking({
                     <button
                       type="button"
                       className={c.ghost}
-                      disabled={busy || !view.slots.length}
+                      disabled={busy || !otherTimes}
                       onClick={() => {
                         setMoving(true);
                         setSaved("");
@@ -532,7 +535,7 @@ export function VisitBooking({
                     >
                       Move this visit
                     </button>
-                    {!view.slots.length && <p className={c.note}>You cannot move it now, because no other time is open.</p>}
+                    {!otherTimes && <p className={c.note}>You cannot move it now, because no other time is open.</p>}
                   </div>
                 )}
               </section>
@@ -587,7 +590,7 @@ export function VisitBooking({
                 zoneNote={false}
                 id="mock-start"
                 legend="Mock teaching time"
-                hint="1 hour · weekdays"
+                hint="1 hour, if you pass · weekdays"
                 checkedAt={null}
                 items={laterMocks}
                 keyOf={(m) => m.start}
@@ -611,7 +614,7 @@ export function VisitBooking({
               {keep}
               <VisitConfirm
                 error={error}
-                missing={[!start && "a test time", unchanged && "times that differ from your booking", view.twoDay && !mock && "a mock teaching time", (!onsite || !commitment) && "both boxes"].filter(Boolean).join(", ")}
+                missing={[!start && "a test time", unchanged && "times that differ from your booking", view.twoDay && !mock && "a mock teaching time", !onsite && !commitment ? "both boxes" : !onsite ? "the onsite box" : !commitment && "the teaching box"].filter(Boolean).join(", ")}
                 disabled={busy || !start || (view.twoDay && !mock) || !onsite || !commitment || unchanged}
                 label={busy ? "Confirming…" : view.visit ? (view.twoDay ? "Confirm new times" : "Confirm new time") : view.twoDay ? "Confirm both times" : "Confirm visit"}
                 onConfirm={book}
@@ -626,7 +629,7 @@ export function VisitBooking({
                       </div>
                       {view.twoDay && (
                         <div>
-                          <span>Mock teaching, if you pass</span>
+                          <span>Mock, if you pass</span>
                           <b>{mock ? `${short(mock.start)}, ${time(mock.start)}` : "Choose a time"}</b>
                         </div>
                       )}

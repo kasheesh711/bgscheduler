@@ -193,7 +193,8 @@ export function PreScreenQuestions({
     ["q-degree", "Degree", !!answers.degree && !!answers.field.trim()],
     ["q-english", "English level", !!answers.english],
     ["q-experience", "Experience", !!answers.experience],
-    ["q-subjects", "Subjects", subjects.length > 0],
+    // Art & Design needs its portfolio (a file or a link) before this counts (Sol r6).
+    ["q-subjects", "Subjects", subjects.length > 0 && (!subjects.includes(ART) || !!fileName || !!portfolio.trim())],
     // Always counted, so the total stays 11; asked only when there is a choice (one subject is chosen for the candidate).
     [subjects.length > 1 ? "q-test" : "q-subjects", "Test subject", !!test],
     ["q-curricula", "Curricula", curricula.length > 0],
@@ -320,6 +321,12 @@ export function PreScreenQuestions({
             </div>
           )}
         </Q>
+        {/* The page chose the only possible subject: say so here, not first on Times (Sol r6). */}
+        {test && (subjects.length === 1 || testable.length === 1) && !(subjects.length > 1 && testChoices.length > 1) && (
+          <p className={c.note} role="status">
+            Test and mock lesson subject: <b>{test}</b>
+          </p>
+        )}
         {subjects.includes(ART) && (
           <Q title="Art & Design Technology portfolio">
             <label className={s.drop}>
@@ -348,7 +355,7 @@ export function PreScreenQuestions({
           <Q
             id="q-test"
             title="Subject for your test and mock lesson"
-            hint={testable.length && testable.length < subjects.length ? "Choose one. Greyed subjects are not tested now." : "Choose one."}
+            hint={testable.length && testable.length < subjects.length ? "Greyed subjects are not tested now." : undefined}
           >
             <Chips
               name="testSubject"
