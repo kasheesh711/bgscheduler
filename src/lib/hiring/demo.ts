@@ -75,7 +75,7 @@ export const resetDemo = () => set(START);
 /** The upload button in demo mode: the demo candidate's paper shows as uploaded and marked. No file is read. */
 export const markDemoPaper = () => state.step === 4 && set({ marked: true });
 
-const BEHAVIORAL = "Calm and clear on the call. Gave a specific example of how she changed a lesson for a weak student.";
+const BEHAVIORAL = "Calm and clear in the mock lesson. Gave a specific example of how she changed a lesson for a weak student.";
 const OFFER = OFFER_LETTERS.part_time.text(NAME, "Mathematics");
 export const demoRubric = (): MockRubric => ({
   items: Object.fromEntries(RUBRIC_ITEMS.map((id, index) => [id, index % 3 ? 10 : 7])) as MockRubric["items"],
