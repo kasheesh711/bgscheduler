@@ -1,5 +1,5 @@
 import { isDecided, SUBJECTS, type HiringConfig, type Stage, type Subject } from "./model";
-import { profileScore, topHiringSubject, workRightsAccepted, workRightsPenalty, type Assessment } from "./scoring";
+import { highSchoolFraction, profileScore, topHiringSubject, workRightsAccepted, workRightsPenalty, type Assessment } from "./scoring";
 import type { CallReview } from "./limits";
 
 export const STAGE_LABELS: Record<Stage, string> = {
@@ -96,7 +96,7 @@ type InsightCandidate = {
 type GateConfig = Pick<
   HiringConfig,
   "profileThreshold" | "profileWeights" | "acceptedWorkRights" | "workRightsPenalties" | "subjectPriority" | "callThreshold"
->;
+> & Partial<Pick<HiringConfig, "highSchools">>;
 type InsightInput = {
   config: GateConfig & Pick<HiringConfig, "interviewers">;
   candidates: InsightCandidate[];
@@ -160,7 +160,7 @@ export function profileGate(
   let awaitingCall = false;
   if (!assessment) add("The profile is not scored.", "Not scored");
   else {
-    const score = profileScore(assessment, config.profileWeights, candidate.universityAssessment?.fraction ?? 0, workRightsPenalty(candidate.workRightsAnswer, config));
+    const score = profileScore(assessment, config.profileWeights, candidate.universityAssessment?.fraction ?? 0, workRightsPenalty(candidate.workRightsAnswer, config), highSchoolFraction(assessment, config));
     // Kevin, 24 Nov 2026: a raised score does not undo a call that is booked or done. The booked call stays on the Calls
     // tab, and a good call still sends the form. A blank call score turns calls off and ends a booked call, as before.
     const booked = !!candidate.callBooked && config.callThreshold !== null;

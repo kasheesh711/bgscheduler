@@ -9,7 +9,7 @@ import type { Insights } from "../pipeline-charts";
 
 vi.mock("next/font/google", () => ({ Instrument_Serif: () => ({ variable: "" }) }));
 
-const weights = { degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0 };
+const weights = { degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0, school: 0 };
 const pre = {
   submittedAt: "31/10/2026, 18:30:05",
   degree: "BSc",

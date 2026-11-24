@@ -314,6 +314,14 @@ If the source name does not match the ranking catalog, the lookup checks the ful
 
 The initial reference list is deliberately limited to ten ranks proved by the release and the three named Thai universities. It is **not a complete ranking dataset**. An administrator can add a verified institution, aliases, country, global rank, edition and source under **University prestige rules and reference data**. Country-only scoring can run automatically for other exact ROR matches; missing rank coverage remains visible.
 
+### High school
+
+The **High school** weight gives points for the candidate's own high school. The AI reads the school names from the CV (only a school the candidate attended, never an employer), each with a quote that must occur in the source. The application compares each name with the **High school list** in Rules and setup. A top-tier school gets the full weight. A listed school gets half. A school that is not listed gets none. With two schools, the better one counts.
+
+A name matches only when it equals a listed name or one of its other names. The words "the", "Bangkok" and "Thailand" are ignored. A same-named school in a different city thus also matches. The first list holds 80 international schools in and near Bangkok (ISAT member list, 24 November 2026) and seven top Thai schools (Triam Udom Suksa, Mahidol Wittayanusorn, Kamnoetvidya, and the Chulalongkorn, Prasarnmit, Patumwan and Kasetsart demonstration schools). The tiers are a draft. Kevin edits them in Rules and setup.
+
+The weight is 0 in a config saved before this part, so a merge changes no score. An application scored before this part has no school list and gets no high-school points until it is scored again. The pre-screen score has no high-school part.
+
 ### Short evidence
 
 The panel shows short lines first. Each assessment has a summary of up to 25 words and one line of up to 15 words for each criterion. The lines follow ASD-STE100. The server checks the word count and asks again, up to three more times, with the exact count. The prompt asks for ASD-STE100, and no code checks that. The exact source quote stays on a click, because the validator compares it to the source. The original long reasons stay stored. The short lines sit beside them. A rewrite pass (`--briefs`) fills the short lines of older assessments. A row whose lines never fit keeps its assessment without short lines, and each rewrite run asks again.

@@ -8,7 +8,7 @@ import { headRecommendation, queueFinalResult, sendRefusal, type Decision } from
 import { computeSheet, passRulesFor, rubricTotals } from "./marking-sheet";
 import { OFFER_LETTERS, type OfferType } from "./offer-letters";
 import { contractTestAllowed, HiringError, HR_CALENDAR, normalizeEmail, runtimeWritesAllowed, type HiringConfig } from "./model";
-import { profileScore, workRightsPenalty, type Assessment } from "./scoring";
+import { highSchoolFraction, profileScore, workRightsPenalty, type Assessment } from "./scoring";
 import { callCalendarState, candidateById, enqueue, settings } from "./service";
 
 const PACKET = "final-review-packet";
@@ -39,16 +39,20 @@ async function evidence(db: Database, id: string, lock = true) {
     throw new HiringError(409, "The graded paper and the completed mock rubric are required.");
   const prestige = candidate.universityAssessment?.fraction ?? 0;
   const penalty = workRightsPenalty(candidate.workRightsAnswer, config);
+  const school = highSchoolFraction(candidate.profileAssessment, config);
+  const { school: schoolWeight, ...oldWeights } = config.profileWeights;
   const ats: {
     score: number;
     criteria: Assessment["criteria"];
-    weights?: HiringConfig["profileWeights"];
+    weights?: Omit<HiringConfig["profileWeights"], "school"> & { school?: number };
     prestige?: number;
     penalty?: number;
+    school?: number;
   } = {
-    score: profileScore(candidate.profileAssessment, config.profileWeights, prestige, penalty),
+    score: profileScore(candidate.profileAssessment, config.profileWeights, prestige, penalty, school),
     criteria: candidate.profileAssessment.criteria,
-    weights: config.profileWeights, prestige, penalty,
+    // With a high-school weight of 0 the evidence keeps the shape of packets saved before that part, so they stay valid.
+    weights: schoolWeight ? config.profileWeights : oldWeights, prestige, penalty, ...(schoolWeight ? { school } : {}),
   };
   return {
     name: candidate.name, email: candidate.email, subject, resumeSha256: candidate.resumeSha256,
