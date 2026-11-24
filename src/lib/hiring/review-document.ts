@@ -64,12 +64,14 @@ function atsBreakdown(ats: ReviewPacket["evidence"]["ats"], atsScore: string) {
   const { weights, prestige, penalty } = ats;
   if (!weights || prestige === undefined || penalty === undefined) return "";
   const parts = Object.entries(criterionNames).map(([id, name]) => {
-    const max = weights[id as keyof typeof weights];
+    const max = weights[id as keyof typeof criterionNames];
     const criterion = ats.criteria.find((entry) => entry.id === id);
     const result = criterion?.result ?? "unknown";
     return { name, status: criterionResults[result], max, earned: max * VALUE[result], evidence: criterion?.evidence };
   });
-  parts.push({ name: "School", status: "", max: weights.prestige, earned: weights.prestige * prestige, evidence: undefined });
+  parts.push({ name: "University", status: "", max: weights.prestige, earned: weights.prestige * prestige, evidence: undefined });
+  // A packet stored before the high-school part has no weight for it and keeps its old rows.
+  if (weights.school) parts.push({ name: "High school", status: "", max: weights.school, earned: weights.school * (ats.school ?? 0), evidence: undefined });
   const gross = parts.reduce((sum, part) => sum + part.earned, 0);
   const barWidth = 304;
   const barX = (value: number) => 8 + barWidth * percent(value) / 100;

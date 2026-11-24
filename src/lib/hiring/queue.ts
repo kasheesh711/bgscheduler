@@ -22,6 +22,7 @@ import {
   availabilityFraction,
   hardStops,
   preScreenPoints,
+  highSchoolFraction,
   profileScore,
   workRightsPenalty,
   visitSubject,
@@ -288,7 +289,7 @@ export function preScreenEntries(rows: FormCandidate[], config: HiringConfig): Q
           {
             id: row.id,
             subject,
-            score: profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0, workRightsPenalty(row.workRightsAnswer, config)),
+            score: profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0, workRightsPenalty(row.workRightsAnswer, config), highSchoolFraction(row.profileAssessment, config)),
             createdAt: row.createdAt,
             manual: row.queueManual,
           },
@@ -316,7 +317,7 @@ export function callEntries(rows: FormCandidate[], config: HiringConfig): QueueE
             {
               id: row.id,
               subject: gate.subject,
-              score: profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0, workRightsPenalty(row.workRightsAnswer, config)),
+              score: profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0, workRightsPenalty(row.workRightsAnswer, config), highSchoolFraction(row.profileAssessment, config)),
               createdAt: row.createdAt,
             },
           ]

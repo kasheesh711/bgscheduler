@@ -45,6 +45,8 @@ import {
   availabilityFraction,
   hardStops,
   preScreenPoints,
+  highSchoolFraction,
+  highSchoolMatch,
   profileScore,
   workRightsPenalty,
   supportedVisitSubjects,
@@ -929,8 +931,10 @@ export async function dashboard(db: Database = getDb()) {
               config.profileWeights,
               c.universityAssessment?.fraction ?? 0,
               workRightsPenalty(c.workRightsAnswer, config),
+              highSchoolFraction(c.profileAssessment, config),
             )
           : null,
+        highSchool: highSchoolMatch(c.profileAssessment?.schools, config.highSchools),
         // The pre-screen score is the eight-part total, not the profile formula.
         preScreenScore: parts?.total ?? null,
         preScreenParts: parts,

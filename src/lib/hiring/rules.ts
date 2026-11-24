@@ -105,6 +105,7 @@ export const PROFILE_WEIGHT_LABELS = {
   teaching: "Teaching experience",
   english: "English evidence",
   prestige: "University prestige",
+  school: "High school",
 };
 export const PRE_SCREEN_WEIGHT_LABELS = {
   degree: "Degree",

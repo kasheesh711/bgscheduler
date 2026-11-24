@@ -139,7 +139,7 @@ describe("CandidateInspector visit details", () => {
         candidate={{ id: "a", name: "A", stage: "onsite_booked", subjects: [], sourceIds: [], paperPassedSubjects: [], preScreen: null } as unknown as HiringCandidate}
         extras={{ pre: { status: "Replied", sentAt: null, remindedAt: null, repliedAt: null }, visit: null, visitFacts: [], onsiteQueued: false, ...extras }}
         seekJobId="1"
-        weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0 }}
+        weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0, school: 0 }}
         busy={false}
         error=""
         notice=""
@@ -183,7 +183,7 @@ describe("CandidateInspector actions", () => {
         }
         extras={{ pre: { status: "Replied", sentAt: null, remindedAt: null, repliedAt: null }, visit, visitFacts: [], onsiteQueued: false }}
         seekJobId="94844236"
-        weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0 }}
+        weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0, school: 0 }}
         busy={false}
         error=""
         notice=""

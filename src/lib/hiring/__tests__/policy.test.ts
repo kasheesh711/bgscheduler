@@ -179,6 +179,7 @@ describe("hiring decision boundaries", () => {
   it("new assessments need briefs; stored rows without them still parse", () => {
     const ids = ["degree", "subject", "curriculum", "teaching", "english"];
     const briefed = {
+      schools: [],
       ...assessment,
       briefSummary: "The tutor holds a maths degree.",
       criteria: assessment.criteria.map((c) => ({ ...c, brief: "Short line." })),
@@ -630,7 +631,7 @@ describe("pre-screen scoring", () => {
     const json = JSON.stringify(z.toJSONSchema(preScreenOutputSchema, { target: "draft-07" }));
     expect(json).toMatch(/briefSummary/);
     expect(preScreenOutputSchema.safeParse(six).success).toBe(false);
-    expect(preScreenOutputSchema.safeParse({ ...six, briefSummary: "Short.", criteria: six.criteria.map((c) => ({ ...c, brief: "Short." })) }).success).toBe(true);
+    expect(preScreenOutputSchema.safeParse({ ...six, schools: [], briefSummary: "Short.", criteria: six.criteria.map((c) => ({ ...c, brief: "Short." })) }).success).toBe(true);
   });
   it("checks written evidence against the two written answers only", () => {
     const source = "motivation: I like teaching\nteachingApproach: Ask what went wrong first\n\nApplication education and experience:\nTaught at Springfield School for ten years";

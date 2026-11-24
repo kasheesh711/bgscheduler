@@ -2,6 +2,7 @@ import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { z } from "zod";
 import { weekSchema } from "@/lib/tutor-attendance/model";
 import { UNIVERSITY_CATALOG, THAI_UNIVERSITIES } from "./university-catalog";
+import { BANGKOK_INTERNATIONAL_SCHOOLS, TOP_THAI_SCHOOLS } from "./high-school-catalog";
 
 export const ZONE = "Asia/Bangkok";
 export const GOOGLE_SCOPES = [
@@ -162,6 +163,8 @@ export const profileWeightsSchema = z
     teaching: z.number().int().min(0).max(100),
     english: z.number().int().min(0).max(100),
     prestige: z.number().int().min(0).max(100),
+    /** The candidate's own high school. 0 for a config saved before this part existed, so its total stays 100. */
+    school: z.number().int().min(0).max(100).default(0),
   })
   .strict()
   .refine(
@@ -171,10 +174,12 @@ export const profileWeightsSchema = z
 export const DEFAULT_WEIGHTS = {
   degree: 10,
   subject: 10,
-  curriculum: 20,
+  curriculum: 15,
   teaching: 20,
   english: 20,
-  prestige: 20,
+  prestige: 15,
+  // Kevin, 24 Nov 2026: 10 points for the high school, 5 taken from university and 5 from curriculum.
+  school: 10,
 };
 export const preScreenWeightsSchema = z
   .object({
@@ -270,6 +275,19 @@ export const baseConfigSchema = z
       )
       .max(3000)
       .default([...UNIVERSITY_CATALOG, ...THAI_UNIVERSITIES]),
+    /** The high schools that earn points: tier 1 gets the full weight, tier 2 half. A school not listed gets none. */
+    highSchools: z
+      .array(
+        z
+          .object({
+            name: z.string().trim().min(1).max(300),
+            aliases: z.array(z.string().trim().min(1).max(300)).max(20),
+            tier: z.union([z.literal(1), z.literal(2)]),
+          })
+          .strict(),
+      )
+      .max(500)
+      .default([...BANGKOK_INTERNATIONAL_SCHOOLS, ...TOP_THAI_SCHOOLS]),
     requireWeekendAndWeekday: z.literal(true).default(true),
     holidays: z.array(z.iso.date()).max(366).default([]),
     interviewers: z

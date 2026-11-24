@@ -20,7 +20,8 @@ export function demoReviewDocument(input: { draft: boolean; behavioral: string; 
     evidence: {
       name: DEMO_NAME, email: "demo@example.test", subject: "Mathematics", resumeSha256: "demo", call: null,
       ats: {
-        score: 88, weights: DEFAULT_WEIGHTS, prestige: 0.9, penalty: 0,
+        // The made-up 88 is the sum with the weights before the high-school part.
+        score: 88, weights: { ...DEFAULT_WEIGHTS, curriculum: 20, prestige: 20, school: 0 }, prestige: 0.9, penalty: 0,
         criteria: [
           criterion("degree", "met", "BSc Mathematics, Chulalongkorn University"),
           criterion("subject", "met", "Degree subject is Mathematics"),

@@ -5,14 +5,16 @@ import { hiringMockResults, hiringPaperResults } from "@/lib/db/schema";
 import { headRecommendation } from "../decisions";
 import { reviewPacketValid, type ReviewPacket } from "../final-review";
 import { computeSheet, passRulesFor } from "../marking-sheet";
-import { configSchema, DEFAULT_WEIGHTS, HiringError } from "../model";
+import { configSchema, HiringError } from "../model";
 import { candidateById, settings } from "../service";
+// The weights a packet stored before the high-school part (24 Nov 2026). Such a packet must stay valid while the school weight is 0.
+const DEFAULT_WEIGHTS = { degree: 10, subject: 10, curriculum: 20, teaching: 20, english: 20, prestige: 20 };
 
 vi.mock("../decisions", () => ({ headRecommendation: vi.fn() }));
 vi.mock("../service", () => ({ candidateById: vi.fn(), settings: vi.fn() }));
 
 function reviewFixture() {
-  const config = configSchema.parse({});
+  const config = configSchema.parse({ profileWeights: { ...DEFAULT_WEIGHTS, school: 0 } });
   const at = new Date("2026-11-19T03:00:00Z");
   const criteria: ReviewPacket["evidence"]["ats"]["criteria"] = (["degree", "subject", "curriculum", "teaching", "english"] as const).map((id) => ({
     id, result: id === "degree" || id === "subject" ? "met" : "unknown", evidence: "", reason: "Source checked.",
@@ -56,7 +58,7 @@ it("rejects a charted packet when the ATS weights change and the score stays the
   const { db, legacyEvidence, packet, settingsRow } = reviewFixture();
   await expect(reviewPacketValid(db, "candidate", packet)).resolves.toBe(true);
 
-  const profileWeights = { ...DEFAULT_WEIGHTS, degree: 11, subject: 9 };
+  const profileWeights = { ...DEFAULT_WEIGHTS, degree: 11, subject: 9, school: 0 };
   const config = { ...settingsRow.config, profileWeights };
   vi.mocked(settings).mockResolvedValue({ config, row: { ...settingsRow, config } });
   await expect(reviewPacketValid(db, "candidate", packet)).resolves.toBe(false);

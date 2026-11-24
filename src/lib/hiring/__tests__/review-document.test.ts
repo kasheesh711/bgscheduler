@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewPacket } from "../final-review";
 import { computeSheet } from "../marking-sheet";
-import { DEFAULT_WEIGHTS } from "../model";
 import { reviewDocument } from "../review-document";
+// The weights before the high-school part (24 Nov 2026). These tests pin scores made with them.
+const DEFAULT_WEIGHTS = { degree: 10, subject: 10, curriculum: 20, teaching: 20, english: 20, prestige: 20, school: 0 };
 
 const paper = computeSheet({ questions: [
   { id: "1", level: "Key Stage 3", marks: 18, max: 20, reason: "Correct method", attempted: true, readable: true },

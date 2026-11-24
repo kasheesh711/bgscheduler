@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_WEIGHTS, type Stage } from "../model";
+import { type Stage } from "../model";
 import { buildInsights, criterionValues, profileGate, readyToInvite } from "../insights";
 import type { Assessment } from "../scoring";
+// The weights before the high-school part (24 Nov 2026). These tests pin scores made with them.
+const DEFAULT_WEIGHTS = { degree: 10, subject: 10, curriculum: 20, teaching: 20, english: 20, prestige: 20, school: 0 };
 
 const assessment = (
   result: Assessment["criteria"][number]["result"],
