@@ -366,8 +366,9 @@ const push = window.history.pushState.bind(window.history);
 window.history.pushState = (...args) => { push(...args); window.dispatchEvent(new Event(change)); };
 const subscribe = (fn) => { window.addEventListener(change, fn); window.addEventListener("popstate", fn); return () => { window.removeEventListener(change, fn); window.removeEventListener("popstate", fn); }; };
 export const useSearchParams = () => new URLSearchParams(useSyncExternalStore(subscribe, () => location.search));
-// The synthetic page has no server to fetch again; refresh keeps the page as it is.
-export const useRouter = () => ({ refresh() {}, push() {}, replace() {} });
+// The synthetic page has no server to fetch again; refresh keeps the page as it is, after a short wait like a real fetch,
+// so a check can see the pending state.
+export const useRouter = () => ({ refresh() { return new Promise((resolve) => setTimeout(resolve, 300)); }, push() {}, replace() {} });
 `;
 // The real review packet HTML (src/lib/hiring/review-document.ts) for a synthetic packet, so Gift's in-page packet is the real layout.
 const packetModule = await build({ entryPoints: [path.join(ROOT, "src/lib/hiring/review-document.ts")], bundle: true, write: false, platform: "node", format: "esm", tsconfig: path.join(ROOT, "tsconfig.json"), logLevel: "error" });
@@ -1258,6 +1259,21 @@ try {
     await list.getByRole("link", { name: /Reply Low/ }).click();
     await frame.getByRole("heading", { name: "Mock scores" }).waitFor();
     assert.equal(await frame.getByRole("slider").nth(0).inputValue(), "9");
+    // Discard puts the sent scores back (critic review, round 19).
+    await frame.getByRole("button", { name: "Discard changes" }).click();
+    await frame.getByRole("button", { name: "Edit scores" }).click();
+    assert.equal(await frame.getByRole("slider").nth(0).inputValue(), "7");
+  });
+  await check("Check recommendation keeps focus while it checks and says when it is not open yet", async () => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/hiring/brief/sample-token?brief=open&embed=1`);
+    const button = page.getByRole("button", { name: "Check recommendation" });
+    await button.focus();
+    await page.keyboard.press("Enter");
+    await page.getByText("Checking…", { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Check recommendation");
+    await page.getByText("Not open yet. Recommend after the mock ends.").waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Check recommendation");
   });
   await check("the paper check's comment jump puts focus in the comment field", async () => {
     await page.setViewportSize({ width: 1280, height: 800 });

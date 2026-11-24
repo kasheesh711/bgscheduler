@@ -89,7 +89,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
     const onMessage = (event: MessageEvent) => {
       if (event.origin !== window.location.origin || event.data?.type !== "hiring-refresh") return;
       asked.current = typeof event.data.part === "string" ? event.data.part : "";
-      setChecked(true);
+      // A refresh at mock start is not a question about the recommendation, so it says nothing (critic review, round 19).
+      if (asked.current === "recommendation") setChecked(true);
       startCheck(() => router.refresh());
     };
     window.addEventListener("message", onMessage);
@@ -141,7 +142,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
               </div>
             ))}
           </dl>
-          {!brief.mockStarted && !brief.mockEnded && !decision && <p className={c.note}>Review the résumé and guide before the mock.</p>}
+          {!brief.mockStarted && !brief.mockEnded && !decision && <p className={`${c.note} ${b.prep}`}>Review the résumé and guide before the mock.</p>}
         </div>
         {brief.ats && (
           <section className={b.ats} aria-label="ATS score">

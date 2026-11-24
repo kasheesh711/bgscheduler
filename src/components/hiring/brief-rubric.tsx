@@ -40,16 +40,18 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   // Changes to scores already sent are kept for this tab only (sessionStorage), so opening another row and coming back
   // does not lose them, and no copy stays on a shared device (Sol and critic reviews, round 18).
   const editedAfterSend = lastSent !== null && lastSent.editCount !== editCount;
+  const apply = (draft: Partial<Draft>) => {
+    const score = (id: RubricItem) => Number(draft.items?.[id]);
+    setItems(Object.fromEntries(RUBRIC_ITEMS.filter((id) => Number.isInteger(score(id)) && score(id) >= 1 && score(id) <= ITEM_MAX).map((id) => [id, score(id)])));
+    setComments(typeof draft.comments === "string" ? draft.comments : "");
+    const kept = { listens: !!draft.ticks?.listens, explains: !!draft.ticks?.explains, plan: !!draft.ticks?.plan };
+    setTicks(kept);
+    setTicksUsed(Object.values(kept).some(Boolean));
+    setChecksDone(typeof draft.checksDone === "boolean" ? draft.checksDone : null);
+  };
+  // The scores last sent, so "Discard changes" can put them back.
+  const sentCopy = useRef<Partial<Draft> | null>(saved ? { items: saved.items as Draft["items"], comments: saved.comments, ticks: saved.stressTest, checksDone: saved.checksDone ?? null } : null);
   useEffect(() => {
-    const apply = (draft: Partial<Draft>) => {
-      const score = (id: RubricItem) => Number(draft.items?.[id]);
-      setItems(Object.fromEntries(RUBRIC_ITEMS.filter((id) => Number.isInteger(score(id)) && score(id) >= 1 && score(id) <= ITEM_MAX).map((id) => [id, score(id)])));
-      setComments(typeof draft.comments === "string" ? draft.comments : "");
-      const kept = { listens: !!draft.ticks?.listens, explains: !!draft.ticks?.explains, plan: !!draft.ticks?.plan };
-      setTicks(kept);
-      setTicksUsed(Object.values(kept).some(Boolean));
-      setChecksDone(typeof draft.checksDone === "boolean" ? draft.checksDone : null);
-    };
     const read = (store: Storage) => {
       const draft = JSON.parse(store.getItem(draftKey) ?? "null") as Partial<Draft> | null;
       return draft && typeof draft.items === "object" && draft.items ? draft : null;
@@ -60,13 +62,13 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       if (!restored.current) {
         restored.current = true;
         const edit = read(sessionStorage);
-        if (edit) {
+        // Only over scores that were sent; with none on the server the copy is stale (critic review, round 19).
+        if (edit && lastSent) {
           apply(edit);
-          if (lastSent) {
-            setEditing(true);
-            onEdit();
-          }
-        } else if (!saved) {
+          setEditing(true);
+          onEdit();
+        } else if (edit) sessionStorage.removeItem(draftKey);
+        if (!edit && !saved) {
           const draft = read(localStorage);
           if (draft) apply(draft);
         }
@@ -85,6 +87,18 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   const firstScore = useRef<HTMLInputElement>(null);
   const sendBar = useRef<HTMLDivElement>(null);
   const sentTotal = lastSent?.editCount === editCount ? lastSent.total : null;
+  // After a change to sent scores: put the sent scores back and drop the tab copy (critic review, round 19).
+  const discard = () => {
+    if (sentCopy.current) apply(sentCopy.current);
+    try {
+      sessionStorage.removeItem(draftKey);
+    } catch {
+      // No store, so no copy to remove.
+    }
+    setEditing(false);
+    setState("sent");
+    if (lastSent) onSent(lastSent.total);
+  };
   // Unscored sliders (value 0), read afresh on each click. The button shows while any score is blank and goes to the
   // first one in the form, so none is skipped, and focuses it (Sol review, rounds 15–18).
   const unscored = () => [...(sendBar.current?.closest("form")?.querySelectorAll<HTMLInputElement>('input[type="range"]') ?? [])]
@@ -127,6 +141,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       const body = (await response.json().catch(() => ({}))) as { total?: number; error?: string };
       if (!response.ok || typeof body.total !== "number") setError(body.error ?? "The scores were not saved. Try again.");
       else {
+        sentCopy.current = { items, comments, ticks, checksDone };
         try {
           localStorage.removeItem(draftKey);
           sessionStorage.removeItem(draftKey);
@@ -337,6 +352,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                   (next.closest("[data-score-row]") ?? next).scrollIntoView({ block: "center" });
                   next.focus({ preventScroll: true });
                 }}>Next unscored</button>}
+                {lastSent && sentCopy.current && <button type="button" className={b.moreBelow} onClick={discard}>Discard changes</button>}
               </div>
               <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
             </div>

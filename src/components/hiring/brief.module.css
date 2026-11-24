@@ -666,3 +666,4 @@
 /* The scoring hint names the pointer the head has: a phone is tapped, not clicked (critic review, round 15). */
 .coarsePointer { display: none; }
 @media (pointer: coarse) { .finePointer { display: none; } .coarsePointer { display: inline; } }
+.prep { text-wrap: pretty; }
