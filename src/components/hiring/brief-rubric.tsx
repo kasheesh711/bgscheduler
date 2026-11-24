@@ -185,7 +185,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
     >
       <div className={b.row} aria-hidden="true">
         {/* The numbers under each slider are not labels only; a click on one or a drag sets the score (Sol review, round 14). */}
-        <span className={c.note}><span className={b.finePointer}>Click or drag to score</span><span className={b.coarsePointer}>Tap or drag to score</span></span>
+        <span className={c.note}><span className={b.finePointer}>Click a number or drag</span><span className={b.coarsePointer}>Tap a number or drag</span></span>
         <div className={b.scale}>
           {LEVELS.map(({ label }) => <span key={label}>{label}</span>)}
         </div>

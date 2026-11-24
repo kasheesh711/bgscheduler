@@ -48,7 +48,8 @@ export const BriefGone = () => (
 );
 
 type Doc = "resume" | "paper" | "answers" | "guide";
-const DOCS: [Doc, string][] = [["resume", "Résumé"], ["paper", "Paper"], ["answers", "Answers"], ["guide", "Guide"]];
+// "Application", not "Answers": a head read it as the paper's answers (Sol review, round 19).
+const DOCS: [Doc, string][] = [["resume", "Résumé"], ["paper", "Paper"], ["answers", "Application"], ["guide", "Guide"]];
 const points = (value: number) => String(Math.round(value * 10) / 10);
 
 /**
@@ -171,10 +172,11 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
         <div className={b.sheet}>
           {blocked && (
             <div className={`${b.panel} ${c.field}`}>
-              <p role="status">{brief.recommendationBlock === "checking" ? "Scores are being checked."
+              <p role="status">{checking ? "Checking scores…" : brief.recommendationBlock === "checking" ? "Scores are being checked."
                 : "Ask BeGifted admin to check the scores."}</p>
+              {/* Stays focusable while it checks; when the recommendation opens, focus moves to it (Sol review, round 19). */}
               {brief.recommendationBlock === "checking" && (
-                <button type="button" className={c.button} disabled={checking} onClick={() => refresh("")}>{checking ? "Checking…" : "Check again"}</button>
+                <button type="button" className={c.button} aria-disabled={checking || undefined} onClick={() => { if (!checking) refresh("recommendation"); }}>Check again</button>
               )}
             </div>
           )}
@@ -204,7 +206,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
           {wait && (
             <div className={`${b.panel} ${c.field}`}>
               <p role="status">{checking ? "Checking…" : checked ? "Not open yet. Recommend after the mock ends." : "Recommend after the mock ends."}</p>
-              <button type="button" className={c.button} disabled={checking} onClick={() => refresh("recommendation")}>Check recommendation</button>
+              <button type="button" className={c.button} aria-disabled={checking || undefined} onClick={() => { if (!checking) refresh("recommendation"); }}>Check recommendation</button>
             </div>
           )}
         </div>
