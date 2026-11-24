@@ -18,9 +18,9 @@ describe("WeekGrid", () => {
     expect(html).toMatch(/data-cell="0,17"[^>]*aria-pressed="true"/);
     expect(html).toContain("Mon 17–19 · Sat 09–10");
     expect(html).toContain("Weekend hour added");
-    expect(html).toContain("Weekday hour from 15:00 added");
+    expect(html).toContain("Weekday hour at or after 15:00 added");
     expect(html).toContain("3 h");
     const none = renderToStaticMarkup(<WeekGrid value={emptyWeek()} onChange={() => {}} disabled={false} />);
-    expect(none).toContain("Still needed: a weekend hour · a weekday hour from 15:00");
+    expect(none).toContain("Still needed: a weekend hour · a weekday hour at or after 15:00");
   });
 });

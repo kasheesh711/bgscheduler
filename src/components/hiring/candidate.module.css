@@ -1379,3 +1379,8 @@ span.qTitle {
     letter-spacing: 0;
   }
 }
+
+/* The chosen week: a light navy fill, so it reads as chosen and not as a focus ring (Sol r26); focus stays the coral outline. */
+.dateWeek[aria-pressed="true"] {
+  background: #e6eaf3;
+}

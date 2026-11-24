@@ -380,7 +380,7 @@ export function PreScreenQuestions({
           </Q>
         )}
         {subjects.includes(ART) && (
-          <Q id="q-portfolio" title="Portfolio">
+          <Q id="q-portfolio" title="Art & Design Technology portfolio">
             <label className={s.drop}>
               <input
                 className={c.hidden}
@@ -434,7 +434,8 @@ export function PreScreenQuestions({
           error={error}
           disabled={busy}
           // Until every answer is in, the button takes the candidate to the next open question (Sol r17).
-          label={busy ? "Saving…" : open.length ? `Next: ${open[0][1]}` : "Save and see times"}
+          // "Go to" says the button moves to that question, not on to the next step (Sol r26).
+          label={busy ? "Saving…" : open.length ? `Go to ${open[0][1]}` : "Save and see times"}
           onConfirm={() => (open.length ? reveal(open[0][0], true) : send())}
           summary={
             <>

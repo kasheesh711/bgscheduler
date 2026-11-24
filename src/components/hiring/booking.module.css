@@ -1,5 +1,7 @@
 /* Candidate booking page. Its own look on purpose (owner request, 11 Nov 2026): it does not follow the app theme. */
 .page {
+  /* A focused field scrolls clear of the sticky bar at the bottom (Sol r26). */
+  scroll-padding-block: 16px 140px;
   --paper: #f6f1e7;
   --card: #fffdf8;
   --ink: #14213d;

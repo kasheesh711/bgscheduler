@@ -168,6 +168,7 @@ function Picker<T extends { date: string }>({
   compact,
   initialDate,
   zoneNote = true,
+  sameCheck,
   liveDates = [],
   currentKey,
   currentOpen = false,
@@ -181,6 +182,8 @@ function Picker<T extends { date: string }>({
   liveDates?: string[];
   /** "Bangkok time" under the week; said once on a page with two lists. */
   zoneNote?: boolean;
+  /** Whether the list above showed a live-checked day: the same freshness line is not said twice (Sol r26). */
+  sameCheck?: boolean;
   /** The day to open on, such as the booked test day while moving. */
   initialDate?: string;
   /** The page can focus or scroll to this list. */
@@ -358,7 +361,7 @@ function Picker<T extends { date: string }>({
       {active && (
         <p className={cs.chosenDay}>
           <b className={cs.dateLabel}>{label(active, { weekday: "long", day: "numeric", month: "long" })}</b>
-          {checkedAt && <Live at={checkedAt} live={liveDates.includes(active)} />}
+          {checkedAt && sameCheck !== liveDates.includes(active) && <Live at={checkedAt} live={liveDates.includes(active)} />}
         </p>
       )}
       {PARTS.map((p, n) => {
@@ -763,6 +766,7 @@ export function VisitBooking({
                 currentKey={moving ? (view.visit?.mockStart ?? undefined) : undefined}
                 currentOpen
                 legend="Mock teaching time"
+                sameCheck={view.liveDates.includes(slot.date)}
                 hint="1 hour, if you pass."
                 items={laterMocks}
                 keyOf={(m) => m.start}

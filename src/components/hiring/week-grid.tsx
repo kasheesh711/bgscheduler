@@ -335,11 +335,11 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
           {late && (
             <span data-ok>
               <Check aria-hidden size={14} />
-              Weekday hour from 15:00 added
+              Weekday hour at or after 15:00 added
             </span>
           )}
           {(!weekend || !late) && (
-            <span>Still needed: {[!weekend && "a weekend hour", !late && "a weekday hour from 15:00"].filter(Boolean).join(" · ")}</span>
+            <span>Still needed: {[!weekend && "a weekend hour", !late && "a weekday hour at or after 15:00"].filter(Boolean).join(" · ")}</span>
           )}
         </p>
       </div>

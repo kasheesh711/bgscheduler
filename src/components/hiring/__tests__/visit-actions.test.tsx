@@ -46,7 +46,7 @@ describe("VisitBooking", () => {
     expect(html).toContain("Questions");
     expect(html).toContain('aria-current="step"');
     expect(html).not.toContain("docs.google.com");
-    for (const question of ["Highest degree", "Field of study", "Subjects you teach confidently", "English level", "Your onsite hours", "Why do you want to tutor with BeGifted?", "Next: Highest degree"])
+    for (const question of ["Highest degree", "Field of study", "Subjects you teach confidently", "English level", "Your onsite hours", "Why do you want to tutor with BeGifted?", "Go to Highest degree"])
       expect(html).toContain(question);
     expect(html).toContain("1 hour, only if you pass");
     expect(html).not.toContain("I can attend at this address");
@@ -72,7 +72,7 @@ describe("VisitBooking", () => {
     // The mock teaching list opens after a test time is chosen; until then its section says what comes first.
     expect(html).toContain("1 hour, if you pass.");
     expect(html).not.toContain('id="mock-start"');
-    expect(page({ twoDay: true, waiting: "answers", formUrl: "https://forms.gle/x", slots: [], enabled: false, subject: "", notice: "Answer first." })).toContain("Next: Highest degree");
+    expect(page({ twoDay: true, waiting: "answers", formUrl: "https://forms.gle/x", slots: [], enabled: false, subject: "", notice: "Answer first." })).toContain("Go to Highest degree");
   });
   it("shows one subject, exam and mock times, and both confirmation boxes", () => {
     const html = page();
