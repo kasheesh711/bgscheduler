@@ -3,7 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatInTimeZone } from "date-fns-tz";
 import { checkRubric, rubricNeedsCheck } from "@/lib/hiring/marking-sheet";
-import { isDecided, localDate, shiftDate, ZONE, type Subject } from "@/lib/hiring/model";
+import { DEFAULT_PAPER_CHECKERS, isDecided, localDate, shiftDate, ZONE, type Subject } from "@/lib/hiring/model";
 import { buildRunSheet, headName, headVisits, pastVisits, upcoming, type RunSheetRow } from "@/lib/hiring/run-sheet";
 import { dayTitle, openHeadDecisions, weekCalls } from "@/lib/hiring/role-views";
 import { universityName } from "@/lib/hiring/seek-view";
@@ -497,8 +497,34 @@ function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisi
   );
 }
 
+/** A near-miss paper waiting for this head's marks (Kevin, 24 Nov 2026). */
+function PaperCheckCard({ check, data, readOnly }: { check: HiringData["paperChecks"][number]; data: HiringData; readOnly: boolean }) {
+  const name = data.candidates.find((c) => c.id === check.candidateId)?.name ?? "Needs review: candidate record not found";
+  return (
+    <article className={`${r.card} ${r.headCard}`}>
+      <div className={r.cardMain}>
+        <p className={r.name}>{name}</p>
+        <p className={r.meta}>{check.subject} · AI score {check.percent}%</p>
+        <p className={r.meta}>Pass: mock teaching. Not passed: the rejection email goes.</p>
+      </div>
+      <div className={r.actions}>
+        {check.path && !readOnly && (
+          <a className={r.big} data-tone="primary" href={check.path} target="_blank" rel="noopener noreferrer" aria-label={`Check the paper of ${name}`}>
+            Check paper
+          </a>
+        )}
+      </div>
+    </article>
+  );
+}
+
 export function HeadsScreen({ data, readOnly = false }: { data: HiringData; readOnly?: boolean }) {
-  const heads = data.config.interviewers;
+  // A paper checker who gives no mocks (Tito) still needs a name to choose.
+  const checkerKeys = (data.config.paperCheckers ?? DEFAULT_PAPER_CHECKERS).map((row) => row.canonicalKey);
+  const heads = [
+    ...data.config.interviewers,
+    ...[...new Set(checkerKeys)].filter((key) => !data.config.interviewers.some((h) => h.canonicalKey === key)).map((canonicalKey) => ({ canonicalKey })),
+  ];
   // The browser remembers the head, so the next visit opens on their own list. This screen renders only in the browser, after the data loads.
   const [key, setKey] = useState<string | null>(() => {
     if (readOnly) return null;
@@ -535,6 +561,7 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
     ended && (row.date >= since || missingOutcome || (due && scored))).reverse();
   const needsAction = ended.filter((visit) => visit.needsAction);
   const done = ended.filter((visit) => !visit.needsAction).slice(0, 6);
+  const checks = head ? data.paperChecks.filter((check) => !check.done && check.head === head.canonicalKey) : [];
   return (
     <div className={r.screen} data-heads-review="">
       <div className={r.section}>
@@ -551,6 +578,13 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
       </div>
       {head && (
         <>
+          {checks.length > 0 && (
+            <Section title="Papers to check" count={checks.length} id="paper-checks">
+              <div className={r.cards}>
+                {checks.map((check) => <PaperCheckCard key={check.resultId} check={check} data={data} readOnly={readOnly} />)}
+              </div>
+            </Section>
+          )}
           <Section title="Next mock" id="next-mock">
             {nextMock ? <HeadCard key={nextMock.row.visitId} visit={nextMock} data={data} readOnly={readOnly} /> : (
               <div className={r.card}>

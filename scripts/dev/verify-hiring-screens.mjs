@@ -91,7 +91,7 @@ const visitFor = (candidateId: string, visitId: string, startIso: string, head: 
 ];
 payload.bookings = [...visitFor("r1", "v1", "2026-11-01T03:00:00Z", "Peat", "Mathematics"), ...visitFor("r2", "v2", new Date(Date.now() + 86400000).toISOString(), "Ek", "Physics")] as never[];
 // The role screens (HR, Admin, Heads). Only with ?roles=1, so the checks of the other tabs read the same payload as before.
-Object.assign(payload, { calls: [], headDecisions: [], briefPaths: {}, funnelEvents: [] });
+Object.assign(payload, { calls: [], headDecisions: [], briefPaths: {}, funnelEvents: [], paperChecks: [] });
 if (/roles=1|pipeline=1/.test(location.search)) {
   const at = (days: number, hour: number) => { const d = new Date(Date.now() + days * 86400000); d.setUTCHours(hour - 7, 0, 0, 0); return d.toISOString(); };
   Object.assign(payload, {

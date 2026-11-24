@@ -255,6 +255,7 @@ export function demoPayload(now = new Date()) {
       ...other.headDecisions,
     ],
     briefPaths: booked ? { [MOCK_ID]: DEMO_BRIEF_PATH } : {},
+    paperChecks: [],
     visitClashes: { candidateIds: [], stale: false, clashes: {} },
     outbox, inviteOutbox: outbox, audit: [],
     funnelEvents: [

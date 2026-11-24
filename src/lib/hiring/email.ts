@@ -255,3 +255,20 @@ export function hiringEmailHtmlFromText(subject: string, text: string, ...action
     [{ kind: "copy", paragraphs: paragraphs.flatMap((p) => p.split("\n")) }, ...actions.map((action) => ({ kind: "action" as const, action }))],
   );
 }
+
+/** Kevin, 24 Nov 2026: a paper below the pass mark gets this result email at once, with no person's Send. */
+export function paperResultEmail(input: { name: string; subject: string; checkedByHead: boolean; mockCancelled: boolean }) {
+  return hiringEmail({
+    subject: "Your BeGifted test result",
+    preheader: `The result of your ${input.subject} test at BeGifted.`,
+    title: "Your test result",
+    hero: "visit",
+    name: input.name,
+    paragraphs: [
+      `Thank you for taking the BeGifted ${input.subject} test.`,
+      `We marked your paper carefully${input.checkedByHead ? ", and the head of the subject checked it a second time" : ""}. Your score did not reach our pass mark, so we will not continue with your application at this time.`,
+      ...(input.mockCancelled ? ["We cancelled your mock teaching booking. You do not need to come back for it."] : []),
+      "Thank you for the time you gave to your application. We wish you every success.",
+    ],
+  });
+}

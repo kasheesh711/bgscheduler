@@ -1,7 +1,7 @@
 "use client";
 
 import { startTransition, useEffect, useState } from "react";
-import { HR_CALENDAR, localDate, SUBJECTS, type HiringConfig } from "@/lib/hiring/model";
+import { DEFAULT_PAPER_CHECKERS, HR_CALENDAR, localDate, PAPER_CHECK_FROM_PERCENT, SUBJECTS, type HiringConfig } from "@/lib/hiring/model";
 import {
   daysOf,
   fullPriority,
@@ -692,6 +692,44 @@ export function SetupPanel({
           >
             Add interviewer
           </button>
+        </section>
+
+        <section className={`${css.setupSection} ${css.setupWide}`}>
+          <h2 className={css.panelTitle}>Paper checks</h2>
+          <p className={css.panelLede}>
+            A failed paper at {PAPER_CHECK_FROM_PERCENT}% or more goes to this head for a check before the candidate gets a result. The head gets a link in their own LINE group.
+          </p>
+          <div className={css.subjectChecks}>
+            {SUBJECTS.map((subject) => {
+              const rows = config.paperCheckers ?? DEFAULT_PAPER_CHECKERS;
+              return (
+                <label key={subject}>
+                  {subject}{" "}
+                  <select
+                    className={css.input}
+                    value={rows.find((row) => row.subject === subject)?.canonicalKey ?? ""}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        paperCheckers: [
+                          ...rows.filter((row) => row.subject !== subject),
+                          ...(e.target.value ? [{ subject, canonicalKey: e.target.value }] : []),
+                        ],
+                      })
+                    }
+                  >
+                    <option value="">Mock interviewer</option>
+                    {data.tutors.map((tutor) => (
+                      <option key={tutor.canonicalKey} value={tutor.canonicalKey}>
+                        {tutor.name}
+                        {tutor.lineReady ? "" : " — LINE needs setup"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              );
+            })}
+          </div>
         </section>
 
         <section className={`${css.setupSection} ${css.setupFull}`}>
