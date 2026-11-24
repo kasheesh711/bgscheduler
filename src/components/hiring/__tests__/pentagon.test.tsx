@@ -43,7 +43,7 @@ const inspect = (profileAssessment: Assessment, preScreenAssessment: PreScreenAs
         } as unknown as HiringCandidate
       }
       seekJobId="1"
-      weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0 }}
+      weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0, school: 0 }}
       busy={false}
       error=""
       notice=""
@@ -212,7 +212,7 @@ describe("CandidateInspector evidence", () => {
             { id: "c1", name: "Sam", stage: "review", email: "s@example.com", subjects: [], sourceIds: [], paperPassedSubjects: [], profileScore: null, profileAssessment: null, preScreenAssessment: null, universityAssessment: null, preScreen: {}, preScreenHash: "h", ...extra } as unknown as HiringCandidate
           }
           seekJobId="1"
-          weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0 }}
+          weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0, school: 0 }}
           busy={false}
           error=""
           notice=""
@@ -244,7 +244,7 @@ describe("CandidateInspector evidence", () => {
           } as unknown as HiringCandidate
         }
         seekJobId="1"
-        weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0 }}
+        weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0, school: 0 }}
         busy={false}
         error=""
         notice=""

@@ -3,12 +3,14 @@ import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import * as schema from "@/lib/db/schema";
 import type { Database } from "@/lib/db";
-import { DEFAULT_WEIGHTS, type HiringConfig } from "../model";
+import { type HiringConfig } from "../model";
 import type { Assessment } from "../scoring";
 import { callEntries, callQueue, preScreenEntries, preScreenQueue, type FormCandidate } from "../queue";
 import { RUBRIC_ITEMS } from "../marking-sheet";
 import { briefView, dashboard, NOT_BLANK_PATTERN } from "../service";
 import { bookingToken } from "../tokens";
+// The weights before the high-school part (24 Nov 2026). These tests pin scores made with them.
+const DEFAULT_WEIGHTS = { degree: 10, subject: 10, curriculum: 20, teaching: 20, english: 20, prestige: 20, school: 0 };
 
 const assessment = (result: "met" | "partial"): Assessment => ({
   criteria: (["degree", "subject", "curriculum", "teaching", "english"] as const).map((id) => ({

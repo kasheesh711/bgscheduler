@@ -116,6 +116,8 @@ export function SetupPanel({
       ...config,
       universities: config.universities.map((u, i) => (i === index ? { ...u, ...patch } : u)),
     });
+  const setHighSchool = (index: number, patch: Partial<HiringConfig["highSchools"][number]>) =>
+    setConfig({ ...config, highSchools: config.highSchools.map((h, i) => (i === index ? { ...h, ...patch } : h)) });
   const setInterviewer = (index: number, patch: Partial<Interviewer>) =>
     setConfig({
       ...config,
@@ -810,6 +812,76 @@ export function SetupPanel({
             }
           >
             Add verified university
+          </button>
+        </section>
+        <section className={`${css.setupSection} ${css.setupFull}`}>
+          <h2 className={css.panelTitle}>High school list</h2>
+          <p className={css.panelLede}>
+            The candidate&apos;s own high school earns the High school weight. A top-tier school gets all the points. A listed school gets half. A school that is not in this list gets none. The name on the CV must be the school name or one of its other names.
+          </p>
+          <div className={css.universityScroll}>
+            <table className={css.universityTable}>
+              <thead>
+                <tr>
+                  <th>School</th>
+                  <th>Tier</th>
+                  <th>Other names (separate with semicolons)</th>
+                  <th><span className="sr-only">Remove</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {config.highSchools.map((h, i) => (
+                  <tr key={i}>
+                    <td>
+                      <input
+                        className={css.input}
+                        aria-label={`High school ${i + 1} name`}
+                        value={h.name}
+                        onChange={(e) => setHighSchool(i, { name: e.target.value })}
+                      />
+                    </td>
+                    <td>
+                      <select
+                        className={css.input}
+                        aria-label={`High school ${i + 1} tier`}
+                        value={h.tier}
+                        onChange={(e) => setHighSchool(i, { tier: e.target.value === "1" ? 1 : 2 })}
+                      >
+                        <option value={1}>Top tier (all points)</option>
+                        <option value={2}>Listed (half)</option>
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        className={css.input}
+                        aria-label={`High school ${i + 1} other names`}
+                        value={h.aliases.join("; ")}
+                        onChange={(e) =>
+                          setHighSchool(i, { aliases: e.target.value.split(";").map((a) => a.trim()).filter(Boolean) })
+                        }
+                      />
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className={css.inlineLink}
+                        aria-label={`Remove high school ${i + 1}`}
+                        onClick={() => setConfig({ ...config, highSchools: config.highSchools.filter((_, j) => j !== i) })}
+                      >
+                        Remove school
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button
+            type="button"
+            className={css.secondary}
+            onClick={() => setConfig({ ...config, highSchools: [...config.highSchools, { name: "", tier: 2, aliases: [] }] })}
+          >
+            Add high school
           </button>
         </section>
         <PassRules config={config} setConfig={setConfig} />

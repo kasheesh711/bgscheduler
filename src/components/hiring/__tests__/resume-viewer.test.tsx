@@ -80,7 +80,7 @@ describe("the candidate panel", () => {
           } as unknown as HiringCandidate
         }
         seekJobId="94844236"
-        weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0 }}
+        weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0, school: 0 }}
         busy={false}
         error=""
         notice=""
