@@ -207,117 +207,8 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.briefVisit {
-  gap: 12px;
-  padding: 12px;
-  border-radius: 12px;
-  background: var(--paper);
-}
-.briefVisit > :first-child dd {
-  color: var(--ink);
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1.2;
-}
-.briefDetails {
-  gap: 8px 16px;
-}
-@media (min-width: 360px) {
-  .briefVisit {
-    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  }
-  .briefDetails {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-.page a.jumpLink {
-  min-height: 44px;
-  text-decoration: none;
-}
-:is(.preScreen, .criterionScore > details) > summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 44px;
-  list-style: none;
-  cursor: pointer;
-}
-:is(.preScreen, .criterionScore > details) > summary::-webkit-details-marker {
-  display: none;
-}
-:is(.preScreen, .criterionScore > details) > summary::after {
-  content: "";
-  width: 9px;
-  height: 9px;
-  margin-right: 4px;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: rotate(45deg);
-}
-:is(.preScreen, .criterionScore > details)[open] > summary {
-  margin-bottom: 12px;
-}
-:is(.preScreen, .criterionScore > details)[open] > summary::after {
-  transform: rotate(225deg);
-}
 .facts:global(#scores) {
   scroll-margin-top: max(16px, env(safe-area-inset-top, 0px));
-}
-.rubricPart,
-.criterionScore {
-  display: grid;
-  min-width: 0;
-  gap: 6px;
-}
-.criterionScore > legend {
-  margin-bottom: 2px;
-}
-@media (min-width: 1024px) {
-  .criterionScore {
-    grid-template-columns: minmax(0, 1fr) 380px;
-    align-items: center;
-    gap: 12px;
-  }
-  .criterionScore > legend {
-    /* Place the legend in the grid. */
-    float: left;
-    margin-bottom: 0;
-  }
-}
-.scoreTiles {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(44px, 1fr));
-  gap: 6px;
-}
-.scoreRow {
-  grid-template-columns: repeat(5, minmax(44px, 1fr));
-  gap: 4px;
-  max-width: 380px;
-}
-.scoreTile {
-  position: relative;
-  display: grid;
-  place-items: center;
-  min-height: 44px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.scoreTile:has(input:enabled):hover {
-  border-color: var(--ink);
-}
-.scoreTile:has(input:disabled) {
-  cursor: default;
-  opacity: 0.65;
-}
-.scoreTile[data-band] {
-  border-color: var(--muted);
-}
-.scoreTile:has(input:checked) {
-  border-color: var(--ink);
-  background-color: var(--ink);
-  color: #fff;
 }
 @media (max-width: 360px) {
   .hero[data-brief] + .sheet .card {
@@ -627,7 +518,6 @@ textarea.input {
 .day:focus-visible,
 .button:focus-visible,
 .ghost:focus-visible,
-.preScreen > summary:focus-visible,
 .page a:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
@@ -946,11 +836,6 @@ textarea.input {
 }
 
 /* The heading inside the pre-screen summary keeps the summary look. */
-.summaryHeading {
-  display: inline;
-  margin: 0;
-  font: inherit;
-}
 
 .page[data-brief] {
   scroll-padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px));
@@ -961,67 +846,18 @@ textarea.input {
 .page[data-brief] .note {
   font-size: 14px;
 }
-.page[data-brief] :is(.answers dd, .criterionScore summary, .ghost, .success, .alert, textarea) {
+.page[data-brief] :is(.answers dd, .ghost, .success, .alert, textarea) {
   font-size: 16px;
-}
-.page[data-brief] .briefVisit > :first-child dd {
-  font-size: 20px;
 }
 .page[data-brief] p.success {
   display: block;
 }
-.criterionScore label:has(input[type="checkbox"]) {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 44px;
-  color: var(--ink);
-  font-size: 16px;
-}
-.page[data-brief] .criterionScore input[type="checkbox"] {
-  appearance: none;
-  display: grid;
-  place-content: center;
-  flex: none;
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--ink);
-  border-radius: 6px;
-  background: var(--paper);
-}
-.page[data-brief] .criterionScore input[type="checkbox"]:checked {
-  background: var(--ink);
-}
-.page[data-brief] .criterionScore input[type="checkbox"]:checked::after {
-  content: "";
-  width: 7px;
-  height: 12px;
-  border: solid var(--paper);
-  border-width: 0 2px 2px 0;
-  transform: translateY(-1px) rotate(45deg);
-}
 @media (forced-colors: active) {
   /* The radio is hidden, so the chosen tile must carry the system selection colours. */
-  .scoreTile:has(input:checked) {
-    forced-color-adjust: none;
-    border-color: Highlight;
-    background: Highlight;
-    color: HighlightText;
-  }
   /* forced-color-adjust: none keeps the navy ring too, which cannot be seen on a dark canvas. */
-  .page[data-brief] .scoreTile:has(> input:checked:focus) {
-    outline-color: CanvasText;
-  }
-  .page[data-brief] .criterionScore input[type="checkbox"] {
-    appearance: auto;
-  }
-  .page[data-brief] .criterionScore input[type="checkbox"]:checked::after {
-    content: none;
-  }
 }
 /* Leave space for the sticky Send bar when the browser scrolls a control into view. */
-.page[data-brief] :is(input, select, textarea, button, summary, .scoreRow, .scoreTile, .criterionScore) {
+.page[data-brief] :is(input, select, textarea, button, summary) {
   scroll-margin-bottom: 16px;
 }
 .page[data-brief] :is(a, button, select, textarea, summary, label):is(:focus, :has(> input:focus)) {

@@ -1,6 +1,5 @@
 import { Suspense } from "react";
-import { BookingShell } from "@/components/hiring/booking";
-import { BriefGone, BriefLoading, InterviewerBrief } from "@/components/hiring/brief";
+import { BriefGone, BriefLoading, BriefShell, InterviewerBrief } from "@/components/hiring/brief";
 import { HiringError } from "@/lib/hiring/model";
 import { briefView } from "@/lib/hiring/service";
 
@@ -28,10 +27,10 @@ async function Body({ params }: { params: Promise<{ token: string }> }) {
 
 export default function Page(props: { params: Promise<{ token: string }> }) {
   return (
-    <BookingShell kind="brief">
+    <BriefShell>
       <Suspense fallback={<BriefLoading />}>
         <Body {...props} />
       </Suspense>
-    </BookingShell>
+    </BriefShell>
   );
 }
