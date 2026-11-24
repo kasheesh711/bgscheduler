@@ -40,7 +40,7 @@ function Linked({ text }: { text: string }) {
         <a href={LINE_URL} rel="noreferrer">
           Contact BeGifted on LINE
         </a>
-        {text.slice(i + named.length)}
+        {text.slice(i + named.length) || "."}
       </>
     );
   const at = text.indexOf(LINE_URL);
@@ -143,7 +143,10 @@ function Picker<T extends { date: string }>({
   onSelect,
   tile,
   compact,
+  initialDate,
 }: {
+  /** The day to open on, such as the booked test day while moving. */
+  initialDate?: string;
   /** The page can focus or scroll to this list. */
   id?: string;
   hint?: string;
@@ -161,7 +164,7 @@ function Picker<T extends { date: string }>({
 }) {
   const days = [...new Set(items.map((i) => i.date))].sort();
   const weeks = [...new Set(days.map(mondayOf))];
-  const chosenDate = items.find((i) => keyOf(i) === selected)?.date;
+  const chosenDate = items.find((i) => keyOf(i) === selected)?.date ?? (initialDate && days.includes(initialDate) ? initialDate : undefined);
   const [weekPicked, setWeek] = useState<string | null>(null);
   const [picked, setPicked] = useState("");
   const week = weekPicked && weeks.includes(weekPicked) ? weekPicked : chosenDate ? mondayOf(chosenDate) : weeks[0];
@@ -258,6 +261,20 @@ export function Layout({ top, main, side }: { top: ReactNode; main: ReactNode; s
     </div>
   );
 }
+
+/** What the visit is: the test, then the mock teaching if the candidate passes. Plain text, not tabs (Fable r2). */
+const VisitPlan = () => (
+  <ol className={cs.plan}>
+    <li>
+      <b>Test</b>
+      <span>2 hours</span>
+    </li>
+    <li>
+      <b>Mock teaching</b>
+      <span>1 hour, if you pass</span>
+    </li>
+  </ol>
+);
 
 /** Questions → Times → Booked, so a candidate always sees where they are. */
 function Steps({ at }: { at: 0 | 1 | 2 }) {
@@ -364,7 +381,7 @@ export function VisitBooking({
   }
   // The server sends a notice for an empty list. The fallback keeps the page from ever showing nothing.
   const notice =
-    view.notice ?? (view.slots.length ? null : `There are no open visit times at the moment. Contact BeGifted on LINE: ${LINE_URL}`);
+    view.notice ?? (view.slots.length ? null : `No test times are open at the moment. Contact BeGifted on LINE: ${LINE_URL}`);
   const showForm = (!view.visit || moving) && !notice;
   const keep = moving && (
     <button
@@ -394,14 +411,7 @@ export function VisitBooking({
             top={
               <>
                 <Steps at={0} />
-                <div className={c.plan}>
-                  <span>
-                    Test<small>2 hours</small>
-                  </span>
-                  <span>
-                    Mock teaching<small>1 hour, if you pass</small>
-                  </span>
-                </div>
+                <VisitPlan />
               </>
             }
           />
@@ -473,7 +483,16 @@ export function VisitBooking({
                 {view.canMove && !moving && (
                   <div className={c.move}>
                     <p className={c.note}>You can move this visit once, up to 24 hours before it starts.</p>
-                    <button type="button" className={c.ghost} disabled={busy || !view.slots.length} onClick={() => setMoving(true)}>
+                    <button
+                      type="button"
+                      className={c.ghost}
+                      disabled={busy || !view.slots.length}
+                      onClick={() => {
+                        setMoving(true);
+                        setSaved("");
+                        reveal("times-start");
+                      }}
+                    >
                       Move this visit
                     </button>
                     {!view.slots.length && <p className={c.note}>You cannot move it now, because no other time is open.</p>}
@@ -493,7 +512,8 @@ export function VisitBooking({
             {showForm && (
               <Picker
                 id="times-start"
-                legend={view.twoDay ? "Test time" : view.visit ? "Choose a new time" : "Choose a time"}
+                initialDate={view.visit ? part(view.visit.examStart, { year: "numeric", month: "2-digit", day: "2-digit" }).split("/").reverse().join("-") : undefined}
+                legend={view.visit ? "New test time" : view.twoDay ? "Test time" : "Choose a time"}
                 checkedAt={view.checkedAt}
                 items={view.slots}
                 keyOf={(s) => s.examStart}
@@ -506,8 +526,10 @@ export function VisitBooking({
                 }}
                 tile={(s) => (
                   <>
-                    <b>{time(s.examStart)}</b>
-                    <small>{s.mockEnd ? `Test + mock to ${time(s.mockEnd)}` : `Test to ${time(s.examEnd)}`}</small>
+                    <b>
+                      {time(s.examStart)}–{time(s.mockEnd ?? s.examEnd)}
+                    </b>
+                    {s.mockEnd && <small>with mock teaching</small>}
                   </>
                 )}
               />
@@ -524,10 +546,9 @@ export function VisitBooking({
                 selected={mock?.start ?? ""}
                 onSelect={(m) => setMock(m.start)}
                 tile={(m) => (
-                  <>
-                    <b>{time(m.start)}</b>
-                    <small>to {time(m.end)}</small>
-                  </>
+                  <b>
+                    {time(m.start)}–{time(m.end)}
+                  </b>
                 )}
               />
             )}
@@ -541,7 +562,7 @@ export function VisitBooking({
               <VisitConfirm
                 error={error}
                 disabled={busy || !start || (view.twoDay && !mock) || !onsite || !commitment}
-                label={busy ? "Confirming…" : view.twoDay ? "Confirm both times" : view.visit ? "Confirm new time" : "Confirm visit"}
+                label={busy ? "Confirming…" : view.visit ? (view.twoDay ? "Confirm new times" : "Confirm new time") : view.twoDay ? "Confirm both times" : "Confirm visit"}
                 onConfirm={book}
                 summary={
                   slot && (
@@ -554,7 +575,7 @@ export function VisitBooking({
                       </div>
                       {view.twoDay && (
                         <div>
-                          <span>Mock teaching</span>
+                          <span>Mock teaching, if you pass</span>
                           <b>{mock ? `${short(mock.start)}, ${time(mock.start)}` : "Choose a time"}</b>
                         </div>
                       )}

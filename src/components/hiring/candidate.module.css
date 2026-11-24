@@ -675,3 +675,61 @@
     font-size: 12px;
   }
 }
+
+/* The visit plan: two steps on one line, not tabs. */
+.plan {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+}
+.plan li {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.plan li + li::before {
+  content: "→";
+  margin-right: 4px;
+  color: var(--muted);
+}
+.plan b {
+  font-weight: 650;
+}
+.plan span {
+  color: var(--muted);
+}
+
+/* Questions still open, as jump links in the desktop rail. */
+.open {
+  display: none;
+}
+@media (min-width: 1024px) {
+  .open {
+    display: block;
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--muted);
+  }
+}
+.rules span:not([data-ok]) {
+  color: #8a2c12;
+}
+.rules span:not([data-ok]) svg {
+  color: #8a2c12;
+}
+.file {
+  min-height: 56px;
+  border-style: dashed;
+  cursor: pointer;
+}
+/* A question jumped to from the rail or after a failed send: no box, the scroll is the cue. */
+.q:focus,
+.known:focus,
+.section :global(label):focus {
+  outline: none;
+}

@@ -33,9 +33,9 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function Q({ title, hint, optional, children }: { title: string; hint?: string; optional?: boolean; children: ReactNode }) {
+function Q({ id, title, hint, optional, children }: { id?: string; title: string; hint?: string; optional?: boolean; children: ReactNode }) {
   return (
-    <fieldset className={s.q}>
+    <fieldset className={s.q} id={id} tabIndex={-1}>
       <legend className={s.qTitle}>
         {title}
         {optional && <small>optional</small>}
@@ -74,7 +74,7 @@ function Chips<T extends string>({
             checked={value.includes(choice)}
             onChange={(e) => onChange(many ? (e.target.checked ? [...value, choice] : value.filter((v) => v !== choice)) : [choice])}
           />
-          {many && <Check aria-hidden size={14} />}
+          <Check aria-hidden size={14} />
           {SHORT[choice] ?? choice}
         </label>
       ))}
@@ -170,28 +170,32 @@ export function PreScreenQuestions({
     motivation,
     teachingApproach,
   };
-  const done = [
-    !!answers.degree && !!answers.field.trim(),
-    subjects.length > 0,
-    !!test,
-    curricula.length > 0,
-    yearGroups.length > 0,
-    !!answers.english,
-    !!answers.experience,
-    weekHoursCount(week) > 0,
-    !!answers.weeklyHours,
-    !!motivation.trim(),
-    !!teachingApproach.trim(),
+  // Each question, whether it is answered, and where it is: the rail lists the open ones as jump links.
+  const checks: [string, string, boolean][] = [
+    ["q-degree", "Degree", !!answers.degree && !!answers.field.trim()],
+    ["q-english", "English level", !!answers.english],
+    ["q-experience", "Experience", !!answers.experience],
+    ["q-subjects", "Subjects", subjects.length > 0],
+    ["q-test", "Test subject", !!test],
+    ["q-curricula", "Curricula", curricula.length > 0],
+    ["q-years", "Year groups", yearGroups.length > 0],
+    ["q-hours", "Teaching hours", weekHoursCount(week) > 0],
+    ["q-weekly", "Hours a week", !!answers.weeklyHours],
+    ["q-why", "Why BeGifted", !!motivation.trim()],
+    ["q-approach", "Your approach", !!teachingApproach.trim()],
   ];
+  const done = checks.map((c) => c[2]);
   const answered = done.filter(Boolean).length;
+  const open = checks.filter((c) => !c[2]);
   async function send() {
     const parsed = answersSchema.safeParse(answers);
     if (parsed.success && subjects.includes(ART) && !fileName && !portfolio.trim())
       return setError("Upload your Art & Design portfolio, or add a link to it.");
     if (!parsed.success) {
-      // One plain sentence. A missing single choice has no message of its own.
+      // One plain sentence, and the first open question comes into view. A missing single choice has no message of its own.
       const issue = parsed.error.issues[0];
-      setError(issue.code === "custom" || issue.code === "too_small" ? issue.message : "Please answer every question.");
+      setError(open.length ? `Please answer: ${open.map((c) => c[1]).join(", ")}.` : issue.code === "custom" || issue.code === "too_small" ? issue.message : "Please answer every question.");
+      if (open.length) reveal(open[0][0], true);
       return;
     }
     setBusy(true);
@@ -222,8 +226,8 @@ export function PreScreenQuestions({
       <input className={c.input} value={value} maxLength={max} placeholder={placeholder} disabled={busy} onChange={(e) => set(e.target.value)} />
     </label>
   );
-  const long = (label: string, value: string, set: (v: string) => void) => (
-    <label className={c.field}>
+  const long = (id: string, label: string, value: string, set: (v: string) => void) => (
+    <label className={c.field} id={id} tabIndex={-1}>
       <span className={s.qTitle}>{label}</span>
       <textarea className={c.input} rows={4} value={value} maxLength={5000} disabled={busy} onChange={(e) => set(e.target.value)} />
     </label>
@@ -232,7 +236,7 @@ export function PreScreenQuestions({
     <>
       <Section title="About you">
         {degreeMode !== "ask" && knownDegree ? (
-          <div className={s.known} data-ok={degreeMode === "confirmed" || undefined}>
+          <div className={s.known} id="q-degree" tabIndex={-1} data-ok={degreeMode === "confirmed" || undefined}>
             <p>
               <small>Your degree, from your résumé</small>
               <b>
@@ -260,22 +264,30 @@ export function PreScreenQuestions({
           </div>
         ) : (
           <>
-            <Q title="Highest completed degree">
+            <Q id="q-degree" title="Highest completed degree">
               <Chips name="degree" choices={ANSWER_CHOICES.degree} value={degree} onChange={setDegree} disabled={busy} />
             </Q>
             {text("Field of study", field, setField, 200, "For example: Chemistry")}
           </>
         )}
-        <Q title="English level">
+        <Q id="q-english" title="English level">
           <Chips name="english" choices={ANSWER_CHOICES.english} value={english} onChange={setEnglish} disabled={busy} />
         </Q>
-        {text("Proof of your English", englishEvidence, setEnglishEvidence, 500, "For example: IELTS 8.0", true)}
-        <Q title="Teaching experience">
+        <input
+          className={c.input}
+          aria-label="Proof of your English level (optional)"
+          placeholder="Proof, such as IELTS 8.0 (optional)"
+          value={englishEvidence}
+          maxLength={500}
+          disabled={busy}
+          onChange={(e) => setEnglishEvidence(e.target.value)}
+        />
+        <Q id="q-experience" title="Teaching experience">
           <Chips name="experience" choices={ANSWER_CHOICES.experience} value={experience} onChange={setExperience} disabled={busy} />
         </Q>
       </Section>
       <Section title="What you teach">
-        <Q title="Subjects you can teach confidently">
+        <Q id="q-subjects" title="Subjects you can teach confidently">
           <Chips name="subjects" choices={showRest ? [...first, ...rest] : first} value={subjects} onChange={setSubjects} many disabled={busy} />
           {!showRest && rest.length > 0 && (
             <div>
@@ -286,15 +298,10 @@ export function PreScreenQuestions({
             </div>
           )}
         </Q>
-        {testChoices.length > 1 && (
-          <Q title="Your test subject" hint="Your test and mock lesson are in this subject.">
-            <Chips name="testSubject" choices={testChoices} value={chosenTest} onChange={setTestSubject} disabled={busy} />
-          </Q>
-        )}
         {subjects.includes(ART) && (
           <Q title="Art & Design portfolio">
             <input
-              className={c.input}
+              className={`${c.input} ${s.file}`}
               type="file"
               aria-label="Portfolio file (PDF, JPEG or PNG, up to 25 MB)"
               accept={PORTFOLIO_TYPES.join(",")}
@@ -309,24 +316,37 @@ export function PreScreenQuestions({
             {text("Or a link to it", portfolio, setPortfolio, 500, "A link that opens without a password", true)}
           </Q>
         )}
-        <Q title="Curricula you have taught">
+        {testChoices.length > 1 && (
+          <Q
+            id="q-test"
+            title="Your test subject"
+            hint={
+              testable.length && testable.length < subjects.length
+                ? "Your test and mock lesson are in this subject. We test in the subjects shown."
+                : "Your test and mock lesson are in this subject."
+            }
+          >
+            <Chips name="testSubject" choices={testChoices} value={chosenTest} onChange={setTestSubject} disabled={busy} />
+          </Q>
+        )}
+        <Q id="q-curricula" title="Curricula you have taught">
           <Chips name="curricula" choices={ANSWER_CHOICES.curricula} value={curricula} onChange={setCurricula} many disabled={busy} />
         </Q>
-        <Q title="Year groups you can teach">
+        <Q id="q-years" title="Year groups you can teach">
           <Chips name="yearGroups" choices={ANSWER_CHOICES.yearGroups} value={yearGroups} onChange={setYearGroups} many disabled={busy} />
         </Q>
       </Section>
       <Section title="When you can teach">
-        <Q title="Hours you can teach onsite">
+        <Q id="q-hours" title="Hours you can teach onsite">
           <WeekGrid value={week} onChange={setWeek} disabled={busy} />
         </Q>
-        <Q title="Hours a week you can commit">
+        <Q id="q-weekly" title="Hours a week you can commit">
           <Chips name="weeklyHours" choices={ANSWER_CHOICES.weeklyHours} value={weeklyHours} onChange={setWeeklyHours} disabled={busy} />
         </Q>
       </Section>
       <Section title="In your words">
-        {long("Why do you want to tutor with BeGifted?", motivation, setMotivation)}
-        {long("A bright student is losing motivation and their grades are slipping. How would you approach it?", teachingApproach, setTeachingApproach)}
+        {long("q-why", "Why do you want to tutor with BeGifted?", motivation, setMotivation)}
+        {long("q-approach", "A bright student is losing motivation and their grades are slipping. How would you approach it?", teachingApproach, setTeachingApproach)}
       </Section>
     </>
   );
@@ -341,14 +361,35 @@ export function PreScreenQuestions({
           label={busy ? "Saving…" : "Save and see times"}
           onConfirm={send}
           summary={
-            <div className={s.progress}>
-              <span>
-                {answered} of {done.length} answered
-              </span>
-              <span className={s.progressBar} aria-hidden>
-                <i style={{ width: `${(answered / done.length) * 100}%` }} />
-              </span>
-            </div>
+            <>
+              <div className={s.progress}>
+                <span>
+                  {answered} of {done.length} answered
+                </span>
+                <span className={s.progressBar} aria-hidden>
+                  <i style={{ width: `${(answered / done.length) * 100}%` }} />
+                </span>
+              </div>
+              {open.length > 0 && (
+                <p className={s.open}>
+                  Still to answer:{" "}
+                  {open.map(([id, name], i) => (
+                    <span key={id}>
+                      {i > 0 && ", "}
+                      <a
+                        href={`#${id}`}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          reveal(id, true);
+                        }}
+                      >
+                        {name}
+                      </a>
+                    </span>
+                  ))}
+                </p>
+              )}
+            </>
           }
         />
       }

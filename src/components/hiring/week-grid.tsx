@@ -1,7 +1,7 @@
 "use client";
 
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { Check, Circle } from "lucide-react";
+import { Check, Plus } from "lucide-react";
 import { GRID_HOURS, hourRanges, WEEK_DAYS, weekHoursCount, type WeekHours } from "@/lib/hiring/week-hours";
 import s from "./candidate.module.css";
 
@@ -51,6 +51,8 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
     if (!cell || disabled || e.button > 0) return;
     e.preventDefault();
     const fill = !has(current.current, ...cell);
+    // The default focus of a pressed button can scroll the page; focus it without that.
+    (e.target as HTMLElement).closest<HTMLElement>("[data-cell]")?.focus({ preventScroll: true });
     drag.current = { fill, from: cell, before: current.current };
     setFocus(cell);
     paint([cell], fill);
@@ -106,7 +108,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   const late = value.slice(0, 5).some((hours) => hours.some((h) => h >= 15));
   return (
     <div className={s.week}>
-      <p className={s.hint}>Tap or drag across the hours. Start on a dark hour to clear.</p>
+      <p className={s.hint}>Tap or drag to select. Start on a selected hour to clear.</p>
       <div className={s.presets} role="group" aria-label="Quick fill">
         {PRESETS.map((p) => {
           const on = p.days.every((d) => p.hours.every((h) => has(value, d, h)));
@@ -169,11 +171,14 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
           <p>{value.flatMap((hours, d) => (hours.length ? [`${WEEK_DAYS[d]} ${hourRanges(hours).replaceAll(":00", "").replace(/-/g, "–")}`] : [])).join(" · ")}</p>
         )}
         <p className={s.rules}>
+          {/* What the booking asks for: a note to add, then a tick once the grid has it (Sol r2: not radio-like). */}
           <span data-ok={weekend || undefined}>
-            {weekend ? <Check aria-hidden size={14} /> : <Circle aria-hidden size={12} />} Saturday or Sunday
+            {weekend ? <Check aria-hidden size={14} /> : <Plus aria-hidden size={14} />}
+            {weekend ? "Saturday or Sunday" : "Add a Saturday or Sunday"}
           </span>
           <span data-ok={late || undefined}>
-            {late ? <Check aria-hidden size={14} /> : <Circle aria-hidden size={12} />} A weekday after 15:00
+            {late ? <Check aria-hidden size={14} /> : <Plus aria-hidden size={14} />}
+            {late ? "A weekday after 15:00" : "Add a weekday after 15:00"}
           </span>
           {count > 0 && <b>{count} hours a week</b>}
         </p>
