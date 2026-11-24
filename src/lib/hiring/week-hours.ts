@@ -6,7 +6,9 @@ import { z } from "zod";
  *
  * The answer is stored as text in `preScreen.availability`, in the Google Form's place, so the sheet import, the AI text
  * and every display keep one string format. The text keeps the words that the old option reader matched ("Weekdays",
- * "Weekend", a time after 15:00 in the weekday part), so a Mac worker that still runs the older code reads it correctly.
+ * "Weekend", a time after 15:00 in the weekday part), so a Mac worker that still runs the older code reads the weekend part
+ * correctly. Its weekday-after-15:00 check also counts a range that only ends at 15:00 (for example 12:00-15:00), so the
+ * Mac worker is updated in the same release.
  */
 export const WEEK_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 export const FIRST_HOUR = 8;

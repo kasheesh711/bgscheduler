@@ -93,6 +93,7 @@ import { checkRubric, computeSheet, passRulesFor, RUBRIC_ITEMS, rubricNeedsCheck
 import { formatInTimeZone } from "date-fns-tz";
 import { HIRING_LINE_URL, hiringEmail, mockPrep, TWO_DAY_STEPS, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
 import { profileDegree, type KnownDegree } from "./profile-degree";
+import { parseWeekHours } from "./week-hours";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -1853,7 +1854,8 @@ export async function visitView(token: string, db: Database = getDb(), now = new
     knownDegree: null as KnownDegree | null,
     testSubjects: [] as Subject[],
     // The saved answers already give a weekend hour and a weekday hour from 15:00: the page ticks that box for the candidate.
-    timeRuleMet: !!candidate.preScreen && meetsTimeRule(candidate.preScreen.availability),
+    // Only an exact grid answer ticks the box for the candidate; old sheet or form text still asks (code review r23).
+    timeRuleMet: !!candidate.preScreen && !!parseWeekHours(candidate.preScreen.availability) && meetsTimeRule(candidate.preScreen.availability),
     // The dates the live Wise read covered (liveForList): the page says "checked live" on these only (code review r4).
     liveDates: live ? businessDates(now, config.holidays, 5) : ([] as string[]),
   };

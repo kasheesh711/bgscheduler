@@ -1289,3 +1289,71 @@
 .chip:not(:has(input:checked)) svg {
   color: #8f8571;
 }
+
+/* Label and input inside one field: the field's own 8 px gap only (Sol r23). */
+span.qTitle {
+  margin-bottom: 0;
+}
+/* "Bangkok time" and the how-to disclosure on one line above the grid (Sol r23). */
+.gridHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0 12px;
+}
+.gridHead .hint {
+  margin: 0;
+}
+.how[open] {
+  flex-basis: 100%;
+}
+.how summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 3px;
+  cursor: pointer;
+  list-style: none;
+}
+.how summary::-webkit-details-marker {
+  display: none;
+}
+.how summary:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.how p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Short equal choices (weekly hours) in equal columns (Opus r22). */
+.chips[data-even] {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (min-width: 640px) {
+  .chips[data-even] {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+/* Below 360 px the tag ("all that apply") gets its own line, so it never joins the title (Opus r22). */
+@media (max-width: 359px) {
+  .qTitle small {
+    display: block;
+    margin-left: 0;
+  }
+}
+/* No one-word last lines in notes (Opus r22). */
+.plan,
+.qTitle,
+.hint {
+  text-wrap: pretty;
+}

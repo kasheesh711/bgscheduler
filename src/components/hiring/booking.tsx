@@ -240,6 +240,14 @@ function Picker<T extends { date: string }>({
     watch.observe(el);
     return () => watch.disconnect();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- one observer for the strip's life
+  // A shorter list (a later test leaves fewer mock weeks) keeps the scroll offset: bring the chosen week back (code review r23).
+  const weeksKey = weeks.join();
+  const lastWeeks = useRef(weeksKey);
+  useLayoutEffect(() => {
+    if (lastWeeks.current === weeksKey) return;
+    lastWeeks.current = weeksKey;
+    scrollToWeek(shownWeek.current, false);
+  }, [weeksKey]); // eslint-disable-line react-hooks/exhaustive-deps -- only when the list of weeks changes
   if (!days.length) return null;
   const shown = items.filter((i) => i.date === active);
   const label = (date: string, options: Intl.DateTimeFormatOptions) => part(NOON(date), options);
@@ -465,7 +473,7 @@ function Checks({
     <div className={c.checks}>
       {/* The address is said once on the Times page, here, where the candidate confirms it (Sol r22, Opus r20). */}
       {row("check-address", onsite, setOnsite, "I can attend at this address.", place)}
-      {/* Saved answers that already meet the rule need no second confirmation: the line under the boxes says so (Sol r18). */}
+      {/* A saved grid answer that meets the rule needs no second confirmation; the booking still sends it (Sol r18). */}
       {!fromAnswers && row("check-hours", commitment, setCommitment, "I can teach onsite on a Saturday or Sunday and a weekday at or after 15:00.")}
     </div>
   );
@@ -780,11 +788,12 @@ export function VisitBooking({
                 missing={
                   (
                     [
-                      [!start, "choose a test time", "times-start"],
+                      // Short, so "Next: …" fits on one line beside the button at 390 px (Opus r22).
+                      [!start, "test time", "times-start"],
                       [unchanged, "change the test time, the mock teaching time, or both", "times-start"],
-                      [view.twoDay && !mock, "choose a mock teaching time", "mock-start"],
-                      [!onsite, "tick the address box", "check-address"],
-                      [!commitment, "tick the Saturday or Sunday box", "check-hours"],
+                      [view.twoDay && !mock, "mock time", "mock-start"],
+                      [!onsite, "the address box", "check-address"],
+                      [!commitment, "the hours box", "check-hours"],
                     ] as [boolean, string, string][]
                   )
                     .filter(([open]) => open)

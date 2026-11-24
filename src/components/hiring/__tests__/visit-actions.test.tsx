@@ -63,7 +63,7 @@ describe("VisitBooking", () => {
     const html = page({ waiting: "answers", slots: [], enabled: false, subject: "", testSubjects: ["Mathematics"] });
     expect(html).toContain("Mathematics");
     expect(html).not.toContain("Psychology");
-    expect(html).toContain("17 more subjects");
+    expect(html).toContain("Show 17 more subjects");
   });
   it("a two-day link asks for the test time first and says the mock teaching is on the same day or a later day", () => {
     const html = page({ twoDay: true, mockSlots: [{ date: "2026-11-03", start: "2026-11-03T04:00:00.000Z", end: "2026-11-03T05:00:00.000Z" }] });

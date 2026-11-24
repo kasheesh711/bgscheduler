@@ -70,6 +70,8 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   // A finger first: a tap chooses one hour, a quick swipe scrolls the page (cells allow vertical panning), and a hold
   // starts a drag (code review r4: a full-width grid must not trap the page's scroll on a phone). A mouse or pen drags at once.
   const pending = useRef<{ cell: [number, number]; x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  // A pointer already changed the cell; the click the browser sends after it must not change it back (event time, ms).
+  const lastPointer = useRef(0);
   function start(cell: [number, number], target: Element | null) {
     const fill = !has(current.current, ...cell);
     // The default focus of a pressed button can scroll the page; focus it without that.
@@ -136,6 +138,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   }
   function up(e?: PointerEvent<HTMLDivElement>) {
     if (e && !e.isPrimary) return;
+    if (e) lastPointer.current = e.timeStamp;
     const wait = pending.current;
     if (wait) {
       // A tap: one hour on or off.
@@ -170,11 +173,6 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   }, []);
   function key(e: KeyboardEvent<HTMLButtonElement>, d: number, h: number) {
     const moves: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
-    if (e.key === " " || e.key === "Enter") {
-      e.preventDefault();
-      if (!disabled) paint([[d, h]], !has(current.current, d, h));
-      return;
-    }
     const step = moves[e.key];
     if (!step) return;
     e.preventDefault();
@@ -194,7 +192,14 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   return (
     <div className={s.week}>
       {/* The rule, fixed above the grid; the live ticks stay under it, where their changes move nothing (Sol r18). */}
-      <p className={s.hint}>Tap, or hold and drag. Bangkok time.</p>
+      {/* The how-to waits behind a disclosure; the hours themselves are the cue (Sol r23). */}
+      <div className={s.gridHead}>
+        <p className={s.hint}>Bangkok time</p>
+        <details className={s.how}>
+          <summary>How to choose hours</summary>
+          <p>Tap an hour. To fill a block, hold, then drag. Start on a chosen hour to clear.</p>
+        </details>
+      </div>
       <div className={s.presets} role="group" aria-label="Quick fill">
         {PRESETS.map((p) => {
           // Add only; a check once every hour of it is in the week (Sol r6).
@@ -258,6 +263,14 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
                 tabIndex={focus[0] === d && focus[1] === h ? 0 : -1}
                 disabled={disabled}
                 onKeyDown={(e) => key(e, d, h)}
+                // Space, Enter, screen readers and switch access press a cell with a click (code review r23); a click
+                // that follows a pointer tap or drag is skipped, because the pointer already changed the cell.
+                onClick={(e) => {
+                  // detail 0: a key or an assistive tool pressed the cell, never a pointer.
+                  if (e.detail > 0 && e.timeStamp - lastPointer.current < 800) return;
+                  setFocus([d, h]);
+                  paint([[d, h]], !has(current.current, d, h));
+                }}
                 onFocus={() => setFocus([d, h])}
               />
             ))}

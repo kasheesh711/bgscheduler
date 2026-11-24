@@ -75,7 +75,13 @@ function Chips<T extends string>({
   many,
   disabled,
   off = [],
+  after,
+  even,
 }: {
+  /** Short, equal choices in equal columns: 2 on a phone, 4 from 640 px (Opus r22: no lone "40+"). */
+  even?: boolean;
+  /** A control that sits in the chip row after the last chip, such as "12 more" (Sol r23). */
+  after?: ReactNode;
   name: string;
   choices: readonly T[];
   value: T[];
@@ -86,7 +92,7 @@ function Chips<T extends string>({
   off?: readonly T[];
 }) {
   return (
-    <div className={s.chips}>
+    <div className={s.chips} data-even={even || undefined}>
       {choices.map((choice) => (
         <label key={choice} className={s.chip} data-one={many ? undefined : ""}>
           <input
@@ -102,6 +108,7 @@ function Chips<T extends string>({
           {SHORT[choice] ?? choice}
         </label>
       ))}
+      {after}
     </div>
   );
 }
@@ -173,6 +180,7 @@ export function PreScreenQuestions({
   const rest = SUBJECTS.filter((v) => !first.includes(v));
   // Collapsed, the list keeps any ticked extra subject in view, so "Fewer subjects" never hides a choice (Sol r14).
   const showRest = moreOpen;
+  const hidden = rest.filter((v) => !subjects.includes(v)).length;
   const shownSubjects = showRest ? [...first, ...rest] : [...first, ...rest.filter((v) => subjects.includes(v))];
   // The test subject is one of the ticked subjects that a visit can be in; with none of those, any ticked subject.
   const testable = subjects.filter((v) => testSubjects.includes(v));
@@ -323,17 +331,30 @@ export function PreScreenQuestions({
         </Q>
       </Section>
       <Section title="What you teach">
-        <Q id="q-subjects" title="Subjects you teach confidently" tag="choose all">
-          <Chips name="subjects" choices={shownSubjects} value={subjects} onChange={setSubjects} many disabled={busy} />
-          {/* Only while some subject is still hidden or could be hidden (Sol r22). */}
-          {rest.some((v) => !subjects.includes(v)) && (
-            <div>
-              <button type="button" className={s.more} aria-expanded={showRest} onClick={() => setMoreOpen(!showRest)}>
-                <ChevronDown aria-hidden size={16} style={showRest ? { transform: "rotate(180deg)" } : undefined} />
-                {showRest ? "Fewer subjects" : `${rest.filter((v) => !subjects.includes(v)).length} more subjects`}
-              </button>
-            </div>
-          )}
+        <Q id="q-subjects" title="Subjects you teach confidently" tag="all that apply">
+          <Chips
+            name="subjects"
+            choices={shownSubjects}
+            value={subjects}
+            onChange={setSubjects}
+            many
+            disabled={busy}
+            after={
+              // In the chip row, only while some subject is still hidden or could be hidden (Sol r22, r23).
+              rest.some((v) => !subjects.includes(v)) && (
+                <button
+                  type="button"
+                  className={s.more}
+                  aria-expanded={showRest}
+                  aria-label={showRest ? "Show fewer subjects" : `Show ${hidden} more subjects`}
+                  onClick={() => setMoreOpen(!showRest)}
+                >
+                  <ChevronDown aria-hidden size={16} style={showRest ? { transform: "rotate(180deg)" } : undefined} />
+                  {showRest ? "Fewer" : `${hidden} more`}
+                </button>
+              )
+            }
+          />
         </Q>
         {/* With one subject ticked there is no choice to show: one line says what the test is in (Sol r6, r20). */}
         {subjects.length === 1 && test && (
@@ -369,7 +390,7 @@ export function PreScreenQuestions({
               />
               <Upload aria-hidden size={18} />
               <span>
-                <b>{fileName || "Upload portfolio"}</b>
+                <b>{fileName || "Upload your portfolio"}</b>
                 <small>{fileName ? "Uploaded. Choose again to replace it." : "PDF, JPG or PNG, max 25 MB"}</small>
               </span>
             </label>
@@ -378,13 +399,13 @@ export function PreScreenQuestions({
                 {fileNote}
               </p>
             )}
-            {text("Link (no password)", portfolio, setPortfolio, 500)}
+            {text("Or a link (no password)", portfolio, setPortfolio, 500)}
           </Q>
         )}
-        <Q id="q-curricula" title="Curricula" tag="choose all">
+        <Q id="q-curricula" title="Curricula" tag="all that apply">
           <Chips name="curricula" choices={ANSWER_CHOICES.curricula} value={curricula} onChange={setCurricula} many disabled={busy} />
         </Q>
-        <Q id="q-years" title="Year groups" tag="choose all">
+        <Q id="q-years" title="Year groups" tag="all that apply">
           <Chips name="yearGroups" choices={ANSWER_CHOICES.yearGroups} value={yearGroups} onChange={setYearGroups} many disabled={busy} />
         </Q>
       </Section>
@@ -393,7 +414,7 @@ export function PreScreenQuestions({
           <WeekGrid value={week} onChange={setWeek} disabled={busy} />
         </Q>
         <Q id="q-weekly" title="Hours a week you can commit">
-          <Chips name="weeklyHours" choices={ANSWER_CHOICES.weeklyHours} value={weeklyHours} onChange={setWeeklyHours} disabled={busy} />
+          <Chips name="weeklyHours" choices={ANSWER_CHOICES.weeklyHours} value={weeklyHours} onChange={setWeeklyHours} disabled={busy} even />
         </Q>
       </Section>
       <Section title="Your words">

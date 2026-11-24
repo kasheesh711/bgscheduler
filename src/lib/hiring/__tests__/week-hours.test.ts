@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { availabilityFraction, hardStops } from "../scoring";
+import { availabilityFraction, hardStops, meetsTimeRule } from "../scoring";
 import { configSchema, preScreenSchema } from "../model";
 import { emptyWeek, parseWeekHours, weekHoursCount, weekHoursSchema, weekHoursText } from "../week-hours";
 
@@ -70,5 +70,15 @@ describe("week hours (the booking page grid)", () => {
     expect(old(weekHoursText([[17], [], [], [], [], [], []]))).toEqual({ weekend: false, weekdayLate: true });
     // Known gap until the Mac worker runs this code: the old reader sees "15:00" at the end of a 12:00-15:00 range as late.
     expect(old(weekHoursText([[12, 13, 14], [], [], [], [], [9], []])).weekdayLate).toBe(true);
+  });
+});
+
+describe("grid text that does not parse (code review r23)", () => {
+  it("fails closed: no weekend and no weekday-after-15:00 flag is guessed", () => {
+    expect(meetsTimeRule(weekHoursText([[15], [], [], [], [], [9], []]))).toBe(true);
+    // Hand-edited in the sheet: "9:00" is not the grid's two-digit form.
+    expect(meetsTimeRule("Weekdays: Mon 9:00-16:00, Weekend: Sat 09:00-10:00")).toBe(false);
+    // Old Google Form option text is still read as before.
+    expect(meetsTimeRule("Weekday Evening (17:00-21:00), Weekend Morning (09:00-12:00)")).toBe(true);
   });
 });

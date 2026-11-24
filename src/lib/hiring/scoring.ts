@@ -232,6 +232,8 @@ function timeSlots(availability: string) {
       weekend: week[5].length + week[6].length > 0,
       weekdayLate: week.slice(0, 5).some((hours) => hours.some((h) => h >= 15)),
     };
+  // Grid text that no longer parses (a hand edit in the sheet) is not guessed: neither flag (code review r23, fail closed).
+  if (/^\s*(?:Weekdays|Weekend):/.test(availability)) return { weekend: false, weekdayLate: false };
   const options = availability.split(",");
   return {
     weekend: options.some((o) => /weekend|saturday|sunday/i.test(o)),
