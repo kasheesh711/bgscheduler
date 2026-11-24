@@ -1210,6 +1210,21 @@ try {
     for (const group of await page.locator("nav details").all()) await group.evaluate((element) => { element.open = true; });
     assert.ok(await page.getByRole("navigation", { name: /hiring list/ }).evaluate((nav) => nav.scrollWidth <= nav.clientWidth), "the list scrolls sideways");
   });
+  await check("the brief's Next unscored button lands on the first unscored slider, clear of the send bar", async () => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/hiring/brief/sample-token?brief=open&embed=1`);
+    await page.getByRole("heading", { name: "Mock scores" }).waitFor();
+    const sliders = page.getByRole("slider");
+    for (const i of [0, 1, 2]) await sliders.nth(i).fill("7");
+    await page.getByRole("button", { name: "Next unscored ↓" }).click();
+    const landed = await page.evaluate(() => {
+      const active = document.activeElement;
+      const ranges = [...document.querySelectorAll('input[type="range"]')];
+      const bar = document.querySelector("[data-sticky]").getBoundingClientRect();
+      return { index: ranges.indexOf(active), value: active?.value, clear: active.getBoundingClientRect().bottom <= bar.top };
+    });
+    assert.deepEqual(landed, { index: 3, value: "0", clear: true });
+  });
   await check("Gift signs from her list on a phone and focus stays on the receipt", async () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${origin}/?roles=1&me=Gift&gift=1&live=1`);
@@ -1255,7 +1270,7 @@ try {
       assert.equal(await page.getByText(message, { exact: true }).count(), 1);
       assert.equal(await page.getByRole("button", { name: "Yes, send to HR" }).count(), state === "closed" ? 1 : 0);
       assert.equal(await page.getByRole("button", { name: "Check again" }).count(), button === "Check again" ? 1 : 0);
-      const resume = page.getByRole("link", { name: "Open the résumé (PDF)" });
+      const resume = page.getByRole("link", { name: "Open résumé (PDF)" });
       assert.equal(await resume.evaluate((el) => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
       await shot(page, `brief-${state}-phone`, true);
       if (button) {

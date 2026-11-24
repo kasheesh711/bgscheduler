@@ -182,8 +182,9 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
               }}>{label}</button>
             ))}
             {fileUrl && (
-              <a className={b.open} href={fileUrl} target="_blank" rel="noreferrer" aria-label={doc === "paper" ? "Open the graded paper" : brief.resume === "pdf" ? "Open the résumé (PDF)" : undefined}>
-                {doc === "resume" && brief.resume !== "pdf" ? "Download résumé (Word)" : "Open"}
+              <a className={b.open} href={fileUrl} target="_blank" rel="noreferrer" aria-label={doc === "paper" ? "Open paper (graded PDF)" : brief.resume === "pdf" ? "Open résumé (PDF)" : undefined}>
+                {/* Names the file, so it does not read as a second "open" for the brief (Sol review, round 16). */}
+                {doc === "resume" && brief.resume !== "pdf" ? "Download résumé (Word)" : doc === "paper" ? "Open paper" : "Open résumé"}
               </a>
             )}
           </div>

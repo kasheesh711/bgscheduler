@@ -39,7 +39,7 @@ describe("InterviewerBrief", () => {
     expect(page).toContain("Line one\nLine two");
     expect(page).toContain("No answer");
     expect(page).toContain('href="/api/hiring/brief/t/resume" target="_blank" rel="noreferrer"');
-    expect(page).toContain("Open the résumé (PDF)");
+    expect(page).toContain("Open résumé (PDF)");
   });
 
   it("says so when there is no file, no exam row or no reply, and names a Word file as a download", () => {

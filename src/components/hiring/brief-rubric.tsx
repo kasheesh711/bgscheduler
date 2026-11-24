@@ -63,15 +63,15 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   const firstScore = useRef<HTMLInputElement>(null);
   const sendBar = useRef<HTMLDivElement>(null);
   const sentTotal = lastSent?.editCount === editCount ? lastSent.total : null;
-  // The first score slider hidden under the send bar, so a laptop head sees that more scores follow (Sol review, round 15).
-  const [below, setBelow] = useState<HTMLInputElement | null>(null);
+  // Unscored sliders (value 0), read afresh each time. The cue shows while one is hidden under the send bar; its button
+  // goes to the first unscored score in the form, so none is skipped, and focuses it (Sol review, rounds 15–16).
+  const unscored = () => [...(sendBar.current?.closest("form")?.querySelectorAll<HTMLInputElement>('input[type="range"]') ?? [])]
+    .filter((range) => range.value === "0");
+  const [below, setBelow] = useState(false);
   useEffect(() => {
     const check = () => {
-      const bar = sendBar.current;
-      if (!bar) return setBelow(null);
-      const top = bar.getBoundingClientRect().top;
-      const ranges = [...(bar.closest("form")?.querySelectorAll<HTMLInputElement>('input[type="range"]') ?? [])];
-      setBelow(ranges.find((range) => range.getBoundingClientRect().bottom > top) ?? null);
+      const top = sendBar.current?.getBoundingClientRect().top ?? Infinity;
+      setBelow(unscored().some((range) => range.getBoundingClientRect().bottom > top));
     };
     check();
     window.addEventListener("scroll", check, { capture: true, passive: true });
@@ -80,7 +80,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       window.removeEventListener("scroll", check, { capture: true });
       window.removeEventListener("resize", check);
     };
-  }, [editing, sentTotal]);
+  }, [editing, sentTotal, items]);
   useEffect(() => {
     if (state !== "sent" && !error) {
       if (editing && sentTotal !== null) firstScore.current?.focus();
@@ -188,7 +188,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
             const selected = items[id] ?? 0;
             return (
               <div key={id}>
-                <div className={b.row}>
+                <div className={b.row} data-score-row="">
                   <button type="button" className={b.item} aria-expanded={open === id} aria-label={`${label}: what each level means`} onClick={() => setOpen(open === id ? null : id)}>
                     {label}
                   </button>
@@ -317,8 +317,12 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                   ? "Answer the required checks to send."
                   : lastSent ? "Score changes not sent."
                     : `${scored} of ${RUBRIC_ITEMS.length} scored`}</p>
-                {below && <button type="button" className={b.moreBelow} onClick={() => below.scrollIntoView({ block: "center",
-                  behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })}>More scores below ↓</button>}
+                {below && <button type="button" className={b.moreBelow} onClick={() => {
+                  const next = unscored()[0];
+                  if (!next) return setBelow(false);
+                  (next.closest("[data-score-row]") ?? next).scrollIntoView({ block: "center" });
+                  next.focus({ preventScroll: true });
+                }}>Next unscored ↓</button>}
               </div>
               <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
             </div>
