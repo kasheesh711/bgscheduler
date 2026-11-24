@@ -333,10 +333,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/hiring" && url.searchParams.get("head"))
     return new Response(JSON.stringify({ name: "Kru Peat", subjects: ["Mathematics"], days: [0, 1, 2, 3, 4].map((i) => ({ date: "2026-11-0" + (2 + i), office: { start: "09:00", end: "18:00" }, blocks: [] })), visits: [], mocks: 0, limit: 2, stale: false, staleReason: null, weekStart: "2026-11-02", head: "Peat" }));
   if (url.pathname === "/api/hiring") {
-    // ?failFirst=1: the first list load fails, as a short outage would, so the retry can be checked.
-    const once = window as unknown as { failedOnce?: boolean };
-    if (location.search.includes("failFirst=1") && !once.failedOnce) {
-      once.failedOnce = true;
+    // ?failFirst=1: the first two list loads fail (the page retries once on its own), so the Try again button can be checked.
+    const once = window as unknown as { failed?: number };
+    if (location.search.includes("failFirst=1") && (once.failed ?? 0) < 2) {
+      once.failed = (once.failed ?? 0) + 1;
       return new Response(JSON.stringify({ error: "Service unavailable" }), { status: 503 });
     }
     // A paper sent in the open page (another frame) is done: the list drops it, as /api/hiring would.
@@ -1306,6 +1306,35 @@ try {
     await retry.focus();
     await page.keyboard.press("Enter");
     await page.waitForFunction(() => document.activeElement?.id === "open-item");
+  });
+  await check("a mock that starts takes an untouched pane, work in the pane keeps it, and the list never says nothing to do under it", async () => {
+    // The fixture's next mock for Ek starts 26 hours after the page opens; the clock jumps past it (critic review, round 22).
+    for (const touch of [false, true]) {
+      await page.clock.install();
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto(`${origin}/?roles=1&me=Ek`);
+      const list = page.getByRole("navigation", { name: /hiring list/ });
+      await list.getByRole("link", { name: /Sample Joy/ }).waitFor();
+      if (touch) await page.frameLocator("#open-item iframe").locator("textarea").click();
+      await page.clock.fastForward("26:05:00");
+      await list.getByRole("heading", { name: /^Mock now/ }).waitFor();
+      const current = await list.locator('[aria-current="true"]').innerText();
+      assert.match(current, touch ? /Sample Joy/ : /Reply Low/);
+      assert.equal(await list.getByText(/^Nothing to (do|score)/).count(), 0, "an empty To do shows under Mock now");
+    }
+  });
+  await check("during a live mock an empty To do does not say there is nothing to do", async () => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/?roles=1&me=Ek&mockNow=1`);
+    const list = page.getByRole("navigation", { name: /hiring list/ });
+    await list.getByRole("link", { name: /Sample Joy/ }).click();
+    await page.frameLocator("#open-item iframe").getByRole("button", { name: "Submit my marks" }).click();
+    await list.getByRole("link", { name: /Sample Joy/ }).waitFor({ state: "detached" });
+    await list.getByRole("heading", { name: /^Mock now/ }).waitFor();
+    // Back to the mock: the saved receipt goes, and the empty To do must not take its place.
+    await list.getByRole("link", { name: /Reply Low/ }).click();
+    await page.frameLocator("#open-item iframe").getByRole("heading", { name: /Mock scores/ }).waitFor();
+    assert.equal(await list.getByText(/^Nothing to (do|score)/).count(), 0);
   });
   await check("the paper check's comment jump puts focus in the comment field", async () => {
     await page.setViewportSize({ width: 1280, height: 800 });

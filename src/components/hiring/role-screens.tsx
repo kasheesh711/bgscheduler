@@ -750,7 +750,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
       const candidate = byId.get(d.candidateId!);
       const ready = packets.has(d.candidateId!);
       return { id: `review-${d.candidateId}`, name: candidate?.name ?? "Candidate", candidate, time: ready ? "Your decision" : "Packet",
-        day: ready ? "" : "not ready", detail: `${candidate?.visitSubject ?? candidate?.subjects[0] ?? "Subject not recorded"}\u00a0· Yes from ${d.head}`,
+        day: ready ? "" : "not ready", detail: `${candidate?.visitSubject ?? candidate?.subjects[0] ?? "Subject not recorded"}\u00a0· Yes from ${d.head.replace(/ /g, "\u00a0")}`,
         tags: [], note: d.draftProblem && "No email draft yet", href: null, task: "Final review",
         action: ready ? "Review packet" : undefined, urgent: ready, review: d };
     })
@@ -878,13 +878,13 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
           }}>Skip to open item</a>
         )}
 
-        {groups.map((group) => (group.items.length > 0 || (group.title === "Next mock" && givesMocks) || (group.title === "To do" && (savedIn === "To do" || (!ready.length && (givesMocks || reviewer))))) && (
+        {groups.map((group) => (group.items.length > 0 || (group.title === "Next mock" && givesMocks) || (group.title === "To do" && (savedIn === "To do" || (!ready.length && !mockNow && (givesMocks || reviewer))))) && (
           <section key={group.title} className={r.group} data-tone={(group.title === "To do" || group.title === "Final review") && group.items.length ? "todo" : undefined}>
             <h2 className={r.groupTitle}>
               {group.label ?? group.title}
               {group.items.length > 1 && <span className={r.count}>{group.items.length}</span>}
             </h2>
-            {group.title === savedIn && <p className={r.saved}>{savedFor?.text}</p>}
+            {group.title === savedIn && <p className={r.saved} aria-hidden="true">{savedFor?.text}</p>}
             {group.items.length ? list(group.items) : group.title === savedIn ? null : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? (unsigned.length ? "No assessment tasks. No hires ready for approval." : "No assessment tasks. No hires to approve.") : nextItem?.note === "Prepare" ? "No marks or recommendations due." : "Nothing to do now.") : "No mock booked. New bookings also come by LINE."}</p>}
           </section>
         ))}
