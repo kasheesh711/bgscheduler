@@ -58,7 +58,7 @@ function isPublicRoute(pathname: string) {
     /^\/api\/hiring\/brief\/[^/]+\/decision$/.test(pathname) ||
     // The head's check of a near-miss paper, from a LINE link: the token in the path is the access check (paperCheckView).
     /^\/hiring\/paper-check\/[^/]+$/.test(pathname) ||
-    /^\/api\/hiring\/paper-check\/[^/]+(?:\/paper)?$/.test(pathname) ||
+    /^\/api\/hiring\/paper-check\/[^/]+(?:\/paper|\/runtime\/[^/]+)?$/.test(pathname) ||
     /^\/room\/[^/]+$/.test(pathname) ||
     pathname === "/api/room/availability" ||
     pathname === "/api/room/reservations" ||
