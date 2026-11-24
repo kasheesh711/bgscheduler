@@ -239,7 +239,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       return new Response(JSON.stringify({ error: "The scores were not saved. Try again." }), { status: 503 });
     const body = JSON.parse(String(init?.body ?? "{}"));
     (window as unknown as { posted: unknown[] }).posted.push(body);
-    if (url.pathname.endsWith("/rubric")) return new Response(JSON.stringify({ total: Object.values(body.items as Record<string, number>).reduce((a, b) => a + b, 0) }));
+    if (url.pathname.endsWith("/rubric")) {
+      // Sent scores come back with the brief next time, as the server stores them.
+      try { localStorage.setItem("fixture:rubric", JSON.stringify({ items: body.items, comments: body.comments, stressTest: body.stressTest, checksDone: body.checksDone })); } catch {}
+      return new Response(JSON.stringify({ total: Object.values(body.items as Record<string, number>).reduce((a, b) => a + b, 0) }));
+    }
     return new Response(JSON.stringify({ ok: true }));
   }
   // The head's re-marked paper: pass at the fixture's 70% mark (four questions of 10).
@@ -342,7 +346,7 @@ const briefState = new URLSearchParams(location.search).get("brief") ?? (locatio
 const paperCheck = location.pathname.startsWith("/hiring/paper-check/");
 const embed = location.search.includes("embed=1");
 // A new page load of the list starts the fixture fresh.
-if (!embed) { try { localStorage.removeItem("fixture:paper-sent"); } catch {} }
+if (!embed) { try { localStorage.removeItem("fixture:paper-sent"); localStorage.removeItem("fixture:rubric"); } catch {} }
 const PAPER_VIEW = { id: "pc1", name: "Sample Joy", subject: "Physics", head: "Kru Ek", aiPercent: 67.5, passMark: 70, mock: null, updatedAt: "2026-11-24T03:00:00.000Z", done: null, open: true,
   comment: "Good mechanics. Lost marks on units.", questions: [1, 2, 3, 4].map((n) => ({ id: String(n), level: "IGCSE / GCSE", max: 10, marks: n === 4 ? 6 : 7, reason: n === 4 ? "Wrong units in the final answer." : "Method and answer correct." })) };
 const recommendationBlock = briefState === "checking" || briefState === "admin" ? briefState : null;
@@ -350,7 +354,7 @@ const briefFor = new URLSearchParams(location.search);
 const ATS = { score: 78, penalty: 0, parts: [["Degree", 10, 10], ["Subject", 10, 10], ["Curriculum", 7.5, 15], ["Teaching", 20, 20], ["English", 20, 20], ["University", 10.5, 15], ["High school", 0, 10]].map(([name, earned, max]) => ({ name, earned, max })) };
 const BRIEF = { ats: ATS, decision: null, name: briefFor.get("name") ?? "Sample Dao", subject: briefFor.get("subject") ?? "Mathematics", gradedPaper: true, exam: briefFor.get("mock") ? null : "Sat 28 Nov, 10:00–11:30", mock: briefFor.get("mock") ?? "Sat 28 Nov, 12:00–12:45",
   interviewer: "Kru Peat", location: "BeGifted, 2nd floor, Siam Square One", answers, resume: "pdf" as const,
-  rubric: null, form: recommendationBlock ? "closed" : briefState ?? "open", recommendationReady: briefState === "closed", recommendationBlock };
+  rubric: (() => { try { return JSON.parse(localStorage.getItem("fixture:rubric") ?? "null"); } catch { return null; } })(), form: recommendationBlock ? "closed" : briefState ?? "open", recommendationReady: briefState === "closed", recommendationBlock };
 createRoot(document.getElementById("root")!).render(<Suspense fallback="Loading">{paperCheck ? <BookingShell kind="paper-check" bare={embed}>{!embed && <ScheduleLink />}<PaperCheck view={PAPER_VIEW as never} token="sample-token" /></BookingShell> : briefState ? location.pathname.startsWith("/hiring/brief/") ? <BriefShell bare={embed}>{!embed && <ScheduleLink />}<InterviewerBrief compact={embed} brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BriefShell> : <BookingShell kind="brief"><InterviewerBrief brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BookingShell> : location.search.includes("preview=1") ? <div className="flex min-h-0 flex-1 flex-col overflow-auto"><HiringStaffPreview role="hr" /></div> : <HiringDashboard />}</Suspense>);
 `;
 
@@ -1229,6 +1233,31 @@ try {
       return { index: ranges.indexOf(active), value: active?.value, clear: active.getBoundingClientRect().bottom <= bar.top };
     });
     assert.deepEqual(landed, { index: 3, value: "0", clear: true });
+  });
+  await check("the brief keeps Next unscored at the end of the form and keeps an edit made after a send", async () => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/?roles=1&me=Ek`);
+    const list = page.getByRole("navigation", { name: /hiring list/ });
+    await list.getByRole("link", { name: /Reply Low/ }).click();
+    const frame = page.frameLocator("#open-item iframe");
+    await frame.getByRole("heading", { name: "Mock scores" }).waitFor();
+    const sliders = frame.getByRole("slider");
+    const count = await sliders.count();
+    // A score skipped above the view: the cue stays at the end of the form (critic review, round 18).
+    for (let i = 0; i < count; i += 1) if (i !== 2) await sliders.nth(i).fill("7");
+    await sliders.nth(count - 1).scrollIntoViewIfNeeded();
+    await frame.getByRole("button", { name: "Next unscored" }).waitFor();
+    await sliders.nth(2).fill("7");
+    await frame.getByText("Yes", { exact: true }).click();
+    await frame.getByRole("button", { name: "Send scores" }).click();
+    await frame.getByRole("button", { name: "Edit scores" }).click();
+    await sliders.nth(0).fill("9");
+    // Another row and back: the changed score is still there (sessionStorage for this tab).
+    await list.getByRole("link", { name: /Sample Joy/ }).click();
+    await page.frameLocator("#open-item iframe").getByRole("heading", { name: "Your marks", exact: false }).first().waitFor();
+    await list.getByRole("link", { name: /Reply Low/ }).click();
+    await frame.getByRole("heading", { name: "Mock scores" }).waitFor();
+    assert.equal(await frame.getByRole("slider").nth(0).inputValue(), "9");
   });
   await check("the paper check's comment jump puts focus in the comment field", async () => {
     await page.setViewportSize({ width: 1280, height: 800 });

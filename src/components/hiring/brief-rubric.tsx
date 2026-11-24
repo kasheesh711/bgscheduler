@@ -37,27 +37,49 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   // Scores that are not sent yet stay in this browser, so a reload in the middle of a mock does not lose them.
   const draftKey = `hiring-brief-draft:${url}`;
   const restored = useRef(false);
+  // Changes to scores already sent are kept for this tab only (sessionStorage), so opening another row and coming back
+  // does not lose them, and no copy stays on a shared device (Sol and critic reviews, round 18).
+  const editedAfterSend = lastSent !== null && lastSent.editCount !== editCount;
   useEffect(() => {
+    const apply = (draft: Partial<Draft>) => {
+      const score = (id: RubricItem) => Number(draft.items?.[id]);
+      setItems(Object.fromEntries(RUBRIC_ITEMS.filter((id) => Number.isInteger(score(id)) && score(id) >= 1 && score(id) <= ITEM_MAX).map((id) => [id, score(id)])));
+      setComments(typeof draft.comments === "string" ? draft.comments : "");
+      const kept = { listens: !!draft.ticks?.listens, explains: !!draft.ticks?.explains, plan: !!draft.ticks?.plan };
+      setTicks(kept);
+      setTicksUsed(Object.values(kept).some(Boolean));
+      setChecksDone(typeof draft.checksDone === "boolean" ? draft.checksDone : null);
+    };
+    const read = (store: Storage) => {
+      const draft = JSON.parse(store.getItem(draftKey) ?? "null") as Partial<Draft> | null;
+      return draft && typeof draft.items === "object" && draft.items ? draft : null;
+    };
     try {
       // Sent scores come from the server. A copy left from an edit after a send must not stay on a shared device.
       if (saved) localStorage.removeItem(draftKey);
-      else if (!restored.current) {
+      if (!restored.current) {
         restored.current = true;
-        const draft = JSON.parse(localStorage.getItem(draftKey) ?? "null") as Partial<Draft> | null;
-        if (draft && typeof draft.items === "object" && draft.items) {
-          const score = (id: RubricItem) => Number(draft.items?.[id]);
-          setItems(Object.fromEntries(RUBRIC_ITEMS.filter((id) => Number.isInteger(score(id)) && score(id) >= 1 && score(id) <= ITEM_MAX).map((id) => [id, score(id)])));
-          setComments(typeof draft.comments === "string" ? draft.comments : "");
-          const kept = { listens: !!draft.ticks?.listens, explains: !!draft.ticks?.explains, plan: !!draft.ticks?.plan };
-          setTicks(kept);
-          setTicksUsed(Object.values(kept).some(Boolean));
-          setChecksDone(typeof draft.checksDone === "boolean" ? draft.checksDone : null);
+        const edit = read(sessionStorage);
+        if (edit) {
+          apply(edit);
+          if (lastSent) {
+            setEditing(true);
+            onEdit();
+          }
+        } else if (!saved) {
+          const draft = read(localStorage);
+          if (draft) apply(draft);
         }
-      } else if (state !== "sent") localStorage.setItem(draftKey, JSON.stringify({ items, comments, ticks, checksDone } satisfies Draft));
+      } else if (state !== "sent") {
+        const copy = JSON.stringify({ items, comments, ticks, checksDone } satisfies Draft);
+        if (editedAfterSend) sessionStorage.setItem(draftKey, copy);
+        else if (!lastSent) localStorage.setItem(draftKey, copy);
+      }
     } catch {
       // Private mode or a full store: the form still works, without the copy.
     }
-  }, [draftKey, saved, state, items, comments, ticks, checksDone]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onEdit is a new function each render; it runs once, on restore
+  }, [draftKey, saved, state, items, comments, ticks, checksDone, editedAfterSend, lastSent]);
   const feedback = useRef<HTMLParagraphElement>(null);
   const summary = useRef<HTMLDivElement>(null);
   const firstScore = useRef<HTMLInputElement>(null);
@@ -107,6 +129,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       else {
         try {
           localStorage.removeItem(draftKey);
+          sessionStorage.removeItem(draftKey);
         } catch {
           // No store, so no copy to remove.
         }
@@ -289,6 +312,11 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
         {sentTotal !== null ? (
           <>
             <button type="button" className={c.ghost} onClick={() => {
+              try {
+                sessionStorage.removeItem(draftKey);
+              } catch {
+                // No store, so no copy to remove.
+              }
               setEditing(false);
               setState("sent");
             }}>

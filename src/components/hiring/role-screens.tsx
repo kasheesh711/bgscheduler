@@ -728,7 +728,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const checks: HeadItem[] = key ? data.paperChecks.filter((check) => !check.done && check.head === key).map((check) => {
     const candidate = data.candidates.find((c) => c.id === check.candidateId);
     return { id: check.resultId, name: candidate?.name ?? "Needs review: candidate record not found", candidate, time: `${check.percent}%`, day: "AI score",
-      detail: `${check.subject} · Paper check`, tags: [], note: null,
+      detail: `${check.subject}\u00a0· Paper check`, tags: [], note: null,
       href: check.path, task: "Re-mark paper", action: "Re-mark paper", urgent: !!check.path };
   }) : [];
   // Gift's final reviews: each newest Yes from a head that no sent result has closed. A ready packet comes first.
@@ -740,7 +740,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
       const candidate = byId.get(d.candidateId!);
       const ready = packets.has(d.candidateId!);
       return { id: `review-${d.candidateId}`, name: candidate?.name ?? "Candidate", candidate, time: ready ? "Your decision" : "Packet",
-        day: ready ? "" : "not ready", detail: `${candidate?.visitSubject ?? candidate?.subjects[0] ?? "Subject not recorded"} · Yes from ${d.head}`,
+        day: ready ? "" : "not ready", detail: `${candidate?.visitSubject ?? candidate?.subjects[0] ?? "Subject not recorded"}\u00a0· Yes from ${d.head}`,
         tags: [], note: d.draftProblem && "No email draft yet", href: null, task: "Final review",
         action: ready ? "Review packet" : undefined, urgent: ready, review: d };
     })
@@ -782,6 +782,13 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   // mock scores are kept as drafts, so nothing typed is lost (Sol review, rounds 11–14).
   const selected = wide ? found ?? (mockNow && !picked ? nextItem : undefined) ?? keep ?? all.find((item) => item.urgent) ?? nextItem ?? all[0] : found;
   if ((selected?.id ?? null) !== (shown?.id ?? null)) setShown(selected ?? null);
+  // A mock that starts while its brief is open: the brief fetches itself again, so its label reads "Mock now" (critic, round 18).
+  const liveId = mockNow ? nextItem?.id : undefined;
+  useEffect(() => {
+    if (!liveId || !wide || selected?.id !== liveId) return;
+    document.querySelector<HTMLIFrameElement>("#open-item iframe")?.contentWindow?.postMessage({ type: "hiring-refresh", part: "" }, window.location.origin);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the mock starts
+  }, [liveId]);
   // "Saved for …" sits in the group that holds the saved row, or under To do once the row has left the list.
   // The part of the brief the open pane was loaded at, for a click on the open row.
   const paneKey = selected ? `${selected.id}:${paneRun}` : null;

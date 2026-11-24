@@ -174,7 +174,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
               <p role="status">{brief.recommendationBlock === "checking" ? "Scores are being checked."
                 : "Ask BeGifted admin to check the scores."}</p>
               {brief.recommendationBlock === "checking" && (
-                <button type="button" className={c.button} onClick={() => window.location.reload()}>Check again</button>
+                <button type="button" className={c.button} disabled={checking} onClick={() => refresh("")}>{checking ? "Checking…" : "Check again"}</button>
               )}
             </div>
           )}
