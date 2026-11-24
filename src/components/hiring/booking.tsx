@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { BookOpen, Check, CircleCheck, Info, MapPin, Phone, Video } from "lucide-react";
 import { mockCanFollow, phoneSchema, type Subject, type Slot } from "@/lib/hiring/model";
 import type { bookingView, callView, contractView, visitView } from "@/lib/hiring/service";
+import { PreScreenQuestions } from "./questions";
 import c from "./booking.module.css";
 type View = Awaited<ReturnType<typeof bookingView>>;
 type VisitView = Awaited<ReturnType<typeof visitView>>;
@@ -295,11 +296,7 @@ export function VisitBooking({
           </p>
         </div>
         <VisitNotice text={view.notice ?? ""} />
-        {view.formUrl && (
-          <a className={c.button} href={view.formUrl} target="_blank" rel="noreferrer">
-            Answer the pre-screening questions
-          </a>
-        )}
+        {view.waiting === "answers" && <PreScreenQuestions token={token} filePath={view.portfolioPath ?? ""} reload={reload} />}
         <Help />
       </>
     );

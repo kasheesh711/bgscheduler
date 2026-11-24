@@ -12,7 +12,7 @@ import {
   updateGoogleSheetRangeValues,
 } from "@/lib/sales-dashboard/sheets";
 import { configSchema, HiringError, TEST_SUBJECT_QUESTION, type HiringConfig } from "../model";
-import { bookingView, bookVisit, inviteToVisit, reviewCandidate, prestigeCatalogHash, sourceHash, visitLink, visitView, type Candidate } from "../service";
+import { answerPreScreen, bookingView, bookVisit, inviteToVisit, reviewCandidate, prestigeCatalogHash, sourceHash, visitLink, visitView, type Candidate } from "../service";
 import { readyToInvite } from "../insights";
 import { isNewFlow, mirrorTracker, parseFormTimestamp, syncTracker } from "../sources";
 import { assessCandidates, deliverOutbox, preScreenText, runHiringCycle } from "../worker";
@@ -32,6 +32,8 @@ import {
 
 vi.mock("../availability", () => ({ availableSlots: vi.fn(async () => []), availableVisitSlots: vi.fn(async () => []), verifyLiveSlot: vi.fn(), readLiveBusy: vi.fn(async () => { throw new Error("no Wise in tests"); }) }));
 vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
+// No portfolio file is in storage unless a test says so.
+vi.mock("../portfolio", () => ({ portfolioUploaded: vi.fn(async () => false) }));
 // The grant cannot read HR's calendar unless a test says so, so no call booking link leaves in the other tests.
 vi.mock("../google", () => ({
   deliverCalendar: vi.fn().mockResolvedValue({ id: "calendar-event" }),
@@ -602,7 +604,7 @@ describe("form queue", () => {
     expect((await releaseQueues(db)).preScreen).toBe(0);
     const rows = await forms();
     expect(rows.map((j) => j.key)).toEqual([`${row.id}:pre-screen`]);
-    expect(rows[0].payload.text).toContain("docs.google.com/forms");
+    expect(rows[0].payload.text).toContain("/hiring/book/");
   });
   it("only stage new enters the form queue", async () => {
     const paused = await seed();
@@ -864,14 +866,17 @@ describe("Next steps after a good R1 (Kevin, 22 Nov 2026)", () => {
     const [form] = await forms();
     expect(form.payload.subject).toBe("Next steps: your BeGifted pre-screening questions and onsite visit");
     const text = String(form.payload.text);
-    expect(text).toContain("docs.google.com/forms");
+    // One button: the questions are on the booking page.
+    expect(text).not.toContain("docs.google.com/forms");
     const token = text.match(/\/hiring\/book\/([\w.-]+)/)![1];
     // The link is the two-day kind (test, then mock teaching on a later day), and its second is the one stored on the row.
     expect(JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString()).kind).toBe("two-day");
     const expires = (await candidate(row.id)).inviteExpiresAt;
     expect(expires).not.toBeNull();
-    // Before the answers the same link already books (Kevin, 24 Nov 2026: the answers never gate booking).
-    expect(await visitView(token, db)).toMatchObject({ waiting: null, subject: "Mathematics" });
+    // Before the answers: the page asks for them, and a booking is refused with the same words.
+    expect(await visitView(token, db)).toMatchObject({ waiting: "answers", slots: [] });
+    await expect(bookVisit(token, { start: "2026-11-07T03:00:00.000Z", subject: "Mathematics", onsiteConfirmed: true, teachingCommitmentConfirmed: true }, db))
+      .rejects.toMatchObject({ status: 409, message: expect.stringMatching(/answer the questions on this page first/) });
     // The reminder carries the same link.
     await db.update(s.hiringOutbox).set({ status: "sent", sentAt: after(-1) }).where(eq(s.hiringOutbox.id, form.id));
     vi.setSystemTime(after(2));
@@ -933,7 +938,94 @@ describe("Next steps after a good R1 (Kevin, 22 Nov 2026)", () => {
     await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
     expect((await candidate(row.id)).stage).toBe("pre_screen");
     const token = visitLink(row.id, expires).split("/hiring/book/")[1];
-    expect(await visitView(token, db)).toMatchObject({ waiting: null, subject: "Mathematics", formUrl: null });
+    expect(await visitView(token, db)).toMatchObject({ waiting: null, subject: "Mathematics" });
+  });
+});
+
+describe("the questions on the booking page (Kevin, 24 Nov 2026)", () => {
+  const answers = {
+    degree: "Bachelor's",
+    field: "Mathematics",
+    subjects: ["Mathematics"],
+    testSubject: "Mathematics",
+    curricula: ["British (IGCSE/ GCSE/ A-level)"],
+    yearGroups: ["Year 10-11 (IGCSE Level)"],
+    english: "Advanced (C1)",
+    englishEvidence: "",
+    experience: "5+ years",
+    portfolio: "",
+    availability: ["Weekday Evening (17:00-21:00)", "Weekend Morning (before 12:00)"],
+    weeklyHours: "11-20",
+    motivation: "I want to help students see why each step of a proof works, not only the answer.",
+    teachingApproach: "Check understanding first, then set one small goal for each lesson and praise it.",
+  };
+  /** A candidate who holds the "Next steps" link and has not answered. */
+  async function holder(values: Values = {}) {
+    const expires = new Date(Math.floor(after(30).getTime() / 1000) * 1000);
+    const row = await seed({ stage: "pre_screen", subjects: ["Mathematics"], inviteExpiresAt: expires, ...values });
+    await formRow(row.id, { sentAt: after(-1), createdAt: after(-1) });
+    return { row, token: visitLink(row.id, expires).split("/hiring/book/")[1] };
+  }
+  it("shows the times on the same link as soon as the questions are answered, and never sends the page answer back", async () => {
+    const { row, token } = await holder();
+    expect(await visitView(token, db)).toMatchObject({ waiting: "answers", slots: [], portfolioPath: `hiring-portfolios/${row.id}` });
+    await answerPreScreen(token, answers, db);
+    expect(await candidate(row.id)).toMatchObject({
+      stage: "pre_screen",
+      reviewNote: null,
+      preScreenAssessment: null,
+      preScreen: { sourceRow: 0, degree: "Bachelor's", testSubject: "Mathematics" },
+    });
+    expect((await candidate(row.id)).preScreenRepliedAt?.getTime()).toBe(now.getTime());
+    expect(await visitView(token, db)).toMatchObject({ waiting: null, subject: "Mathematics", portfolioPath: null });
+    // A second send changes nothing.
+    await answerPreScreen(token, { ...answers, field: "Other" }, db);
+    expect((await candidate(row.id)).preScreen?.field).toBe("Mathematics");
+    // A Google Form answer that comes later does not replace the page answer.
+    const before = await candidate(row.id);
+    tracker({ pre: [preRow(row.email!, "5/11/2026, 05:00:00", "Another answer")] });
+    await syncTracker(db, await settingsConfig());
+    expect(await candidate(row.id)).toMatchObject({ preScreen: before.preScreen, preScreenResubmitted: false, revision: before.revision });
+  });
+  it("never gates booking on the answers: a hard stop is a note for staff, and the times still show", async () => {
+    const { row, token } = await holder();
+    await answerPreScreen(token, { ...answers, degree: "Below Bachelor's" }, db);
+    expect(await candidate(row.id)).toMatchObject({ stage: "review", reviewNote: "No completed bachelor's degree." });
+    expect(await visitView(token, db)).toMatchObject({ waiting: null, subject: "Mathematics" });
+    // An English level that drops every ticked subject still gives times, in the subject the candidate chose.
+    const weak = await holder({ subjects: [] });
+    await answerPreScreen(weak.token, { ...answers, english: "Intermediate (B1)" }, db);
+    expect((await candidate(weak.row.id)).stage).toBe("review");
+    expect(await visitView(weak.token, db)).toMatchObject({ waiting: null, subject: "Mathematics" });
+    // A work-rights answer that is not accepted is a note too, not a gate.
+    const other = await holder({ workRightsAnswer: "I need sponsorship" });
+    await answerPreScreen(other.token, answers, db);
+    expect((await candidate(other.row.id)).stage).toBe("review");
+    expect((await visitView(other.token, db)).waiting).toBeNull();
+    expect(await invites()).toEqual([]);
+  });
+  it("wakes a No reply candidate, and scores a page answer once for staff after the candidate booked", async () => {
+    const late = await holder({ stage: "no_reply" });
+    await answerPreScreen(late.token, answers, db);
+    expect((await candidate(late.row.id)).stage).toBe("pre_screen");
+    // Booked before the worker's next cycle: the AI still reads the answers, and the stage and the revision stay.
+    const { row, token } = await holder();
+    await answerPreScreen(token, answers, db);
+    await db.update(s.hiringCandidates).set({ stage: "onsite_booked", visitSubject: "Mathematics" }).where(eq(s.hiringCandidates.id, row.id));
+    const booked = await candidate(row.id);
+    await assessCandidates(db, await settingsConfig(), (_s, _k, kind) => assessment(kind));
+    expect(await candidate(row.id)).toMatchObject({ stage: "onsite_booked", revision: booked.revision, preScreenAssessment: { summary: "Evidence" } });
+  });
+  it("refuses answers that are not valid, and keeps a Google Form answer that came first", async () => {
+    const { row, token } = await holder();
+    await expect(answerPreScreen(token, { ...answers, motivation: " " }, db)).rejects.toThrow();
+    // Art & Design with no uploaded file and no link.
+    await expect(answerPreScreen(token, { ...answers, subjects: ["Art & Design Technology"], testSubject: "Art & Design Technology" }, db))
+      .rejects.toMatchObject({ status: 400, message: expect.stringMatching(/portfolio/) });
+    expect((await candidate(row.id)).preScreen).toBeNull();
+    const form = await holder({ preScreen: pre, preScreenRepliedAt: now });
+    await answerPreScreen(form.token, answers, db);
+    expect((await candidate(form.row.id)).preScreen?.sourceRow).toBe(2);
   });
 });
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { queueRecruitmentMock } from "./recruitment";
+import { queueRecruitmentForm, queueRecruitmentMock } from "./recruitment";
 import { PRESTIGE_RULES } from "./prestige";
 import { createHash, randomUUID } from "node:crypto";
 import { fromZonedTime } from "date-fns-tz";
@@ -27,6 +27,10 @@ import {
   instant,
   isVisitBooking,
   PRE_SCREEN_URL,
+  SUBJECTS,
+  portfolioPath,
+  answersSchema,
+  answersToPreScreen,
   normalizeSubjects,
   overlap,
   runtimeWritesAllowed,
@@ -59,9 +63,11 @@ import { googleConnectionStatus, readHrBusy } from "./google";
 import { visitClashes } from "./head-schedule";
 import { bookingToken, readBookingToken, VISIT_LINK_DAYS } from "./tokens";
 import { storedResume } from "./resume-files";
+import { portfolioUploaded } from "./portfolio";
 import { blockingLimit, headWeekMocks, releaseQueue, type Funnel, type LimitName, type QueueHold } from "./limits";
 import {
   callInviteSentAt,
+  formSentAt,
   inviteRows,
   linkSentAt,
   lockQueue,
@@ -84,7 +90,7 @@ import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/li
 import { paperChecks } from "./paper-check";
 import { checkRubric, computeSheet, passRulesFor, RUBRIC_ITEMS, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
-import { HIRING_LINE_URL, hiringEmail, mockPrep, stepIcon, TWO_DAY_STEPS, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
+import { HIRING_LINE_URL, hiringEmail, mockPrep, TWO_DAY_STEPS, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -483,12 +489,15 @@ export const preScreenEmail = (name: string, email: string, reminder: boolean, v
         subject: reminder
           ? "Reminder: answer your BeGifted pre-screening questions"
           : "Next steps: your BeGifted pre-screening questions and onsite visit",
-        preheader: "Answer a short questionnaire, then book your test and your mock teaching.",
+        preheader: "Answer a few questions, then book your test and your mock teaching on one page.",
         title: reminder ? "Your questions are still open" : "Here are your next steps",
         hero: "next",
         name,
         paragraphs: reminder
-          ? ["We have not yet received your pre-screening answers. If you are still interested in joining BeGifted, please answer them. Then you can book your test and your mock teaching."]
+          ? [
+              "We have not received your answers yet. If you still want to join BeGifted, please open your page and answer the questions. They take about 5–7 minutes.",
+              "After the last question, you choose your test time and your mock teaching time on the same page.",
+            ]
           : hrLeft
             ? [
                 "Thank you for your interest in joining BeGifted, and for your patience.",
@@ -497,28 +506,14 @@ export const preScreenEmail = (name: string, email: string, reminder: boolean, v
               ]
             : ["Thank you for your interest in joining BeGifted. We invite you to the next steps."],
         details: [
-          { label: "Use this email", value: email },
-          { label: "Questionnaire", value: "About 5–7 minutes" },
+          { label: "Questions", value: "About 5–7 minutes" },
           { label: "Onsite visits", value: VISIT_LENGTH },
         ],
-        stepsHeading: "Your next steps",
-        steps: [
-          {
-            heading: "Answer the pre-screening questions",
-            paragraphs: [
-              "Use this email address on the form. One question asks which subject you want to be tested on at your visit.",
-            ],
-            action: { label: "Open the questionnaire", url: PRE_SCREEN_URL },
-            icon: stepIcon(2),
-          },
-          {
-            heading: "Book your test and your mock teaching",
-            paragraphs: [
-              "Choose your two times on this link now: the test first, and the mock teaching on the same day or a later day.",
-            ],
-            action: { label: "Book your test and mock teaching", url: visitUrl },
-            icon: stepIcon(3),
-          },
+        // One page holds the questions and the booking (Kevin, 24 Nov 2026), so the email has one button.
+        action: { label: "Answer the questions and book", url: visitUrl },
+        after: [
+          "The link opens one page. First you answer the questions. One question asks which subject you want to be tested on.",
+          "Then you choose your two times on the same page: the test first, and the mock teaching on the same day or a later day.",
         ],
       })
     : hiringEmail({
@@ -1588,16 +1583,99 @@ const examOf = (rows: VisitRow[]) => rows.find((b) => b.kind === "paper");
 
 /** Stages where a live "Next steps" link books at once: the pre-screen answers never gate booking (Kevin, 24 Nov 2026). */
 const NEXT_STEPS_OPEN = ["pre_screen", "no_reply", "review"];
-/** The answers' visit subject when one is usable, else the highest-ranked CV subject that is hiring and has a head. */
+/**
+ * The answers' visit subject when one is usable. Else, because the answers never gate booking: the subject the
+ * candidate chose or ticked even when a hard stop dropped it, then the CV subjects, then any subject, each time the
+ * highest-ranked one that is hiring and has a head. So a candidate who answered always gets times.
+ */
 function nextStepsSubject(c: Candidate, config: HiringConfig): Subject | null {
-  const headed = (v: Subject) => config.interviewers.some((i) => i.subjects.includes(v));
-  return (c.preScreen && visitSubject(c.preScreen, c.workRightsAnswer, config)) || topHiringSubject(c.subjects.filter(headed), config.subjectPriority);
+  const top = (subjects: readonly Subject[]) =>
+    topHiringSubject(subjects.filter((v) => config.interviewers.some((i) => i.subjects.includes(v))), config.subjectPriority);
+  return (
+    (c.preScreen && visitSubject(c.preScreen, c.workRightsAnswer, config)) ||
+    top(normalizeSubjects(c.preScreen?.testSubject ?? "")) ||
+    top(normalizeSubjects(c.preScreen?.subjects ?? "")) ||
+    top(c.subjects) ||
+    top(SUBJECTS)
+  );
 }
 
 /**
  * The link's expiry second must equal the row's, so a new link ends the old one. A booked link stays open until the visit
  * starts. An unbooked link closes at expireDays even when the worker is not running to mark No booking.
  */
+/**
+ * A live "Next steps" link whose questions are not answered yet: the page asks them before it shows the times (Kevin,
+ * 24 Nov 2026: answer first). The answers themselves never gate booking.
+ */
+const answersFirst = (candidate: Candidate, cap: VisitLink) =>
+  candidate.inviteExpiresAt?.getTime() === cap.exp * 1000 &&
+  cap.kind !== "paper-visit" &&
+  NEXT_STEPS_OPEN.includes(candidate.stage) &&
+  !candidate.preScreen;
+const ANSWERS_FIRST = "Please answer the questions on this page first. Then you can choose your times.";
+
+/** The candidate of a link whose questions are still open. For the portfolio upload, which comes before the answers. */
+export async function questionsOpen(token: string, db: Database = getDb(), now = new Date()) {
+  const cap = visitToken(token, now);
+  if (!answersFirst(await candidateById(db, cap.id), cap))
+    throw new HiringError(409, "The questions of this link are closed.");
+  return cap.id;
+}
+
+/**
+ * The questions on the booking page (Kevin, 24 Nov 2026). The answers are stored in the Google Form's shape, and the
+ * same link then books at once: the answers never gate booking. A hard stop only moves the candidate to review with a
+ * note for staff, at once, because a booking can come before the worker's next cycle. The AI scores the answers later.
+ */
+export async function answerPreScreen(token: string, value: unknown, db: Database = getDb(), now = new Date()) {
+  const answers = answersSchema.parse(value);
+  const cap = visitToken(token, now);
+  // Art & Design needs a portfolio: a file uploaded on the page, or a link. Storage is read before the lock.
+  const art = answers.subjects.includes("Art & Design Technology");
+  const file = art && (await portfolioUploaded(cap.id))
+    ? `Uploaded file: ${new URL(`/api/hiring/portfolio/${cap.id}`, process.env.APP_BASE_URL || "https://bgscheduler.vercel.app")}`
+    : "";
+  await withDatabaseTransaction(db, async (tx) => {
+    const [row] = await tx.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, cap.id)).for("update");
+    if (!row) throw new HiringError(404, onLine("This booking link is no longer active."));
+    // A second send, or a Google Form answer that came first: the page reloads and shows what is true now.
+    if (!answersFirst(row, cap)) return;
+    if (art && !file && !answers.portfolio) throw new HiringError(400, "Upload your Art & Design portfolio, or add a link to it.");
+    const preScreen = answersToPreScreen(answers, now, file);
+    const { config } = await settings(tx);
+    const { stops } = hardStops(preScreen, row.workRightsAnswer, normalizeSubjects(preScreen.subjects), config);
+    const [saved] = await tx
+      .update(s.hiringCandidates)
+      .set({
+        preScreen,
+        preScreenRepliedAt: now,
+        // A late answer wakes a No reply row, as in the sheet import. A row in review stays there.
+        stage: stops.length ? "review" : row.stage === "no_reply" ? "pre_screen" : row.stage,
+        ...(stops.length ? { reviewNote: stops.join(" ") } : {}),
+        revision: row.revision + 1,
+        updatedAt: now,
+      })
+      .where(eq(s.hiringCandidates.id, row.id))
+      .returning();
+    // They answered, so an unsent form or reminder must not follow, as in the sheet import.
+    await tx
+      .update(s.hiringOutbox)
+      .set({ status: "cancelled" })
+      .where(
+        and(
+          eq(s.hiringOutbox.candidateId, row.id),
+          sql`${s.hiringOutbox.payload}->>'workflowStage' = 'pre_screen'`,
+          inArray(s.hiringOutbox.status, ["pending", "failed"]),
+        ),
+      );
+    // As in the sheet import: the recruitment group hears only of an answer to a form that was sent.
+    if (await formSentAt(tx, row.id)) await queueRecruitmentForm(tx, saved, now);
+    await audit(tx, "candidate", "pre-screen-answered", row.id, { source: "booking-page", stops });
+    if (stops.length && row.stage !== "review") await audit(tx, "hiring-queue", "move-to-review", row.id, { phase: "pre", reasons: stops });
+  });
+}
+
 async function openVisit(db: Database, cap: VisitLink, config: HiringConfig, now: Date) {
   const candidate = await candidateById(db, cap.id);
   const rows = await visitRows(db, cap.id);
@@ -1612,6 +1690,8 @@ async function openVisit(db: Database, cap: VisitLink, config: HiringConfig, now
     const live = await linkSentAt(db, cap.id);
     open = !!live && (!live.sentAt || now.getTime() - live.sentAt.getTime() < config.onsiteFollowUp.expireDays * DAY);
   } else if (linked && cap.kind !== "paper-visit" && NEXT_STEPS_OPEN.includes(candidate.stage)) {
+    // Answer first: the page asks the questions before the times, and a booking is refused with the same words.
+    if (!candidate.preScreen) throw new HiringError(409, ANSWERS_FIRST);
     subject ??= nextStepsSubject(candidate, config);
     if (!subject) throw new HiringError(409, onLine("There are no open visit times at the moment. Please try again later."));
     open = true;
@@ -1665,6 +1745,24 @@ const offeredSlots = async (db: Database, config: HiringConfig, subject: Subject
 export async function visitView(token: string, db: Database = getDb(), now = new Date()) {
   const cap = visitToken(token, now);
   const { config } = await settings(db);
+  if (answersFirst(await candidateById(db, cap.id), cap))
+    return {
+      kind: "visit" as const,
+      paired: true,
+      twoDay: cap.kind === "two-day",
+      mockSlots: [] as { date: string; start: string; end: string }[],
+      subject: "",
+      location: config.location,
+      enabled: false,
+      slots: [],
+      visit: null,
+      canMove: false,
+      notice: ANSWERS_FIRST as string | null,
+      checkedAt: null,
+      waiting: "answers" as "answers" | null,
+      // Where the page uploads an Art & Design portfolio while the questions are open.
+      portfolioPath: portfolioPath(cap.id) as string | null,
+    };
   const { subject, rows } = await openVisit(db, cap, config, now);
   const enabled = bookable(config, cap.id);
   const exam = examOf(rows);
@@ -1721,8 +1819,8 @@ export async function visitView(token: string, db: Database = getDb(), now = new
     notice,
     // When the times were checked against live Wise. Null means the 30-minute Wise copy was used.
     checkedAt: live?.checkedAt ?? null,
-    waiting: null as "answers" | "checking" | null,
-    formUrl: null as string | null,
+    waiting: null as "answers" | null,
+    portfolioPath: null as string | null,
   };
 }
 

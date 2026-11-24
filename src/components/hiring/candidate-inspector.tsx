@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ComponentProps } from "react";
+import { AnswerText } from "./answer-text";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { criterionValues, STAGE_LABELS } from "@/lib/hiring/insights";
 import { ANSWER_LABELS, DEFAULT_PRE_SCREEN_WEIGHTS, isDecided, RESUME_TYPES, SUBJECTS, type HiringConfig, type Subject } from "@/lib/hiring/model";
@@ -570,7 +571,7 @@ export function CandidateInspector({
                   {ANSWER_LABELS.map(([key, label]) => (
                     <div key={key}>
                       <dt>{label}</dt>
-                      <dd>{candidate.preScreen?.[key] || <span className={css.mutedCell}>No answer</span>}</dd>
+                      <dd>{candidate.preScreen?.[key] ? <AnswerText text={candidate.preScreen[key]!} /> : <span className={css.mutedCell}>No answer</span>}</dd>
                     </div>
                   ))}
                 </dl>

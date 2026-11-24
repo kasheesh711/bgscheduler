@@ -447,7 +447,8 @@ export const configSchema = baseConfigSchema.superRefine((value, ctx) => {
 
 export const preScreenSchema = z
   .object({
-    sourceRow: z.number().int().positive(),
+    // The sheet row of a Google Form answer. 0 is an answer given on the booking page (`answersSchema`).
+    sourceRow: z.number().int().nonnegative(),
     submittedAt: z.string().max(100),
     degree: z.string().max(500),
     field: z.string().max(2000),
@@ -469,6 +470,71 @@ export const preScreenSchema = z
 export type PreScreen = z.infer<typeof preScreenSchema>;
 /** The form question that sets the visit subject. The sheet column is found by this header, not by its position. */
 export const TEST_SUBJECT_QUESTION = "Which subject do you want to be tested on at your onsite visit?";
+/**
+ * The questions on the booking page (Kevin, 24 Nov 2026: the questions and the booking are one page). The choices are
+ * the Google Form's own texts, because `hardStops` and `availabilityFraction` read these words. The subject list is
+ * ours, so every tick is a subject the app knows.
+ */
+export const ANSWER_CHOICES = {
+  degree: ["Below Bachelor's", "Bachelor's", "Master's", "PhD"],
+  curricula: ["IB (MYP/ DP)", "British (IGCSE/ GCSE/ A-level)", "American (US High School/ AP)", "Thai National Curriculum"],
+  yearGroups: ["Year 2-6 (Primary)", "Year 7-9 (Lower Secondary)", "Year 10-11 (IGCSE Level)", "Year 12-13 (A-level/ IB DP)"],
+  english: ["Native", "Advanced (C1)", "Upper-Intermediate (B2)", "Intermediate (B1)"],
+  experience: ["Less than 1 year", "1-3 years", "3-5 years", "5+ years"],
+  availability: [
+    "Weekday Morning (before 12:00)",
+    "Weekday Afternoon (12:00-17:00)",
+    "Weekday Evening (17:00-21:00)",
+    "Weekend Morning (before 12:00)",
+    "Weekend Afternoon (12:00-17:00)",
+    "Weekend Evening (17:00-21:00)",
+  ],
+  weeklyHours: ["1-10", "11-20", "20-40", "40+"],
+} as const;
+/** The Art & Design portfolio file of the booking page: one PDF or picture in private storage (`portfolio.ts`). */
+export const PORTFOLIO_TYPES = ["application/pdf", "image/jpeg", "image/png"] as const;
+export const MAX_PORTFOLIO_BYTES = 25 * 1024 * 1024;
+export const portfolioPath = (candidateId: string) => `hiring-portfolios/${candidateId}`;
+const ticks = <T extends readonly [string, ...string[]]>(choices: T, message: string) =>
+  z.array(z.enum(choices)).min(1, message).max(choices.length);
+// No minimum length (Kevin, 24 Nov 2026). An answer is still needed.
+const written = (question: string) => z.string().trim().min(1, `Answer the question "${question}".`).max(5000);
+export const answersSchema = z
+  .object({
+    // One choice: "Below Bachelor's" with a higher degree would read as no degree.
+    degree: z.enum(ANSWER_CHOICES.degree),
+    field: z.string().trim().min(1, "Write your field of study.").max(200),
+    subjects: z.array(subjectSchema).min(1, "Choose at least one subject.").max(SUBJECTS.length),
+    testSubject: subjectSchema,
+    curricula: ticks(ANSWER_CHOICES.curricula, "Choose at least one curriculum."),
+    yearGroups: ticks(ANSWER_CHOICES.yearGroups, "Choose at least one year group."),
+    english: z.enum(ANSWER_CHOICES.english),
+    englishEvidence: z.string().trim().max(500),
+    experience: z.enum(ANSWER_CHOICES.experience),
+    // An optional link. The file upload is checked on the server (`answerPreScreen`).
+    portfolio: z.string().trim().max(500),
+    availability: ticks(ANSWER_CHOICES.availability, "Choose at least one time."),
+    weeklyHours: z.enum(ANSWER_CHOICES.weeklyHours),
+    motivation: written("Why do you want to tutor with BeGifted?"),
+    teachingApproach: written("How would you approach it?"),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.subjects.includes(value.testSubject))
+      ctx.addIssue({ code: "custom", path: ["testSubject"], message: "Choose a test subject from the subjects you can teach." });
+  });
+export type Answers = z.infer<typeof answersSchema>;
+/** Page answers in the stored shape of a Google Form answer, so every later check reads one format. */
+export const answersToPreScreen = (answers: Answers, now: Date, portfolioFile = ""): PreScreen => ({
+  ...answers,
+  portfolio: [answers.portfolio, portfolioFile].filter(Boolean).join(" · "),
+  sourceRow: 0,
+  submittedAt: now.toISOString(),
+  subjects: answers.subjects.join(", "),
+  curricula: answers.curricula.join(", "),
+  yearGroups: answers.yearGroups.join(", "),
+  availability: answers.availability.join(", "),
+});
 /** The form answers in reading order, for the admin panel and the interviewer's page. */
 export const ANSWER_LABELS: [Exclude<keyof PreScreen, "sourceRow" | "submittedAt">, string][] = [
   ["degree", "Degree"],

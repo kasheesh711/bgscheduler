@@ -17,7 +17,7 @@ import { ScheduleEmailRejection } from "@/lib/classrooms/schedule-email";
 import { pushLineTextMessage, LinePushError } from "@/lib/line/client";
 import { progressUsesTutorBot } from "@/lib/line/progress-reminders";
 import {
-  contractTestAllowed, HR_CALENDAR, isDecided, runtimeWritesAllowed, type HiringConfig } from "./model";
+  contractTestAllowed, HR_CALENDAR, isDecided, runtimeWritesAllowed, type HiringConfig, type Stage } from "./model";
 import {
   askForBriefs,
   assessWithEvidence,
@@ -69,6 +69,7 @@ const preScreenSource = (c: typeof s.hiringCandidates.$inferSelect) =>
   "\n\nApplication education and experience:\n" +
   c.profileText;
 
+const SELF_SERVED: Stage[] = ["onsite_invited", "onsite_booked"];
 export async function assessCandidates(
   db: Database,
   config: HiringConfig,
@@ -85,7 +86,19 @@ export async function assessCandidates(
   const rows = await db
     .select()
     .from(s.hiringCandidates)
-    .where(scoreOnly ? (candidateId ? eq(s.hiringCandidates.id, candidateId) : undefined) : inArray(s.hiringCandidates.stage, ["new", "review", "pre_screen", "no_reply"]))
+    .where(
+      scoreOnly
+        ? (candidateId ? eq(s.hiringCandidates.id, candidateId) : undefined)
+        : or(
+            inArray(s.hiringCandidates.stage, ["new", "review", "pre_screen", "no_reply"]),
+            // Answers from the booking page can open booking before the AI reads them. They are scored once, for staff.
+            and(
+              inArray(s.hiringCandidates.stage, SELF_SERVED),
+              isNotNull(s.hiringCandidates.preScreen),
+              isNull(s.hiringCandidates.preScreenHash),
+            ),
+          ),
+    )
     .orderBy(asc(s.hiringCandidates.createdAt));
   let calls = 0;
   for (const candidate of rows) {
@@ -133,13 +146,16 @@ export async function assessCandidates(
           const [held] = await tx
             .update(s.hiringCandidates)
             .set({
-              ...(scoreOnly ? {} : { stage: "review" as const }),
+              // An invited or booked candidate keeps the visit: the score is for staff to read, not a gate.
+              ...(scoreOnly || SELF_SERVED.includes(candidate.stage) ? {} : { stage: "review" as const }),
               ...(phase === "pre"
                 ? { preScreenHash: hash, preScreenAssessment: null }
                 : { profileHash: hash, profileAssessment: null }),
-              reviewNote:
-                "AI evidence could not be verified. Review this application before advancing it.",
-              revision: candidate.revision + 1,
+              // A row already in review keeps its note (a hard stop from the booking page, for example).
+              ...(SELF_SERVED.includes(candidate.stage) || (candidate.stage === "review" && candidate.reviewNote) ? {} : { reviewNote:
+                "AI evidence could not be verified. Review this application before advancing it." }),
+              // The visit reminder is tied to the row's revision, so an invited row keeps it.
+              revision: candidate.revision + (SELF_SERVED.includes(candidate.stage) ? 0 : 1),
               updatedAt: new Date(),
             })
             .where(

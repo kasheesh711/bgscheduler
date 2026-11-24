@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { AnswerText } from "./answer-text";
 import { format, parseISO } from "date-fns";
 import { percentile } from "@/lib/hiring/funnel";
 import { ANSWER_LABELS, isDecided } from "@/lib/hiring/model";
@@ -139,7 +140,7 @@ function PreScreenPanel({
               {ANSWER_LABELS.map(([key, label]) => (
                 <div key={key}>
                   <dt>{label}</dt>
-                  <dd>{candidate.preScreen?.[key] || <span className={css.mutedCell}>No answer</span>}</dd>
+                  <dd>{candidate.preScreen?.[key] ? <AnswerText text={candidate.preScreen[key]!} /> : <span className={css.mutedCell}>No answer</span>}</dd>
                 </div>
               ))}
             </dl>

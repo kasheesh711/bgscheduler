@@ -71,25 +71,25 @@ describe("preScreenRows", () => {
 
 describe("preScreenEmail with a visit link (Next steps)", () => {
   const visit = "https://bgscheduler.vercel.app/hiring/book/visit-token";
-  it("gives the form and the booking link together, and says the link books now", () => {
+  it("gives one link for the questions and the booking, with no Google Form", () => {
     const email = preScreenEmail("Ann", "ann@example.com", false, visit);
     expect(email.subject).toBe("Next steps: your BeGifted pre-screening questions and onsite visit");
     for (const part of [email.text, email.html]) {
-      expect(part).toContain(PRE_SCREEN_URL);
+      expect(part).not.toContain(PRE_SCREEN_URL);
       expect(part).toContain(visit);
       expect(part).toContain("which subject you want to be tested on");
-      expect(part).toContain("Choose your two times on this link now");
-      expect(part).not.toContain("When booking opens");
-      expect(part).toContain("ann@example.com");
+      expect(part).toContain("Then you choose your two times on the same page");
+      expect(part).not.toMatch(/when booking opens/i);
       // Two-day visit (Kevin, 24 Nov 2026): the test first, the mock teaching on a later day. No HR interview.
       expect(part).toContain("the test first, and the mock teaching on the same day or a later day");
       expect(part).not.toContain("HR");
     }
   });
-  it("shows the two steps as buttons, with no process strip that names the old HR interview", () => {
+  it("shows one button (Kevin, 24 Nov 2026), with no process strip that names the old HR interview", () => {
     const email = preScreenEmail("Ann", "ann@example.com", false, visit);
-    expect(email.html).toContain(">Open the questionnaire</a>");
-    expect(email.html).toContain(">Book your test and mock teaching</a>");
+    expect(email.html).toContain(">Answer the questions and book</a>");
+    expect(email.html.match(/\/hiring\/book\//g)).toHaveLength(1);
+    expect(email.html).not.toContain("questionnaire");
     expect(email.text).not.toContain("You are here");
     expect(email.html).toContain("/brand/email/hiring/v1/hero-next-steps.jpg");
   });

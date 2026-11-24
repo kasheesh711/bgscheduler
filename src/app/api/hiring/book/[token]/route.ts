@@ -1,7 +1,8 @@
 import { after, NextResponse } from "next/server";
 import { subjectSchema } from "@/lib/hiring/model";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
-import { bookCall, bookContract, contractView, bookInterview, bookingView, bookVisit, callView, visitView } from "@/lib/hiring/service";
+import { answerPreScreen, questionsOpen, bookCall, bookContract, contractView, bookInterview, bookingView, bookVisit, callView, visitView } from "@/lib/hiring/service";
+import { portfolioUploadHandler } from "@/lib/hiring/portfolio";
 import { readBookingToken } from "@/lib/hiring/tokens";
 import { deliverBookingMessages } from "@/lib/hiring/worker";
 export const maxDuration = 120;
@@ -40,8 +41,18 @@ export async function POST(
     requireSameOrigin(request);
     const { token } = await params;
     const kind = readBookingToken(token).kind;
-    const book = (kind === "visit" || kind === "paper-visit" || kind === "two-day") ? bookVisit : kind === "call" ? bookCall : kind === "contract" ? bookContract : bookInterview;
-    const booking = await book(token, await request.json());
+    const visit = kind === "visit" || kind === "paper-visit" || kind === "two-day";
+    const body = await request.json();
+    // The token step of the portfolio upload, from the browser to private storage, while the questions are open.
+    if (visit && body?.type === "blob.generate-client-token")
+      return NextResponse.json(await portfolioUploadHandler(request, body, await questionsOpen(token)), { headers });
+    // The questions step of a "Next steps" link. The page reloads the view, which then shows the times.
+    if (visit && body && typeof body === "object" && "answers" in body) {
+      await answerPreScreen(token, body.answers);
+      return NextResponse.json({ ok: true }, { headers });
+    }
+    const book = visit ? bookVisit : kind === "call" ? bookCall : kind === "contract" ? bookContract : bookInterview;
+    const booking = await book(token, body);
     after(() => deliverBookingMessages());
     return NextResponse.json(
       {
