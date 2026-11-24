@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { formatInTimeZone } from "date-fns-tz";
 import { checkRubric, rubricNeedsCheck } from "@/lib/hiring/marking-sheet";
-import { DEFAULT_PAPER_CHECKERS, isDecided, localDate, shiftDate, ZONE, type Subject } from "@/lib/hiring/model";
+import { isDecided, localDate, shiftDate, ZONE, type Subject } from "@/lib/hiring/model";
 import { buildRunSheet, headName, headVisits, pastVisits, upcoming, type RunSheetRow } from "@/lib/hiring/run-sheet";
-import { dayTitle, openHeadDecisions, weekCalls } from "@/lib/hiring/role-views";
+import { dayTitle, headKeys, nickname, openHeadDecisions, weekCalls, type HeadDecisionRow } from "@/lib/hiring/role-views";
 import { universityName } from "@/lib/hiring/seek-view";
 import { ContractTemplates, SignedContract } from "./contract-templates";
 import { FinalReview, reviewBlocks } from "./final-review";
@@ -19,17 +19,6 @@ import r from "./role-screens.module.css";
 
 const shortDay = (date: string) =>
   new Date(`${date}T12:00:00Z`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
-
-function ResumeButton({ open, onToggle, name, panelId }: { open: boolean; onToggle: () => void; name: string; panelId: string }) {
-  return (
-    <button type="button" className={r.big} aria-expanded={open} aria-controls={panelId} aria-label={`${open ? "Hide" : "Show"} the résumé of ${name}`} onClick={(event) => {
-      onToggle();
-      if (open) event.currentTarget.focus();
-    }}>
-      {open ? "Hide résumé" : "Résumé"}
-    </button>
-  );
-}
 
 function Section({ title, count, children, controls, id, hideHeading }: { title: string; count?: number; children: ReactNode; controls?: ReactNode; id?: string; hideHeading?: boolean }) {
   return (
@@ -414,8 +403,23 @@ export function AdminScreen({ data, reload, readOnly = false, onOpenResults }: {
 }
 
 // ─── Heads ───
+// Kevin, 24 Nov 2026: a head has two jobs, re-marking a near-miss paper and scoring a mock. Both are listed on the
+// left and the chosen one is already open on the right, so nothing needs a click to open. A head sees only their list.
 
 const HEAD_KEY = "hiring-head";
+/** Wide enough for the list beside an open brief. Below this, a tap opens the brief or the paper check as its own page. */
+const SPLIT = "(min-width: 1024px)";
+function useWide() {
+  return useSyncExternalStore(
+    (change) => {
+      const query = window.matchMedia(SPLIT);
+      query.addEventListener("change", change);
+      return () => query.removeEventListener("change", change);
+    },
+    () => window.matchMedia(SPLIT).matches,
+    () => false,
+  );
+}
 
 function headVisit(row: Pick<RunSheetRow, "visitId" | "candidateId" | "date" | "mockStart" | "paperStart" | "subject">,
   data: HiringData, now: Date, mock?: HiringData["bookings"][number]) {
@@ -442,101 +446,169 @@ function headVisit(row: Pick<RunSheetRow, "visitId" | "candidateId" | "date" | "
   return { row, candidate, active, path, ended, decision, scored, checkingScores, needsCheck, due, missingOutcome, needsAction, status };
 }
 
-function HeadCard({ visit, data, readOnly }: { visit: ReturnType<typeof headVisit>; data: HiringData; readOnly: boolean }) {
+/** One line on the left and one page on the right: a mock, a paper visit, or a near-miss paper to re-mark. */
+interface HeadItem {
+  id: string;
+  name: string;
+  candidate?: HiringCandidate;
+  /** The time (or the AI score of a paper) on top, the day under it. */
+  time: string | null;
+  day: string;
+  detail: string;
+  tags: { text: string; tone?: "hire" | "reject" }[];
+  /** What the head must know or do. Empty when the open page says it. */
+  note: string | null;
+  /** The brief or the paper check, opened at the part that needs the head. */
+  href: string | null;
+  task: string;
+  /** Needs the head now: a paper to re-mark, a mock to score, a packet to sign. The first one is open on arrival. */
+  urgent?: boolean;
+  /** A final review: Gift's packet, opened in the pane, not as a page. */
+  review?: HeadDecisionRow;
+}
+
+function visitItem(visit: ReturnType<typeof headVisit>, today: string): HeadItem {
   const { row, candidate, active, path, decision, scored, checkingScores, needsCheck, due, missingOutcome, status } = visit;
-  const name = candidate?.name ?? "Needs review: candidate record not found";
-  const [resume, setResume] = useState(false);
-  const resumeId = useId();
-  const briefLabel = decision && !needsCheck && !checkingScores ? "View brief" : !due ? "Open interview brief" : scored ? "Record recommendation" : "Score and recommend";
-  return (
-    <article className={`${r.card} ${r.headCard}`}>
-      <p className={r.time}>
-        {row.mockStart ?? row.paperStart}
-        <span>{shortDay(row.date)}</span>
-      </p>
-      <div className={r.cardMain}>
-        <p className={r.name}>{name}</p>
-        <p className={r.meta}>
-          {row.subject ?? "Subject not recorded"}{status && ` · ${status}`}
-        </p>
-        <p className={r.meta}>
-          {scored && !decision && (
-            <span className={r.tag} data-tone="hire">
-              Scores sent
-            </span>
-          )}
-          {decision && (
-            <span className={r.tag} data-tone={decision.decision}>
-              Recommendation: {decision.decision === "hire" ? "Yes" : "No"}
-            </span>
-          )}
-        </p>
-        {checkingScores ? <p className={r.meta}>Scores are being checked. Come back later.</p>
-          : needsCheck && <p className={r.meta}>Ask admin to check scores.</p>}
-        {row.mockStart && !path && !status && <p className={r.meta}>{missingOutcome
-          ? (scored ? "Ask admin to record the recommendation" : "Ask admin to record the outcome")
-          : "No brief yet."}</p>}
-        {path && !active && <p className={r.meta}>The interview brief is closed.</p>}
-        {candidate?.resumeState === "none" && <p className={r.meta}>No résumé file is stored.</p>}
-        {candidate?.resumeState === "deleted" && <p className={r.meta}>The résumé file was deleted.</p>}
-      </div>
-      <div className={r.actions}>
-        {path && active && !readOnly && (
-          <a className={r.big} data-tone={due ? "primary" : undefined} href={due ? `${path}#${scored ? "recommendation" : "scores"}` : path} target="_blank" rel="noopener noreferrer" aria-label={`${briefLabel} for ${name}`}>
-            {briefLabel}
-          </a>
+  const mock = !!row.mockStart;
+  const open = path && active;
+  return {
+    id: row.visitId,
+    name: candidate?.name ?? "Needs review: candidate record not found",
+    candidate,
+    time: row.mockStart ?? row.paperStart,
+    day: row.date === today ? "Today" : row.date === shiftDate(today, 1) ? "Tomorrow" : shortDay(row.date),
+    detail: `${row.subject ?? "Subject not recorded"} · ${mock ? "Mock" : "Paper test"}`,
+    tags: [
+      ...(status ? [{ text: status }] : []),
+      ...(scored && !decision && !due ? [{ text: "Scores sent", tone: "hire" as const }] : []),
+      ...(decision ? [{ text: `Recommendation: ${decision.decision === "hire" ? "Yes" : "No"}`, tone: decision.decision }] : []),
+    ],
+    note: due && open ? (scored ? "Recommend: Yes or No" : "Score the mock")
+      : checkingScores ? "Admin is checking the scores"
+      : needsCheck ? "Ask admin: check the scores"
+      : mock && !path && !status ? (missingOutcome ? (scored ? "Ask admin to record the recommendation" : "Ask admin to record the outcome") : "No brief yet.")
+      : path && !active ? "The interview brief is closed."
+      : candidate?.resumeState === "none" ? "No résumé file is stored."
+      : candidate?.resumeState === "deleted" ? "The résumé file was deleted."
+      : null,
+    href: open ? (due ? `${path}#${scored ? "recommendation" : "scores"}` : path) : null,
+    task: decision && !needsCheck && !checkingScores ? "View brief" : !due ? "Interview brief" : scored ? "Record recommendation" : "Score and recommend",
+    urgent: !!open && due,
+  };
+}
+
+/** The open page inside the screen: `embed=1` drops the page's own header and its link back to this list. */
+const embedded = (href: string) => {
+  const [base, hash] = href.split("#");
+  return `${base}${base.includes("?") ? "&" : "?"}embed=1${hash ? `#${hash}` : ""}`;
+};
+
+function ItemLink({ item, selected, onSelect, wide, readOnly, paneId }: { item: HeadItem; selected: boolean; onSelect: () => void; wide: boolean; readOnly: boolean; paneId: string }) {
+  const body = (
+    <>
+      <span className="sr-only">{item.task}: </span>
+      <span className={r.itemTime}>
+        {item.time}
+        <span>{item.day}</span>
+      </span>
+      <span className={r.itemMain}>
+        <span className={r.itemName}>{item.name}</span>
+        <span className={r.itemDetail}>{item.detail}</span>
+        {(item.tags.length > 0 || item.note) && (
+          <span className={r.itemNotes}>
+            {item.tags.map((tag) => <span key={tag.text} className={r.tag} data-tone={tag.tone}>{tag.text}</span>)}
+            {item.note && <span className={r.itemNote}>{item.note}</span>}
+          </span>
         )}
-        {candidate && <ResumeButton open={resume} onToggle={() => setResume(!resume)} name={name} panelId={resumeId} />}
-      </div>
-      {candidate && (
-        <div id={resumeId} className={r.resume} hidden={!resume}>
-          {resume && <ResumePeek candidate={candidate} months={data.config.resumeRetentionMonths} />}
+      </span>
+    </>
+  );
+  // On a phone the list is the page, so the link opens the brief or the paper check itself.
+  // A preview must never open the head's brief or paper check, where a send would count.
+  return item.href && !readOnly ? (
+    <a className={r.item} href={item.href} aria-current={selected ? "true" : undefined} data-urgent={item.urgent ? "" : undefined}
+      onClick={(event) => {
+        if (!wide || event.metaKey || event.ctrlKey || event.shiftKey) return;
+        event.preventDefault();
+        onSelect();
+      }}>
+      {body}
+    </a>
+  ) : (
+    <button type="button" className={r.item} aria-current={selected ? "true" : undefined} aria-expanded={wide ? undefined : selected}
+      aria-controls={wide ? undefined : paneId} data-urgent={item.urgent ? "" : undefined} onClick={onSelect}>
+      {body}
+    </button>
+  );
+}
+
+/** The right side: the real brief or paper check page, or the résumé when there is no page to open. */
+function ItemPane({ item, data, readOnly, reload }: { item: HeadItem; data: HiringData; readOnly: boolean; reload?: () => Promise<void> }) {
+  // Only Gift signs. A preview or another account sees the facts and the résumé.
+  if (item.review && data.reviewAccess?.gift && !readOnly) {
+    return (
+      <div className={`${r.paneFacts} ${r.reviewPane}`}>
+        <div className={r.reviewMain}>
+          <h2 className={r.paneName}>{item.name}</h2>
+          <p className={r.meta}>
+            <span className={r.tag} data-tone={item.review.decision}>{item.review.decision === "hire" ? "Yes" : "No"}</span>
+            {item.review.head} · {item.review.reason || "No reason given"}
+          </p>
+          <FinalReview id={item.review.candidateId!} autoLoad hideHeading {...reviewBlocks(data.writeGate, data.config, item.review.candidateId!)}
+            onChanged={reload && (async () => reload())} />
         </div>
-      )}
-    </article>
-  );
-}
-
-/** A near-miss paper waiting for this head's marks (Kevin, 24 Nov 2026). */
-function PaperCheckCard({ check, data, readOnly }: { check: HiringData["paperChecks"][number]; data: HiringData; readOnly: boolean }) {
-  const name = data.candidates.find((c) => c.id === check.candidateId)?.name ?? "Needs review: candidate record not found";
+        {item.candidate && <div className={r.reviewResume}><ResumePeek candidate={item.candidate} months={data.config.resumeRetentionMonths} /></div>}
+      </div>
+    );
+  }
+  // A preview must not score or mark in the head's name, so it shows only the résumé.
+  if (item.href && !readOnly) {
+    return (
+      <iframe key={item.id} className={r.paneFrame} src={embedded(item.href)} title={`${item.task}: ${item.name}`} />
+    );
+  }
   return (
-    <article className={`${r.card} ${r.headCard}`}>
-      <div className={r.cardMain}>
-        <p className={r.name}>{name}</p>
-        <p className={r.meta}>{check.subject} · AI score {check.percent}%</p>
-        <p className={r.meta}>Pass: mock teaching. Not passed: the rejection email goes.</p>
-      </div>
-      <div className={r.actions}>
-        {check.path && !readOnly && (
-          <a className={r.big} data-tone="primary" href={check.path} target="_blank" rel="noopener noreferrer" aria-label={`Check the paper of ${name}`}>
-            Check paper
-          </a>
-        )}
-      </div>
-    </article>
+    <div className={r.paneFacts}>
+      <h2 className={r.paneName}>{item.name}</h2>
+      <p className={r.meta}>{[item.day, item.time, item.detail].filter(Boolean).join(" · ")}</p>
+      {item.note && <p className={r.meta}>{item.note}</p>}
+      {readOnly && item.href && <p className={r.quiet}>Preview: the brief and the scores open only for the head.</p>}
+      {item.review && <p className={r.quiet}>The packet and the sign-off open only for the final reviewer.</p>}
+      {item.candidate && <ResumePeek candidate={item.candidate} months={data.config.resumeRetentionMonths} />}
+    </div>
   );
 }
 
-export function HeadsScreen({ data, readOnly = false }: { data: HiringData; readOnly?: boolean }) {
-  // A paper checker who gives no mocks (Tito) still needs a name to choose.
-  const checkerKeys = (data.config.paperCheckers ?? DEFAULT_PAPER_CHECKERS).map((row) => row.canonicalKey);
-  const heads = [
-    ...data.config.interviewers,
-    ...[...new Set(checkerKeys)].filter((key) => !data.config.interviewers.some((h) => h.canonicalKey === key)).map((canonicalKey) => ({ canonicalKey })),
-  ];
-  // The browser remembers the head, so the next visit opens on their own list. This screen renders only in the browser, after the data loads.
-  const [key, setKey] = useState<string | null>(() => {
-    if (readOnly) return null;
+/**
+ * The Heads screen. `head` is the head who is signed in (or the one a preview shows): their list only, with no name to
+ * choose. Without it (Kevin, or the Mock teaching tab), a menu picks the head and the browser remembers the choice.
+ */
+export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, reload }: {
+  data: HiringData;
+  readOnly?: boolean;
+  head?: string | null;
+  /** A candidate id from Gift's review email link: that final review is open on arrival. */
+  open?: string;
+  reload?: () => Promise<void>;
+}) {
+  const heads = headKeys(data.config);
+  const [chosen, setChosen] = useState<string | null>(() => {
+    if (fixedHead || readOnly) return null;
+    // ?head=Ek opens that head's screen as they see it (Kevin, 24 Nov 2026).
+    const asked = new URLSearchParams(window.location.search).get("head");
+    if (asked) return asked;
     try {
       return window.localStorage.getItem(HEAD_KEY);
     } catch {
-      // Storage can be blocked. The picker still works for this visit.
+      // Storage can be blocked. The menu still works for this visit.
       return null;
     }
   });
+  const key = fixedHead ?? (chosen && heads.includes(chosen) ? chosen : heads[0] ?? null);
+  const [picked, setPicked] = useState<string | null>(open ? `review-${open}` : null);
   const choose = (value: string) => {
-    setKey(value);
+    setChosen(value);
+    setPicked(null);
     if (readOnly) return;
     try {
       window.localStorage.setItem(HEAD_KEY, value);
@@ -544,94 +616,139 @@ export function HeadsScreen({ data, readOnly = false }: { data: HiringData; read
       // As above.
     }
   };
+  const wide = useWide();
+  // A score sent in the open page shows in the list when the head comes back to it (not more than once in 30 seconds).
+  const loadedAt = useRef(0);
+  useEffect(() => {
+    if (!reload) return;
+    loadedAt.current = Date.now();
+    const refresh = () => {
+      if (Date.now() - loadedAt.current < 30_000) return;
+      loadedAt.current = Date.now();
+      void reload().catch(() => {});
+    };
+    // A save in the open brief or paper check reloads the list at once, so the row leaves To do.
+    const saved = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.data?.type !== "hiring-saved") return;
+      loadedAt.current = Date.now();
+      void reload().catch(() => {});
+    };
+    window.addEventListener("focus", refresh);
+    window.addEventListener("message", saved);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("message", saved);
+    };
+  }, [reload]);
+
   const { rows, now, today } = useVisits(data);
-  const head = heads.find((h) => h.canonicalKey === key);
-  const visits = head ? [
-    ...data.bookings.filter((mock) => mock.kind === "mock" && mock.interviewerKey === head.canonicalKey).map((mock) => {
+  const visits = key ? [
+    ...data.bookings.filter((mock) => mock.kind === "mock" && mock.interviewerKey === key).map((mock) => {
       const start = new Date(mock.startTime);
       return headVisit({ visitId: mock.id, candidateId: mock.candidateId, date: localDate(start),
         mockStart: formatInTimeZone(start, ZONE, "HH:mm"), paperStart: null, subject: mock.subjects[0] ?? null }, data, now, mock);
     }),
-    ...headVisits(rows, head.canonicalKey, today).filter((row) => !row.mockStart).map((row) => headVisit(row, data, now)),
+    ...headVisits(rows, key, today).filter((row) => !row.mockStart).map((row) => headVisit(row, data, now)),
   ].sort((a, b) => (a.row.date + clock(a.row)).localeCompare(b.row.date + clock(b.row))) : [];
-  const [nextMock, ...comingMocks] = visits.filter((visit) => !visit.ended && visit.row.mockStart);
-  const paperVisits = visits.filter((visit) => !visit.ended && !visit.row.mockStart);
+  const nextMock = visits.find((visit) => !visit.ended && visit.row.mockStart);
+  const clockNow = formatInTimeZone(now, ZONE, "HH:mm");
+  const coming = visits.filter((visit) => !visit.ended && visit !== nextMock
+    && (!!visit.row.mockStart || visit.row.date > today || (visit.row.paperStart ?? "") > clockNow));
   const since = shiftDate(today, -56);
   const ended = visits.filter(({ row, ended, missingOutcome, due, scored }) =>
     ended && (row.date >= since || missingOutcome || (due && scored))).reverse();
-  const needsAction = ended.filter((visit) => visit.needsAction);
-  const done = ended.filter((visit) => !visit.needsAction).slice(0, 6);
-  const checks = head ? data.paperChecks.filter((check) => !check.done && check.head === head.canonicalKey) : [];
+  const checks: HeadItem[] = key ? data.paperChecks.filter((check) => !check.done && check.head === key).map((check) => {
+    const candidate = data.candidates.find((c) => c.id === check.candidateId);
+    return { id: check.resultId, name: candidate?.name ?? "Needs review: candidate record not found", candidate, time: `${check.percent}%`, day: "AI score",
+      detail: `${check.subject} · Paper check`, tags: [], note: null,
+      href: check.path, task: "Check paper", urgent: !!check.path };
+  }) : [];
+  // Gift's final reviews: each newest Yes from a head that no sent result has closed. A ready packet comes first.
+  const byId = new Map(data.candidates.map((candidate) => [candidate.id, candidate]));
+  const packets = new Set(data.reviewPackets ?? []);
+  const reviews: HeadItem[] = key && key === data.finalReviewer ? openHeadDecisions(data.headDecisions, data.decisions)
+    .filter((d) => d.decision === "hire" && d.candidateId && !["hired", "rejected", "stopped"].includes(byId.get(d.candidateId)?.stage ?? ""))
+    .map((d) => {
+      const candidate = byId.get(d.candidateId!);
+      const ready = packets.has(d.candidateId!);
+      return { id: `review-${d.candidateId}`, name: candidate?.name ?? "Candidate", candidate, time: ready ? "Review" : "Waiting",
+        day: ready ? "packet ready" : "no packet yet", detail: `${candidate?.visitSubject ?? candidate?.subjects[0] ?? "Subject not recorded"} · Yes from ${d.head}`,
+        tags: [], note: d.draftProblem && `No email draft yet: ${d.draftProblem}`, href: null, task: "Final review", urgent: ready, review: d };
+    })
+    : [];
+  // One To do list in the order of the work: papers to re-mark, mocks to score, packets to sign (Sol review, 24 Nov 2026).
+  const groups = [
+    { title: "To do", items: [...checks, ...ended.filter((visit) => visit.needsAction).map((visit) => visitItem(visit, today)), ...reviews.filter((item) => item.urgent)]
+      .sort((a, b) => Number(!!b.urgent) - Number(!!a.urgent)) },
+    { title: "Next mock", items: nextMock ? [visitItem(nextMock, today)] : [] },
+    { title: "Coming up", items: coming.map((visit) => visitItem(visit, today)) },
+    { title: "Waiting for the packet", items: reviews.filter((item) => !item.urgent) },
+  ];
+  const past = ended.filter((visit) => !visit.needsAction).slice(0, 6).map((visit) => visitItem(visit, today));
+  const all = [...groups.flatMap((group) => group.items), ...past];
+  // The most urgent page is already open: a paper to re-mark or a mock to score, else the next mock.
+  // A save can take the open row off the list. Its page stays open, with its confirmation, until another row is chosen.
+  const [shown, setShown] = useState<HeadItem | null>(null);
+  const found = picked ? all.find((item) => item.id === picked) : undefined;
+  const keep = shown && (!picked || picked === shown.id) ? all.find((item) => item.id === shown.id) ?? shown : undefined;
+  const selected = found ?? keep ?? (wide ? all.find((item) => item.urgent) ?? all[0] : undefined);
+  if ((selected?.id ?? null) !== (shown?.id ?? null)) setShown(selected ?? null);
+  const paneId = useId();
+  const name = key ? headName(key, data.tutors) : null;
+  // A head who only checks papers (Tito) has no "Next mock" line.
+  const givesMocks = data.config.interviewers.some((h) => h.canonicalKey === key);
+  const list = (items: HeadItem[]) => (
+    <ul className={r.items}>
+      {items.map((item) => (
+        <li key={item.id}>
+          <ItemLink item={item} wide={wide} readOnly={readOnly} paneId={paneId} selected={selected?.id === item.id}
+            onSelect={() => setPicked(!wide && picked === item.id ? null : item.id)} />
+          {!wide && picked === item.id && (!item.href || readOnly) && (
+            <div id={paneId} className={r.inlinePane} role="region" aria-label={item.name}>
+              <ItemPane item={item} data={data} readOnly={readOnly} reload={reload} />
+            </div>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
   return (
-    <div className={r.screen} data-heads-review="">
-      <div className={r.section}>
-        {!head && <p className={r.quiet}>Choose your name</p>}
-        <div className={r.picker} role="group" aria-label="Choose your name">
-          {heads.map((h) => (
-            <button key={h.canonicalKey} type="button" aria-pressed={h.canonicalKey === key} onClick={() => choose(h.canonicalKey)}>
-              {headName(h.canonicalKey, data.tutors)}
-            </button>
-          ))}
-        </div>
-        <p className="sr-only" role="status">{head && `${headName(head.canonicalKey, data.tutors)} · ${nextMock
+    <div className={r.workspace} data-heads-review="">
+      <nav className={r.rail} aria-label={name ? `${nickname(name)}'s hiring list` : "Hiring list"}>
+        {!fixedHead && (
+          <label className={r.headMenu}>
+            Head
+            <select value={key ?? ""} onChange={(event) => choose(event.target.value)}>
+              {heads.map((h) => <option key={h} value={h}>{headName(h, data.tutors)}</option>)}
+            </select>
+          </label>
+        )}
+        {wide && selected && <a className={r.skip} href="#open-item">Skip to the open page</a>}
+        <p className="sr-only" role="status">{name && `${name} · ${nextMock
           ? `next mock ${shortDay(nextMock.row.date)}, ${nextMock.row.mockStart}` : "no mock booked"}`}</p>
-      </div>
-      {head && (
-        <>
-          {checks.length > 0 && (
-            <Section title="Papers to check" count={checks.length} id="paper-checks">
-              <div className={r.cards}>
-                {checks.map((check) => <PaperCheckCard key={check.resultId} check={check} data={data} readOnly={readOnly} />)}
-              </div>
-            </Section>
-          )}
-          <Section title="Next mock" id="next-mock">
-            {nextMock ? <HeadCard key={nextMock.row.visitId} visit={nextMock} data={data} readOnly={readOnly} /> : (
-              <div className={r.card}>
-                <div className={r.cardMain}>
-                  <p>No mock booked yet.</p>
-                  <p className={r.quiet}>New bookings also come by LINE.</p>
-                </div>
-              </div>
-            )}
-          </Section>
-          {needsAction.length > 0 && (
-            <Section title="Mocks that need action" count={needsAction.length}>
-              <div className={r.cards}>
-                {needsAction.map((visit) => (
-                  <HeadCard key={visit.row.visitId} visit={visit} data={data} readOnly={readOnly} />
-                ))}
-              </div>
-            </Section>
-          )}
-          {comingMocks.length > 0 && (
-            <Section title="Coming to you" count={comingMocks.length}>
-              <div className={r.cards}>
-                {comingMocks.map((visit) => (
-                  <HeadCard key={visit.row.visitId} visit={visit} data={data} readOnly={readOnly} />
-                ))}
-              </div>
-            </Section>
-          )}
-          {paperVisits.length > 0 && (
-            <Section title="Paper visits" count={paperVisits.length}>
-              <div className={r.cards}>
-                {paperVisits.map((visit) => (
-                  <HeadCard key={visit.row.visitId} visit={visit} data={data} readOnly={readOnly} />
-                ))}
-              </div>
-            </Section>
-          )}
-          {done.length > 0 && (
-            <Section title="Past mocks" count={done.length}>
-              <div className={r.cards}>
-                {done.map((visit) => (
-                  <HeadCard key={visit.row.visitId} visit={visit} data={data} readOnly={readOnly} />
-                ))}
-              </div>
-            </Section>
-          )}
-        </>
+        {groups.map((group) => (group.items.length > 0 || (group.title === "Next mock" && givesMocks)) && (
+          <section key={group.title} className={r.group} data-tone={group.title === "To do" ? "todo" : undefined}>
+            <h2 className={r.groupTitle}>
+              {group.title}
+              {group.items.length > 1 && <span className={r.count}>{group.items.length}</span>}
+            </h2>
+            {group.items.length ? list(group.items) : <p className={r.quiet}>No mock booked. New bookings also come by LINE.</p>}
+          </section>
+        ))}
+        {!heads.length ? <p className={r.quiet}>No heads are set up. Add interviewers in Rules and setup.</p>
+          : !all.length && !givesMocks && <p className={r.quiet}>Nothing to do. New papers to check also come by LINE.</p>}
+        {past.length > 0 && (
+          <details className={r.group}>
+            <summary className={r.groupTitle}>Past mocks <span className={r.count}>{past.length}</span></summary>
+            {list(past)}
+          </details>
+        )}
+      </nav>
+      {wide && (
+        <section id="open-item" tabIndex={-1} className={r.pane} aria-label={selected ? `${selected.task}: ${selected.name}` : "Nothing open"}>
+          {selected ? <ItemPane key={selected.id} item={selected} data={data} readOnly={readOnly} reload={reload} />
+            : <p className={r.quiet}>Nothing to do. New bookings also come by LINE.</p>}
+        </section>
       )}
     </div>
   );

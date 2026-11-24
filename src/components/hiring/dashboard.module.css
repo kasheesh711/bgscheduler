@@ -47,6 +47,9 @@
   padding-inline: max(16px, calc((100% - 948px) / 2));
   font-size: 14px;
 }
+/* The head's list and the open page use the full width, so the header does too. */
+.surface[data-heads-review] .topbar[data-heads] { padding: 6px 16px; }
+.topbar[data-heads] .title { font-size: 24px; }
 
 /* Header */
 .topbar {

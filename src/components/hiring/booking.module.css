@@ -134,6 +134,51 @@
     max-width: 1440px;
   }
 }
+/* Inside the head's Hiring screen (embed=1) there is no hero: the sheet starts at the top and uses the pane's width. */
+.page[data-bare] {
+  background: transparent;
+}
+.page[data-bare] .sheet {
+  max-width: none;
+  margin-top: 0;
+  padding: 0;
+}
+/* No frame, and the facts on one line, so the paper and the marks start near the top (Kevin: "so much white space"). */
+.page[data-bare] .card {
+  gap: 14px;
+  padding: 14px 20px 32px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  animation: none;
+}
+.page[data-bare] .facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 20px;
+}
+.page[data-bare] .facts .answers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+}
+.page[data-bare] .facts .answers > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.page[data-bare] .facts .answers dd {
+  margin: 0;
+}
+.page[data-bare] .facts .ghost {
+  width: auto;
+  min-height: 44px;
+  padding: 0 14px;
+}
+.page[data-bare] .stepTitle {
+  font-size: 20px;
+}
 @keyframes rise {
   from {
     opacity: 0;

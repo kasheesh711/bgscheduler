@@ -634,10 +634,11 @@ export const BookingLoading = () => (
   </div>
 );
 
-export function BookingShell({ kind, children }: { kind?: "visit" | "mock" | "paper" | "brief" | "call" | "contract" | "onboarding" | "paper-check"; children: ReactNode }) {
+export function BookingShell({ kind, children, bare = false }: { kind?: "visit" | "mock" | "paper" | "brief" | "call" | "contract" | "onboarding" | "paper-check"; children: ReactNode; bare?: boolean }) {
   return (
-    <main className={c.page} data-brief={kind === "brief" || kind === "paper-check" ? "" : undefined}>
-      <header className={c.hero} data-brief={kind === "brief" || kind === "paper-check" ? "" : undefined} data-wide={kind === "paper-check" ? "" : undefined}>
+    <main className={c.page} data-brief={kind === "brief" || kind === "paper-check" ? "" : undefined} data-bare={bare ? "" : undefined}>
+      {/* `bare`: the page is open inside the head's Hiring screen, which has its own header. */}
+      {!bare && <header className={c.hero} data-brief={kind === "brief" || kind === "paper-check" ? "" : undefined} data-wide={kind === "paper-check" ? "" : undefined}>
         <div className={c.heroInner}>
           <p className={c.brand}>BeGifted Education</p>
           <h1 className={c.title}>
@@ -645,7 +646,7 @@ export function BookingShell({ kind, children }: { kind?: "visit" | "mock" | "pa
             <em>{kind === "onboarding" ? "onboarding" : kind === "brief" ? "brief" : kind === "paper-check" ? "check" : kind === "contract" ? "contract signing" : kind === "call" ? "R1: HR Interview" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "assessment"}</em>
           </h1>
         </div>
-      </header>
+      </header>}
       <div className={c.sheet}>
         <div className={c.card}>{children}</div>
       </div>

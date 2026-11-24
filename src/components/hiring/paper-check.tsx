@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { paperCheckView } from "@/lib/hiring/paper-check";
+import { tellHiringList } from "./brief";
 import { PdfPages } from "./pdf-pages";
 import c from "./booking.module.css";
 import k from "./paper-check.module.css";
@@ -52,7 +53,10 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
         body: JSON.stringify({ updatedAt: view.updatedAt, comment, marks: Object.fromEntries(view.questions.map((q) => [q.id, Number(marks[q.id])])) }),
       });
       const body = (await response.json().catch(() => ({}))) as { error?: string; outcome?: Outcome };
-      if (response.ok && body.outcome) setOutcome(body.outcome);
+      if (response.ok && body.outcome) {
+        setOutcome(body.outcome);
+        tellHiringList();
+      }
       else setError(body.error ?? "Your marks were not saved. Try again.");
     } catch {
       setError("Your marks were not saved. Check your connection, then try again.");
@@ -69,7 +73,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
         <div><dt className={c.factLabel}>AI score</dt><dd>{view.aiPercent}%{view.passMark !== null && ` (pass mark ${view.passMark}%)`}</dd></div>
         <div><dt className={c.factLabel}>Mock teaching</dt><dd>{view.mock ?? "Not booked yet"}</dd></div>
       </dl>
-      <a className={`${c.ghost} ${c.jumpLink}`} href={`/api/hiring/paper-check/${token}/paper`} target="_blank" rel="noreferrer">Open the marked paper in a new tab</a>
+      <a className={`${c.ghost} ${c.jumpLink}`} href={`/api/hiring/paper-check/${token}/paper`} target="_blank" rel="noreferrer">Open marked paper</a>
       <p className={c.note}>Personal data. Do not share.</p>
     </section>
   );
@@ -101,7 +105,6 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
       </section>
       <section className={`${c.facts} ${k.marks}`}>
         <h2 className={c.stepTitle}>Your marks</h2>
-        <p className={c.note}>The AI marked this paper just below the pass mark. Read the marked paper, then give your mark for each question. Your marks are final.</p>
         <ol className={k.questions}>
           {view.questions.map((q) => (
             <li key={q.id} className={k.question}>
@@ -123,7 +126,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
                   aria-invalid={bad.includes(q) || undefined}
                   onChange={(event) => setMarks({ ...marks, [q.id]: event.target.value })}
                 />
-                <span className={k.max}>of {q.max}{q.marks !== null && q.marks !== Number(marks[q.id]) ? ` · AI gave ${q.marks}` : ""}</span>
+                <span className={k.max}>of {q.max}{q.marks !== null && ` · AI gave ${q.marks}`}</span>
               </div>
             </li>
           ))}
@@ -132,15 +135,19 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
           <span>Comment (optional)</span>
           <textarea className={c.input} rows={3} maxLength={4000} value={comment} onChange={(event) => setComment(event.target.value)} />
         </label>
-        <p className={k.total} role="status">
-          Your score: <strong>{percent}%</strong>
-          {view.passMark !== null && <> — {passes ? "pass: goes on to mock teaching" : "not passed: the candidate gets the rejection email"}</>}
-        </p>
-        {bad.length > 0 && <p className={c.note}>Give a mark from 0 to the maximum for question {bad.map((q) => q.id).join(", ")}.</p>}
-        <button type="button" className={c.button} disabled={pending || bad.length > 0} onClick={() => void send()}>
-          {pending ? "Saving…" : "Submit my marks"}
-        </button>
-        {error && <p role="alert" className={c.alert}>{error}</p>}
+        {/* The score and the send stay in view while the head works down the questions. */}
+        <div className={k.submit}>
+          <p className={k.total} role="status">
+            Your score: <strong>{percent}%</strong>
+            {view.passMark !== null && <> — {passes ? "pass: goes on to mock teaching" : "not passed: the candidate gets the rejection email"}</>}
+          </p>
+          {bad.length > 0 && <p className={c.note}>Give a mark from 0 to the maximum for question {bad.map((q) => q.id).join(", ")}.</p>}
+          <button type="button" className={c.button} disabled={pending || bad.length > 0} onClick={() => void send()}>
+            {pending ? "Saving…" : "Submit my marks"}
+          </button>
+          <p className={c.note}>Your marks are final.</p>
+          {error && <p role="alert" className={c.alert}>{error}</p>}
+        </div>
       </section>
       </div>
     </>

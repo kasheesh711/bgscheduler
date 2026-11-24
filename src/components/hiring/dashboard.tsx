@@ -6,7 +6,8 @@ import { startTransition, useEffect, useMemo, useRef, useState, useSyncExternalS
 import { useSearchParams } from "next/navigation";
 import { Instrument_Serif } from "next/font/google";
 import { signIn } from "next-auth/react";
-import { isRoleView } from "@/lib/hiring/role-views";
+import { isRoleView, nickname } from "@/lib/hiring/role-views";
+import { headName } from "@/lib/hiring/run-sheet";
 import { GOOGLE_FREEBUSY_SCOPE, GOOGLE_SCOPES, type HiringConfig, type Stage, type Subject } from "@/lib/hiring/model";
 import { assessmentRows } from "@/lib/hiring/assessment-view";
 import { buildInsights, readyToInvite } from "@/lib/hiring/insights";
@@ -44,6 +45,10 @@ const serif = Instrument_Serif({
 
 export type HiringData = Awaited<ReturnType<typeof dashboard>> & {
   reviewAccess?: { hr: boolean; gift: boolean };
+  /** The head who is signed in, so /hiring opens on their own Heads screen. Null for other staff. */
+  viewerHead?: string | null;
+  /** The head who gives the final sign-off (Gift). Their Heads screen lists the final reviews too. */
+  finalReviewer?: string | null;
   google: { connected: boolean; email: string; lastError: string | null; callCalendar: "readable" | "reconnect" | "unreadable" };
 };
 export type HiringCandidate = HiringData["candidates"][number];
@@ -117,7 +122,8 @@ function subscribeToReviewLink(change: () => void) {
   };
 }
 
-export function HiringDashboard() {
+/** `head`: the signed-in head, known before the data loads, so a head never sees the full dashboard first. */
+export function HiringDashboard({ head = null }: { head?: string | null } = {}) {
   const [data, setData] = useState<HiringData | null>(null);
   const [config, setConfig] = useState<HiringConfig | null>(null);
   const [configRevision, setConfigRevision] = useState(0);
@@ -140,7 +146,8 @@ export function HiringDashboard() {
   const reviewLink = param === "hr" && hash ? /^#review-(.+)$/.exec(hash)?.[1] : undefined;
   const giftOnly = !!data?.reviewAccess?.gift && !data.reviewAccess.hr;
   const linkedReview = data?.reviewAccess?.gift ? reviewLink : undefined;
-  const view: HiringView = giftOnly && linkedReview ? "review" : param && Object.hasOwn(VIEWS, param) ? (param as HiringView) : "overview";
+  // Gift's review email link opens her Heads screen with that review open, when she is a head; else the review screen.
+  const view: HiringView = giftOnly && linkedReview ? ((data?.viewerHead ?? head) ? "heads" : "review") : param && Object.hasOwn(VIEWS, param) ? (param as HiringView) : (data?.viewerHead ?? head) ? "heads" : "overview";
   const giftReview = view === "review" && giftOnly;
   const loaded = !!data;
   // Next.js keeps useSearchParams in step with pushState, and this does not reload the page.
@@ -358,7 +365,7 @@ export function HiringDashboard() {
           {/* Always one line, so the tabs below do not move down when the data arrives. */}
           {!giftReview && <p className={role ? css.subtitle : `${css.subtitle} ${css.statusSubtitle}`}>
             {role ? (
-              VIEWS[view]
+              view === "heads" && data?.viewerHead ? nickname(headName(data.viewerHead, data.tutors)) : VIEWS[view]
             ) : data ? (
               <>
                 SEEK {campaignNames(data.config.seekJobs)} · Threshold {data.config.profileThreshold}/100 ·
@@ -447,7 +454,7 @@ export function HiringDashboard() {
             Check the hiring setup and reload this page.
           </p>
         ) : (
-          <TabSkeleton label={`Loading hiring: ${VIEWS[view]}…`} hidden={view === "capacity"} />
+          <TabSkeleton label={view === "heads" ? "Loading your hiring list…" : `Loading hiring: ${VIEWS[view]}…`} hidden={view === "capacity"} />
         )
       ) : (
         <>
@@ -489,7 +496,7 @@ export function HiringDashboard() {
           setAssessmentVisit(id);
           setView("assessment", true);
         }} />}
-        {(view === "heads" || view === "mock") && <HeadsScreen data={data} />}
+        {(view === "heads" || view === "mock") && <HeadsScreen data={data} head={view === "heads" ? data.viewerHead : undefined} open={linkedReview} reload={() => load(true)} />}
         {(view === "review" || view === "offer") && (
           <HiringReviewScreen key={view} data={data} offers={view === "offer"} linkedReview={linkedReview} reload={() => load(true)} onOpenResults={(id) => {
             const rows = assessmentRows(data.bookings, data.papers, data.mocks).filter((row) => row.candidateId === id);

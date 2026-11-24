@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { after, NextResponse } from "next/server";
-import { requireHiringAdmin } from "@/lib/hiring/access";
+import { headKeyFor, requireHiringAdmin } from "@/lib/hiring/access";
 import { createFileIntent, finishFile } from "@/lib/hiring/assessment-files";
 import { cachedHiringCapacity } from "@/lib/hiring/capacity-cache";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
@@ -15,6 +15,7 @@ import { deliverBookingMessages, deliverOutbox } from "@/lib/hiring/worker";
 import { getDb } from "@/lib/db";
 import { finalReviewAccess } from "@/lib/hiring/final-review";
 import { googleConnectionStatus } from "@/lib/hiring/google";
+import { headKeys } from "@/lib/hiring/role-views";
 
 // A dashboard or head-schedule load can trigger a cold Wise index build.
 export const maxDuration = 120;
@@ -159,6 +160,10 @@ export async function GET(request: Request) {
       );
     }
     const data = await dashboard();
+    // A head opens /hiring on their own Heads screen (Kevin, 24 Nov 2026). The tutor-contact match is the one sign-in uses.
+    const heads = headKeys(data.config);
+    // Gift's Heads screen also lists the final reviews (Kevin, 24 Nov 2026), also when staff preview it.
+    const [viewerHead, finalReviewer] = await Promise.all([headKeyFor(actor, heads), headKeyFor(process.env.HIRING_FINAL_REVIEWER_EMAIL, heads)]);
     // The read of the people@ calendar that the call page uses (kept 60 seconds). A slow Google must not hold the
     // dashboard, so it gets 4 seconds here; the read itself goes on and the next load finds its answer.
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -170,6 +175,8 @@ export async function GET(request: Request) {
       {
         ...data,
         reviewAccess: finalReviewAccess(actor),
+        viewerHead,
+        finalReviewer,
         google: { ...(await googleConnectionStatus(data.config.connectedEmail)), callCalendar },
       },
       { headers: { "Cache-Control": "no-store" } },

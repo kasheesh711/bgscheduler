@@ -7,6 +7,21 @@
   margin: 0 auto;
   padding: 16px 12px 0;
 }
+.back {
+  /* Stays in view when the link opens at the scores or the recommendation. */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  justify-self: start;
+  padding-inline: 4px;
+  background: var(--paper);
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 .top,
 .panel {
   border: 1px solid var(--line);
@@ -367,7 +382,8 @@
     grid-column: 2;
   }
 }
-@media (min-width: 1100px) {
+/* 960: the brief also opens beside the head's list in Hiring, in a pane about 1,000px wide. */
+@media (min-width: 960px) {
   .wrap {
     padding: 16px 20px 0;
   }
@@ -396,4 +412,30 @@
     color: HighlightText;
     forced-color-adjust: none;
   }
+}
+
+/* Phone: every score and choice is a 44px target; the ten score steps sit in two rows of five (bands 1–2, then 3–4). */
+@media (max-width: 699px) {
+  .bar {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    row-gap: 6px;
+  }
+  .cell {
+    height: 44px;
+  }
+  .item,
+  .ticks label,
+  .choice,
+  .tab {
+    min-height: 44px;
+  }
+  .open {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}
+/* Inside the head's Hiring screen (embed=1): less top gutter. The background is in booking.module.css. */
+[data-bare] > .wrap {
+  padding-top: 8px;
 }

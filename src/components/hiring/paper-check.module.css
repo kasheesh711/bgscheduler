@@ -68,7 +68,8 @@
   min-width: 0;
 }
 
-@media (min-width: 1024px) {
+/* 900: the check also opens beside the head's list in Hiring, in a pane about 1,000px wide. */
+@media (min-width: 900px) {
   .split {
     grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);
     align-items: start;
@@ -83,4 +84,14 @@
   .paper > div {
     height: calc(100dvh - 80px);
   }
+}
+
+.submit {
+  position: sticky;
+  bottom: 0;
+  display: grid;
+  gap: 6px;
+  padding: 10px 0 12px;
+  background: var(--card, #fffdf8);
+  border-top: 1px solid var(--line, #e6decd);
 }

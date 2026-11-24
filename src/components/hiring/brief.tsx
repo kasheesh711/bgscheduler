@@ -15,11 +15,23 @@ type Brief = Awaited<ReturnType<typeof briefView>>;
 export type BriefPending = "scores" | "recommendation" | null;
 
 /** The brief has its own wide page. The booking pages keep the narrow card. */
-export const BriefShell = ({ children }: { children: ReactNode }) => (
-  <main className={c.page} data-brief="">
+export const BriefShell = ({ children, bare = false }: { children: ReactNode; bare?: boolean }) => (
+  <main className={c.page} data-brief="" data-bare={bare ? "" : undefined}>
     <div className={b.wrap}>{children}</div>
   </main>
 );
+
+/** From a LINE link to the head's whole list (Kevin, 24 Nov 2026). /hiring asks for a sign-in first. */
+export const ScheduleLink = () => (
+  <a className={b.back} href="/hiring?view=heads">
+    ← My hiring list
+  </a>
+);
+
+/** Inside the head's Hiring screen (a frame), a save tells the list beside it to reload. Same origin only. */
+export function tellHiringList() {
+  if (window.parent !== window) window.parent.postMessage({ type: "hiring-saved" }, window.location.origin);
+}
 
 export const BriefLoading = () => (
   <p role="status" className={c.note}>
@@ -66,7 +78,10 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
       <h2 className={decision ? "sr-only" : b.panelTitle}>Your recommendation</h2>
       <BriefDecision
         sent={decision}
-        onSent={setDecision}
+        onSent={(sent) => {
+          setDecision(sent);
+          tellHiringList();
+        }}
         url={decisionUrl}
         hasScores={lastSent !== null || brief.form === "closed"}
         unsent={unsent}
@@ -143,7 +158,10 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
                 pending={pending}
                 setPending={setPending}
                 onEdit={() => setEditCount((count) => count + 1)}
-                onSent={(total) => setLastSent({ total, max: RUBRIC_ITEMS.length * ITEM_MAX, editCount })}
+                onSent={(total) => {
+                  setLastSent({ total, max: RUBRIC_ITEMS.length * ITEM_MAX, editCount });
+                  tellHiringList();
+                }}
               />
             </section>
           )}
