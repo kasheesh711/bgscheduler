@@ -564,7 +564,7 @@ function ItemLink({ item, selected, onSelect, wide, readOnly, paneId }: { item: 
 }
 
 /** The right side: the real brief or paper check page, or the résumé when there is no page to open. */
-function ItemPane({ item, data, readOnly, reload }: { item: HeadItem; data: HiringData; readOnly: boolean; reload?: () => Promise<void> }) {
+function ItemPane({ item, data, readOnly, reload, onSigned }: { item: HeadItem; data: HiringData; readOnly: boolean; reload?: () => Promise<void>; onSigned?: (item: HeadItem) => void }) {
   // The paper-check link is signed again on every list load. Keep the first address, so a list refresh never reloads
   // the open page and loses marks the head is typing (code review, 24 Nov 2026). The pane is keyed by the row.
   const [src] = useState(() => (item.href ? embedded(item.href) : null));
@@ -579,7 +579,10 @@ function ItemPane({ item, data, readOnly, reload }: { item: HeadItem; data: Hiri
           <p className={`${r.meta} ${r.reviewWho}`}>{item.review.reason || "No reason given"}</p>
           {item.review.draftProblem && <p className={r.warn}>No email draft yet: {item.review.draftProblem}</p>}
           <FinalReview id={item.review.candidateId!} autoLoad hideHeading inline {...reviewBlocks(data.writeGate, data.config, item.review.candidateId!)}
-            onChanged={reload && (async () => reload())} />
+            onChanged={async (didSign) => {
+              if (didSign) onSigned?.(item);
+              await reload?.();
+            }} />
         </div>
       </div>
     );
@@ -635,6 +638,12 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   // Staff choose a head first; nothing opens in a head's name before that.
   const key = fixedHead ?? (chosen && heads.includes(chosen) ? chosen : null);
   const [picked, setPicked] = useState<string | null>(open ? `review-${open}` : null);
+  const [signedItems, setSignedItems] = useState<HeadItem[]>([]);
+  const keepSigned = (item: HeadItem) => {
+    setPicked(item.id);
+    setSignedItems((current) => [...current.filter((kept) => kept.id !== item.id),
+      { ...item, urgent: false, action: undefined, time: "Packet", day: "signed", tags: [{ text: "Signed", tone: "hire" }] }]);
+  };
   const choose = (value: string) => {
     setChosen(value);
     setPicked(null);
@@ -728,8 +737,10 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const actionVisits = ended.filter((visit) => visit.needsAction && !visit.checkingScores).map((visit) => visitItem(visit, today));
   const checking = ended.filter((visit) => visit.needsAction && visit.checkingScores).map((visit) => visitItem(visit, today));
   const nextItem = nextMock ? visitItem(nextMock, today, mockNow) : undefined;
+  // A signed review leaves the data on reload; keep its row, marked Signed, while it is still the open row.
+  const stillSigned = signedItems.filter((item) => item.id === picked && !reviews.some((review) => review.id === item.id));
   const groups = [
-    { title: "To do", items: [...checks, ...actionVisits, ...reviews.filter((item) => item.urgent)]
+    { title: "To do", items: [...checks, ...actionVisits, ...reviews.filter((item) => item.urgent), ...stillSigned]
       .sort((a, b) => Number(!!b.urgent) - Number(!!a.urgent)) },
     { title: mockNow ? "Mock now" : "Next mock", items: nextItem ? [nextItem] : [] },
     { title: "Coming up", items: coming.map((visit) => visitItem(visit, today)) },
@@ -770,7 +781,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
             onSelect={() => setPicked(!wide && picked === item.id ? null : item.id)} />
           {!wide && picked === item.id && (!item.href || readOnly) && (
             <div id={`${paneId}-${item.id}`} className={r.inlinePane} role="region" aria-label={item.name}>
-              <ItemPane item={item} data={data} readOnly={readOnly} reload={reload} />
+              <ItemPane item={item} data={data} readOnly={readOnly} reload={reload} onSigned={keepSigned} />
             </div>
           )}
         </li>
@@ -827,7 +838,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
       </Rail>
       {wide && (
         <section id="open-item" tabIndex={-1} className={r.pane} aria-label={selected ? `${selected.task}: ${selected.name}` : "Nothing open"}>
-          {selected ? <ItemPane key={selected.id} item={selected} data={data} readOnly={readOnly || (!fixedHead && !chosen)} reload={reload} />
+          {selected ? <ItemPane key={selected.id} item={selected} data={data} readOnly={readOnly || (!fixedHead && !chosen)} reload={reload} onSigned={keepSigned} />
             : null}
         </section>
       )}

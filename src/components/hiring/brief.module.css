@@ -633,3 +633,6 @@
 }
 .sliderNumbers { cursor: pointer; }
 .sliderNumbers [data-on] { color: var(--ink); font-weight: 700; }
+@media (min-width: 700px) {
+  [data-bare] .scale { display: grid; grid-template-columns: repeat(2, max-content); justify-content: space-between; }
+}

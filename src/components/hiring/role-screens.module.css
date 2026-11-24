@@ -155,3 +155,5 @@ details[open] > summary.groupTitle::after { content: "▾"; }
 .inlinePane .paneName { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .pane .reviewWho { display: none; }
 .itemAction + .itemNotes .itemNote::before { content: "· "; }
+/* The phone packet reader fills its full-screen dialog. */
+.paneFacts dialog iframe { height: 100%; }
