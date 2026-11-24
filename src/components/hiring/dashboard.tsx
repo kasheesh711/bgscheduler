@@ -199,7 +199,8 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
   // In demo mode a new step is a new payload.
   useEffect(() => {
     // One quiet retry before an error: a short outage then never shows (critic review, round 22).
-    load(true).catch(() => load(true)).catch((e) => setError(e.message));
+    // After a short wait, so a waking database or a cold start is covered too (critic review, round 23).
+    load(true).catch(() => new Promise((resolve) => setTimeout(resolve, 1500)).then(() => load(true))).catch((e) => setError(e.message));
   }, [demoStep]);
   const command: Command = async (body) => {
     setBusy(true);

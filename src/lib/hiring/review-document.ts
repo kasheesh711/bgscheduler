@@ -256,7 +256,7 @@ summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details 
 <p class="paper-detail num"><span>${escape(sheet.total)} / ${escape(sheet.max)}</span>${chip(sheet.result, levels.length > 1 ? "Level passed" : "Pass")}</p>
 ${paperTarget === null ? "" : `<p class="paper-detail meta">Pass mark ${escape(paperTarget)}%</p>`}</div>
 <div class="tile"><h3>Mock</h3>${gauge(mockTotals.percent, "%")}${mockTotals.max === 100 ? "" : `<p class="paper-detail num">${escape(mockTotals.total)} / ${escape(mockTotals.max)}</p>`}</div>
-<div class="tile head-tile"><h3>Head</h3><p><strong>Yes</strong> · ${escape(recommendation.head)}</p></div>
+<div class="tile head-tile"><h3>Head</h3><p><strong>Yes</strong> · ${escape(recommendation.head).replace(/ /g, "&nbsp;")}</p></div>
 </div><p class="guide"><span role="group" aria-label="Score guide">Strong ≥80 · Fair 60 to under 80 · Low &lt;60</span></p>${recommendation.reason ? `<p class="copy">${escape(recommendation.reason)}</p>` : ""}
 <div class="files"><a href="${escape(resume)}">Original résumé</a><a href="${escape(paper)}">Marked exam</a><a class="jump" href="#paper-results" target="_self">Paper results ↓</a><a class="jump" href="#mock-scores" target="_self">Mock scores ↓</a></div></section>
 <section><h2>${breakdown ? "ATS breakdown" : "Initial ATS assessment"}</h2>

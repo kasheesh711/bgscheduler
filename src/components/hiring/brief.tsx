@@ -202,7 +202,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
           {!blocked && (
             <section id="scores" className={b.panel} tabIndex={-1}>
               <h2 className={b.panelTitle}>Mock scores <span className={c.note}>· {RUBRIC_ITEMS.length} items</span></h2>
-              {!brief.mockEnded && brief.form !== "closed" && !decision && <p className={c.note}>Send scores during the mock.</p>}
+              {!brief.mockEnded && brief.form !== "closed" && !decision && !lastSent && <p className={c.note}>Send scores during the mock.</p>}
               <BriefRubric
                 key={serverRubric ?? "new"}
                 saved={brief.rubric}
