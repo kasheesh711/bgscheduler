@@ -29,7 +29,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   // A drag fills or clears the rectangle from the first cell to the cell under the pointer (as in When2meet), on top of
   // the week as it was when the drag began.
   const drag = useRef<{ fill: boolean; from: [number, number]; before: WeekHours } | null>(null);
-  const [focus, setFocus] = useState<[number, number]>([0, 0]);
+  const [focus, setFocus] = useState<[number, number]>([0, GRID_HOURS[0]]);
   const has = (week: WeekHours, d: number, h: number) => week[d].includes(h);
   function paint(cells: [number, number][], fill: boolean) {
     const next = current.current.map((hours, d) => {
