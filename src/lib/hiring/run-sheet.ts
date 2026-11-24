@@ -79,13 +79,16 @@ export function buildRunSheet({ bookings, candidates, config, library, tutors }:
   const visits = new Map<string, RunSheetBooking[]>();
   for (const b of bookings) {
     if (b.kind !== "paper" && b.kind !== "mock") continue;
-    const id = b.visitId ?? b.id;
+    // A two-day visit (Kevin, 24 Nov 2026) has its test and its mock on two dates: one row for each day, so the head and
+    // the office see the mock on its own day. The key ends with the date; a visit id holds no "|".
+    const id = `${b.visitId ?? b.id}|${localDate(at(b.startTime))}`;
     visits.set(id, [...(visits.get(id) ?? []), b]);
   }
   const ready = (kind: string, subject: string) =>
     library.find((f) => f.kind === kind && f.subject === subject && f.status === "ready");
   const rows: RunSheetRow[] = [];
-  for (const [visitId, all] of visits) {
+  for (const [key, all] of visits) {
+    const visitId = key.split("|")[0];
     // A visit with any confirmed part is confirmed; its cancelled parts are history.
     const confirmed = all.filter((b) => b.status === "confirmed");
     const parts = (confirmed.length ? confirmed : all).sort((a, b) => at(a.startTime).getTime() - at(b.startTime).getTime());
@@ -99,9 +102,11 @@ export function buildRunSheet({ bookings, candidates, config, library, tutors }:
 
     let hod: RunSheetHead | null = null;
     let hodReason: string | null = null;
-    if (mockRow?.interviewerKey) {
-      const key = mockRow.interviewerKey;
-      const email = config.interviewers.find((h) => h.canonicalKey === key)?.email ?? mockRow.interviewerEmail ?? null;
+    // The test day of a two-day visit names the head who is booked for its mock on the later day.
+    const headRow = mockRow ?? bookings.find((b) => b.kind === "mock" && b.status === "confirmed" && !!b.visitId && b.visitId === visitId);
+    if (headRow?.interviewerKey) {
+      const key = headRow.interviewerKey;
+      const email = config.interviewers.find((h) => h.canonicalKey === key)?.email ?? headRow.interviewerEmail ?? null;
       hod = { key, name: headName(key, tutors), email, source: "booked" };
     } else if (mockRow) hodReason = "Needs review: no head is booked for this mock";
     else if (!subject) hodReason = NO_SUBJECT;

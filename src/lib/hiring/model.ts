@@ -96,7 +96,9 @@ export type Subject = z.infer<typeof subjectSchema>;
 export type InterviewKind = "paper" | "mock";
 // `brief` is the interviewer's page for one mock booking: its id is a booking id, not a candidate id.
 // `call` is the candidate's link to book the HR pre-screen call.
-export const tokenKindSchema = z.enum(["paper", "mock", "visit", "paper-visit", "brief", "call", "contract", "onboarding"]);
+// `two-day` (Kevin, 24 Nov 2026) books the test (Monday to Sunday) and the final-round mock teaching on a later day
+// (Monday to Friday) together. `visit` (both on one day) and `paper-visit` (test only) are links sent before that.
+export const tokenKindSchema = z.enum(["paper", "mock", "visit", "paper-visit", "two-day", "brief", "call", "contract", "onboarding"]);
 /** A booking of the visit flows. A row of kind `call` belongs to the HR call list only. */
 export const isVisitBooking = <T extends { kind: string }>(row: T): row is T & { kind: InterviewKind } =>
   row.kind === "paper" || row.kind === "mock";
@@ -499,19 +501,21 @@ export function businessDates(
   now: Date,
   holidays: string[] = [],
   count = 5,
+  // The test (Kevin, 24 Nov 2026): a candidate with a full-time job can sit it on a Saturday or Sunday. The weekend
+  // days between the business dates are added; they do not use up the count.
+  weekends = false,
 ): string[] {
   const dates: string[] = [];
   // Today is excluded. Every candidate receives five complete future business dates.
   const cursor = new Date(`${localDate(now)}T12:00:00Z`);
-  for (let i = 0; dates.length < count && i < 400; i++) {
+  for (let i = 0, business = 0; business < count && i < 400; i++) {
     cursor.setUTCDate(cursor.getUTCDate() + 1);
     const date = cursor.toISOString().slice(0, 10);
-    if (
-      cursor.getUTCDay() !== 0 &&
-      cursor.getUTCDay() !== 6 &&
-      !holidays.includes(date)
-    )
-      dates.push(date);
+    if (holidays.includes(date)) continue;
+    const weekend = cursor.getUTCDay() === 0 || cursor.getUTCDay() === 6;
+    if (weekend && !weekends) continue;
+    dates.push(date);
+    if (!weekend) business++;
   }
   return dates;
 }
@@ -546,6 +550,8 @@ export const bookingSchema = z
 export const visitBookingSchema = z
   .object({
     start: z.iso.datetime(),
+    /** A "two-day" link: the mock teaching time, on a later day than the test at `start`. */
+    mockStart: z.iso.datetime().optional(),
     subject: subjectSchema,
     onsiteConfirmed: z.literal(true),
     teachingCommitmentConfirmed: z.literal(true),

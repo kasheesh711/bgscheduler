@@ -867,6 +867,48 @@ describe("hiring workflow persistence", () => {
       expect(notices).toHaveLength(1);
       expect(notices[0].notice).toBe("booked");
     });
+    it("a two-day link books the test (a Sunday too) and the mock teaching on a later weekday, and a counted fail cancels that mock", async () => {
+      // Kevin, 24 Nov 2026: the test, Monday to Sunday, then the final-round mock teaching, Monday to Friday, booked together.
+      const real = await vi.importActual<typeof import("../availability")>("../availability");
+      vi.mocked(availableSlots).mockImplementation((...args) => real.availableSlots(...args));
+      const sunday = { weekday: 0, startMinute: 540, endMinute: 1080, lastArrivalMinute: 959 };
+      await setVisit({ paperOfficeHours: [...base.paperOfficeHours, sunday] });
+      const row = await invited();
+      const twoDay = bookingToken(row.id, "two-day", row.inviteExpiresAt!);
+      const TEST_SUN = "2026-11-01T03:00:00.000Z";
+      const MOCK_MON = "2026-11-02T04:00:00.000Z";
+      const view = await visitView(twoDay, db);
+      expect(view.twoDay).toBe(true);
+      expect(view.slots.map((slot) => slot.examStart)).toContain(TEST_SUN);
+      // The mock teaching is on weekdays only, and the page gets no head's name.
+      expect(view.mockSlots.map((slot) => slot.start)).toContain(MOCK_MON);
+      expect(view.mockSlots.every((slot) => ![0, 6].includes(new Date(`${slot.date}T12:00:00Z`).getUTCDay()))).toBe(true);
+      expect(view.mockSlots[0]).not.toHaveProperty("interviewerKey");
+      await expect(bookVisit(twoDay, choice(TEST_SUN), db)).rejects.toThrow(/mock teaching time/);
+      // The mock teaching must be on a later day than the test.
+      await expect(bookVisit(twoDay, choice(EXAM, { mockStart: MOCK_MON }), db)).rejects.toThrow(/no longer available/);
+      await bookVisit(twoDay, choice(TEST_SUN, { mockStart: MOCK_MON }), db);
+      const [exam, mock] = await rowsOf(row.id);
+      expect([exam.kind, exam.startTime.toISOString(), exam.interviewerKey]).toEqual(["paper", TEST_SUN, null]);
+      expect([mock.kind, mock.startTime.toISOString(), mock.endTime.toISOString(), mock.interviewerKey]).toEqual(["mock", MOCK_MON, "2026-11-02T05:00:00.000Z", "Peat"]);
+      expect(mock.visitId).toBe(exam.visitId);
+      expect((await read(row.id)).stage).toBe("onsite_booked");
+      const email = (await jobsOf(row.id)).find((job) => job.key === `booking:${exam.id}:email`)!;
+      expect(String(email.payload.text)).toContain("Final round: mock teaching, if you pass");
+      expect(String(email.payload.text)).not.toContain("same day");
+      // A retry returns the same visit.
+      await bookVisit(twoDay, choice(TEST_SUN, { mockStart: MOCK_MON }), db);
+      expect(await rowsOf(row.id)).toHaveLength(2);
+      // The test is marked on Sunday afternoon: a counted fail cancels Monday's mock.
+      vi.setSystemTime(new Date("2026-11-01T08:00:00Z"));
+      await setVisit({ paperOfficeHours: [...base.paperOfficeHours, sunday], paperPassRules: [{ subject: "Mathematics", level: "IGCSE / GCSE", percent: 70 }] });
+      await db.insert(s.hiringPaperResults).values({ candidateId: row.id, subject: "Mathematics", source: "person", status: "done", marks: { comment: "", missingPages: null, questions: [
+        { id: "1", level: "IGCSE / GCSE" as const, attempted: true, readable: true, marks: 2, max: 10, reason: "Marked." },
+      ] } });
+      expect(await cancelMockAfterFail(db, row.id, "Mathematics", "staff@example.com")).toBe(true);
+      expect((await rowsOf(row.id)).map((b) => b.status)).toEqual(["confirmed", "cancelled"]);
+      vi.setSystemTime(now);
+    });
     it("a counted fail in the grading gap cancels the mock and tells the head; a pass, a missing pass mark, an unchecked result and an older result do not", async () => {
       const marks = (score: number) => ({ comment: "", missingPages: null, questions: [
         { id: "1", level: "IGCSE / GCSE" as const, attempted: true, readable: true, marks: score, max: 10, reason: "Marked." },
@@ -1654,10 +1696,14 @@ describe("hiring workflow persistence", () => {
       await setVisit({ onsiteLimits: { perWeek: 10, unbooked: 2, perHeadPerWeek: 2, perSubject: 2 } });
       vi.setSystemTime(new Date(now.getTime() + 3600000));
       await click(row.id, "send_new_link", [], "Candidate can come next week");
+      // A new link is a two-day link: the test, and the mock teaching on a later day.
+      const real = await vi.importActual<typeof import("../availability")>("../availability");
+      vi.mocked(availableSlots).mockImplementation((...args) => real.availableSlots(...args));
       const fresh = await newestLink(row.id);
-      await bookVisit(fresh, choice(), db);
+      await bookVisit(fresh, choice(EXAM, { mockStart: "2026-11-03T04:00:00.000Z" }), db);
       expect((await visitView(fresh, db)).canMove).toBe(true);
-      await bookVisit(fresh, choice(EXAM_TUE, { move: true }), db);
+      // The move changes the test and keeps a later mock.
+      await bookVisit(fresh, choice(EXAM_TUE, { move: true, mockStart: "2026-11-04T04:00:00.000Z" }), db);
       expect((await visitView(fresh, db)).canMove).toBe(false);
       expect((await db.select().from(s.hiringAudit)).find((a) => a.action === "send_new_link")!.detail).toMatchObject({ reason: "Candidate can come next week" });
       // The new link counts as a send.

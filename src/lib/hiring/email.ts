@@ -110,7 +110,13 @@ export function mockPrep(subject: string): { paragraphs: string[]; links: EmailR
   };
 }
 
-export const VISIT_LENGTH = "A 2-hour test. If you pass, a 1-hour mock teaching interview on the same day";
+export const VISIT_LENGTH = "A 2-hour test (Monday to Sunday). If you pass, a 1-hour final-round mock teaching interview on a later day (Monday to Friday)";
+/** A "two-day" visit (Kevin, 24 Nov 2026): the test first, then the final-round mock teaching on a later day. Both are booked together. */
+export const TWO_DAY_STEPS: CompanySection[] = [
+  { heading: "Day 1: the test", paragraphs: ["Please arrive 10 minutes early. The test is on paper and takes 2 hours. It is closed book: no notes and no phone."] },
+  { heading: "We grade your test", paragraphs: ["We tell you the result before your mock teaching day."] },
+  { heading: "Day 2, if you pass: final round mock teaching", paragraphs: ["A 1-hour mock teaching interview with the head of your subject. Prepare your lesson before the day. If you do not pass the test, we cancel this booking."] },
+];
 /** The visit day, in order (Kevin, 22 Nov 2026). The mock takes place only after a pass, on the same day. */
 export const VISIT_STEPS: CompanySection[] = [
   { heading: "Arrive at your booked time", paragraphs: ["Please arrive 10 minutes early."] },

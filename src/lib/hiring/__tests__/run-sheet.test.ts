@@ -58,6 +58,20 @@ const base: RunSheetInput = {
 };
 
 describe("buildRunSheet", () => {
+  it("gives a two-day visit one row on the test day and one on the mock day", () => {
+    // Kevin, 24 Nov 2026: the test on Sunday, the mock teaching on Monday. The head must see the mock on Monday.
+    const rows = buildRunSheet({
+      ...base,
+      bookings: [
+        booking({ id: "p", visitId: "v1", startTime: "2026-11-15T03:00:00.000Z" }),
+        booking({ id: "m", kind: "mock", visitId: "v1", interviewerKey: "Peat", startTime: "2026-11-16T04:00:00.000Z" }),
+      ],
+    });
+    expect(rows.map((row) => [row.visitId, row.date, row.paperStart, row.mockStart, row.hod?.key])).toEqual([
+      ["v1", "2026-11-15", "10:00", null, "Peat"],
+      ["v1", "2026-11-16", null, "11:00", "Peat"],
+    ]);
+  });
   it("groups a paper and mock into one visit and takes the booked head", () => {
     const rows = buildRunSheet({
       ...base,

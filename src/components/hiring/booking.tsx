@@ -216,6 +216,11 @@ export function VisitBooking({
   // The list reloads on its own, so a chosen time that has gone is no longer chosen.
   const slot = view.slots.find((s) => s.examStart === chosen);
   const start = slot?.examStart ?? "";
+  // A two-day link: the mock teaching is a second choice, on a later day than the chosen test. With no test chosen
+  // (also after a booking) no mock is chosen.
+  const [mockChosen, setMock] = useState("");
+  const laterMocks = slot ? view.mockSlots.filter((m) => m.date > slot.date) : [];
+  const mock = laterMocks.find((m) => m.start === mockChosen);
   async function book() {
     setBusy(true);
     setError("");
@@ -226,6 +231,7 @@ export function VisitBooking({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           start,
+          ...(view.twoDay ? { mockStart: mock?.start } : {}),
           subject: view.subject,
           onsiteConfirmed: onsite,
           teachingCommitmentConfirmed: commitment,
@@ -282,7 +288,11 @@ export function VisitBooking({
               Mock teaching<small>1 hour, if you pass</small>
             </span>
           </div>
-          <p className={c.note}>Your onsite visit is one day: the test, then the mock teaching interview if you pass.</p>
+          <p className={c.note}>
+            {view.twoDay
+              ? "You book two times together: the test first, then the final-round mock teaching interview on a later day."
+              : "Your onsite visit is one day: the test, then the mock teaching interview if you pass."}
+          </p>
         </div>
         <VisitNotice text={view.notice ?? ""} />
         {view.formUrl && (
@@ -309,7 +319,7 @@ export function VisitBooking({
           </span>
           {view.paired && <span>Mock teaching<small>1 hour</small></span>}
         </div>
-        <p className={c.note}>{view.paired ? "We grade your test in 5 to 10 minutes. If you pass, the mock teaching interview follows on the same day." : "We will contact you after we grade your paper."} All times are Bangkok time.</p>
+        <p className={c.note}>{view.twoDay ? "Choose a test time (Monday to Sunday) and a mock teaching time on a later day (Monday to Friday). The mock teaching takes place if you pass the test." : view.paired ? "We grade your test in 5 to 10 minutes. If you pass, the mock teaching interview follows on the same day." : "We will contact you after we grade your paper."} All times are Bangkok time.</p>
       </div>
       {view.visit && (
         <section>
@@ -336,6 +346,7 @@ export function VisitBooking({
               {view.visit.mockStart && view.visit.mockEnd && <div className={c.ticketRow}>
                 <span>Mock teaching with {view.visit.head}</span>
                 <strong>
+                  {view.twoDay && `${day(view.visit.mockStart)}, `}
                   {time(view.visit.mockStart)}–{time(view.visit.mockEnd)}
                 </strong>
               </div>}
@@ -364,7 +375,7 @@ export function VisitBooking({
       {showForm && (
         <>
           <Picker
-            legend={view.visit ? "Choose a new time" : "Choose a time"}
+            legend={view.twoDay ? "1. Choose your test time" : view.visit ? "Choose a new time" : "Choose a time"}
             checkedAt={view.checkedAt}
             items={view.slots}
             keyOf={(s) => s.examStart}
@@ -390,12 +401,35 @@ export function VisitBooking({
               </>
             )}
           />
+          {view.twoDay && slot && (
+            <Picker
+              legend="2. Choose your mock teaching time (a later day)"
+              checkedAt={null}
+              items={laterMocks}
+              keyOf={(m) => m.start}
+              selected={mock?.start ?? ""}
+              onSelect={(m) => setMock(m.start)}
+              tile={(m) => (
+                <>
+                  <span className={c.tileTime}>{time(m.start)}</span>
+                  <span className={c.tileLines}>
+                    <span className={c.tileLine}>
+                      <span>Mock teaching</span>
+                      <span>
+                        {time(m.start)}–{time(m.end)}
+                      </span>
+                    </span>
+                  </span>
+                </>
+              )}
+            />
+          )}
           <Checks onsite={onsite} commitment={commitment} setOnsite={setOnsite} setCommitment={setCommitment} />
           {keep}
           <VisitConfirm
             error={error}
-            disabled={busy || !start || !onsite || !commitment}
-            label={busy ? "Confirming…" : view.visit ? "Confirm new time" : "Confirm visit"}
+            disabled={busy || !start || (view.twoDay && !mock) || !onsite || !commitment}
+            label={busy ? "Confirming…" : view.twoDay ? "Confirm both times" : view.visit ? "Confirm new time" : "Confirm visit"}
             onConfirm={book}
             summary={
               slot && (
@@ -404,6 +438,14 @@ export function VisitBooking({
                   <b>
                     {time(slot.examStart)}–{time(slot.mockEnd ?? slot.examEnd)}
                   </b>
+                  {mock && (
+                    <>
+                      <span>{day(mock.start)}</span>
+                      <b>
+                        {time(mock.start)}–{time(mock.end)}
+                      </b>
+                    </>
+                  )}
                 </p>
               )
             }

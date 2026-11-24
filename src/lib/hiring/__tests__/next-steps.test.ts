@@ -71,31 +71,35 @@ describe("preScreenRows", () => {
 
 describe("preScreenEmail with a visit link (Next steps)", () => {
   const visit = "https://bgscheduler.vercel.app/hiring/book/visit-token";
-  it("gives the form and the visit link together, and says booking opens after the answers", () => {
+  it("gives the form and the booking link together, and says booking opens after the answers", () => {
     const email = preScreenEmail("Ann", "ann@example.com", false, visit);
     expect(email.subject).toBe("Next steps: your BeGifted pre-screening questions and onsite visit");
     for (const part of [email.text, email.html]) {
-      expect(part).toContain("Thank you for your time at R1: HR Interview");
       expect(part).toContain(PRE_SCREEN_URL);
       expect(part).toContain(visit);
       expect(part).toContain("which subject you want to be tested on");
       expect(part).toContain("When booking opens, we email you");
       expect(part).toContain("ann@example.com");
+      // Two-day visit (Kevin, 24 Nov 2026): the test first, the mock teaching on a later day. No HR interview.
+      expect(part).toContain("the test first, and the mock teaching on a later day");
+      expect(part).not.toContain("HR");
+      expect(part).not.toContain("same day");
     }
   });
-  it("shows the two steps as buttons, R1 as done and this step as the reader's place", () => {
+  it("shows the two steps as buttons, with no process strip that names the old HR interview", () => {
     const email = preScreenEmail("Ann", "ann@example.com", false, visit);
     expect(email.html).toContain(">Open the questionnaire</a>");
-    expect(email.html).toContain(">Book your onsite visit</a>");
-    expect(email.text).toContain("2. Pre-screening questions and visit booking (You are here)");
-    expect(email.html).toContain(">Done</p>");
+    expect(email.html).toContain(">Book your test and mock teaching</a>");
+    expect(email.text).not.toContain("You are here");
     expect(email.html).toContain("/brand/email/hiring/v1/hero-next-steps.jpg");
   });
-  it("does not thank the candidate for R1 when there was none", () => {
-    const email = preScreenEmail("Ann", "ann@example.com", false, visit, false);
-    expect(email.text).not.toContain("R1");
-    expect(email.subject).toBe("Next steps: your BeGifted pre-screening questions and onsite visit");
+  it("tells a candidate who held a link to the old HR interview that it is closed, and apologises", () => {
+    const email = preScreenEmail("Ann", "ann@example.com", false, visit, true);
+    for (const text of ["no longer available because of emergency circumstances", "there is no HR interview", "apologise for the inconvenience", "for your patience"])
+      expect(email.text).toContain(text);
     expect(email.text).toContain(visit);
+    // The reminder is about the answers only.
+    expect(preScreenEmail("Ann", "ann@example.com", true, visit, true).text).not.toContain("HR");
   });
   it("keeps the visit link in the reminder, and a form sent before this change keeps the old wording", () => {
     expect(preScreenEmail("Ann", "ann@example.com", true, visit).text).toContain(visit);

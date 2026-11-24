@@ -315,6 +315,11 @@ describe("hiring decision boundaries", () => {
     expect(englishLevel("Native", "")).toBe(5);
     expect(englishLevel("Native", "CEFR C2")).toBe(5);
   });
+  it("adds the weekend days for the test, and they do not use up the five business dates", () => {
+    // Saturday 31 Oct 2026, 06:00 Bangkok.
+    const dates = businessDates(new Date("2026-10-30T23:00:00Z"), ["2026-11-03"], 5, true);
+    expect(dates).toEqual(["2026-11-01", "2026-11-02", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08", "2026-11-09"]);
+  });
   it("returns the next five whole Bangkok business days and respects closures", () => {
     expect(businessDates(new Date("2026-10-30T23:00:00Z"))).toEqual([
       "2026-11-02",
