@@ -114,7 +114,8 @@ describe("dashboard reads", () => {
     expect(onsite).toBeDefined();
     expect(onsite).not.toMatch(/"profile_text"|"profile_assessment"/);
     // Only people first seen in the funnel window count, so older audit rows are not read.
-    expect(log.find((q) => q.includes('from "hiring_audit" where') && q.includes('"action" in'))).toMatch(/"created_at" >= \$\d+/);
+    // (The paper-check read also filters by action, with a row limit instead of a window.)
+    expect(log.some((q) => q.includes('from "hiring_audit" where') && q.includes('"action" in') && /"created_at" >= \$\d+/.test(q))).toBe(true);
     // Wave 1 holds every read; visitClashes may add one more. Before the change it was about 17.
     expect(waves()).toBeLessThanOrEqual(2);
   });

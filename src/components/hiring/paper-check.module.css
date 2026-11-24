@@ -1,0 +1,86 @@
+.questions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.question {
+  border: 1px solid var(--border, #e5e2dc);
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.label {
+  font-weight: 600;
+}
+
+.level,
+.max,
+.reason {
+  color: var(--muted-foreground, #6b6760);
+  font-size: 0.875rem;
+}
+
+.reason {
+  margin: 0;
+}
+
+.markRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mark {
+  width: 6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.total {
+  margin: 0.75rem 0;
+  font-size: 1.05rem;
+}
+
+/* The paper and the marks. Stacked on a phone; side by side from 1024px, the paper fixed while the marks scroll. */
+.split {
+  display: grid;
+  gap: 24px;
+}
+
+.paper {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.marks {
+  min-width: 0;
+}
+
+@media (min-width: 1024px) {
+  .split {
+    grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);
+    align-items: start;
+  }
+
+  .paper {
+    position: sticky;
+    top: 12px;
+  }
+
+  /* The page box of PdfPages: as tall as the window allows. */
+  .paper > div {
+    height: calc(100dvh - 80px);
+  }
+}

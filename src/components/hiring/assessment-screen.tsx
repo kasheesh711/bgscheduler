@@ -48,11 +48,19 @@ const byCandidate = <T extends { candidateId: string }>(rows: T[]) => {
 };
 
 /** One line for a table cell: the result, or what is happening to it. */
-export function paperCell(paper: Paper, config: HiringData["config"]) {
+type PaperCheck = HiringData["paperChecks"][number];
+/** The check of this result: open, or done with the head's answer. */
+export const checkOf = (paper: Pick<Paper, "id">, checks: HiringData["paperChecks"]) => checks.find((check) => check.resultId === paper.id);
+const checkWords = (check: PaperCheck) => check.done
+  ? `${check.done.head}'s check: ${check.done.percent}%, ${check.done.passed ? "pass" : "not passed"}`
+  : `with ${check.headLabel ?? "a head"} for a check`;
+
+export function paperCell(paper: Paper, config: HiringData["config"], checks: HiringData["paperChecks"] = []) {
   if (paper.history) return `${paper.subject}: ${paper.history.outcome || "Recorded"}`;
   if (paper.status !== "done" || !paper.marks) return `${paper.subject}: ${STATUS[paper.status].label}`;
   const sheet = computeSheet(paper.marks, passRulesFor(config, paper.subject));
-  return `${paper.subject}: ${sheet.max ? Math.round((sheet.total / sheet.max) * 100) : 0}% · ${sheet.canTeachUpTo}`;
+  const check = checkOf(paper, checks);
+  return `${paper.subject}: ${sheet.max ? Math.round((sheet.total / sheet.max) * 100) : 0}% · ${sheet.canTeachUpTo}${check ? ` · ${checkWords(check)}` : ""}`;
 }
 export function mockCell(mock: Mock) {
   if (mock.history) return mock.history.score === null ? mock.history.outcome || "Recorded" : `${mock.history.score} / 100`;
@@ -239,7 +247,7 @@ function MarksEditor({ paper, command, busy, onDone }: { paper: Paper; command: 
   );
 }
 
-export function PaperSheetView({ paper, taken = [], config, command, reload, busy }: { paper: Paper; taken?: string[]; config: HiringData["config"]; command: Command; reload: Reload; busy: boolean }) {
+export function PaperSheetView({ paper, taken = [], config, command, reload, busy, check }: { paper: Paper; taken?: string[]; config: HiringData["config"]; command: Command; reload: Reload; busy: boolean; check?: PaperCheck }) {
   const stuck = paper.stuck;
   const sheet = paper.marks ? computeSheet(paper.marks, passRulesFor(config, paper.subject)) : null;
   const [editing, setEditing] = useState(false);
@@ -297,6 +305,19 @@ export function PaperSheetView({ paper, taken = [], config, command, reload, bus
         <p className={css.warnWord}>Marked without a mark scheme, from the AI&apos;s own subject knowledge.</p>
       )}
       {paper.marks?.missingPages && <p className={css.warnWord}>Missing pages: {paper.marks.missingPages}</p>}
+      {check && (
+        <p className={check.done ? css.inspectorNote : css.warnWord} data-paper-check="">
+          {check.done ? (
+            <>{checkWords(check)}. {check.done.passed ? "The candidate goes on to mock teaching." : "The rejection email was queued."}</>
+          ) : (
+            <>
+              AI score {check.percent}%: sent to {check.headLabel ?? "no head (none covers this subject)"} for a check
+              {check.line ? " in LINE" : ". No LINE group is set up, so send the link yourself"}. The mock stays booked until the check is in.{" "}
+              {check.path && <a className={css.inlineLink} href={check.path} target="_blank" rel="noopener noreferrer">Open the check page</a>}
+            </>
+          )}
+        </p>
+      )}
       {sheet && paper.marks && (
         <>
           <table className={css.sheetTable}>
@@ -781,7 +802,7 @@ function AssessmentPanel({
       <div className={css.inspectorBody}>
         {!papers.length && <p className={css.inspectorText}>No paper result yet.</p>}
         {papers.map((paper) => (
-          <PaperSheetView key={paper.id} paper={paper} taken={papers.filter((other) => other.id !== paper.id && other.source !== "tracker").map((other) => other.subject)} config={data.config} command={command} reload={reload} busy={busy} />
+          <PaperSheetView key={paper.id} paper={paper} taken={papers.filter((other) => other.id !== paper.id && other.source !== "tracker").map((other) => other.subject)} config={data.config} command={command} reload={reload} busy={busy} check={checkOf(paper, data.paperChecks)} />
         ))}
         {candidate.stage === "onsite_booked" && papers.some((paper) =>
           paper.subject === row.subject && paper.status === "done" && paper.fileId && paper.marks &&
@@ -941,7 +962,7 @@ export function AssessmentScreen({
                         <td className={css.fitCell} title={row.headKey ? (heads.get(row.headKey) ?? row.headKey) : undefined}>{row.headKey ? (heads.get(row.headKey) ?? row.headKey) : "–"}</td>
                         <td className={`${css.preCell} ${css.wrapCell}`}>
                           {rowPapers.length ? (
-                            rowPapers.map((paper) => <span key={paper.id} className={css.pillNote}>{paperCell(paper, data.config)}</span>)
+                            rowPapers.map((paper) => <span key={paper.id} className={css.pillNote}>{paperCell(paper, data.config, data.paperChecks)}</span>)
                           ) : row.kinds.includes("paper") && row.subject ? (
                             <>
                               <PrintPaper library={data.library} subject={row.subject} />

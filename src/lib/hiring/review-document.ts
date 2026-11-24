@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { ITEM_MAX, RUBRIC, rubricItems, rubricTotals, type LevelResult } from "./marking-sheet";
 import { STRESS_ELEMENTS } from "./rubric-guide";
 import type { ReviewPacket } from "./final-review";
-import { VALUE } from "./scoring";
+import { PROFILE_CRITERIA, VALUE } from "./scoring";
 
 const escape = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (char) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
@@ -14,7 +14,7 @@ const percent = (value: number) => Math.min(100, Math.max(0, value));
 const chip = (result: LevelResult, passLabel = "Pass") => `<span class="chip ${result === "passed" ? "pass" : result === "not_passed" ? "below" : ""}">${{
   passed: passLabel, not_passed: "Below pass", pass_mark_missing: "No pass mark", not_done: "Not done",
 }[result]}</span>`;
-const criterionNames = { degree: "Degree", subject: "Subject", curriculum: "Curriculum", teaching: "Teaching", english: "English" };
+const criterionNames = PROFILE_CRITERIA;
 const criterionResults = { met: "Met", partial: "Partly", not_met: "Not met", unknown: "Unknown" };
 const stackColors = ["#2a78d6", "#eb6834", "#199e70", "#c98400", "#d96a97", "#008300"];
 

@@ -1,0 +1,148 @@
+"use client";
+
+import { useState } from "react";
+import type { paperCheckView } from "@/lib/hiring/paper-check";
+import { PdfPages } from "./pdf-pages";
+import c from "./booking.module.css";
+import k from "./paper-check.module.css";
+
+type View = Awaited<ReturnType<typeof paperCheckView>>;
+type Outcome = "passed" | "rejected" | "held" | "none" | "check";
+
+/** The best level's percent, the same rule the server uses: one passed level is a pass. */
+function bestPercent(questions: View["questions"], marks: Record<string, string>) {
+  const levels = new Map<string, { scored: number; max: number; tried: boolean }>();
+  for (const q of questions) {
+    const level = levels.get(q.level) ?? { scored: 0, max: 0, tried: false };
+    const value = Number(marks[q.id]);
+    levels.set(q.level, { scored: level.scored + (Number.isFinite(value) ? value : 0), max: level.max + q.max, tried: level.tried || marks[q.id] !== "" });
+  }
+  return Math.max(0, ...[...levels.values()].filter((l) => l.tried && l.max > 0).map((l) => (l.scored / l.max) * 100));
+}
+
+const RESULT: Record<Outcome, string> = {
+  passed: "Pass. The candidate goes on to mock teaching. Admin is told in LINE.",
+  rejected: "Not passed. The rejection email is on its way to the candidate.",
+  held: "Not passed. Admin sends the result, because the candidate has another open step.",
+  none: "Your marks are saved.",
+  check: "Your marks are saved.",
+};
+
+/** The head's page: the marked paper, the AI's marks, and one mark for each question. Built for a phone. */
+export function PaperCheck({ view, token }: { view: View; token: string }) {
+  const [marks, setMarks] = useState<Record<string, string>>(() => Object.fromEntries(view.questions.map((q) => [q.id, q.marks === null ? "" : String(q.marks)])));
+  const [comment, setComment] = useState(view.comment);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const bad = view.questions.filter((q) => {
+    const value = Number(marks[q.id]);
+    return marks[q.id] === "" || !Number.isFinite(value) || value < 0 || value > q.max;
+  });
+  const percent = Math.round(bestPercent(view.questions, marks) * 10) / 10;
+  const passes = view.passMark !== null && percent >= view.passMark;
+
+  async function send() {
+    setPending(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/hiring/paper-check/${token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ updatedAt: view.updatedAt, comment, marks: Object.fromEntries(view.questions.map((q) => [q.id, Number(marks[q.id])])) }),
+      });
+      const body = (await response.json().catch(() => ({}))) as { error?: string; outcome?: Outcome };
+      if (response.ok && body.outcome) setOutcome(body.outcome);
+      else setError(body.error ?? "Your marks were not saved. Try again.");
+    } catch {
+      setError("Your marks were not saved. Check your connection, then try again.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  const header = (
+    <section className={c.facts}>
+      <h2 className={c.subject}>{view.name}</h2>
+      <dl className={`${c.answers} ${c.briefDetails}`}>
+        <div><dt className={c.factLabel}>Subject</dt><dd>{view.subject}</dd></div>
+        <div><dt className={c.factLabel}>AI score</dt><dd>{view.aiPercent}%{view.passMark !== null && ` (pass mark ${view.passMark}%)`}</dd></div>
+        <div><dt className={c.factLabel}>Mock teaching</dt><dd>{view.mock ?? "Not booked yet"}</dd></div>
+      </dl>
+      <a className={`${c.ghost} ${c.jumpLink}`} href={`/api/hiring/paper-check/${token}/paper`} target="_blank" rel="noreferrer">Open the marked paper in a new tab</a>
+      <p className={c.note}>Personal data. Do not share.</p>
+    </section>
+  );
+
+  if (outcome || view.done)
+    return (
+      <>
+        {header}
+        <p role="status" className={outcome === "rejected" || view.done?.passed === false ? c.notice : c.success}>
+          {outcome ? RESULT[outcome] : `${view.done!.head}'s check is recorded: ${view.done!.percent}%, ${view.done!.passed ? "pass" : "not passed"}.`}
+        </p>
+      </>
+    );
+  if (!view.open)
+    return (
+      <>
+        {header}
+        <p role="status" className={c.note}>This paper no longer needs a check. Admin changed the marks or closed the application.</p>
+      </>
+    );
+  return (
+    <>
+      {header}
+      <div className={k.split}>
+      {/* The paper beside the marks on a wide screen, above them on a phone. Drawn on the page: a PDF frame is blank on Safari and phones. */}
+      <section className={k.paper} aria-label="Marked paper">
+        <h2 className={c.stepTitle}>Marked paper</h2>
+        <PdfPages src={`/api/hiring/paper-check/${token}/paper`} runtime={`/api/hiring/paper-check/${token}/runtime`} title={`Marked paper of ${view.name}`} maxPages={40} />
+      </section>
+      <section className={`${c.facts} ${k.marks}`}>
+        <h2 className={c.stepTitle}>Your marks</h2>
+        <p className={c.note}>The AI marked this paper just below the pass mark. Read the marked paper, then give your mark for each question. Your marks are final.</p>
+        <ol className={k.questions}>
+          {view.questions.map((q) => (
+            <li key={q.id} className={k.question}>
+              <div className={k.head}>
+                <label htmlFor={`q-${q.id}`} className={k.label}>Question {q.id}</label>
+                <span className={k.level}>{q.level}</span>
+              </div>
+              {q.reason && <p className={k.reason}>AI: {q.reason}</p>}
+              <div className={k.markRow}>
+                <input
+                  id={`q-${q.id}`}
+                  className={`${c.input} ${k.mark}`}
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  max={q.max}
+                  step={0.5}
+                  value={marks[q.id]}
+                  aria-invalid={bad.includes(q) || undefined}
+                  onChange={(event) => setMarks({ ...marks, [q.id]: event.target.value })}
+                />
+                <span className={k.max}>of {q.max}{q.marks !== null && q.marks !== Number(marks[q.id]) ? ` · AI gave ${q.marks}` : ""}</span>
+              </div>
+            </li>
+          ))}
+        </ol>
+        <label className={c.field}>
+          <span>Comment (optional)</span>
+          <textarea className={c.input} rows={3} maxLength={4000} value={comment} onChange={(event) => setComment(event.target.value)} />
+        </label>
+        <p className={k.total} role="status">
+          Your score: <strong>{percent}%</strong>
+          {view.passMark !== null && <> — {passes ? "pass: goes on to mock teaching" : "not passed: the candidate gets the rejection email"}</>}
+        </p>
+        {bad.length > 0 && <p className={c.note}>Give a mark from 0 to the maximum for question {bad.map((q) => q.id).join(", ")}.</p>}
+        <button type="button" className={c.button} disabled={pending || bad.length > 0} onClick={() => void send()}>
+          {pending ? "Saving…" : "Submit my marks"}
+        </button>
+        {error && <p role="alert" className={c.alert}>{error}</p>}
+      </section>
+      </div>
+    </>
+  );
+}

@@ -1,7 +1,8 @@
 import { and, asc, eq, gte, lt, lte, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
-import { hiringBookings as bookings, hiringCandidates as candidates, hiringOutbox as outbox, hiringRecruitmentDeliveries as deliveries, hiringSettings } from "@/lib/db/schema";
+import { hiringBookings as bookings, hiringCandidates as candidates, hiringOutbox as outbox, hiringRecruitmentDeliveries as deliveries, hiringSettings, progressLineGroups } from "@/lib/db/schema";
+import { progressUsesTutorBot } from "@/lib/line/progress-reminders";
 import { fetchLineGroupSummary, pushLineTextMessage, replyLineMessage, LinePushError } from "@/lib/line/client";
 import { isScheduleBotAdmin } from "@/lib/line/schedule-bot";
 import { mentionedTheaText } from "@/lib/line/thea-query";
@@ -53,7 +54,7 @@ export async function receiveRecruitmentSetup(db: Database, raw: unknown): Promi
   return true;
 }
 
-async function enqueue(db: Database, key: string, groupId: string, text: string, bookingId: string | null, notice: string) {
+export async function enqueueRecruitmentLine(db: Database, key: string, groupId: string, text: string, bookingId: string | null, notice: string) {
   await db.insert(deliveries).values(recruitmentParts(text).map((message, index) => ({
     key: `${key}:${String(index).padStart(4, "0")}`, groupId, message, bookingId, notice,
   }))).onConflictDoNothing({ target: deliveries.key });
@@ -70,21 +71,21 @@ export async function queueRecruitmentMock(db: Database, booking: typeof booking
   if (!candidate) throw new Error(`The ${booking.kind} candidate is missing.`);
   const time = `${when(booking.startTime)}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: ZONE, hour: "2-digit", minute: "2-digit" })} (Bangkok)`;
   if (booking.kind === "call") {
-    await enqueue(db, `call:${booking.id}:${notice}`, config.recruitmentLineGroupId,
+    await enqueueRecruitmentLine(db, `call:${booking.id}:${notice}`, config.recruitmentLineGroupId,
       `R1: HR Interview ${notice} (Google Meet)\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nTime: ${time}${movedFrom ? `\nPrevious time: ${when(movedFrom)} (cancelled)` : ""}\nRésumé: ${
         storedResume(booking.candidateId, candidate.resumePath, candidate.resumeType) ? callResumeLink(booking) : "No file stored. See the Hiring page."}`,
       booking.id, notice);
     return;
   }
   const text = `Mock teaching ${notice}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nInterviewer: ${booking.interviewerKey ?? "To be confirmed"}\nTime: ${time}\nPlace: ${config.location}${movedFrom ? `\nPrevious time: ${when(movedFrom)} (cancelled)` : ""}`;
-  await enqueue(db, `mock:${booking.id}:${notice}`, config.recruitmentLineGroupId, text, booking.id, notice);
+  await enqueueRecruitmentLine(db, `mock:${booking.id}:${notice}`, config.recruitmentLineGroupId, text, booking.id, notice);
 }
 
 /** A head's decision after a mock. HR prepares the review for a Yes recommendation. One notice for each recorded decision. */
 export async function queueRecruitmentHeadDecision(db: Database, candidate: { id: string; name: string }, input: { decision: "hire" | "reject"; reason: string; head: string; subject: string | null; key: string }) {
   const { config } = await settings(db);
   if (!config.recruitmentLineGroupId) return;
-  await enqueue(db, `head-decision:${input.key}`, config.recruitmentLineGroupId,
+  await enqueueRecruitmentLine(db, `head-decision:${input.key}`, config.recruitmentLineGroupId,
     `Head decision: ${input.decision === "hire" ? "HIRE" : "DO NOT HIRE"}\nCandidate: ${candidate.name} — ${input.subject ?? "Subject not recorded"}\nHead: ${input.head}\nReason: ${input.reason || "None given"}\n${input.decision === "hire" ? "Kevin: add the assessment and send the packet to Gift." : "The rejection email is queued."}`,
     null, "head_decision");
 }
@@ -93,7 +94,7 @@ export async function queueRecruitmentHeadDecision(db: Database, candidate: { id
 export async function queueRecruitmentForm(db: Database, candidate: Pick<typeof candidates.$inferSelect, "id" | "name" | "email" | "phone" | "subjects">, submittedAt: Date) {
   const { config } = await settings(db);
   if (!config.recruitmentLineGroupId) return;
-  await enqueue(db, `form-completed:${candidate.id}`, config.recruitmentLineGroupId,
+  await enqueueRecruitmentLine(db, `form-completed:${candidate.id}`, config.recruitmentLineGroupId,
     `Form completed\n${candidate.name} — ${candidate.subjects.join(", ") || "Subject not recorded"}\n${contactLines(candidate)}\n${when(submittedAt)} (Bangkok)`, null, "form_completed");
 }
 
@@ -106,7 +107,7 @@ export async function queueRecruitmentInvitation(db: Database, job: Pick<typeof 
   if (!config.recruitmentLineGroupId) return;
   const subject = job.payload.workflowStage === "paper_passed" ? candidate.paperPassedSubjects.join(", ")
     : candidate.visitSubject ?? candidate.subjects.join(", ");
-  await enqueue(db, `invite-sent:${job.id}`, config.recruitmentLineGroupId,
+  await enqueueRecruitmentLine(db, `invite-sent:${job.id}`, config.recruitmentLineGroupId,
     `${job.payload.workflowStage === "paper_passed" ? "Mock teaching invite sent" : "Paper assessment invite sent"}\n${candidate.name} — ${subject || "Subject not recorded"}\n${contactLines(candidate)}\n${when(sentAt)} (Bangkok)`, null, "invite_sent");
 }
 
@@ -139,7 +140,7 @@ export async function queueRecruitmentWeekly(db: Database, now = new Date()) {
     const sentLines = sent.filter(row => { if (seen.has(row.id)) return false; seen.add(row.id); return true; })
       .map(row => `${row.name} — ${row.subjects[0] ?? "Subject not recorded"} — sent ${when(row.sentAt!)}`);
     const mockLines = mocks.map(({ name, booking: b }) => `${name} — ${b.subjects.join(", ")} — ${b.interviewerKey ?? "To be confirmed"} — ${when(b.startTime)}–${b.endTime.toLocaleTimeString("en-GB", { timeZone: ZONE, hour: "2-digit", minute: "2-digit" })}`);
-    await enqueue(tx, key, config.recruitmentLineGroupId,
+    await enqueueRecruitmentLine(tx, key, config.recruitmentLineGroupId,
       `Recruitment summary — week of ${week.date} (Bangkok)\n\nPre-screen invitations sent in the previous week (${sentLines.length})\n${sentLines.join("\n") || "None"}\n\nMocks this week (${mockLines.length})\n${mockLines.join("\n") || "None"}`, null, "weekly");
     return true;
   });
@@ -168,7 +169,7 @@ export async function queueRecruitmentDailyCalls(db: Database, now = new Date())
     if (!calls.length) return false;
     const lines = calls.map((call) => `${call.start.toLocaleTimeString("en-GB", { timeZone: ZONE, hour: "2-digit", minute: "2-digit" })} ${call.name}`);
     const url = new URL("/hiring?view=hr", process.env.APP_BASE_URL || "https://bgscheduler.vercel.app");
-    await enqueue(tx, key, config.recruitmentLineGroupId,
+    await enqueueRecruitmentLine(tx, key, config.recruitmentLineGroupId,
       `Today’s HR calls · ${date} (Bangkok)\n\n${lines.join("\n")}\n\nOpen today’s calls\n${url}`, null, "daily-calls");
     return true;
   });
@@ -177,7 +178,8 @@ export async function queueRecruitmentDailyCalls(db: Database, now = new Date())
 export async function deliverRecruitment(db: Database, now = new Date()) {
   if (!runtimeWritesAllowed()) return 0;
   const { config } = await settings(db);
-  if (!config.enabled || !config.deliveryEnabled || !config.recruitmentLineGroupId) return 0;
+  // No recruitment group is not a stop: a paper check goes to the head's own group.
+  if (!config.enabled || !config.deliveryEnabled) return 0;
   // Expired leases retain their retry key. LINE only remembers retry keys for 24 hours.
   await db.update(deliveries).set({ status: "retry", leaseUntil: null })
     .where(and(eq(deliveries.status, "sending"), lte(deliveries.leaseUntil, now)));
@@ -196,14 +198,19 @@ export async function deliverRecruitment(db: Database, now = new Date()) {
       }
       const [booking] = row.bookingId ? await db.select().from(bookings).where(eq(bookings.id, row.bookingId)) : [];
       const expiredDigest = row.notice === "daily-calls" && !row.key.startsWith(`daily-calls:${localDate(now)}:`);
-      const obsolete = expiredDigest || row.groupId !== latest.recruitmentLineGroupId || (row.bookingId && (!booking ||
+      // A paper check goes to the head's own tutor group, so only a group switched off makes it obsolete.
+      const [headGroup] = row.notice === "paper_check"
+        ? await db.select().from(progressLineGroups).where(and(eq(progressLineGroups.groupId, row.groupId), eq(progressLineGroups.enabled, true)))
+        : [];
+      const wrongGroup = row.notice === "paper_check" ? !headGroup : row.groupId !== latest.recruitmentLineGroupId;
+      const obsolete = expiredDigest || wrongGroup || (row.bookingId && (!booking ||
         (row.notice !== "cancelled" && (booking.status !== "confirmed" || booking.endTime <= now))));
       if (obsolete || (row.firstAttemptAt && now.getTime() - row.firstAttemptAt.getTime() >= 23 * 3600000)) {
         await db.update(deliveries).set({ status: obsolete && !(expiredDigest && row.firstAttemptAt) ? "cancelled" : "uncertain", leaseUntil: null,
           error: expiredDigest ? "The date of the call digest passed." : obsolete ? "The booking or recruitment group changed." : "Retry window expired. Check delivery before resending." }).where(eq(deliveries.id, row.id));
         continue;
       }
-      const receipt = await pushLineTextMessage({ to: row.groupId, text: row.message, retryKey: row.id, tutorBot: true, signal: AbortSignal.timeout(20000) });
+      const receipt = await pushLineTextMessage({ to: row.groupId, text: row.message, retryKey: row.id, tutorBot: headGroup ? progressUsesTutorBot(headGroup.canonicalKey, headGroup.tutorBot) : true, signal: AbortSignal.timeout(20000) });
       await db.update(deliveries).set({ status: "sent", receipt: { ...receipt }, sentAt: new Date(), leaseUntil: null, error: null }).where(eq(deliveries.id, row.id));
       sent++;
     } catch (error) {

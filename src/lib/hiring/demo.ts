@@ -255,6 +255,7 @@ export function demoPayload(now = new Date()) {
       ...other.headDecisions,
     ],
     briefPaths: booked ? { [MOCK_ID]: DEMO_BRIEF_PATH } : {},
+    paperChecks: [],
     visitClashes: { candidateIds: [], stale: false, clashes: {} },
     outbox, inviteOutbox: outbox, audit: [],
     funnelEvents: [
@@ -292,6 +293,7 @@ export function demoBrief(now = new Date()) {
     exam: `${day}, ${clock(paperStart)}–${clock(new Date(paperStart.getTime() + 2 * HOUR))}`,
     mock: `${day}, ${clock(mockStart)}–${clock(new Date(mockStart.getTime() + HOUR))}`,
     interviewer: HEAD, location: "BeGifted Education", answers: { ...answers, sourceRow: 0, submittedAt: "" }, resume: "pdf" as const,
+    ats: { score: 82.5, parts: [["Degree", 15, 15], ["Subject", 15, 15], ["Curriculum", 15, 15], ["Teaching", 7.5, 15], ["English", 15, 15], ["University", 10, 15], ["High school", 5, 10]].map(([name, earned, max]) => ({ name: String(name), earned: Number(earned), max: Number(max) })), penalty: 0 },
     rubric: state.rubric, form: "open" as const, recommendationReady: !!state.rubric, recommendationBlock: null,
   };
 }
@@ -372,6 +374,8 @@ export function demoFetch(input: string, init?: { method?: string; body?: unknow
     return json({ ok: true });
   }
   if (path === "/api/hiring/marking") return json({ status: "done", error: null });
+  if (path === "/api/hiring/brief/demo/resume" || path === "/api/hiring/brief/demo/paper")
+    return new Response(demoFile(path), { headers: { "Content-Type": "application/pdf" } });
   if (path === "/api/hiring/brief/demo/rubric" && post) {
     const items = (body.items ?? {}) as MockRubric["items"];
     set({ rubric: { items, comments: String(body.comments ?? ""), stressTest: body.stressTest as MockRubric["stressTest"], checksDone: body.checksDone as boolean } });

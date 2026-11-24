@@ -160,6 +160,23 @@ export const highSchoolFraction = (
 ) => highSchoolMatch(assessment?.schools, config.highSchools)?.fraction ?? 0;
 type CriterionResult = "met" | "partial" | "not_met" | "unknown";
 export const VALUE: Record<CriterionResult, number> = { met: 1, partial: 0.5, not_met: 0, unknown: 0 };
+/** The profile criteria by name, in the order every breakdown shows them. */
+export const PROFILE_CRITERIA = { degree: "Degree", subject: "Subject", curriculum: "Curriculum", teaching: "Teaching", english: "English" };
+/** The profile score in parts (before the work-rights penalty): the points earned and the most each part gives. */
+export function profileParts(
+  assessment: Scored,
+  weights: Record<keyof typeof PROFILE_CRITERIA, number> & { prestige?: number; school?: number },
+  prestige = 0,
+  school = 0,
+) {
+  const parts: { name: string; earned: number; max: number }[] = Object.entries(PROFILE_CRITERIA).map(([id, name]) => {
+    const max = weights[id as keyof typeof PROFILE_CRITERIA];
+    return { name, max, earned: max * VALUE[assessment.criteria.find((c) => c.id === id)?.result ?? "unknown"] };
+  });
+  if (weights.prestige) parts.push({ name: "University", max: weights.prestige, earned: weights.prestige * prestige });
+  if (weights.school) parts.push({ name: "High school", max: weights.school, earned: weights.school * school });
+  return parts;
+}
 export function profileScore(
   assessment: Scored,
   weights: Omit<typeof DEFAULT_WEIGHTS, "prestige" | "school"> & {

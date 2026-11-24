@@ -2,8 +2,7 @@
 
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { DEMO_BRIEF_PATH, DEMO_STEPS, demoBrief, demoState, markDemoPaper, resetDemo, setDemoStep, subscribeDemo } from "@/lib/hiring/demo";
-import { BookingShell } from "./booking";
-import { InterviewerBrief } from "./brief";
+import { BriefShell, InterviewerBrief } from "./brief";
 import css from "./demo-bar.module.css";
 
 export type DemoView = (typeof DEMO_STEPS)[number]["view"];
@@ -95,9 +94,9 @@ export function DemoBar({ onStep, briefOpen, setBriefOpen }: { onStep: (view: De
             <span><strong>Demo</strong> This is the page the head opens from LINE.</span>
             <button type="button" onClick={() => setBriefOpen(false)}>Back to Hiring</button>
           </p>
-          <BookingShell kind="brief">
-            <InterviewerBrief brief={demoBrief()} resumeUrl="/api/hiring/brief/demo/resume" rubricUrl="/api/hiring/brief/demo/rubric" decisionUrl="/api/hiring/brief/demo/decision" />
-          </BookingShell>
+          <BriefShell>
+            <InterviewerBrief brief={demoBrief()} resumeUrl="/api/hiring/brief/demo/resume" rubricUrl="/api/hiring/brief/demo/rubric" decisionUrl="/api/hiring/brief/demo/decision" pdfRuntime="/api/hiring/pdf-runtime" />
+          </BriefShell>
         </div>
       )}
     </>

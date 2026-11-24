@@ -1,16 +1,25 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ITEM_MAX, RUBRIC_ITEMS, rubricTotals } from "@/lib/hiring/marking-sheet";
 import { ANSWER_LABELS } from "@/lib/hiring/model";
 import { QUESTION_BANK, STRESS_ELEMENTS, STRESS_SCENARIO, STRESS_STEPS } from "@/lib/hiring/rubric-guide";
 import type { briefView } from "@/lib/hiring/service";
 import { BriefDecision } from "./brief-decision";
 import { BriefRubric } from "./brief-rubric";
+import { PdfPages } from "./pdf-pages";
 import c from "./booking.module.css";
+import b from "./brief.module.css";
 
 type Brief = Awaited<ReturnType<typeof briefView>>;
 export type BriefPending = "scores" | "recommendation" | null;
+
+/** The brief has its own wide page. The booking pages keep the narrow card. */
+export const BriefShell = ({ children }: { children: ReactNode }) => (
+  <main className={c.page} data-brief="">
+    <div className={b.wrap}>{children}</div>
+  </main>
+);
 
 export const BriefLoading = () => (
   <p role="status" className={c.note}>
@@ -25,24 +34,36 @@ export const BriefGone = () => (
   </p>
 );
 
-/** The interviewer's page: who they will meet, the résumé, the form answers, and the interviewer's own score form. No contact details and no AI scores. */
-export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: { brief: Brief; resumeUrl: string; rubricUrl: string; decisionUrl: string }) {
+type Doc = "resume" | "paper" | "answers" | "guide";
+const DOCS: [Doc, string][] = [["resume", "Résumé"], ["paper", "Paper"], ["answers", "Answers"], ["guide", "Guide"]];
+const points = (value: number) => String(Math.round(value * 10) / 10);
+
+/**
+ * The interviewer's page: the score sheet for the mock, with the candidate's résumé and graded paper beside it and the
+ * résumé score in parts. No contact details outside the résumé itself.
+ */
+export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdfRuntime }: { brief: Brief; resumeUrl: string; rubricUrl: string; decisionUrl: string; /** The demo gives the staff copy of the pdf.js files: its link has no real token. */ pdfRuntime?: string }) {
   const [pending, setPending] = useState<BriefPending>(null);
   const [editCount, setEditCount] = useState(0);
   const [lastSent, setLastSent] = useState(() => brief.rubric ? { total: rubricTotals(brief.rubric).total, max: rubricTotals(brief.rubric).max, editCount: 0 } : null);
   const [decision, setDecision] = useState(brief.decision);
+  const [doc, setDoc] = useState<Doc>("resume");
+  const [paperOpened, setPaperOpened] = useState(false);
   const unsent = lastSent !== null && lastSent.editCount !== editCount;
-  const jumpToRecommendation = lastSent !== null && !unsent;
   const blocked = brief.form === "closed" && !brief.recommendationReady && !decision;
   const earlyRecommendation = brief.form === "closed" && brief.recommendationReady;
+  const paperUrl = resumeUrl.replace(/resume$/, "paper");
+  const runtime = pdfRuntime ?? resumeUrl.replace(/resume$/, "pdf-runtime");
   const facts: [string, string][] = [
     ["Subject", brief.subject],
+    ["Mock teaching", `${brief.mock} (Bangkok)`],
     ...(brief.exam ? ([["Exam", brief.exam]] as [string, string][]) : []),
+    ["Place", brief.location],
     ["Interviewer", brief.interviewer ?? "To be confirmed"],
   ];
   const recommendation = (
-    <section id="recommendation" className={c.facts} tabIndex={-1}>
-      <h2 className={decision ? "sr-only" : c.stepTitle}>Your recommendation</h2>
+    <section id="recommendation" className={b.panel} tabIndex={-1}>
+      <h2 className={decision ? "sr-only" : b.panelTitle}>Your recommendation</h2>
       <BriefDecision
         sent={decision}
         onSent={setDecision}
@@ -55,117 +76,143 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl }: {
     </section>
   );
   const wait = brief.form === "wait" && !decision;
+  const fileUrl = doc === "resume" && brief.resume ? resumeUrl : doc === "paper" ? paperUrl : null;
   return (
     <>
-      <section className={c.facts}>
-        <h2 className={c.subject}>{brief.name}</h2>
-        <dl className={`${c.answers} ${c.briefVisit}`}>
-          <div>
-            <dt className={c.factLabel}>Mock teaching</dt>
-            <dd>{brief.mock} (Bangkok)</dd>
-          </div>
-          <div>
-            <dt className={c.factLabel}>Place</dt>
-            <dd>{brief.location}</dd>
-          </div>
-        </dl>
-        <dl className={`${c.answers} ${c.briefDetails}`}>
-          {facts.map(([label, value]) => (
-            <div key={label}>
-              <dt className={c.factLabel}>{label}</dt>
-              <dd>{value}</dd>
-            </div>
-          ))}
-        </dl>
-        {brief.form === "open" && !decision && (
-          <a className={`${c.button} ${c.jumpLink}`} href={jumpToRecommendation ? "#recommendation" : "#scores"}>
-            {jumpToRecommendation ? "Go to recommendation" : "Go to mock scores"}
-          </a>
-        )}
-      </section>
-      {(wait || blocked) && (
-        <div className={c.field}>
-          <p role="status">{wait ? "Scores open after the mock."
-            : brief.recommendationBlock === "checking" ? "Scores are being checked."
-            : "Ask BeGifted admin to check the scores."}</p>
-          {(wait || brief.recommendationBlock === "checking") && (
-            <button type="button" className={c.button} onClick={() => window.location.reload()}>Check again</button>
-          )}
-        </div>
-      )}
-      {earlyRecommendation && recommendation}
-      <section className={c.facts}>
-        <h2 className={c.stepTitle}>Candidate files</h2>
-        {brief.gradedPaper && <a className={`${c.ghost} ${c.jumpLink}`} href={resumeUrl.replace(/resume$/, "paper")} target="_blank" rel="noreferrer" aria-label="Open the graded paper">Graded paper</a>}
-        {brief.resume ? (
-          <a className={`${c.ghost} ${c.jumpLink}`} href={resumeUrl} target="_blank" rel="noreferrer" aria-label={brief.resume === "pdf" ? "Open the résumé (PDF)" : undefined}>
-            {brief.resume === "pdf" ? "Résumé (PDF)" : "Download résumé (Word)"}
-          </a>
-        ) : (
-          <p className={c.note}>No résumé file is stored for this candidate.</p>
-        )}
-        {(brief.resume || brief.gradedPaper) && <p className={c.note}>Personal data. Do not share.</p>}
-      </section>
-      <details className={c.preScreen}>
-        <summary className={c.stepTitle}><h2 className={c.summaryHeading}>Pre-screen answers</h2></summary>
-        {brief.answers ? (
-          <dl className={c.answers}>
-            {ANSWER_LABELS.map(([key, label]) => (
-              <div key={key}>
-                <dt className={c.factLabel}>{label}</dt>
-                <dd>{brief.answers?.[key] || "No answer"}</dd>
+      <header className={b.top}>
+        <div>
+          <p className={b.eyebrow}>Interview brief</p>
+          <h1 className={b.name}>{brief.name}</h1>
+          <dl className={b.facts}>
+            {facts.map(([label, value]) => (
+              <div key={label}>
+                <dt>{label}</dt>
+                <dd>{value}</dd>
               </div>
             ))}
           </dl>
-        ) : (
-          <p className={c.note}>This candidate has no pre-screen reply.</p>
+        </div>
+        {brief.ats && (
+          <section className={b.ats} aria-label="ATS score">
+            <p className={b.atsHead}>
+              <span className={b.eyebrow}>ATS score</span>
+              <strong>{points(brief.ats.score)}/100</strong>
+            </p>
+            <ul className={b.atsParts}>
+              {brief.ats.parts.map(({ name, earned, max }) => (
+                <li key={name}>
+                  <span>{name}</span>
+                  <span className={b.atsBar} aria-hidden="true"><span style={{ width: `${max ? (earned / max) * 100 : 0}%` }} /></span>
+                  <span className={b.num}>{points(earned)}/{points(max)}</span>
+                </li>
+              ))}
+              {brief.ats.penalty > 0 && (
+                <li className={b.penalty}>
+                  <span>Work rights</span>
+                  <span />
+                  <span className={b.num}>−{points(brief.ats.penalty)}</span>
+                </li>
+              )}
+            </ul>
+          </section>
         )}
-      </details>
-      <details className={c.preScreen}>
-        <summary className={c.stepTitle}><h2 className={c.summaryHeading}>Interviewer guide</h2></summary>
-        <h3 className={c.factLabel}>Stress Test: parent role-play</h3>
-        <ul className={c.note}>
-          {STRESS_STEPS.map((step) => <li key={step}>{step}</li>)}
-        </ul>
-        <p><strong>Scenario:</strong> <em>&ldquo;{STRESS_SCENARIO}&rdquo;</em></p>
-        <dl className={c.answers}>
-          {STRESS_ELEMENTS.map(({ key, label, detail }) => (
-            <div key={key}>
-              <dt className={c.factLabel}>{label}</dt>
-              <dd>{detail}</dd>
+      </header>
+      <div className={b.cols}>
+        <div className={b.sheet}>
+          {(wait || blocked) && (
+            <div className={`${b.panel} ${c.field}`}>
+              <p role="status">{wait ? "Scores open after the mock."
+                : brief.recommendationBlock === "checking" ? "Scores are being checked."
+                : "Ask BeGifted admin to check the scores."}</p>
+              {(wait || brief.recommendationBlock === "checking") && (
+                <button type="button" className={c.button} onClick={() => window.location.reload()}>Check again</button>
+              )}
             </div>
-          ))}
-        </dl>
-        <h3 className={c.factLabel}>Question bank</h3>
-        <p className={c.note}>Use any of these during or after the mock. The answers are evidence for the linked item. They are not scored separately.</p>
-        <ol className={c.answers}>
-          {QUESTION_BANK.map(({ question, informs, good }) => (
-            <li key={question}>
-              <p><strong>{question}</strong></p>
-              <p className={c.note}>Informs: {informs}</p>
-              <p>A good answer: {good}</p>
-            </li>
-          ))}
-        </ol>
-      </details>
-      {!wait && !blocked && (
-        <section id="scores" className={c.facts} tabIndex={-1}>
-          <h2 className={c.stepTitle}>Mock lesson scores</h2>
-          <BriefRubric
-            saved={brief.rubric}
-            form={brief.form}
-            url={rubricUrl}
-            editCount={editCount}
-            lastSent={lastSent}
-            decisionSent={!!decision}
-            pending={pending}
-            setPending={setPending}
-            onEdit={() => setEditCount((count) => count + 1)}
-            onSent={(total) => setLastSent({ total, max: RUBRIC_ITEMS.length * ITEM_MAX, editCount })}
-          />
-        </section>
-      )}
-      {brief.form !== "wait" && !blocked && !earlyRecommendation && recommendation}
+          )}
+          {earlyRecommendation && recommendation}
+          {!wait && !blocked && (
+            <section id="scores" className={b.panel} tabIndex={-1}>
+              <h2 className="sr-only">Mock lesson scores</h2>
+              <BriefRubric
+                saved={brief.rubric}
+                form={brief.form}
+                url={rubricUrl}
+                editCount={editCount}
+                lastSent={lastSent}
+                decisionSent={!!decision}
+                pending={pending}
+                setPending={setPending}
+                onEdit={() => setEditCount((count) => count + 1)}
+                onSent={(total) => setLastSent({ total, max: RUBRIC_ITEMS.length * ITEM_MAX, editCount })}
+              />
+            </section>
+          )}
+          {brief.form !== "wait" && !blocked && !earlyRecommendation && recommendation}
+        </div>
+        <aside className={`${b.panel} ${b.docs}`} aria-label="Candidate files">
+          <div className={b.tabs}>
+            {DOCS.filter(([key]) => key !== "paper" || brief.gradedPaper).map(([key, label]) => (
+              <button key={key} type="button" className={b.tab} aria-pressed={doc === key} onClick={() => {
+                setDoc(key);
+                if (key === "paper") setPaperOpened(true);
+              }}>{label}</button>
+            ))}
+            {fileUrl && (
+              <a className={b.open} href={fileUrl} target="_blank" rel="noreferrer" aria-label={doc === "paper" ? "Open the graded paper" : brief.resume === "pdf" ? "Open the résumé (PDF)" : undefined}>
+                {doc === "resume" && brief.resume !== "pdf" ? "Download résumé (Word)" : "Open"}
+              </a>
+            )}
+          </div>
+          {/* Every tab stays in the page while hidden, so a file is fetched once. */}
+          <div className={`${b.pane} ${doc === "answers" || doc === "guide" ? b.text : ""}`}>
+            {(doc === "resume" || doc === "paper") && (brief.resume || brief.gradedPaper) && <p className={c.note}>Personal data. Do not share.</p>}
+            <div hidden={doc !== "resume"}>
+              {brief.resume === "pdf" ? <PdfPages src={resumeUrl} title="Résumé" runtime={runtime} />
+                : <p className={c.note}>{brief.resume ? "A Word résumé has no preview. Use the download link." : "No résumé file is stored for this candidate."}</p>}
+            </div>
+            {/* The server builds the graded paper on each request, so it is fetched once, on the first open of its tab. */}
+            {paperOpened && <div hidden={doc !== "paper"}><PdfPages src={paperUrl} title="Graded paper" runtime={runtime} /></div>}
+            <div hidden={doc !== "answers"}>{brief.answers ? (
+              <dl className={c.answers}>
+                {ANSWER_LABELS.map(([key, label]) => (
+                  <div key={key}>
+                    <dt className={c.factLabel}>{label}</dt>
+                    <dd>{brief.answers?.[key] || "No answer"}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : (
+              <p className={c.note}>This candidate has no pre-screen reply.</p>
+            )}</div>
+            <div hidden={doc !== "guide"}>
+                <h3 className={c.factLabel}>Stress Test: parent role-play</h3>
+                <ul className={c.note}>
+                  {STRESS_STEPS.map((step) => <li key={step}>{step}</li>)}
+                </ul>
+                <p><strong>Scenario:</strong> <em>&ldquo;{STRESS_SCENARIO}&rdquo;</em></p>
+                <dl className={c.answers}>
+                  {STRESS_ELEMENTS.map(({ key, label, detail }) => (
+                    <div key={key}>
+                      <dt className={c.factLabel}>{label}</dt>
+                      <dd>{detail}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <h3 className={c.factLabel}>Question bank</h3>
+                <p className={c.note}>Use any of these during or after the mock. The answers are evidence for the linked item. They are not scored separately.</p>
+                <ol className={c.answers}>
+                  {QUESTION_BANK.map(({ question, informs, good }) => (
+                    <li key={question}>
+                      <p><strong>{question}</strong></p>
+                      <p className={c.note}>Informs: {informs}</p>
+                      <p>A good answer: {good}</p>
+                    </li>
+                  ))}
+                </ol>
+            </div>
+          </div>
+        </aside>
+      </div>
     </>
   );
 }
