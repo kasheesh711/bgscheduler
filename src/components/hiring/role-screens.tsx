@@ -498,10 +498,13 @@ function visitItem(visit: ReturnType<typeof headVisit>, today: string, live = fa
       ...(decision ? [{ text: `Recommendation: ${decision.decision === "hire" ? "Yes" : "No"}`, tone: decision.decision }] : []),
     ],
     action: due && open ? (scored ? "Recommend Yes or No" : "Score mock") : live && open ? "Score mock"
-      : !checkingScores && (needsCheck || (mock && !path && !status && missingOutcome)) ? "Ask admin" : undefined,
+      : checkingScores ? undefined
+      : needsCheck ? "Ask admin: check scores"
+      : mock && !path && !status && missingOutcome ? "Ask admin: outcome missing" : undefined,
+    // The reason is in the action for Ask admin rows, so the row reads as one task.
     note: checkingScores ? "Admin checking scores"
-      : needsCheck ? "Check scores"
-      : mock && !path && !status ? (missingOutcome ? "Outcome missing" : "No brief yet")
+      : needsCheck ? null
+      : mock && !path && !status ? (missingOutcome ? null : "No brief yet")
       : path && !active ? "Brief closed"
       : candidate?.resumeState === "none" ? "No résumé"
       : candidate?.resumeState === "deleted" ? "Résumé deleted"
@@ -737,16 +740,18 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const actionVisits = ended.filter((visit) => visit.needsAction && !visit.checkingScores).map((visit) => visitItem(visit, today));
   const checking = ended.filter((visit) => visit.needsAction && visit.checkingScores).map((visit) => visitItem(visit, today));
   const nextItem = nextMock ? visitItem(nextMock, today, mockNow) : undefined;
-  // A signed review leaves the data on reload; keep its row, marked Signed, while it is still the open row.
-  const stillSigned = signedItems.filter((item) => item.id === picked && !reviews.some((review) => review.id === item.id));
+  // A signed review leaves To do at once, before the reload drops it, and stays under Just finished while it is open.
+  const signedIds = new Set(signedItems.map((item) => item.id));
+  const unsigned = reviews.filter((item) => !signedIds.has(item.id));
+  const stillSigned = signedItems.filter((item) => item.id === picked);
   const groups = [
-    { title: "To do", items: [...checks, ...actionVisits, ...reviews.filter((item) => item.urgent)]
+    { title: "To do", items: [...checks, ...actionVisits, ...unsigned.filter((item) => item.urgent)]
       .sort((a, b) => Number(!!b.urgent) - Number(!!a.urgent)) },
     { title: "Just finished", items: stillSigned },
     { title: mockNow ? "Mock now" : "Next mock", items: nextItem ? [nextItem] : [] },
     { title: "Coming up", items: coming.map((visit) => visitItem(visit, today)) },
     // Rows where the head can only wait: admin is checking the scores, or the packet is not ready.
-    { title: "Waiting", items: [...checking, ...reviews.filter((item) => !item.urgent)] },
+    { title: "Waiting", items: [...checking, ...unsigned.filter((item) => !item.urgent)] },
   ];
   // A mock in progress leads the list.
   if (mockNow) groups.unshift(...groups.splice(2, 1));
@@ -823,7 +828,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
         ))}
         {!heads.length ? <p className={r.quiet}>No heads are set up. Add interviewers in Rules and setup.</p>
           : !key ? <p className={r.quiet}>Choose a head to see their list.</p>
-          : !all.length && !givesMocks && <p className={r.quiet}>Nothing to do. New papers to check also come by LINE.</p>}
+          : !all.length && !givesMocks && !wide && <p className={r.quiet}>Nothing to do. New papers to check also come by LINE.</p>}
         {papers.length > 0 && (
           <details className={r.group}>
             <summary className={r.groupTitle}>Paper tests, no action <span className={r.count}>{papers.length}</span></summary>
@@ -840,6 +845,8 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
       {wide && (
         <section id="open-item" tabIndex={-1} className={r.pane} aria-label={selected ? `${selected.task}: ${selected.name}` : "Nothing open"}>
           {selected ? <ItemPane key={selected.id} item={selected} data={data} readOnly={readOnly || (!fixedHead && !chosen)} reload={reload} onSigned={keepSigned} />
+            : key && !all.length ? <div className={r.paneFacts}><h2 className={r.paneName}>Nothing to do</h2>
+              <p className={r.quiet}>{givesMocks ? "New bookings and papers to check also come by LINE." : "New papers to check also come by LINE."}</p></div>
             : null}
         </section>
       )}

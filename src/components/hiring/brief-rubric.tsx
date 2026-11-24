@@ -259,6 +259,25 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       {state === "sent" && <p ref={feedback} role="status" className={c.success} tabIndex={-1}>{sentMessage}</p>}
       {saveError}
       <div ref={sendBar} className={c.field} data-sticky="">
+        {/* The one answer besides the scores sits beside Send scores, so the head sees both (Sol review, 24 Nov 2026). It stays after Edit scores, so a wrong answer can be changed alone. */}
+        <fieldset className={b.choices} disabled={!!pending}>
+          <legend>School&apos;s required checks completed <span className={c.note}>(must be Yes to hire)</span></legend>
+          {([[true, "Yes"], [false, "No"]] as const).map(([value, text]) => (
+            <label key={text} className={b.choice}>
+              <input
+                type="radio"
+                name={`${rubricId}-checks`}
+                className={c.hidden}
+                checked={checksDone === value}
+                onChange={() => {
+                  setChecksDone(value);
+                  changed();
+                }}
+              />
+              {text}
+            </label>
+          ))}
+        </fieldset>
         {sentTotal !== null ? (
           <>
             <button type="button" className={c.ghost} onClick={() => {
@@ -270,25 +289,6 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
           </>
         ) : (
           <>
-            {/* The one answer besides the scores sits beside Send scores, so the head sees both (Sol review, 24 Nov 2026). */}
-        <fieldset className={b.choices} disabled={!!pending}>
-              <legend>School&apos;s required checks completed <span className={c.note}>(must be Yes to hire)</span></legend>
-              {([[true, "Yes"], [false, "No"]] as const).map(([value, text]) => (
-                <label key={text} className={b.choice}>
-                  <input
-                    type="radio"
-                    name={`${rubricId}-checks`}
-                    className={c.hidden}
-                    checked={checksDone === value}
-                    onChange={() => {
-                      setChecksDone(value);
-                      changed();
-                    }}
-                  />
-                  {text}
-                </label>
-              ))}
-            </fieldset>
             <div className={c.field}>
               <p role="status" className={checksMissing || lastSent ? undefined : c.note}>{checksMissing
                 ? "Answer the required checks to send."

@@ -634,5 +634,14 @@
 .sliderNumbers { cursor: pointer; }
 .sliderNumbers [data-on] { color: var(--ink); font-weight: 700; }
 @media (min-width: 700px) {
-  [data-bare] .scale { display: grid; grid-template-columns: repeat(2, max-content); justify-content: space-between; }
+  [data-bare] .scale { display: grid; grid-template-columns: repeat(2, max-content); grid-template-rows: repeat(2, auto); grid-auto-flow: column; justify-content: space-between; }
+}
+/* The required checks take their own line in the send bar; on a phone the two answers share it, so nothing covers the score count. */
+[data-sticky] > .choices { grid-column: 1 / -1; flex-wrap: wrap; }
+[data-sticky] > .choices legend { float: none; flex-basis: 100%; margin: 0 0 4px; }
+@media (max-width: 699px) {
+  [data-sticky] > .choices .choice { flex: 1; }
+  [data-sticky] > div:first-of-type { grid-column: 1 / -1; }
+  [data-sticky] > .sendEnd { grid-column: 1 / -1; justify-content: space-between; }
+  [data-sticky] button[type="submit"] { white-space: nowrap; }
 }

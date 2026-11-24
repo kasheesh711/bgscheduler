@@ -408,12 +408,16 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
 const AXE = readFileSync(path.join(ROOT, "node_modules/axe-core/axe.min.js"), "utf8");
 const PDF = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF";
 
-// A one-page A4 PDF with a line of text, so the real PDF viewer has something to draw.
-const samplePdf = (text) => {
-  const stream = `BT /F1 28 Tf 60 760 Td (${text}) Tj ET BT /F1 14 Tf 60 720 Td (Experience, education and subjects would be here.) Tj ET`;
-  const objects = ["<</Type/Catalog/Pages 2 0 R>>", "<</Type/Pages/Count 1/Kids[3 0 R]>>",
-    "<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>",
-    `<</Length ${stream.length}>>stream\n${stream}\nendstream`, "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>"];
+// An A4 PDF with a line of text on each page, so the real PDF viewer has something to draw. The paper has five pages,
+// so the shots show whether a long paper scrolls inside its own box (critic review, round 10).
+const samplePdf = (text, pages = 1) => {
+  const objects = ["<</Type/Catalog/Pages 2 0 R>>", `<</Type/Pages/Count ${pages}/Kids[${Array.from({ length: pages }, (_, i) => `${4 + i * 2} 0 R`).join(" ")}]>>`,
+    "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>"];
+  for (let page = 1; page <= pages; page += 1) {
+    const stream = `BT /F1 28 Tf 60 760 Td (${text}${pages > 1 ? ` - page ${page}` : ""}) Tj ET BT /F1 14 Tf 60 720 Td (Experience, education and subjects would be here.) Tj ET`;
+    objects.push(`<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents ${5 + (page - 1) * 2} 0 R/Resources<</Font<</F1 3 0 R>>>>>>`,
+      `<</Length ${stream.length}>>stream\n${stream}\nendstream`);
+  }
   let body = "%PDF-1.4\n";
   const offsets = objects.map((object, i) => { const at = body.length; body += `${i + 1} 0 obj${object}endobj\n`; return at; });
   const xref = body.length;
@@ -440,7 +444,7 @@ const server = createServer((request, response) => {
   }
   if (/^\/api\/hiring\/(?:brief|paper-check)\/[^/]+\/(?:resume|paper)$/.test(url.pathname)) {
     response.writeHead(200, { "Content-Type": "application/pdf" });
-    response.end(samplePdf(url.pathname.endsWith("paper") ? "Marked paper - made-up data" : "Sample resume - made-up data"));
+    response.end(url.pathname.endsWith("paper") ? samplePdf("Marked paper - made-up data", 5) : samplePdf("Sample resume - made-up data"));
     return;
   }
   if (url.pathname.startsWith("/api/hiring/resume/")) {
@@ -1176,10 +1180,10 @@ try {
     const group = (title) => page.getByRole("region", { name: /hiring list/ }).locator("section").filter({ has: page.getByRole("heading", { name: new RegExp(`^${title}`) }) });
     for (const [title, name, note] of [
       ["Waiting", "Sample Lek", "Admin checking scores"],
-      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => ["To do", name, "Ask admin"]),
+      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => ["To do", name, /^Ask admin: /]),
     ]) {
       const line = group(title).getByRole("listitem").filter({ hasText: name });
-      await line.getByText(note, { exact: true }).waitFor();
+      await line.getByText(note, typeof note === "string" ? { exact: true } : undefined).waitFor();
       const link = line.getByRole("link", { name: new RegExp(`^Interview brief: .*${name}`) });
       assert.match(await link.getAttribute("href"), /^\/hiring\/brief\/sample-token\?name=/);
       const target = await link.boundingBox();

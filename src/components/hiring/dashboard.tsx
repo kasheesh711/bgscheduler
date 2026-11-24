@@ -330,7 +330,7 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
         {TOOLS.map((name) => (
           <button key={name} type="button" aria-pressed={view === name} onClick={() => setView(name)}>
             {/* A head finds the way back to their own list by its name (blind test, 24 Nov 2026). */}
-            {name === "heads" && data?.viewerHead ? "My list" : VIEWS[name]}
+            {name === "heads" && (data?.viewerHead ?? head) ? "My list" : VIEWS[name]}
           </button>
         ))}
         {/* A full page load, so the demo starts clean and the real data is gone from the screen. */}
@@ -369,7 +369,7 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
           {/* Always one line, so the tabs below do not move down when the data arrives. */}
           {!giftReview && <p className={role ? css.subtitle : `${css.subtitle} ${css.statusSubtitle}`}>
             {role ? (
-              view === "heads" && data?.viewerHead ? nickname(headName(data.viewerHead, data.tutors)) : VIEWS[view]
+              view === "heads" && data?.viewerHead ? nickname(headName(data.viewerHead, data.tutors)) : view === "heads" && head ? "My list" : VIEWS[view]
             ) : data ? (
               <>
                 SEEK {campaignNames(data.config.seekJobs)} · Threshold {data.config.profileThreshold}/100 ·

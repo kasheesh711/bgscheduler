@@ -148,13 +148,17 @@
     min-height: 0;
     grid-template-rows: minmax(0, 1fr);
   }
+  /* The paper fills its column and its pages scroll inside the box, so a long paper never moves the marks. */
   [data-bare] .paper {
     position: static;
+    align-self: stretch;
+    grid-template-rows: auto minmax(0, 1fr);
     min-height: 0;
-    overflow: auto;
+    overflow: hidden;
   }
   [data-bare] .paper > div {
-    height: 100%;
+    height: auto;
+    min-height: 0;
   }
   [data-bare] .questions {
     max-height: none;
