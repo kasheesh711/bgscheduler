@@ -36,7 +36,7 @@ describe("CallBooking", () => {
     expect(html).toMatch(/<input[^>]*type="tel"[^>]*required/);
     expect(html).toContain("Your phone number (backup)");
     expect(html).toMatch(/<button[^>]*disabled[^>]*>Confirm R1 interview<\/button>/);
-    expect(html).toContain("contact BeGifted on LINE");
+    expect(html).toContain("Contact BeGifted on LINE");
   });
 
   it("shows a booked R1 interview with one move, and no form until the candidate asks to move", () => {
