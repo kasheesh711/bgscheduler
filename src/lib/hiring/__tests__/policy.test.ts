@@ -751,3 +751,14 @@ it("keeps LINE Login bound to the candidate browser and rejects a mismatched LIN
     vi.unstubAllEnvs();
   }
 });
+
+it("lets the mock teaching follow the test on the same day after the grading gap, or on a later day", async () => {
+  const { mockCanFollow } = await import("../model");
+  const examEnd = "2026-11-30T05:00:00.000Z"; // 12:00 Bangkok
+  expect(mockCanFollow(examEnd, "2026-11-30T04:00:00.000Z")).toBe(false); // during the test
+  expect(mockCanFollow(examEnd, "2026-11-30T05:00:00.000Z")).toBe(false); // no time to grade
+  expect(mockCanFollow(examEnd, "2026-11-30T05:15:00.000Z")).toBe(true);
+  expect(mockCanFollow(examEnd, "2026-11-30T06:00:00.000Z")).toBe(true); // 13:00 the same day
+  expect(mockCanFollow(examEnd, "2026-12-01T03:00:00.000Z")).toBe(true); // a later day
+  expect(mockCanFollow(examEnd, "2026-11-27T06:00:00.000Z")).toBe(false); // an earlier day
+});

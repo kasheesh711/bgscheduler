@@ -206,6 +206,12 @@ export const DEFAULT_PRE_SCREEN_WEIGHTS = {
 export const VISIT_LINK_DAYS = 30;
 /** Staff grade the paper between the exam and the mock (Kevin, 22 Nov 2026: grading takes 5 to 10 minutes). */
 export const VISIT_GAP_MINUTES = 15;
+/**
+ * A mock teaching time can follow a test when it starts after the test ends and the grading gap: on the same day or on a
+ * later day (Kevin, 24 Nov 2026, the same day he first asked for a later day only).
+ */
+export const mockCanFollow = (examEnd: string | Date, mockStart: string | Date) =>
+  new Date(mockStart).getTime() >= new Date(examEnd).getTime() + VISIT_GAP_MINUTES * 60000;
 const limit = z.number().int().min(0).max(1000);
 const followUpSchema = z
   .object({

@@ -92,14 +92,13 @@ describe("candidate emails keep their facts", () => {
     expect(reminder.text).not.toContain("Link closes");
     for (const e of [invite, reminder]) {
       // Two-day visit (Kevin, 24 Nov 2026): the test any day of the week, the mock teaching on a later weekday.
-      expect(e.text).toContain("Two visits: A 2-hour test (Monday to Sunday). If you pass, a 1-hour final-round mock teaching interview on a later day (Monday to Friday)");
-      expect(e.text).toContain("1. Day 1: the test\nPlease arrive 10 minutes early.");
-      expect(e.text).toContain("3. Day 2, if you pass: final round mock teaching");
+      expect(e.text).toContain("Test and mock teaching: A 2-hour test (Monday to Sunday). If you pass, a 1-hour final-round mock teaching interview on the same day or a later day (Monday to Friday)");
+      expect(e.text).toContain("1. The test\nPlease arrive 10 minutes early.");
+      expect(e.text).toContain("3. If you pass: final round mock teaching");
       expect(e.text).toContain("If you do not pass the test, we cancel this booking.");
-      expect(e.text).not.toContain("same day");
       expect(e.text).toContain("What to bring:\n• Photo ID (passport or ID card)\n• Pens\n• A calculator, if your subject uses one");
       expect(e.text).toContain("prepare one lesson in Physics");
-      expect(e.html).toContain("Day 1: the test");
+      expect(e.html).toContain("If you pass: final round mock teaching");
       expect(e.html).toContain("Photo ID (passport or ID card)");
       expect(e.text).toContain("Location: Gaysorn Amarin Tower");
       expect(e.text).toContain("Book your two times:\nhttps://bgscheduler.vercel.app/hiring/book/t");

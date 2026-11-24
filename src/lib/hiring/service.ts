@@ -39,6 +39,7 @@ import {
   type HiringConfig,
   type Stage,
   type Subject,
+  mockCanFollow,
 } from "./model";
 import {
   availabilityFraction,
@@ -509,7 +510,7 @@ export const preScreenEmail = (name: string, email: string, reminder: boolean, v
           {
             heading: "Book your test and your mock teaching",
             paragraphs: [
-              "We check your answers first. When booking opens, we email you. Then choose your two times on this link: the test first, and the mock teaching on a later day.",
+              "We check your answers first. When booking opens, we email you. Then choose your two times on this link: the test first, and the mock teaching on the same day or a later day.",
             ],
             action: { label: "Book your test and mock teaching", url: visitUrl },
             icon: stepIcon(3),
@@ -549,15 +550,15 @@ export const visitInviteEmail = (input: { name: string; subject: string; url: st
     ],
     details: [
       { label: "Subject", value: input.subject },
-      { label: "Two visits", value: VISIT_LENGTH },
+      { label: "Test and mock teaching", value: VISIT_LENGTH },
       { label: "Location", value: input.location },
       ...(input.expireDays === undefined ? [] : [{ label: "Link closes", value: `${input.expireDays} days after this email` }]),
     ],
     action: { label: "Book your two times", url: input.url },
-    stepsHeading: "Your two visits",
+    stepsHeading: "Your test and mock teaching",
     steps: TWO_DAY_STEPS,
     list: VISIT_BRING,
-    after: ["You book both times together: the test first, then the mock teaching on a later day.", ...mockPrep(input.subject).paragraphs],
+    after: ["You book both times together: the test first, then the mock teaching on the same day or a later day.", ...mockPrep(input.subject).paragraphs],
     links: mockPrep(input.subject).links,
   });
 const onLine = (text: string) => `${text} Contact BeGifted on LINE: ${HIRING_LINE_URL}`;
@@ -1608,10 +1609,10 @@ const twoDaySlots = async (db: Database, config: HiringConfig, subject: Subject,
   const mocks = (await availableSlots(db, config, "mock", [subject], now, indexDb, live, cap.id))
     .filter((slot) => open(slot.start) && !seen.has(slot.start) && !!seen.add(slot.start))
     .map((slot) => ({ date: slot.date, start: slot.start, end: slot.end, interviewerKey: slot.interviewerKey! }));
-  // The mock teaching is on a later day than the test, so a time with no partner is not a choice.
+  // The mock teaching follows the test (same day after the grading gap, or a later day), so a time with no partner is not a choice.
   return {
-    tests: tests.filter((test) => mocks.some((mock) => mock.date > test.date)),
-    mocks: mocks.filter((mock) => tests.some((test) => mock.date > test.date)),
+    tests: tests.filter((test) => mocks.some((mock) => mockCanFollow(test.examEnd, mock.start))),
+    mocks: mocks.filter((mock) => tests.some((test) => mockCanFollow(test.examEnd, mock.start))),
   };
 };
 
@@ -2132,14 +2133,14 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
   const unavailable = () => new HiringError(409, "That visit time is no longer available. Choose another time.");
   // The same live read as the list, so the head assigned here is the head the candidate's list was built on.
   const live = (await liveForList(db, config, [open.subject], now)) ?? undefined;
-  /** The chosen times, if still open. A two-day visit joins a test time and a mock teaching hour on a later day. */
+  /** The chosen times, if still open. A two-day visit joins a test time and a mock teaching hour that follows it (`mockCanFollow`). */
   const pick = async (d: Database, c: HiringConfig, subject: Subject, rows: VisitRow[], at: Date) => {
     if (!twoDay) return (await offeredSlots(d, c, subject, cap, rows, at, db, live)).find((v) => new Date(v.examStart).getTime() === start);
     const { tests, mocks } = await twoDaySlots(d, c, subject, cap, at, db, live);
     const test = tests.find((v) => Date.parse(v.examStart) === start);
     const mock = mocks.find((v) => Date.parse(v.start) === mockStart);
     // `date` is the day of the head's hour: the live Wise check reads it.
-    return test && mock && mock.date > test.date
+    return test && mock && mockCanFollow(test.examEnd, mock.start)
       ? { date: mock.date, examStart: test.examStart, examEnd: test.examEnd, mockStart: mock.start, mockEnd: mock.end, interviewerKey: mock.interviewerKey, subject }
       : undefined;
   };
@@ -2235,7 +2236,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
             ...(rows.length
               ? {}
               : { action: { label: twoDay ? "Move your times" : "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!, twoDay ? "two-day" : "visit") } }),
-            stepsHeading: twoDay ? "Your two visits" : "Your visit day",
+            stepsHeading: twoDay ? "Your test and mock teaching" : "Your visit day",
             steps: twoDay ? TWO_DAY_STEPS : VISIT_STEPS,
             list: VISIT_BRING,
             after: [
