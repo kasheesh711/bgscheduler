@@ -74,21 +74,27 @@ export function profileDegree(assessment: Pick<Assessment, "universities"> | nul
   for (const university of assessment?.universities ?? []) {
     if (!university.completedDegree) continue;
     const text = university.evidence;
-    LEVELS.forEach(([degree, word, abbreviation], rank) => {
-      if (rank >= bestRank) return;
-      const match = text.match(word) ?? text.match(abbreviation);
-      if (!match || match.index === undefined) return;
-      // A professional doctorate (medicine, pharmacy, veterinary, dental) is not a PhD: ask the questions instead.
-      if (degree === "PhD" && /doctor of (?:medicine|pharmacy|veterinary|dental|optometry)|\b(?:MD|PharmD|DVM|DDS)\b/i.test(text)) {
-        bestRank = rank;
-        best = null;
-        return;
-      }
-      const field = fieldAfter(text.slice(match.index + match[0].length));
-      // The highest level decides. Its field must be known, or the line is not a confirmation.
+    // Words first, at every level; an abbreviation counts only when its subject follows ("MA in", "BSc (", "M.Sc.").
+    // So "University of Massachusetts Amherst, MA" or "MS Office" never reads as a Master's (code review r13).
+    const found =
+      LEVELS.map(([degree, word], rank) => ({ degree, rank, match: text.match(word) })).find((f) => f.match) ??
+      LEVELS.map(([degree, , abbreviation], rank) => {
+        const match = text.match(abbreviation);
+        const after = match && match.index !== undefined ? text.slice(match.index + match[0].length) : "";
+        return { degree, rank, match: match && (match[0].endsWith(".") || /^\s*(?:in\b|[([,.])/i.test(after)) ? match : null };
+      }).find((f) => f.match);
+    if (!found?.match || found.match.index === undefined || found.rank >= bestRank) continue;
+    const { degree, rank, match } = found;
+    // A professional doctorate (medicine, pharmacy, veterinary, dental) is not a PhD: ask the questions instead.
+    if (degree === "PhD" && /doctor of (?:medicine|pharmacy|veterinary|dental|optometry)|\b(?:MD|PharmD|DVM|DDS)\b/i.test(text)) {
       bestRank = rank;
-      best = field ? { degree, field } : null;
-    });
+      best = null;
+      continue;
+    }
+    const field = fieldAfter(text.slice((match.index ?? 0) + match[0].length));
+    // The highest level decides. Its field must be known, or the line is not a confirmation.
+    bestRank = rank;
+    best = field ? { degree, field } : null;
   }
   return best;
 }

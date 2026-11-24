@@ -46,7 +46,7 @@ describe("VisitBooking", () => {
     expect(html).toContain("Questions");
     expect(html).toContain('aria-current="step"');
     expect(html).not.toContain("docs.google.com");
-    for (const question of ["Highest degree", "Field of study", "Subjects you can teach confidently", "English level", "Tap your hours", "Why do you want to tutor with BeGifted?", "Save and see times"])
+    for (const question of ["Highest degree", "Field of study", "Subjects you teach confidently", "English level", "Tap your hours", "Why do you want to tutor with BeGifted?", "Save and see times"])
       expect(html).toContain(question);
     expect(html).toContain("1 hour, only if you pass");
     expect(html).not.toContain("I will come to this address.");
@@ -85,7 +85,7 @@ describe("VisitBooking", () => {
     expect(html).not.toContain("Peat");
     // The live-check line shows only when the list came from a live Wise read.
     expect(html).not.toContain("Checked at");
-    expect(page({ checkedAt: "2026-11-02T02:05:00.000Z" })).toContain("Checked at 09:05");
+    expect(page({ checkedAt: "2026-11-02T02:05:00.000Z" })).toContain("Times checked at 09:05");
     // A day outside the live read never says "checked live".
     expect(page({ checkedAt: "2026-11-02T02:05:00.000Z", liveDates: ["2026-11-04"] })).not.toContain("Checked at");
   });
@@ -101,9 +101,9 @@ describe("VisitBooking", () => {
     expect(html.match(/href="https:\/\/lin\.ee\/OjMHF41"/g)).toHaveLength(1);
     expect(html).toContain(">Contact BeGifted on LINE</a>");
     expect(html).toContain("&lt;b&gt;Closed&lt;/b&gt;");
-    expect(html).not.toContain("Need help?");
+    expect(html.match(/Contact BeGifted on LINE/g)).toHaveLength(1);
     // With no notice, the footer stays.
-    expect(page({ visit: { examStart: slot.examStart, examEnd: slot.examEnd, mockStart: slot.mockStart, mockEnd: slot.mockEnd, head: "Peat" } })).toContain("Need help?");
+    expect(page({ visit: { examStart: slot.examStart, examEnd: slot.examEnd, mockStart: slot.mockStart, mockEnd: slot.mockEnd, head: "Peat" } })).toContain("Contact BeGifted on LINE");
   });
   it("shows a fallback and the link for an empty list with no notice, never a blank page", () => {
     const html = page({ slots: [], notice: null });

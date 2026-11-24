@@ -436,10 +436,22 @@
   opacity: 0.35;
   cursor: not-allowed;
 }
+/* One strip of all weeks: a week fills the width, the strip scrolls sideways a week at a time. */
 .dates {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: calc((100% - 12px) / 7);
   gap: 2px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+.dates::-webkit-scrollbar {
+  display: none;
+}
+.date[data-monday] {
+  scroll-snap-align: start;
 }
 .date {
   display: grid;
@@ -848,22 +860,22 @@
 }
 /* The questions' bar on a phone: count and button on one row. */
 @media (max-width: 1023px) {
-  [data-confirm][data-compact] {
+  .layout [data-confirm][data-compact] {
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
   }
-  [data-confirm][data-compact] > :not(button) {
+  .layout [data-confirm][data-compact] > :not(button) {
     grid-column: 1 / -1;
   }
-  [data-confirm][data-compact] > :first-child {
+  .layout [data-confirm][data-compact] > :first-child {
     grid-column: 1;
   }
-  [data-confirm][data-compact] > button {
+  .layout [data-confirm][data-compact] > button {
     grid-column: 2;
     grid-row: 1;
     width: auto;
   }
-  [data-confirm][data-compact] .progress {
+  .layout [data-confirm][data-compact] .progress {
     flex-direction: column;
     align-items: stretch;
     gap: 6px;
@@ -936,10 +948,10 @@
   gap: 6px;
 }
 @media (max-width: 359px) {
-  [data-confirm][data-compact] {
+  .layout [data-confirm][data-compact] {
     grid-template-columns: minmax(0, 1fr);
   }
-  [data-confirm][data-compact] > button {
+  .layout [data-confirm][data-compact] > button {
     grid-column: 1;
     grid-row: auto;
     width: 100%;
@@ -969,7 +981,7 @@
 .nowrap {
   white-space: nowrap;
 }
-[data-confirm][data-compact] .progressBar {
+.layout [data-confirm][data-compact] .progressBar {
   flex: none;
   width: 100%;
 }
@@ -1001,7 +1013,7 @@
   text-transform: uppercase;
   color: var(--muted);
 }
-/* Same look as the day row: month above a large day number. */
+/* Week ranges: quiet buttons, never filled like a chosen day. */
 .dateWeek {
   display: grid;
   justify-items: center;
@@ -1024,19 +1036,15 @@
   color: var(--muted);
 }
 .dateWeek b {
-  font-family: var(--serif);
-  font-size: 22px;
-  font-weight: 600;
-  line-height: 1;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.1;
   font-variant-numeric: lining-nums tabular-nums;
+  white-space: nowrap;
 }
 .dateWeek[aria-pressed="true"] {
-  border-color: var(--ink);
-  background: var(--ink);
-  color: #fbf7ee;
-}
-.dateWeek[aria-pressed="true"] span {
-  color: #d9d4c8;
+  border: 2px solid var(--ink);
+  background: #fff;
 }
 .dateWeek:focus-visible {
   outline: 3px solid var(--accent);
@@ -1105,5 +1113,61 @@
 @media (max-width: 359px) {
   .chips[data-stack] {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+
+/* The second list on a page names its weeks without repeating the "Week of" label. */
+.weeks[data-quiet] .weeksLabel {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.keysHint {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.week:has([data-cell]:focus-visible) .keysHint {
+  position: static;
+  width: auto;
+  height: auto;
+  clip: auto;
+  white-space: normal;
+  font-size: 13px;
+  color: var(--muted);
+}
+/* Plan: one grid, names in one column and details in the other (Opus r13). */
+.plan {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+}
+.plan li {
+  display: contents;
+}
+.plan li + li::before {
+  content: none;
+}
+.plan b {
+  white-space: nowrap;
+}
+/* Wide ticket: test and mock share rows (Opus r13). */
+@media (min-width: 640px) {
+  .legs > div {
+    display: grid;
+    grid-row: span 4;
+    grid-template-rows: subgrid;
+  }
+}
+@media (max-width: 359px) {
+  .steps {
+    gap: 10px;
   }
 }

@@ -80,8 +80,11 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   }
   function down(e: PointerEvent<HTMLDivElement>) {
     const cell = cellOf(e.target as Element);
-    if (!cell || disabled || e.button > 0) return;
-    if (e.pointerType === "touch") {
+    // One pointer at a time: a second finger never chooses hours on its own (code review r13).
+    if (!cell || disabled || e.button > 0 || !e.isPrimary) return;
+    if (pending.current) clearTimeout(pending.current.timer);
+    // A finger or a pen waits for a hold; the cells let the page pan up and down meanwhile. A mouse drags at once.
+    if (e.pointerType !== "mouse") {
       const target = e.target as Element;
       pending.current = {
         cell,
@@ -103,6 +106,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
     } catch {}
   }
   function move(e: PointerEvent<HTMLDivElement>) {
+    if (!e.isPrimary) return;
     const wait = pending.current;
     if (wait) {
       // Moved before the hold: this is a scroll, not a choice.
@@ -111,7 +115,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
     }
     if (!drag.current) return;
     // A mouse released outside the window leaves no pointerup here.
-    if (e.pointerType === "mouse" && e.buttons === 0) return up();
+    if (e.pointerType === "mouse" && e.buttons === 0) return up(e);
     const cell = cellOf(document.elementFromPoint(e.clientX, e.clientY));
     if (!cell) return;
     const { fill, from, before } = drag.current;
@@ -130,7 +134,8 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
     current.current = next;
     onChange(next);
   }
-  function up() {
+  function up(e?: PointerEvent<HTMLDivElement>) {
+    if (e && !e.isPrimary) return;
     const wait = pending.current;
     if (wait) {
       // A tap: one hour on or off.
@@ -199,7 +204,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
               className={s.preset}
               data-full={full || undefined}
               aria-pressed={full}
-              aria-label={`${full ? "Remove" : "Add"} ${p.label.toLowerCase()}: ${p.title}`}
+              aria-label={`${p.label}: ${p.title}`}
               title={p.title}
               disabled={disabled}
               onClick={() => preset(p)}
@@ -224,6 +229,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
         ref={gridRef}
         onPointerUp={up}
         onPointerCancel={cancel}
+        onContextMenu={(e) => e.preventDefault()}
       >
         <span aria-hidden />
         {WEEK_DAYS.map((day, d) => (
@@ -314,7 +320,8 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
         </p>
       </div>
 
-      <p id="week-grid-keys" className={s.srOnly}>
+      {/* Read by screen readers always; shown when the keyboard reaches the grid (Opus r13). */}
+      <p id="week-grid-keys" className={s.keysHint}>
         Arrow keys move between hours. Space or Enter chooses or clears an hour.
       </p>
 

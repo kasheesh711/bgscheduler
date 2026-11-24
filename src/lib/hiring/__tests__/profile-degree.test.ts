@@ -24,6 +24,11 @@ describe("profileDegree (the résumé's degree for the one-tap confirm)", () => 
     expect(read("BACHELOR OF ARTS Assumption University Finished 2021")).toBeNull();
     expect(read("Bachelor of Science University of Mines and Technology")).toBeNull();
   });
+  it("does not read a state or a product as a Master's", () => {
+    expect(read("Bachelor of Arts in English, University of Massachusetts Amherst, MA Graduated 2019")).toEqual({ degree: "Bachelor's", field: "English" });
+    expect(read("Bachelor of Science in Biology; MS Office certified")).toEqual({ degree: "Bachelor's", field: "Biology" });
+    expect(read("MBA Aug 2014 Mumbai")).toBeNull();
+  });
   it("does not read a professional doctorate as a PhD", () => {
     expect(read("Doctor of Medicine (MD), Mahidol University")).toBeNull();
     expect(read("Doctor of Veterinary Medicine (DVM) Bahauddin Zakariya University")).toBeNull();

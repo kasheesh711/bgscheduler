@@ -610,7 +610,8 @@ input[type="file"].input {
   width: 22px;
   height: 22px;
   margin-top: 1px;
-  border: 1.5px solid #b8ae98;
+  /* 3:1 against white (WCAG 1.4.11, Opus r13). */
+  border: 1.5px solid #8f8571;
   border-radius: 7px;
   background: #fff;
   color: transparent;

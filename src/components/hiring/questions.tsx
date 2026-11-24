@@ -22,6 +22,7 @@ const SHORT: Record<string, string> = {
   "Year 7-9 (Lower Secondary)": "Year 7–9",
   "Year 10-11 (IGCSE Level)": "Year 10–11",
   "Year 12-13 (A-level/ IB DP)": "Year 12–13",
+  "Less than 1 year": "Less than 1\u00a0year",
 };
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -170,7 +171,9 @@ export function PreScreenQuestions({
   // Subjects a visit can be in come first; the rest open on request (Mobbin: Meetup "popular" first, Bumble "show more").
   const first = testSubjects.length ? testSubjects.filter((v) => SUBJECTS.includes(v)) : [...SUBJECTS];
   const rest = SUBJECTS.filter((v) => !first.includes(v));
-  const showRest = moreOpen || subjects.some((v) => rest.includes(v));
+  // Collapsed, the list keeps any ticked extra subject in view, so "Fewer subjects" never hides a choice (Sol r14).
+  const showRest = moreOpen;
+  const shownSubjects = showRest ? [...first, ...rest] : [...first, ...rest.filter((v) => subjects.includes(v))];
   // The test subject is one of the ticked subjects that a visit can be in; with none of those, any ticked subject.
   const testable = subjects.filter((v) => testSubjects.includes(v));
   const testChoices = testable.length ? testable : subjects;
@@ -201,7 +204,7 @@ export function PreScreenQuestions({
     ["q-subjects", "Subjects", subjects.length > 0],
     // Art & Design needs its portfolio (a file or a link): its own step, so "Next" names it (Sol r13).
     ...(subjects.includes(ART) ? [["q-portfolio", "Portfolio", !!fileName || !!portfolio.trim()] as [string, string, boolean]] : []),
-    // Always counted, so the total stays 11; asked only when there is a choice (one subject is chosen for the candidate).
+    // Always counted; asked only when there is a choice (one subject is chosen for the candidate).
     [subjects.length > 1 ? "q-test" : "q-subjects", "Test subject", !!test],
     ["q-curricula", "Curricula", curricula.length > 0],
     ["q-years", "Year groups", yearGroups.length > 0],
@@ -223,7 +226,7 @@ export function PreScreenQuestions({
       // One plain sentence, and the first open question comes into view. A missing single choice has no message of its own.
       const issue = parsed.error.issues[0];
       // Short, so the sticky bar stays small (Opus r8); the page jumps to the first open question.
-      setError(open.length ? `Please answer ${open[0][1]}${open.length > 1 ? ` and ${open.length - 1} more` : ""}.` : issue.code === "custom" || issue.code === "too_small" ? issue.message : "Please answer every question.");
+      setError(open.length ? `Still to answer: ${open[0][1]}${open.length > 1 ? `, and ${open.length - 1} more` : ""}.` : issue.code === "custom" || issue.code === "too_small" ? issue.message : "Please answer every question.");
       if (open.length) reveal(open[0][0], true);
       return;
     }
@@ -274,8 +277,9 @@ export function PreScreenQuestions({
             </p>
             <div className={s.knownActions}>
               <button type="button" aria-pressed={degreeMode === "confirmed"} disabled={busy} onClick={() => setDegreeMode("confirmed")}>
+                {/* One name for both states; aria-pressed says whether it is confirmed (code review r13). */}
                 {degreeMode === "confirmed" && <Check aria-hidden size={16} />}
-                {degreeMode === "confirmed" ? "Confirmed" : "Yes, that's right"}
+                Yes, that&apos;s right
               </button>
               <button
                 type="button"
@@ -302,7 +306,7 @@ export function PreScreenQuestions({
         <Q id="q-english" title="English level">
           <Chips name="english" choices={ANSWER_CHOICES.english} value={english} onChange={setEnglish} disabled={busy} />
           <label className={s.small} htmlFor="english-proof">
-            English proof <small>optional</small>
+            English proof <small>optional · e.g. IELTS</small>
           </label>
           <input
             id="english-proof"
@@ -318,13 +322,13 @@ export function PreScreenQuestions({
         </Q>
       </Section>
       <Section title="What you teach">
-        <Q id="q-subjects" title="Subjects you can teach confidently" tag="all that apply">
-          <Chips name="subjects" choices={showRest ? [...first, ...rest] : first} value={subjects} onChange={setSubjects} many disabled={busy} />
-          {rest.length > 0 && !subjects.some((v) => rest.includes(v)) && (
+        <Q id="q-subjects" title="Subjects you teach confidently" tag="all that apply">
+          <Chips name="subjects" choices={shownSubjects} value={subjects} onChange={setSubjects} many disabled={busy} />
+          {rest.length > 0 && (
             <div>
               <button type="button" className={s.more} aria-expanded={showRest} onClick={() => setMoreOpen(!showRest)}>
                 <ChevronDown aria-hidden size={16} style={showRest ? { transform: "rotate(180deg)" } : undefined} />
-                {showRest ? "Fewer subjects" : `${rest.length} more subjects`}
+                {showRest ? "Fewer subjects" : `${rest.filter((v) => !subjects.includes(v)).length} more subjects`}
               </button>
             </div>
           )}
@@ -347,8 +351,8 @@ export function PreScreenQuestions({
               />
               <Upload aria-hidden size={18} />
               <span>
-                <b>{fileName || "Upload a portfolio"}</b>
-                <small>{fileName ? "Uploaded. Choose again to replace it." : "PDF, JPG or PNG · 25 MB"}</small>
+                <b>{fileName || "Upload portfolio"}</b>
+                <small>{fileName ? "Uploaded. Choose again to replace it." : "PDF, JPG or PNG, up to 25 MB"}</small>
               </span>
             </label>
             {fileNote && (
@@ -362,9 +366,9 @@ export function PreScreenQuestions({
         {subjects.length > 1 && testChoices.length > 0 && (
           <Q
             id="q-test"
-            title="Test and mock teaching subject"
-            tag="pick one from above"
-            hint={testable.length && testable.length < subjects.length ? "Greyed: no test now." : undefined}
+            title="Test and mock subject"
+            tag="one from above"
+            hint={testable.length && testable.length < subjects.length ? "Greyed: not tested." : undefined}
           >
             <Chips
               name="testSubject"
@@ -383,11 +387,11 @@ export function PreScreenQuestions({
           <Chips name="yearGroups" choices={ANSWER_CHOICES.yearGroups} value={yearGroups} onChange={setYearGroups} many disabled={busy} />
         </Q>
       </Section>
-      <Section title="When you can teach onsite">
-        <Q id="q-hours" title="Tap your hours, or hold and drag">
+      <Section title="Availability">
+        <Q id="q-hours" title="Tap your hours, or hold and drag" tag="Bangkok time">
           <WeekGrid value={week} onChange={setWeek} disabled={busy} />
         </Q>
-        <Q id="q-weekly" title="Weekly hours you can commit">
+        <Q id="q-weekly" title="Weekly hours to commit">
           <Chips name="weeklyHours" choices={ANSWER_CHOICES.weeklyHours} value={weeklyHours} onChange={setWeeklyHours} disabled={busy} />
         </Q>
       </Section>

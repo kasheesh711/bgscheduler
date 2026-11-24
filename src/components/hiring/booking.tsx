@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { BookOpen, Check, CircleCheck, FileSignature, Info, MapPin, Video } from "lucide-react";
 import { mockCanFollow, phoneSchema, type Subject, type Slot } from "@/lib/hiring/model";
 import type { bookingView, callView, contractView, visitView } from "@/lib/hiring/service";
@@ -20,7 +20,6 @@ const part = (value: string | Date, options: Intl.DateTimeFormatOptions) =>
   new Date(value).toLocaleDateString("en-GB", { ...ZONE, ...options });
 const Help = () => (
   <p className={c.help}>
-    Need help?{" "}
     <a href={LINE_URL} rel="noreferrer">
       Contact BeGifted on LINE
     </a>
@@ -137,7 +136,7 @@ const Fact = ({ icon, label, children }: { icon: ReactNode; label: string; child
 /** When the times were checked against live Wise. Nothing shows when the list came from the Wise copy. */
 /** How fresh the chosen day's times are: live-checked days say when; later days are checked when the candidate books. */
 const Live = ({ at, live }: { at: string; live: boolean }) => (
-  <span className={live ? c.live : cs.later}>{live ? `Checked at ${time(at)}.` : "Confirmed when you book."}</span>
+  <span className={live ? c.live : cs.later}>{live ? `Times checked at ${time(at)}.` : "Confirmed when you book."}</span>
 );
 
 const NOON = (date: string) => `${date}T12:00:00+07:00`;
@@ -171,9 +170,13 @@ function Picker<T extends { date: string }>({
   zoneNote = true,
   liveDates = [],
   currentKey,
+  currentOpen = false,
 }: {
-  /** The booked time while moving: marked "Current" and not open, so the one move is not spent on it (Opus r5). */
+  /** The booked time while moving: marked "Current". */
   currentKey?: string;
+  /** A two-day move can keep one booked time and change the other (service.ts twoDaySlots), so there "Current" stays
+   *  open; elsewhere it is closed so the one move is not spent on it (Opus r5, code review r13). */
+  currentOpen?: boolean;
   /** The dates the live Wise read covered; only these say "checked live". */
   liveDates?: string[];
   /** "Bangkok time" under the week; said once on a page with two lists. */
@@ -201,8 +204,25 @@ function Picker<T extends { date: string }>({
   const [weekPicked, setWeek] = useState<string | null>(null);
   const [picked, setPicked] = useState("");
   const week = weekPicked && weeks.includes(weekPicked) ? weekPicked : chosenDate ? mondayOf(chosenDate) : weeks[0];
-  const inWeek = days.filter((d) => mondayOf(d) === week && items.some((i) => i.date === d && keyOf(i) !== currentKey));
-  const active = inWeek.includes(picked) ? picked : chosenDate && inWeek.includes(chosenDate) ? chosenDate : inWeek[0];
+  const closed = (i: T) => !currentOpen && keyOf(i) === currentKey;
+  const open = (d: string) => items.some((i) => i.date === d && !closed(i));
+  const firstOpen = (w: string) => days.find((d) => mondayOf(d) === w && open(d));
+  // Any day in the strip can be the chosen day, whichever week is in view (Sol r14: one tap to any date). Scrolling the
+  // strip never changes the shown times; only a tap on a day or a week button does (keyboard walk r16).
+  const [startWeek] = useState(week);
+  const active = picked && open(picked) ? picked : chosenDate && open(chosenDate) ? chosenDate : firstOpen(startWeek) ?? days.find(open);
+  // All weeks in one strip that scrolls sideways a week at a time; the week buttons jump it.
+  const strip = useRef<HTMLDivElement>(null);
+  const weeksId = useId();
+  const scrollToWeek = (w: string, smooth = true) => {
+    const el = strip.current;
+    if (!el) return;
+    const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollTo({ left: weeks.indexOf(w) * el.clientWidth, behavior: smooth && !reduce ? "smooth" : "auto" });
+  };
+  useEffect(() => {
+    if (week !== weeks[0]) scrollToWeek(week, false);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- once, to open on the chosen or booked week
   if (!days.length) return null;
   const shown = items.filter((i) => i.date === active);
   const label = (date: string, options: Intl.DateTimeFormatOptions) => part(NOON(date), options);
@@ -214,8 +234,8 @@ function Picker<T extends { date: string }>({
       {hint && <p className={c.note}>{hint}</p>}
       {/* One button per week, so a later week is one tap away (Sol r9), and the shown week is named. */}
       {weeks.length > 1 ? (
-        <div className={cs.weeks} role="group" aria-labelledby={`${id ?? legend}-weeks`} style={{ gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))` }}>
-          <span className={cs.weeksLabel} id={`${id ?? legend}-weeks`}>
+        <div className={cs.weeks} data-quiet={!zoneNote || undefined} role="group" aria-labelledby={weeksId} style={{ gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 120px))` }}>
+          <span className={c.hidden} id={weeksId}>
             Week of
           </span>
           {weeks.map((w) => (
@@ -225,10 +245,17 @@ function Picker<T extends { date: string }>({
               className={cs.dateWeek}
               aria-pressed={w === week}
               aria-label={`Week of ${label(w, { day: "numeric", month: "long" })}`}
-              onClick={() => setWeek(w)}
+              onClick={() => {
+                setWeek(w);
+                setPicked(firstOpen(w) ?? "");
+                scrollToWeek(w);
+              }}
             >
-              <span>{label(w, { month: "short" })}</span>
-              <b>{label(w, { day: "numeric" })}</b>
+              {/* A range, not a date tile, so it never reads as the chosen day (Opus r13). */}
+              <b>
+                {label(w, { day: "numeric" })}–{label(plusDays(w, 6), { day: "numeric" })}
+              </b>
+              <span>{label(plusDays(w, 6), { month: "short" })}</span>
             </button>
           ))}
         </div>
@@ -238,17 +265,41 @@ function Picker<T extends { date: string }>({
         </p>
       )}
       {zoneNote && <p className={c.note}>Bangkok time</p>}
-      <div className={cs.dates}>
-        {Array.from({ length: 7 }, (_, i) => plusDays(week, i)).map((date) => {
+      <div
+        ref={strip}
+        className={cs.dates}
+        data-scroll-x=""
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          const w = weeks[Math.round(el.scrollLeft / Math.max(1, el.clientWidth))];
+          if (w && w !== week) setWeek(w);
+        }}
+      >
+        {weeks.flatMap((w) => Array.from({ length: 7 }, (_, i) => plusDays(w, i))).map((date) => {
           // The booked time while moving is not open, so it does not make its day open either (Sol r7).
-          const count = items.filter((i) => i.date === date && keyOf(i) !== currentKey).length;
+          const count = items.filter((i) => i.date === date && !closed(i)).length;
           return (
             <button
               key={date}
               type="button"
               className={cs.date}
+              data-monday={new Date(NOON(date)).getUTCDay() === 1 || undefined}
+              data-day={date}
               disabled={!count}
               aria-pressed={date === active}
+              // One Tab stop for the strip; the arrow keys move between open days and choose one (keyboard walk r16).
+              tabIndex={date === active ? 0 : -1}
+              onKeyDown={(e) => {
+                const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+                if (!step) return;
+                e.preventDefault();
+                const openDays = days.filter(open);
+                const next = openDays[openDays.indexOf(date) + step];
+                if (!next) return;
+                setPicked(next);
+                setWeek(mondayOf(next));
+                requestAnimationFrame(() => strip.current?.querySelector<HTMLButtonElement>(`[data-day="${next}"]`)?.focus());
+              }}
               aria-label={`${label(date, { weekday: "long", day: "numeric", month: "long" })}, ${count} ${count === 1 ? "time" : "times"}`}
               onClick={() => setPicked(date)}
             >
@@ -274,7 +325,7 @@ function Picker<T extends { date: string }>({
                     type="radio"
                     name={legend}
                     className={c.hidden}
-                    disabled={keyOf(item) === currentKey}
+                    disabled={closed(item)}
                     checked={selected === keyOf(item)}
                     onChange={() => onSelect(item)}
                   />
@@ -485,8 +536,10 @@ export function VisitBooking({
       </>
     );
   const short = (value: string) => part(value, { weekday: "short", day: "numeric", month: "short" });
-  // Move opens only when a test time other than the booked one is open (Sol r6).
-  const otherTimes = view.slots.some((s) => s.examStart !== view.visit?.examStart);
+  // Move opens only when some other time is open: another test time, or on a two-day link another mock time (Sol r6,
+  // code review r13: the lists keep the candidate's own times, so a move can change one and keep the other).
+  const otherTimes =
+    view.slots.some((s) => s.examStart !== view.visit?.examStart) || (view.twoDay && view.mockSlots.some((m) => m.start !== view.visit?.mockStart));
   // A move to the same times would use up the one move for nothing (Sol r5).
   const unchanged = !!view.visit && moving && start === view.visit.examStart && (!view.twoDay || mock?.start === view.visit.mockStart);
   return (
@@ -541,15 +594,20 @@ export function VisitBooking({
                       <span>Test</span>
                       <b>{short(view.visit.examStart)}</b>
                       <small>
-                        {time(view.visit.examStart)}–{time(view.visit.examEnd)}
+                        <span className={cs.nowrap}>
+                          {time(view.visit.examStart)}–{time(view.visit.examEnd)}
+                        </span>
                       </small>
+                      <small aria-hidden />
                     </div>
                     {view.visit.mockStart && view.visit.mockEnd && (
                       <div>
                         <span>Mock teaching</span>
                         <b>{short(view.visit.mockStart)}</b>
                         <small>
-                          {time(view.visit.mockStart)}–{time(view.visit.mockEnd)}
+                          <span className={cs.nowrap}>
+                            {time(view.visit.mockStart)}–{time(view.visit.mockEnd)}
+                          </span>
                           {view.visit.head && <span className={cs.nowrap}>{` · ${view.visit.head}`}</span>}
                         </small>
                         <small>If you pass the test</small>
@@ -598,6 +656,7 @@ export function VisitBooking({
                 checkedAt={view.checkedAt}
                 liveDates={view.liveDates}
                 currentKey={moving ? view.visit?.examStart : undefined}
+                currentOpen={view.twoDay}
                 items={view.slots}
                 keyOf={(s) => s.examStart}
                 startOf={(s) => s.examStart}
@@ -622,13 +681,15 @@ export function VisitBooking({
                 <h2 className={c.stepTitle} id="mock-wait">
                   Mock teaching time
                 </h2>
-                <p className={c.note}>1 hour, if you pass. Its times show once you choose a test time.</p>
+                <p className={c.note}>1 hour, if you pass. Shown after you choose a test time.</p>
               </section>
             )}
             {showForm && view.twoDay && slot && (
               <Picker
                 zoneNote={false}
                 id="mock-start"
+                currentKey={moving ? (view.visit?.mockStart ?? undefined) : undefined}
+                currentOpen
                 legend="Mock teaching time"
                 hint="1 hour, if you pass."
                 checkedAt={null}
@@ -661,7 +722,7 @@ export function VisitBooking({
           showForm && (
             <>
               <Checks onsite={onsite} commitment={commitment} setOnsite={setOnsite} setCommitment={setCommitment} fromAnswers={view.timeRuleMet} />
-              {moving && <p className={c.note}>This is your one move.</p>}
+              {moving && <p className={c.note}>You can move this visit once. Your current times stay booked until you confirm.</p>}
               {keep}
               <VisitConfirm
                 error={error}
