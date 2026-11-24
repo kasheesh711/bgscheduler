@@ -119,6 +119,14 @@
   }
 }
 .more {
+  justify-self: start;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
   margin: 0;
   color: var(--muted, #5b6478);
   font-size: 13px;
@@ -129,11 +137,24 @@
    Submit and "Your marks are final." always show below them. */
 @media (min-width: 700px) {
   [data-bare] .marks {
-    position: sticky;
-    top: 12px;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr) auto auto;
-    height: calc(100dvh - 120px);
+    min-height: 0;
+    height: 100%;
+  }
+  /* The split takes the frame's height left under the facts, so the marks column ends at the bottom of the pane. */
+  [data-bare] .split {
+    flex: 1;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+  }
+  [data-bare] .paper {
+    position: static;
+    min-height: 0;
+    overflow: auto;
+  }
+  [data-bare] .paper > div {
+    height: 100%;
   }
   [data-bare] .questions {
     max-height: none;

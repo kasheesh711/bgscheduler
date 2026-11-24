@@ -179,7 +179,13 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
           <textarea className={c.input} rows={3} maxLength={4000} value={comment} onChange={(event) => setComment(event.target.value)} />
         </label>
         </div>
-        {more !== null && <p className={k.more} aria-hidden="true">{more ? `Scroll to question ${more} ↓` : "Scroll for the comment ↓"}</p>}
+        {more !== null && (
+          <button type="button" className={k.more} onClick={() => {
+            const target = more ? questionList.current?.querySelector<HTMLElement>(`li[data-question="${CSS.escape(more)}"]`) : questionList.current?.lastElementChild;
+            target?.scrollIntoView({ block: "nearest" });
+            target?.querySelector<HTMLElement>("input, textarea")?.focus({ preventScroll: true });
+          }}>{more ? `Go to question ${more} ↓` : "Go to the comment ↓"}</button>
+        )}
         {/* The score and the send stay in view while the head works down the questions. */}
         <div className={k.submit}>
           <p className={k.total} role="status">

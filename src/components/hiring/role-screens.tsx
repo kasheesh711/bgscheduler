@@ -500,7 +500,7 @@ function visitItem(visit: ReturnType<typeof headVisit>, today: string, live = fa
     action: due && open ? (scored ? "Recommend Yes or No" : "Score mock") : live && open ? "Score mock"
       : !checkingScores && (needsCheck || (mock && !path && !status && missingOutcome)) ? "Ask admin" : undefined,
     note: checkingScores ? "Admin checking scores"
-      : needsCheck ? (open ? null : "Check scores")
+      : needsCheck ? "Check scores"
       : mock && !path && !status ? (missingOutcome ? "Outcome missing" : "No brief yet")
       : path && !active ? "Brief closed"
       : candidate?.resumeState === "none" ? "No résumé"
@@ -576,10 +576,7 @@ function ItemPane({ item, data, readOnly, reload }: { item: HeadItem; data: Hiri
         <div className={r.reviewMain}>
           <h2 className={r.paneName}>{item.name}</h2>
           {/* The open packet states the head's recommendation; a phone shows it here. */}
-          <p className={`${r.meta} ${r.reviewWho}`}>
-            <span className={r.tag} data-tone={item.review.decision}>{item.review.decision === "hire" ? "Yes" : "No"}</span>
-            {item.review.head} · {item.review.reason || "No reason given"}
-          </p>
+          <p className={`${r.meta} ${r.reviewWho}`}>{item.review.reason || "No reason given"}</p>
           {item.review.draftProblem && <p className={r.warn}>No email draft yet: {item.review.draftProblem}</p>}
           <FinalReview id={item.review.candidateId!} autoLoad hideHeading inline {...reviewBlocks(data.writeGate, data.config, item.review.candidateId!)}
             onChanged={reload && (async () => reload())} />
@@ -650,6 +647,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     }
   };
   const wide = useWide();
+  // Navigation beside the open page; on a phone a region (changing the element would rebuild the list and drop focus).
   const Rail = wide ? "nav" : "section";
   // A score sent in the open page shows in the list when the head comes back to it (not more than once in 30 seconds).
   const loadedAt = useRef(0);
@@ -801,14 +799,14 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
         )}
         <p className="sr-only" role="status">{name && `${name} · ${nextMock
           ? `${mockNow ? "mock now" : "next mock"} ${shortDay(nextMock.row.date)}, ${nextMock.row.mockStart}` : "no mock booked"}`}</p>
-        {groups.map((group) => (group.items.length > 0 || (group.title === "Next mock" && givesMocks) || (group.title === "To do" && (givesMocks || reviewer || !!savedFor))) && (
+        {groups.map((group) => (group.items.length > 0 || (group.title === "Next mock" && givesMocks) || (group.title === "To do" && (givesMocks || reviewer || (!!savedFor && selected?.id === savedFor.id)))) && (
           <section key={group.title} className={r.group} data-tone={group.title === "To do" && group.items.length ? "todo" : undefined}>
             <h2 className={r.groupTitle}>
               {group.title}
               {group.items.length > 1 && <span className={r.count}>{group.items.length}</span>}
             </h2>
             {group.title === "To do" && savedFor && selected?.id === savedFor.id && <p className={r.saved}>{savedFor.text}</p>}
-            {group.items.length ? list(group.items) : savedFor ? null : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "Nothing to score or sign now." : "Nothing to do now.") : "No mock booked. New bookings also come by LINE."}</p>}
+            {group.items.length ? list(group.items) : group.title === "To do" && savedFor && selected?.id === savedFor.id ? null : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "Nothing to score or sign now." : "Nothing to do now.") : "No mock booked. New bookings also come by LINE."}</p>}
           </section>
         ))}
         {!heads.length ? <p className={r.quiet}>No heads are set up. Add interviewers in Rules and setup.</p>

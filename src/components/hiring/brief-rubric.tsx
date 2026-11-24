@@ -240,24 +240,6 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
         </fieldset>
       ))}
       <div className={b.extra}>
-        <fieldset className={b.choices} disabled={!!pending}>
-          <legend>School&apos;s required checks completed <span className={c.note}>(must be Yes to hire)</span></legend>
-          {([[true, "Yes"], [false, "No"]] as const).map(([value, text]) => (
-            <label key={text} className={b.choice}>
-              <input
-                type="radio"
-                name={`${rubricId}-checks`}
-                className={c.hidden}
-                checked={checksDone === value}
-                onChange={() => {
-                  setChecksDone(value);
-                  changed();
-                }}
-              />
-              {text}
-            </label>
-          ))}
-        </fieldset>
         <label className={c.field}>
           Comments
           <textarea
@@ -288,6 +270,25 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
           </>
         ) : (
           <>
+            {/* The one answer besides the scores sits beside Send scores, so the head sees both (Sol review, 24 Nov 2026). */}
+        <fieldset className={b.choices} disabled={!!pending}>
+              <legend>School&apos;s required checks completed <span className={c.note}>(must be Yes to hire)</span></legend>
+              {([[true, "Yes"], [false, "No"]] as const).map(([value, text]) => (
+                <label key={text} className={b.choice}>
+                  <input
+                    type="radio"
+                    name={`${rubricId}-checks`}
+                    className={c.hidden}
+                    checked={checksDone === value}
+                    onChange={() => {
+                      setChecksDone(value);
+                      changed();
+                    }}
+                  />
+                  {text}
+                </label>
+              ))}
+            </fieldset>
             <div className={c.field}>
               <p role="status" className={checksMissing || lastSent ? undefined : c.note}>{checksMissing
                 ? "Answer the required checks to send."
