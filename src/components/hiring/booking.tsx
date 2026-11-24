@@ -121,7 +121,7 @@ const Fact = ({ icon, label, children }: { icon: ReactNode; label: string; child
 );
 
 /** When the times were checked against live Wise. Nothing shows when the list came from the Wise copy. */
-const Live = ({ at }: { at: string | null }) => (at ? <span className={c.live}>Checked live, {time(at)}</span> : null);
+const Live = ({ at }: { at: string | null }) => (at ? <span className={c.live}>Updated {time(at)}</span> : null);
 
 const NOON = (date: string) => `${date}T12:00:00+07:00`;
 const plusDays = (date: string, n: number) => new Date(Date.parse(NOON(date)) + n * 86_400_000).toISOString().slice(0, 10);
@@ -184,7 +184,7 @@ function Picker<T extends { date: string }>({
   const [weekPicked, setWeek] = useState<string | null>(null);
   const [picked, setPicked] = useState("");
   const week = weekPicked && weeks.includes(weekPicked) ? weekPicked : chosenDate ? mondayOf(chosenDate) : weeks[0];
-  const inWeek = days.filter((d) => mondayOf(d) === week);
+  const inWeek = days.filter((d) => mondayOf(d) === week && items.some((i) => i.date === d && keyOf(i) !== currentKey));
   const active = inWeek.includes(picked) ? picked : chosenDate && inWeek.includes(chosenDate) ? chosenDate : inWeek[0];
   if (!days.length) return null;
   const at = weeks.indexOf(week);
@@ -198,7 +198,8 @@ function Picker<T extends { date: string }>({
       </legend>
       {hint && <p className={c.note}>{hint}</p>}
       {/* The week label always shows; the arrows only when there is more than one week (Sol r6). */}
-      {(weeks.length > 1 || zoneNote) && (
+      {/* The week label always shows, so each list says which week it is (Sol r7); arrows only for several weeks. */}
+      {(
         <div className={cs.weekNav} data-single={weeks.length > 1 ? undefined : ""}>
           <button type="button" className={cs.arrow} aria-label="Previous week" disabled={at <= 0} hidden={weeks.length < 2} onClick={() => setWeek(weeks[at - 1])}>
             <ChevronLeft aria-hidden size={20} />
@@ -214,7 +215,8 @@ function Picker<T extends { date: string }>({
       )}
       <div className={cs.dates}>
         {Array.from({ length: 7 }, (_, i) => plusDays(week, i)).map((date) => {
-          const count = items.filter((i) => i.date === date).length;
+          // The booked time while moving is not open, so it does not make its day open either (Sol r7).
+          const count = items.filter((i) => i.date === date && keyOf(i) !== currentKey).length;
           return (
             <button
               key={date}
@@ -394,7 +396,7 @@ export function VisitBooking({
       setSaved(
         view.visit
           ? "Moved. Email and calendar invites are on their way."
-          : "Booked. Email and calendar invites are on their way.",
+          : "Email and calendar invites are on their way.",
       );
       setMoving(false);
       setStart("");
@@ -442,6 +444,7 @@ export function VisitBooking({
               <>
                 <Steps at={0} />
                 <VisitPlan />
+                <p className={c.note}>After these questions, you choose both times.</p>
               </>
             }
           />
@@ -481,7 +484,8 @@ export function VisitBooking({
             {view.visit && (
               <section className={cs.booked}>
                 <div className={c.stepHead}>
-                  <h2 className={c.stepTitle} id="booked-visit" tabIndex={-1}>
+                  {/* The page title already says "Your onsite visit": the heading is for screen readers and focus (Opus r6). */}
+                  <h2 className={c.hidden} id="booked-visit" tabIndex={-1}>
                     Your booked visit
                   </h2>
                   <span className={c.badge}>
@@ -495,7 +499,7 @@ export function VisitBooking({
                     <span>{part(view.visit.examStart, { month: "short" })}</span>
                     {/* A two-day visit shows its second day on the stub too (Opus r4). */}
                     {view.visit.mockStart && short(view.visit.mockStart) !== short(view.visit.examStart) && (
-                      <i className={cs.stubSecond}>+ {part(view.visit.mockStart, { day: "numeric", month: "short" })}</i>
+                      <i className={cs.stubSecond}>& {part(view.visit.mockStart, { day: "numeric", month: "short" })}</i>
                     )}
                   </div>
                   <div className={cs.legs}>
@@ -512,7 +516,12 @@ export function VisitBooking({
                         <b>{short(view.visit.mockStart)}</b>
                         <small>
                           {time(view.visit.mockStart)}–{time(view.visit.mockEnd)}
-                          {view.visit.head && ` · ${view.visit.head}`}
+                          {view.visit.head && (
+                            <>
+                              {" · "}
+                              <span className={cs.nowrap}>{view.visit.head}</span>
+                            </>
+                          )}
                         </small>
                         <small>If you pass the test</small>
                       </div>
@@ -582,7 +591,7 @@ export function VisitBooking({
                 <h2 className={c.stepTitle} id="mock-wait">
                   Mock teaching time
                 </h2>
-                <p className={c.note}>1 hour, if you pass. Choose a test time first.</p>
+                <p className={c.note}>1 hour, if you pass.</p>
               </section>
             )}
             {showForm && view.twoDay && slot && (
@@ -590,7 +599,7 @@ export function VisitBooking({
                 zoneNote={false}
                 id="mock-start"
                 legend="Mock teaching time"
-                hint="1 hour, if you pass · weekdays"
+                hint="1 hour, if you pass"
                 checkedAt={null}
                 items={laterMocks}
                 keyOf={(m) => m.start}
@@ -603,6 +612,16 @@ export function VisitBooking({
                   </b>
                 )}
               />
+            )}
+            {/* While a time is still missing: once both are chosen, nothing is blocked. */}
+            {showForm && (!slot || (view.twoDay && !mock)) && (
+              <p className={c.help}>
+                No time works?{" "}
+                <a href={LINE_URL} rel="noreferrer">
+                  Contact BeGifted on LINE
+                </a>
+                .
+              </p>
             )}
           </>
         }
@@ -624,13 +643,13 @@ export function VisitBooking({
                       <div>
                         <span>Test</span>
                         <b>
-                          {short(slot.examStart)}, {time(slot.examStart)}
+                          {part(slot.examStart, { day: "numeric", month: "short" })}, {time(slot.examStart)}
                         </b>
                       </div>
                       {view.twoDay && (
                         <div>
                           <span>Mock, if you pass</span>
-                          <b>{mock ? `${short(mock.start)}, ${time(mock.start)}` : "Choose a time"}</b>
+                          <b>{mock ? `${part(mock.start, { day: "numeric", month: "short" })}, ${time(mock.start)}` : "Choose a time"}</b>
                         </div>
                       )}
                     </div>
@@ -713,7 +732,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
     <>
       {saved && <Saved>{saved}</Saved>}
       <div className={c.facts}>
-        <Fact icon={contract ? <FileSignature aria-hidden /> : <Video aria-hidden />} label={contract ? "Contract signing" : "R1: HR Interview"}>
+        <Fact icon={contract ? <FileSignature aria-hidden /> : <Video aria-hidden />} label={contract ? "Signing" : "Video call"}>
           {view.minutes} minutes {contract ? "with our team" : "on Google Meet with our HR team"}
         </Fact>
         {view.kind === "contract" ? <Fact icon={<MapPin aria-hidden />} label="Where">{view.location}</Fact> : <p className={c.note}>Google Calendar sends you the Google Meet link.</p>}
@@ -777,7 +796,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
             tile={(s) => <b>{time(s.start)}</b>}
           />
           {!contract && <label className={c.field}>
-            <span className={c.stepTitle}>Your phone number (backup)</span>
+            <span className={c.stepTitle}>Your phone number</span>
             <input
               className={c.input}
               type="tel"
@@ -794,6 +813,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
           {keep}
           <VisitConfirm
             error={error}
+            missing={[!start && "a time", !phoneOk && "your phone number"].filter(Boolean).join(", ")}
             disabled={busy || !start || !phoneOk}
             label={busy ? "Confirming…" : view.call ? "Confirm new time" : `Confirm ${appointment}`}
             onConfirm={book}

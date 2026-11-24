@@ -48,6 +48,9 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   // The week before the last Clear, for one Undo; any new choice forgets it.
   const [undo, setUndo] = useState<WeekHours | null>(null);
   const undoRef = useRef<HTMLButtonElement>(null);
+  const clearRef = useRef<HTMLButtonElement>(null);
+  // Single taps by finger. After the second, one tip shows how to fill a block (Sol r7: help only when it is useful).
+  const [taps, setTaps] = useState(0);
   const has = (week: WeekHours, d: number, h: number) => week[d].includes(h);
   function paint(cells: [number, number][], fill: boolean) {
     const next = current.current.map((hours, d) => {
@@ -134,6 +137,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
       // A tap: one hour on or off.
       clearTimeout(wait.timer);
       pending.current = null;
+      setTaps((n) => n + 1);
       setFocus(wait.cell);
       paint([wait.cell], !has(current.current, ...wait.cell));
       return;
@@ -208,61 +212,12 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
           );
         })}
       </div>
-      <div className={s.readback} aria-live="polite">
-        {count > 0 && (
-          <p className={s.readline}>
-            <span>{readback(value)}</span>
-            <button
-              type="button"
-              className={s.clear}
-              disabled={disabled}
-              onClick={() => {
-                setUndo(value);
-                onChange(WEEK_DAYS.map(() => []));
-                // The Clear button goes away: keyboard focus moves to Undo (Sol r6).
-                requestAnimationFrame(() => undoRef.current?.focus());
-              }}
-            >
-              Clear
-            </button>
-          </p>
-        )}
-        {/* The line is always there, so the grid below never moves when the first hour is chosen. */}
-        {count === 0 && !undo && (
-          <p className={s.readline}>
-            <span className={s.empty}>No hours chosen yet.</span>
-          </p>
-        )}
-        {count === 0 && undo && (
-          <p className={s.readline}>
-            <span>Cleared.</span>
-            <button ref={undoRef} type="button" className={s.clear} disabled={disabled} onClick={() => (onChange(undo), setUndo(null))}>
-              Undo
-            </button>
-          </p>
-        )}
-        <p className={s.rules}>
-          {/* What the booking asks for: a note to add, then a tick once the grid has it (Sol r2: not radio-like). */}
-          <span data-ok={weekend || undefined}>
-            {weekend ? <Check aria-hidden size={14} /> : <Plus aria-hidden size={14} />}
-            {weekend ? "Saturday or Sunday" : "Add a Saturday or Sunday"}
-          </span>
-          <span data-ok={late || undefined}>
-            {late ? <Check aria-hidden size={14} /> : <Plus aria-hidden size={14} />}
-            {late ? "A weekday after 15:00" : "Add a weekday after 15:00"}
-          </span>
-          {count > 0 && <b>{count} hours available</b>}
-        </p>
-      </div>
-      <details className={s.help}>
-        <summary>How to fill the grid</summary>
-        <p>Tap an hour to choose it, or tap it again to clear it. To fill or clear a block, hold an hour, then drag. With a keyboard, use the arrow keys and Space.</p>
-      </details>
       <div
         className={s.grid}
         data-week-grid=""
         role="group"
         aria-label="Hours you can teach onsite, Monday to Sunday"
+        aria-describedby="week-grid-keys"
         aria-disabled={disabled || undefined}
         onPointerDown={down}
         onPointerMove={move}
@@ -303,6 +258,75 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
           21
         </span>
       </div>
+      {/* Below the grid: its height can change while a finger drags, and nothing below the finger may move. */}
+      <div className={s.readback} aria-live="polite">
+        {count > 0 && (
+          <p className={s.readline}>
+            <span>
+              {readback(value)} · <b>{count} h</b>
+            </span>
+            <button
+              ref={clearRef}
+              type="button"
+              className={s.clear}
+              disabled={disabled}
+              onClick={() => {
+                setUndo(value);
+                onChange(WEEK_DAYS.map(() => []));
+                // The Clear button goes away: keyboard focus moves to Undo (Sol r6).
+                requestAnimationFrame(() => undoRef.current?.focus());
+              }}
+            >
+              Clear
+            </button>
+          </p>
+        )}
+        {/* The line is always there, so the grid below never moves when the first hour is chosen. */}
+        {count === 0 && !undo && (
+          <p className={s.readline}>
+            <span className={s.empty}>No hours chosen yet.</span>
+          </p>
+        )}
+        {count === 0 && undo && (
+          <p className={s.readline}>
+            <span>Cleared.</span>
+            <button
+              ref={undoRef}
+              type="button"
+              className={s.clear}
+              disabled={disabled}
+              onClick={() => {
+                onChange(undo);
+                setUndo(null);
+                requestAnimationFrame(() => clearRef.current?.focus());
+              }}
+            >
+              Undo
+            </button>
+          </p>
+        )}
+        <p className={s.rules}>
+          {/* What the booking asks for: a note to add, then a tick once the grid has it (Sol r2: not radio-like). */}
+          {/* Status, not actions: neutral until met, then a green tick (Opus r6). */}
+          <span data-ok={weekend || undefined}>
+            {weekend && <Check aria-hidden size={14} />}
+            {weekend ? "Saturday or Sunday" : "Needs a Saturday or Sunday"}
+          </span>
+          <span data-ok={late || undefined}>
+            {late && <Check aria-hidden size={14} />}
+            {late ? "A weekday after 15:00" : "Needs a weekday after 15:00"}
+          </span>
+        </p>
+      </div>
+
+      <p id="week-grid-keys" className={s.srOnly}>
+        Arrow keys move between hours. Space or Enter chooses or clears an hour.
+      </p>
+      {taps >= 2 && (
+        <p className={s.hint} role="status">
+          Tip: hold an hour, then drag to fill a block.
+        </p>
+      )}
     </div>
   );
 }

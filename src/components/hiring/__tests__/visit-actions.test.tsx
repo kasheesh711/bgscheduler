@@ -54,7 +54,7 @@ describe("VisitBooking", () => {
   it("shows the résumé's degree as one line to confirm, in place of the two degree questions", () => {
     const html = page({ waiting: "answers", slots: [], enabled: false, subject: "", knownDegree: { degree: "Bachelor's", field: "English" } });
     expect(html).toContain("Bachelor&#x27;s · English");
-    expect(html).toContain("Correct");
+    expect(html).toContain("Yes, that&#x27;s right");
     expect(html).toContain("Edit");
     expect(html).not.toContain("Highest completed degree");
     expect(html).not.toContain("Field of study");
@@ -70,7 +70,7 @@ describe("VisitBooking", () => {
     expect(html).toContain("Test time");
     expect(html).toContain("Confirm both times");
     // The mock teaching list opens after a test time is chosen; until then its section says what comes first.
-    expect(html).toContain("Choose a test time first.");
+    expect(html).toContain("1 hour, if you pass.");
     expect(html).not.toContain('id="mock-start"');
     expect(page({ twoDay: true, waiting: "answers", formUrl: "https://forms.gle/x", slots: [], enabled: false, subject: "", notice: "Answer first." })).toContain("Save and see times");
   });
@@ -84,10 +84,10 @@ describe("VisitBooking", () => {
     expect(html).toContain("I can teach onsite");
     expect(html).not.toContain("Peat");
     // The live-check line shows only when the list came from a live Wise read.
-    expect(html).not.toContain("checked live");
-    expect(page({ checkedAt: "2026-11-02T02:05:00.000Z" })).toContain("Checked live, 09:05");
+    expect(html).not.toContain("Updated");
+    expect(page({ checkedAt: "2026-11-02T02:05:00.000Z" })).toContain("Updated 09:05");
     // A day outside the live read never says "checked live".
-    expect(page({ checkedAt: "2026-11-02T02:05:00.000Z", liveDates: ["2026-11-04"] })).not.toContain("Checked live");
+    expect(page({ checkedAt: "2026-11-02T02:05:00.000Z", liveDates: ["2026-11-04"] })).not.toContain("Updated");
   });
   it("shows the notice and the LINE contact, and no form, for an empty list or a stale snapshot", () => {
     const html = page({ slots: [], notice: `Times cannot be shown. Contact BeGifted on LINE: ${LINE}` });

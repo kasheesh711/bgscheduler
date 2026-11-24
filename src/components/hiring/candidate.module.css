@@ -112,8 +112,11 @@
 .chip:hover {
   border-color: #b8ae98;
 }
+/* The check keeps its space when hidden, so a chip does not grow when chosen (Sol r7). */
 .chip svg {
-  display: none;
+  flex: none;
+  visibility: hidden;
+  margin-left: -4px;
 }
 .chip:has(input:checked) {
   border-color: var(--ink);
@@ -121,7 +124,7 @@
   color: #fbf7ee;
 }
 .chip:has(input:checked) svg {
-  display: block;
+  visibility: visible;
 }
 .chip:has(input:focus-visible) {
   outline: 3px solid var(--accent);
@@ -725,10 +728,7 @@
   }
 }
 .rules span:not([data-ok]) {
-  color: #8a2c12;
-}
-.rules span:not([data-ok]) svg {
-  color: #8a2c12;
+  color: var(--muted);
 }
 .file {
   min-height: 56px;
@@ -811,9 +811,10 @@
 }
 .timeCheck {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 50%;
+  right: 12px;
   display: none;
+  transform: translateY(-50%);
 }
 .time:has(input:checked) .timeCheck {
   display: block;
@@ -935,4 +936,21 @@
 }
 .empty {
   color: var(--muted);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+[data-confirm][data-compact] .progressBar {
+  flex: none;
+  width: 100%;
 }

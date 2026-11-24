@@ -657,8 +657,8 @@ input[type="file"].input {
   margin: 0 -18px;
   padding: 14px 18px;
   border-block: 1px solid var(--line);
-  background: rgb(255 253 248 / 0.92);
-  backdrop-filter: blur(8px);
+  /* Solid: WebKit showed the content through a translucent bar (Opus r6). */
+  background: var(--card);
 }
 @media (min-width: 640px) {
   .confirm {

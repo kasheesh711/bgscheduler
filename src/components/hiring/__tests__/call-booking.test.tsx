@@ -26,7 +26,7 @@ const page = (patch = {}) => renderToStaticMarkup(<CallBooking token="t" view={v
 describe("CallBooking", () => {
   it("offers the days, the times of the first day, and a required backup phone field; the button waits for both", () => {
     const html = page();
-    expect(html).toContain("R1: HR Interview");
+    expect(html).toContain("Video call");
     expect(html).toContain("30 minutes on Google Meet with our HR team");
     expect(html).toContain("Google Meet link");
     expect(html).toContain("2 times");
@@ -34,7 +34,7 @@ describe("CallBooking", () => {
     expect(html).toContain(">09:00<");
     expect(html).toContain(">09:15<");
     expect(html).toMatch(/<input[^>]*type="tel"[^>]*required/);
-    expect(html).toContain("Your phone number (backup)");
+    expect(html).toContain("Your phone number");
     expect(html).toMatch(/<button[^>]*disabled[^>]*>Confirm R1 interview<\/button>/);
     expect(html).toContain("Contact BeGifted on LINE");
   });

@@ -38,6 +38,7 @@ function Q({
   title,
   hint,
   optional,
+  tag,
   hideTitle,
   children,
 }: {
@@ -45,6 +46,8 @@ function Q({
   title: string;
   hint?: string;
   optional?: boolean;
+  /** A short note after the title, such as "all that apply". */
+  tag?: string;
   /** The section title already says it on screen; screen readers still get the question. */
   hideTitle?: boolean;
   children: ReactNode;
@@ -54,6 +57,7 @@ function Q({
       <legend className={hideTitle ? c.hidden : s.qTitle}>
         {title}
         {optional && <small>optional</small>}
+        {tag && <small>{tag}</small>}
       </legend>
       {hint && <p className={c.note}>{hint}</p>}
       {children}
@@ -266,7 +270,7 @@ export function PreScreenQuestions({
             <div className={s.knownActions}>
               <button type="button" aria-pressed={degreeMode === "confirmed"} disabled={busy} onClick={() => setDegreeMode("confirmed")}>
                 {degreeMode === "confirmed" && <Check aria-hidden size={16} />}
-                {degreeMode === "confirmed" ? "Confirmed" : "Correct"}
+                {degreeMode === "confirmed" ? "Confirmed" : "Yes, that's right"}
               </button>
               <button
                 type="button"
@@ -310,7 +314,7 @@ export function PreScreenQuestions({
         </Q>
       </Section>
       <Section title="What you teach">
-        <Q id="q-subjects" title="Subjects you can teach confidently">
+        <Q id="q-subjects" title="Subjects you can teach confidently" tag="all that apply">
           <Chips name="subjects" choices={showRest ? [...first, ...rest] : first} value={subjects} onChange={setSubjects} many disabled={busy} />
           {rest.length > 0 && !subjects.some((v) => rest.includes(v)) && (
             <div>
@@ -324,11 +328,11 @@ export function PreScreenQuestions({
         {/* The page chose the only possible subject: say so here, not first on Times (Sol r6). */}
         {test && (subjects.length === 1 || testable.length === 1) && !(subjects.length > 1 && testChoices.length > 1) && (
           <p className={c.note} role="status">
-            Test and mock lesson subject: <b>{test}</b>
+            Test and mock teaching subject: <b>{test}</b>
           </p>
         )}
         {subjects.includes(ART) && (
-          <Q title="Art & Design Technology portfolio">
+          <Q title="Art & Design Technology portfolio" tag="file or link">
             <label className={s.drop}>
               <input
                 className={c.hidden}
@@ -340,7 +344,7 @@ export function PreScreenQuestions({
               <Upload aria-hidden size={18} />
               <span>
                 <b>{fileName || "Choose a file"}</b>
-                <small>{fileName ? "Uploaded. Choose again to replace it." : "PDF, JPEG or PNG, max 25 MB"}</small>
+                <small>{fileName ? "Uploaded. Choose again to replace it." : "PDF, JPG or PNG · 25 MB"}</small>
               </span>
             </label>
             {fileNote && (
@@ -348,14 +352,15 @@ export function PreScreenQuestions({
                 {fileNote}
               </p>
             )}
-            {text("Or a link", portfolio, setPortfolio, 500, "A link that opens without a password", true)}
+            {text("Or a link", portfolio, setPortfolio, 500, "A link that opens without a password")}
           </Q>
         )}
         {subjects.length > 1 && testChoices.length > 0 && (
           <Q
             id="q-test"
-            title="Subject for your test and mock lesson"
-            hint={testable.length && testable.length < subjects.length ? "Greyed subjects are not tested now." : undefined}
+            title="Subject for your test and mock teaching"
+            tag="choose one"
+            hint={testable.length && testable.length < subjects.length ? "Greyed subjects have no test now." : undefined}
           >
             <Chips
               name="testSubject"

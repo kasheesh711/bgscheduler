@@ -19,8 +19,8 @@ describe("WeekGrid", () => {
     expect(html).toContain("Mon 17–19 · Sat 09–10");
     expect(html).toContain("Saturday or Sunday");
     expect(html).toContain("A weekday after 15:00");
-    expect(html).toContain("3 hours available");
+    expect(html).toContain("3 h");
     const none = renderToStaticMarkup(<WeekGrid value={emptyWeek()} onChange={() => {}} disabled={false} />);
-    expect(none).toContain("Add a Saturday or Sunday");
+    expect(none).toContain("Needs a Saturday or Sunday");
   });
 });
