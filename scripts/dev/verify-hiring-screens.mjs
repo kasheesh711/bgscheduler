@@ -1020,7 +1020,7 @@ try {
     // The paper to re-mark comes first and is already open beside the list.
     await page.frameLocator("iframe").getByText("Sample Joy").first().waitFor();
     assert.equal(await page.locator("iframe").getAttribute("src"), "/hiring/paper-check/sample-token?embed=1");
-    assert.equal(await page.getByRole("link", { name: /^Check paper: .*Sample Joy/ }).getAttribute("aria-current"), "true");
+    assert.equal(await page.getByRole("link", { name: /^Re-mark paper: .*Sample Joy/ }).getAttribute("aria-current"), "true");
     await shot(page, "role-heads");
     // One click on the next mock opens its brief in the same place.
     await page.getByRole("link", { name: /^Interview brief: .*Reply Low/ }).click();
@@ -1031,9 +1031,9 @@ try {
     // On a phone the list is the page: a tap opens the paper check or the brief itself, which links back.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${origin}/?view=heads&roles=1&me=Ek`);
-    await page.getByRole("link", { name: /^Check paper: .*Sample Joy/ }).waitFor();
+    await page.getByRole("link", { name: /^Re-mark paper: .*Sample Joy/ }).waitFor();
     assert.equal(await page.locator("iframe").count(), 0);
-    assert.equal(await page.getByRole("link", { name: /^Check paper: .*Sample Joy/ }).getAttribute("href"), "/hiring/paper-check/sample-token");
+    assert.equal(await page.getByRole("link", { name: /^Re-mark paper: .*Sample Joy/ }).getAttribute("href"), "/hiring/paper-check/sample-token");
     await shot(page, "role-heads-phone");
     await page.goto(`${origin}/hiring/brief/sample-token`);
     assert.equal(await page.getByRole("link", { name: "← My hiring list" }).getAttribute("href"), "/hiring?view=heads");
@@ -1125,7 +1125,7 @@ try {
     });
     await at(1024, 768, "roles=1&me=Ek", "heads-ws-ek-1024", frameReady("Sample Joy"));
     for (const [width, height, size] of [[390, 844, "phone"], [320, 700, "320"]]) {
-      await at(width, height, "roles=1&me=Ek", `heads-ws-ek-${size}`, () => page.getByRole("link", { name: /^Check paper: .*Sample Joy/ }).waitFor());
+      await at(width, height, "roles=1&me=Ek", `heads-ws-ek-${size}`, () => page.getByRole("link", { name: /^Re-mark paper: .*Sample Joy/ }).waitFor());
       await at(width, height, "roles=1&me=Gift&gift=1&live=1", `heads-ws-gift-${size}`, () => page.getByRole("button", { name: /^Final review: .*Reply Passed/ }).waitFor());
     }
     await at(390, 844, "roles=1&me=Gift&gift=1&live=1", "heads-ws-gift-review-phone", async () => {
@@ -1631,12 +1631,12 @@ try {
         } else if (id === "H2") {
           // A head opens /hiring: their own list, no name to choose. On a phone one tap opens the paper to re-mark.
           await open("roles=1&me=Ek");
-          const check = tab.getByRole("link", { name: /^Check paper: .*Sample Joy/ });
+          const check = tab.getByRole("link", { name: /^Re-mark paper: .*Sample Joy/ });
           await check.waitFor();
-          await first(check, "Check paper: Sample Joy");
+          await first(check, "Re-mark paper: Sample Joy");
           await snap();
           await axe();
-          await tap(check, "Check paper: Sample Joy");
+          await tap(check, "Re-mark paper: Sample Joy");
           const back = tab.getByRole("link", { name: "← My hiring list" });
           await back.waitFor();
           await tab.addStyleTag({ content: "#root{padding:0!important}" });

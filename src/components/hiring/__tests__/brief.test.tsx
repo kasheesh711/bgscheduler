@@ -57,13 +57,14 @@ describe("InterviewerBrief", () => {
   it("shows the score form before and during the mock, and the recommendation only after it, with score choices for each item", () => {
     const wait = html({ form: "wait", mockEnded: false });
     expect(wait).toContain('type="radio"');
-    expect(wait).toContain("Send scores during the mock; recommend after it ends.");
+    expect(wait).toContain("Send scores during the mock.");
+    expect(wait).toContain("Recommend after the mock ends.");
     expect(wait).not.toContain("Yes, send for final review");
     expect(wait.indexOf("Check recommendation")).toBeLessThan(wait.indexOf("Candidate files"));
     // Closed early by admin: no "ask admin" alarm, the same wait for the recommendation.
     const closedEarly = html({ form: "closed", mockEnded: false, recommendationBlock: null });
     expect(closedEarly).not.toContain("Ask BeGifted admin");
-    expect(closedEarly).toContain(". Recommend after it ends.");
+    expect(closedEarly).toContain("Recommend after the mock ends.");
     expect(closedEarly).not.toContain("Send scores during the mock");
     expect(closedEarly).not.toContain("Yes, send for final review");
     const closed = html({ form: "closed", recommendationReady: true });

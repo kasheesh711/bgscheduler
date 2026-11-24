@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { ITEM_MAX, RUBRIC_ITEMS, rubricTotals } from "@/lib/hiring/marking-sheet";
 import { ANSWER_LABELS } from "@/lib/hiring/model";
@@ -66,24 +66,30 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   const unsent = lastSent !== null && lastSent.editCount !== editCount;
   // A check for the recommendation fetches the brief again in place: the open file tab and unsent score edits stay
   // (Sol review, round 17). The head's list asks the same when its row now names another part.
+  // The refresh runs as a transition, so "Checking…" shows until the new brief is on screen; then the part asked for
+  // opens, or the check says the recommendation is not open yet (Sol review, round 18).
   const router = useRouter();
-  const [showAfter, setShowAfter] = useState<string | null>(null);
+  const [checking, startCheck] = useTransition();
+  const [checked, setChecked] = useState(false);
+  const asked = useRef<string | null>(null);
   const refresh = (part: string) => {
-    setShowAfter(part);
-    router.refresh();
+    asked.current = part;
+    setChecked(true);
+    startCheck(() => router.refresh());
   };
   useEffect(() => {
-    if (showAfter === null) return;
-    const target = showAfter ? document.getElementById(showAfter) : null;
+    if (checking || asked.current === null) return;
+    const target = asked.current ? document.getElementById(asked.current) : null;
+    asked.current = null;
     target?.scrollIntoView({ block: "start" });
     target?.focus({ preventScroll: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when the refreshed brief arrives
-  }, [brief]);
+  }, [checking]);
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.origin !== window.location.origin || event.data?.type !== "hiring-refresh") return;
-      setShowAfter(typeof event.data.part === "string" ? event.data.part : "");
-      router.refresh();
+      asked.current = typeof event.data.part === "string" ? event.data.part : "";
+      setChecked(true);
+      startCheck(() => router.refresh());
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -95,9 +101,9 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   // The head is the interviewer and the place does not change, so the short header keeps the subject and the time.
   const facts: [string, string][] = [
     ["Subject", brief.subject],
-    // Before the mock ends, the time says what the head can do when (Sol review, rounds 11–12); its label says
-    // whether the mock is still to come or under way (Sol review, round 17).
-    [brief.mockEnded || brief.decision ? "Mock teaching" : brief.mockStarted ? "Mock now" : "Upcoming mock", `${compact ? brief.mock : `${brief.mock} (Bangkok)`}${!brief.mockEnded && !brief.decision ? (brief.form === "closed" ? ". Recommend after it ends." : ". Send scores during the mock; recommend after it ends.") : ""}`],
+    // The label says whether the mock is still to come or under way (Sol review, round 17). Each instruction sits where it
+    // is used: before the mock under the facts, sending with the scores, recommending by its check (Sol review, round 18).
+    [brief.mockEnded || brief.decision ? "Mock teaching" : brief.mockStarted ? "Mock now" : "Upcoming mock", compact ? brief.mock : `${brief.mock} (Bangkok)`],
     ...(brief.exam && !compact ? ([["Exam", brief.exam]] as [string, string][]) : []),
     ...(compact ? [] : ([["Place", brief.location], ["Interviewer", brief.interviewer ?? "To be confirmed"]] as [string, string][])),
   ];
@@ -134,6 +140,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
               </div>
             ))}
           </dl>
+          {!brief.mockStarted && !brief.mockEnded && !decision && <p className={c.note}>Review the résumé and guide before the mock.</p>}
         </div>
         {brief.ats && (
           <section className={b.ats} aria-label="ATS score">
@@ -175,6 +182,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
           {!blocked && (
             <section id="scores" className={b.panel} tabIndex={-1}>
               <h2 className={b.panelTitle}>Mock scores</h2>
+              {!brief.mockEnded && brief.form !== "closed" && !decision && <p className={c.note}>Send scores during the mock.</p>}
               <BriefRubric
                 saved={brief.rubric}
                 form={brief.form}
@@ -195,7 +203,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
           {brief.mockEnded && !blocked && !earlyRecommendation && recommendation}
           {wait && (
             <div className={`${b.panel} ${c.field}`}>
-              <button type="button" className={c.button} onClick={() => refresh("recommendation")}>Check recommendation</button>
+              <p role="status">{checking ? "Checking…" : checked ? "Not open yet. Recommend after the mock ends." : "Recommend after the mock ends."}</p>
+              <button type="button" className={c.button} disabled={checking} onClick={() => refresh("recommendation")}>Check recommendation</button>
             </div>
           )}
         </div>

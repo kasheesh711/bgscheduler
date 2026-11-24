@@ -729,7 +729,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     const candidate = data.candidates.find((c) => c.id === check.candidateId);
     return { id: check.resultId, name: candidate?.name ?? "Needs review: candidate record not found", candidate, time: `${check.percent}%`, day: "AI score",
       detail: `${check.subject} · Paper check`, tags: [], note: null,
-      href: check.path, task: "Check paper", action: "Re-mark paper", urgent: !!check.path };
+      href: check.path, task: "Re-mark paper", action: "Re-mark paper", urgent: !!check.path };
   }) : [];
   // Gift's final reviews: each newest Yes from a head that no sent result has closed. A ready packet comes first.
   const byId = new Map(data.candidates.map((candidate) => [candidate.id, candidate]));
@@ -790,7 +790,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const savedIn = savedFor && selected?.id === savedFor.id
     ? groups.find((group) => group.items.some((item) => item.id === savedFor.id))?.title ?? "To do" : null;
   useEffect(() => {
-    openNameRef.current = selected ? { id: selected.id, text: `${selected.task === "Check paper" ? "Marks saved" : "Saved"} for ${selected.name}` } : null;
+    openNameRef.current = selected ? { id: selected.id, text: `${selected.task === "Re-mark paper" ? "Marks saved" : "Saved"} for ${selected.name}` } : null;
   }, [selected]);
   const paneId = useId();
   // Gift's review link: on a phone the row may sit below the fold.

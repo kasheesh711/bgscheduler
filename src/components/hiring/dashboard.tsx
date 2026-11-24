@@ -425,7 +425,8 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
         )}
       </header>
       {view !== "hr" && view !== "heads" && !giftReview && <p className={css.purpose}>{PURPOSE[view]}</p>}
-      {error && view !== "setup" && (
+      {/* A head's failed first load has its own message and retry below. */}
+      {error && view !== "setup" && !(view === "heads" && !data) && (
         <p role="alert" className={css.alert}>
           {error}
         </p>
@@ -455,9 +456,21 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
       </div>
       {!data || !config || !insights ? (
         error ? (
-          <p role="status" className={css.loading} hidden={view === "capacity"}>
-            Check the hiring setup and reload this page.
-          </p>
+          view === "heads" ? (
+            // A head cannot check the setup, so the list offers a retry and names who to ask (Sol review, round 18).
+            <div role="alert" className={css.loading}>
+              <p>Could not load your hiring list.</p>
+              <button type="button" className={css.primary} onClick={() => {
+                setError("");
+                load(true).catch((e) => setError(e.message));
+              }}>Try again</button>
+              <p>If it fails again, ask BeGifted admin.</p>
+            </div>
+          ) : (
+            <p role="status" className={css.loading} hidden={view === "capacity"}>
+              Check the hiring setup and reload this page.
+            </p>
+          )
         ) : (
           <TabSkeleton label={view === "heads" ? "Loading your hiring list…" : `Loading hiring: ${VIEWS[view]}…`} hidden={view === "capacity"} />
         )

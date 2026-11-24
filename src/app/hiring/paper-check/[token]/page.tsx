@@ -8,7 +8,7 @@ import { paperCheckView } from "@/lib/hiring/paper-check";
 // Public: the head opens this from a LINE notice, with no session. Access is the token in the path and nothing else
 // (paperCheckView). Reachability needs the `/hiring/paper-check/` entry in src/proxy.ts.
 export const metadata = {
-  title: "Paper check | BeGifted",
+  title: "Re-mark paper | BeGifted",
   robots: { index: false, follow: false },
   referrer: "no-referrer" as const,
 };

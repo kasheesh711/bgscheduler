@@ -642,8 +642,8 @@ export function BookingShell({ kind, children, bare = false }: { kind?: "visit" 
         <div className={c.heroInner}>
           <p className={c.brand}>BeGifted Education</p>
           <h1 className={c.title}>
-            {kind === "onboarding" ? "Tutor " : kind === "brief" ? "Interview " : kind === "paper-check" ? "Paper " : "Book your "}
-            <em>{kind === "onboarding" ? "onboarding" : kind === "brief" ? "brief" : kind === "paper-check" ? "check" : kind === "contract" ? "contract signing" : kind === "call" ? "R1: HR Interview" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "assessment"}</em>
+            {kind === "onboarding" ? "Tutor " : kind === "brief" ? "Interview " : kind === "paper-check" ? "Re-mark " : "Book your "}
+            <em>{kind === "onboarding" ? "onboarding" : kind === "brief" ? "brief" : kind === "paper-check" ? "paper" : kind === "contract" ? "contract signing" : kind === "call" ? "R1: HR Interview" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "assessment"}</em>
           </h1>
         </div>
       </header>}

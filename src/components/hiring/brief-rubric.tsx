@@ -63,24 +63,10 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   const firstScore = useRef<HTMLInputElement>(null);
   const sendBar = useRef<HTMLDivElement>(null);
   const sentTotal = lastSent?.editCount === editCount ? lastSent.total : null;
-  // Unscored sliders (value 0), read afresh each time. The cue shows while one is hidden under the send bar; its button
-  // goes to the first unscored score in the form, so none is skipped, and focuses it (Sol review, rounds 15–16).
+  // Unscored sliders (value 0), read afresh on each click. The button shows while any score is blank and goes to the
+  // first one in the form, so none is skipped, and focuses it (Sol review, rounds 15–18).
   const unscored = () => [...(sendBar.current?.closest("form")?.querySelectorAll<HTMLInputElement>('input[type="range"]') ?? [])]
     .filter((range) => range.value === "0");
-  const [below, setBelow] = useState(false);
-  useEffect(() => {
-    const check = () => {
-      const top = sendBar.current?.getBoundingClientRect().top ?? Infinity;
-      setBelow(unscored().some((range) => range.getBoundingClientRect().bottom > top));
-    };
-    check();
-    window.addEventListener("scroll", check, { capture: true, passive: true });
-    window.addEventListener("resize", check);
-    return () => {
-      window.removeEventListener("scroll", check, { capture: true });
-      window.removeEventListener("resize", check);
-    };
-  }, [editing, sentTotal, items]);
   useEffect(() => {
     if (state !== "sent" && !error) {
       if (editing && sentTotal !== null) firstScore.current?.focus();
@@ -317,9 +303,9 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                   ? "Answer the required checks to send."
                   : lastSent ? "Score changes not sent."
                     : `${scored}/${RUBRIC_ITEMS.length} scored`}</p>
-                {below && <button type="button" className={b.moreBelow} onClick={() => {
+                {scored < RUBRIC_ITEMS.length && <button type="button" className={b.moreBelow} onClick={() => {
                   const next = unscored()[0];
-                  if (!next) return setBelow(false);
+                  if (!next) return;
                   (next.closest("[data-score-row]") ?? next).scrollIntoView({ block: "center" });
                   next.focus({ preventScroll: true });
                 }}>Next unscored</button>}
