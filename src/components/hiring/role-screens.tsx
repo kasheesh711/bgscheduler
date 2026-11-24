@@ -534,7 +534,7 @@ function ItemLink({ item, selected, onSelect, wide, readOnly, paneId }: { item: 
         {item.time}
         <span>{item.day}</span>
         {/* The open row on a laptop says it is the one showing; "Open" read as a command (Sol review, round 16). */}
-        {selected && wide && <span className={r.itemOpen}>Selected</span>}
+        {selected && wide && <span className={r.itemOpen} aria-hidden="true">Selected</span>}
       </span>
       <span className={r.itemMain}>
         <span className={r.itemName}>{item.name}</span>

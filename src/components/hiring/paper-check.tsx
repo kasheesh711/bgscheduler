@@ -186,10 +186,11 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
         <label className={c.field}>
           {/* A comment already on the result is the marker's; the head may keep or change it, and it saves with the marks. */}
           <span>{view.comment ? "Existing marking comment" : "Comment (optional)"}</span>
-          {view.comment && <span id={`${view.id}-comment-help`} className={c.note}>Saved with your marks.</span>}
           <textarea className={c.input} rows={3} maxLength={4000} value={comment} aria-describedby={view.comment ? `${view.id}-comment-help` : undefined}
             onChange={(event) => setComment(event.target.value)} />
         </label>
+        {/* Outside the label, so a screen reader reads it once, as the description. */}
+        {view.comment && <p id={`${view.id}-comment-help`} className={c.note}>Saved with your marks.</p>}
         </div>
         {more !== null && (
           <button type="button" className={k.more} onClick={() => {

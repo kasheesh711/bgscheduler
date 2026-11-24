@@ -656,9 +656,12 @@
 /* The radio covers its whole box, so a tap or click anywhere on Yes or No picks it (blind test, round 12). */
 .choiceInput { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 /* "More scores below" sits beside the count on a laptop; a phone head scrolls the one column anyway. */
-.countRow { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.countRow { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .countRow > p { margin: 0; }
-.moreBelow { min-height: 24px; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; text-decoration: underline; cursor: pointer; }
+/* Beside the count on one line; where the bar is too narrow for that, the cue hides so the bar never grows (critic review, round 16). */
+.moreBelow { min-height: 24px; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; text-decoration: underline; white-space: nowrap; cursor: pointer; }
+.sendBar { container-type: inline-size; }
+@container (max-width: 459px) { .moreBelow { display: none; } }
 @media (max-width: 699px) { .moreBelow { display: none; } }
 /* The scoring hint names the pointer the head has: a phone is tapped, not clicked (critic review, round 15). */
 .coarsePointer { display: none; }
