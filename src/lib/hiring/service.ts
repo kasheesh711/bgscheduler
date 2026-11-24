@@ -1441,7 +1441,7 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     .where(and(eq(s.hiringAudit.candidateId, mock.candidateId), eq(s.hiringAudit.action, "head-decision")))
     .orderBy(desc(s.hiringAudit.createdAt))
     .limit(1);
-  const recommendationReady = own.form !== "wait" && !!(await completedBriefResult(db, mock));
+  const recommendationReady = now >= mock.endTime && !!(await completedBriefResult(db, mock));
   const result = own.replaced;
   const checking = result?.bookingId === mock.id && (result.status === "uploaded" || result.status === "marking");
   return {
@@ -1461,7 +1461,9 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     rubric: own.rubric,
     form: own.form,
     recommendationReady,
-    recommendationBlock: own.form !== "closed" || recommendationReady ? null : checking ? ("checking" as const) : ("admin" as const),
+    // The head scores while they watch; only the recommendation waits for the lesson to end.
+    mockEnded: now >= mock.endTime,
+    recommendationBlock: own.form !== "closed" || recommendationReady || now < mock.endTime ? null : checking ? ("checking" as const) : ("admin" as const),
   };
 }
 /** Read the completed result for this booking, using the same check for the brief and its decision. */
@@ -1477,7 +1479,8 @@ type MockResult = typeof s.hiringMockResults.$inferSelect;
 const ownBriefRubric = (row: MockResult | undefined, mockId: string) =>
   row?.source === "person" && row.bookingId === mockId && !row.changedBy && !row.checkedBy ? row.rubric : null;
 /**
- * What the score form shows. `wait`: the lesson has not started. `closed`: a result that is not this head's own untouched
+ * What the score form shows. `wait`: the lesson has not ended, so the head can score during it but the recommendation
+ * waits (Kevin, 24 Nov 2026: heads fill the sheet in while they watch). `closed`: a result that is not this head's own untouched
  * scores is recorded, or a decision is drafted, so only a person with Hiring access can change it. The page shows a
  * rubric only when it is the head's own.
  */
@@ -1496,7 +1499,7 @@ async function briefRubric(mock: { id: string; candidateId: string; subjects: Su
     sql`${s.hiringAudit.detail}->>'bookingId' = ${mock.id}`,
   )).limit(1);
   const closed = !subject || !!draft || !!recommended || (!!row && row.source !== "tracker" && !rubric);
-  return { rubric, form: now < mock.endTime ? ("wait" as const) : closed ? ("closed" as const) : ("open" as const), replaced: row };
+  return { rubric, form: closed ? ("closed" as const) : now < mock.endTime ? ("wait" as const) : ("open" as const), replaced: row };
 }
 /**
  * The interviewer's scores for one mock, sent from the interviewer link (Kevin's decision, 13 Nov 2026: a score form,
@@ -1514,7 +1517,6 @@ export async function saveBriefRubric(token: string, rubric: MockRubric, db: Dat
     const mock = await briefMock(token, tx, now);
     const subject = briefSubject(mock);
     const { form, replaced: before } = await briefRubric(mock, tx, now);
-    if (form === "wait") throw new HiringError(409, "You can send scores after the mock lesson ends.");
     if (form === "closed" || !subject) throw new HiringError(409, BRIEF_CLOSED);
     const problems = checkRubric(rubric);
     // The head's form is always the current one, so a send without an item or the checks answer is refused.

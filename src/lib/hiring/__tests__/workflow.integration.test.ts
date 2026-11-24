@@ -1101,7 +1101,7 @@ describe("hiring workflow persistence", () => {
       // The head's notice carries the candidate's contact line.
       expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\nCandidate: .+\nEmail: \S+@example\.com\nPhone: not recorded\nSubject: /);
     });
-    it("saves the head's scores from the link after the mock ends, and keeps what a resend replaced", async () => {
+    it("saves the head's scores from the link before, during and after the mock, and keeps what a resend replaced", async () => {
       const row = await invited();
       await bookVisit(link(row), choice(), db);
       await deliverOutbox(db, base);
@@ -1110,19 +1110,23 @@ describe("hiring workflow persistence", () => {
       const rubric = (score: number | null) => ({ items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, score])), comments: "Clear lesson.", stressTest: TICKS, checksDone: true }) as MockRubric;
       const queued = (await db.select().from(s.hiringOutbox)).length;
       const before = new Date(mock.startTime.getTime() - 1);
-      expect(await briefView(token, db, before)).toMatchObject({ form: "wait", rubric: null });
-      await expect(saveBriefRubric(token, rubric(7), db, before)).rejects.toMatchObject({ status: 409 });
-      const during = mock.endTime;
+      expect(await briefView(token, db, before)).toMatchObject({ form: "wait", rubric: null, recommendationReady: false });
+      // Heads fill the sheet in while they watch: the form takes scores before the lesson ends.
+      expect(await saveBriefRubric(token, rubric(7), db, before)).toBe(98);
+      expect(await briefView(token, db, before)).toMatchObject({ form: "wait", rubric: rubric(7), recommendationReady: false });
+      await db.delete(s.hiringAudit).where(eq(s.hiringAudit.action, "mock-rubric-submitted"));
+      await db.delete(s.hiringMockResults);
+      const ended = mock.endTime;
       // The head's form is always the 14-item form with the checks answer.
       const legacy = { ...rubric(7), items: Object.fromEntries(Object.entries(rubric(7).items).slice(0, 10)) } as MockRubric;
       for (const bad of [rubric(null), rubric(11), rubric(7.5), { ...rubric(7), items: { ...rubric(7).items, accuracy: 0 } }, { ...rubric(7), checksDone: undefined }, legacy])
-        await expect(saveBriefRubric(token, bad, db, during)).rejects.toMatchObject({ status: 400 });
+        await expect(saveBriefRubric(token, bad, db, ended)).rejects.toMatchObject({ status: 400 });
       expect(await db.select().from(s.hiringMockResults)).toHaveLength(0);
-      expect(await saveBriefRubric(token, rubric(7), db, during)).toBe(98);
+      expect(await saveBriefRubric(token, rubric(7), db, ended)).toBe(98);
       const [saved] = await db.select().from(s.hiringMockResults);
       expect(saved).toMatchObject({ candidateId: row.id, subject: "Mathematics", source: "person", status: "done", bookingId: mock.id, fileId: null, rubric: rubric(7) });
-      expect(await briefView(token, db, during)).toMatchObject({ form: "open", rubric: rubric(7) });
-      expect(await saveBriefRubric(token, rubric(10), db, during)).toBe(140);
+      expect(await briefView(token, db, ended)).toMatchObject({ form: "open", rubric: rubric(7) });
+      expect(await saveBriefRubric(token, rubric(10), db, ended)).toBe(140);
       expect(await db.select().from(s.hiringMockResults)).toHaveLength(1);
       const audits = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "mock-rubric-submitted")).orderBy(s.hiringAudit.createdAt);
       expect(audits.map((a) => a.actor)).toEqual(["interviewer:Peat", "interviewer:Peat"]);
@@ -1131,12 +1135,12 @@ describe("hiring workflow persistence", () => {
       expect(await db.select().from(s.hiringOutbox)).toHaveLength(queued);
       expect((await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id)))[0].stage).toBe("onsite_booked");
       // The page never carries the row it would replace.
-      expect(Object.keys(await briefView(token, db, during))).not.toContain("replaced");
+      expect(Object.keys(await briefView(token, db, ended))).not.toContain("replaced");
       // A change or a confirmation by a person with Hiring access, an upload, or a drafted decision closes the form:
       // the page then shows no scores, and a send changes nothing.
       const closed = async (recommendationReady: boolean) => {
-        expect(await briefView(token, db, during)).toMatchObject({ form: "closed", recommendationReady });
-        await expect(saveBriefRubric(token, rubric(1), db, during)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/already recorded/) });
+        expect(await briefView(token, db, ended)).toMatchObject({ form: "closed", recommendationReady });
+        await expect(saveBriefRubric(token, rubric(1), db, ended)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/already recorded/) });
         expect((await db.select().from(s.hiringMockResults))[0].rubric).toEqual(rubric(10));
       };
       const ownResult = { source: "person", status: "done", bookingId: mock.id, changedBy: null, checkedBy: null } as const;
@@ -1150,22 +1154,22 @@ describe("hiring workflow persistence", () => {
         await db.update(s.hiringMockResults).set({ ...ownResult, ...patch });
         await closed(ready);
         // Scores that are no longer the head's own are not shown.
-        expect((await briefView(token, db, during)).rubric).toBeNull();
+        expect((await briefView(token, db, ended)).rubric).toBeNull();
       }
       await db.update(s.hiringMockResults).set({ ...ownResult, source: "ai", rubric: { ...rubric(10), checksDone: null } });
-      expect(await briefView(token, db, during)).toMatchObject({ form: "closed", recommendationReady: false });
+      expect(await briefView(token, db, ended)).toMatchObject({ form: "closed", recommendationReady: false });
       await db.update(s.hiringMockResults).set({ ...ownResult, rubric: rubric(10) });
-      expect((await briefView(token, db, during)).form).toBe("open");
+      expect((await briefView(token, db, ended)).form).toBe("open");
       await db.insert(s.hiringDecisions).values({ candidateId: row.id, decision: "hire", status: "draft", reason: "r", emailSubject: "s", emailBody: "b", decidedBy: "owner" });
       await closed(true);
       await db.delete(s.hiringDecisions);
       // A past tracker result is replaced, as an upload replaces it.
       await db.update(s.hiringMockResults).set({ source: "tracker", bookingId: null, rubric: null });
-      expect((await briefView(token, db, during)).form).toBe("open");
-      expect(await saveBriefRubric(token, rubric(4), db, during)).toBe(56);
+      expect((await briefView(token, db, ended)).form).toBe("open");
+      expect(await saveBriefRubric(token, rubric(4), db, ended)).toBe(56);
       // A sent result ends the link for scores too.
       await db.update(s.hiringCandidates).set({ stage: "rejected" }).where(eq(s.hiringCandidates.id, row.id));
-      await expect(saveBriefRubric(token, rubric(7), db, during)).rejects.toMatchObject({ status: 404 });
+      await expect(saveBriefRubric(token, rubric(7), db, ended)).rejects.toMatchObject({ status: 404 });
     });
     it("records one recommendation after the mock with the rubric from that booking", async () => {
       const row = await invited();
