@@ -71,14 +71,15 @@ describe("preScreenRows", () => {
 
 describe("preScreenEmail with a visit link (Next steps)", () => {
   const visit = "https://bgscheduler.vercel.app/hiring/book/visit-token";
-  it("gives the form and the booking link together, and says booking opens after the answers", () => {
+  it("gives the form and the booking link together, and says the link books now", () => {
     const email = preScreenEmail("Ann", "ann@example.com", false, visit);
     expect(email.subject).toBe("Next steps: your BeGifted pre-screening questions and onsite visit");
     for (const part of [email.text, email.html]) {
       expect(part).toContain(PRE_SCREEN_URL);
       expect(part).toContain(visit);
       expect(part).toContain("which subject you want to be tested on");
-      expect(part).toContain("When booking opens, we email you");
+      expect(part).toContain("Choose your two times on this link now");
+      expect(part).not.toContain("When booking opens");
       expect(part).toContain("ann@example.com");
       // Two-day visit (Kevin, 24 Nov 2026): the test first, the mock teaching on a later day. No HR interview.
       expect(part).toContain("the test first, and the mock teaching on the same day or a later day");

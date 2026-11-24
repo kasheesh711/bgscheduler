@@ -375,9 +375,9 @@ export async function inviteToMock(
     .where(eq(s.hiringCandidates.id, candidate.id));
 }
 /**
- * The "Next steps" email (Kevin, 22 Nov 2026): the form and the visit link together. The visit link
- * opens booking only after the answers pass the usual checks; until then its page asks for the answers first.
- * `inviteExpiresAt` holds the link's second, and `inviteToVisit` keeps it, so this same link books the visit.
+ * The "Next steps" email (Kevin, 22 Nov 2026): the form and the visit link together. The visit link books at once;
+ * the answers never gate it (Kevin, 24 Nov 2026). `inviteExpiresAt` holds the link's second, and `inviteToVisit`
+ * keeps it, so a later onsite invitation sends this same link.
  */
 export async function inviteToPreScreen(db: Database, candidate: Candidate, now = new Date()) {
   if (!candidate.email)
@@ -512,7 +512,7 @@ export const preScreenEmail = (name: string, email: string, reminder: boolean, v
           {
             heading: "Book your test and your mock teaching",
             paragraphs: [
-              "We check your answers first. When booking opens, we email you. Then choose your two times on this link: the test first, and the mock teaching on the same day or a later day.",
+              "Choose your two times on this link now: the test first, and the mock teaching on the same day or a later day.",
             ],
             action: { label: "Book your test and mock teaching", url: visitUrl },
             icon: stepIcon(3),
@@ -601,21 +601,26 @@ export async function inviteToVisit(
     throw new HiringError(409, "This candidate cannot get an onsite invitation at this stage.");
   if (!c.email)
     throw new HiringError(409, "A verified application email is required.");
-  if (!c.preScreen || !c.preScreenAssessment)
-    throw new HiringError(409, "The pre-screen response has no score yet.");
-  const { stops } = hardStops(
-    c.preScreen,
-    c.workRightsAnswer,
-    normalizeSubjects(c.preScreen.subjects),
-    config,
-  );
-  if (stops.length) throw new HiringError(409, stops.join(" "));
-  const supported = supportedVisitSubjects(c.preScreen, c.workRightsAnswer, config);
-  if (!topHiringSubject(supported, config.subjectPriority))
-    throw new HiringError(409, "No supported subject is open for hiring.");
-  const subject = visitSubject(c.preScreen, c.workRightsAnswer, config);
-  if (!subject)
-    throw new HiringError(409, `No head is set for the subject: ${supported.join(", ")}.`);
+  // After a visit (cancel, no-show, No booking) the new link keeps that visit's subject: the pre-screen never gates
+  // booking (Kevin, 24 Nov 2026), and a candidate may have booked on a Next steps link without passing answers.
+  const again = c.stage === "no_booking" ? c.visitSubject : null;
+  if (!again) {
+    if (!c.preScreen || !c.preScreenAssessment)
+      throw new HiringError(409, "The pre-screen response has no score yet.");
+    const { stops } = hardStops(
+      c.preScreen,
+      c.workRightsAnswer,
+      normalizeSubjects(c.preScreen.subjects),
+      config,
+    );
+    if (stops.length) throw new HiringError(409, stops.join(" "));
+    const supported = supportedVisitSubjects(c.preScreen, c.workRightsAnswer, config);
+    if (!topHiringSubject(supported, config.subjectPriority))
+      throw new HiringError(409, "No supported subject is open for hiring.");
+    if (!visitSubject(c.preScreen, c.workRightsAnswer, config))
+      throw new HiringError(409, `No head is set for the subject: ${supported.join(", ")}.`);
+  }
+  const subject = again ?? visitSubject(c.preScreen!, c.workRightsAnswer, config)!;
   const limit = resend ? null : blockingLimit("onsite", subject, await readLimitUsage(tx, "onsite", now), config);
   if (limit)
     throw new HiringError(409, `The onsite limit "${LIMIT_TEXT[limit]}" is full. Raise the number to send more.`);
@@ -1549,29 +1554,24 @@ const visitRows = (db: Database, candidateId: string) =>
 type VisitRow = Awaited<ReturnType<typeof visitRows>>[number];
 const examOf = (rows: VisitRow[]) => rows.find((b) => b.kind === "paper");
 
+/** Stages where a live "Next steps" link books at once: the pre-screen answers never gate booking (Kevin, 24 Nov 2026). */
+const NEXT_STEPS_OPEN = ["pre_screen", "no_reply", "review"];
+/** The answers' visit subject when one is usable, else the highest-ranked CV subject that is hiring and has a head. */
+function nextStepsSubject(c: Candidate, config: HiringConfig): Subject | null {
+  const headed = (v: Subject) => config.interviewers.some((i) => i.subjects.includes(v));
+  return (c.preScreen && visitSubject(c.preScreen, c.workRightsAnswer, config)) || topHiringSubject(c.subjects.filter(headed), config.subjectPriority);
+}
+
 /**
  * The link's expiry second must equal the row's, so a new link ends the old one. A booked link stays open until the visit
  * starts. An unbooked link closes at expireDays even when the worker is not running to mark No booking.
  */
-/**
- * A "Next steps" link before booking opens: "answers" while the form is unanswered, "checking" while the answers wait
- * for the checks or a person. Null for every other link.
- */
-function answersFirst(candidate: Candidate, cap: VisitLink): "answers" | "checking" | null {
-  if (!["pre_screen", "no_reply"].includes(candidate.stage) || candidate.inviteExpiresAt?.getTime() !== cap.exp * 1000) return null;
-  return candidate.preScreen ? "checking" : "answers";
-}
-const ANSWERS_FIRST = {
-  answers: `Please answer the pre-screening questions first: ${PRE_SCREEN_URL} When booking opens, we email you, and this link lets you book.`,
-  checking: "Thank you for your answers. We have them. When booking opens, we email you, and this link lets you book. If we have a question, we contact you.",
-};
-
 async function openVisit(db: Database, cap: VisitLink, config: HiringConfig, now: Date) {
   const candidate = await candidateById(db, cap.id);
-  const first = answersFirst(candidate, cap);
-  if (first) throw new HiringError(409, ANSWERS_FIRST[first]);
   const rows = await visitRows(db, cap.id);
-  let open = candidate.inviteExpiresAt?.getTime() === cap.exp * 1000 && !!candidate.visitSubject;
+  const linked = candidate.inviteExpiresAt?.getTime() === cap.exp * 1000;
+  let subject = candidate.visitSubject;
+  let open = linked && !!subject;
   if (open && candidate.stage === "onsite_booked") {
     const exam = examOf(rows);
     open = !!exam && exam.startTime > now;
@@ -1579,9 +1579,13 @@ async function openVisit(db: Database, cap: VisitLink, config: HiringConfig, now
     // A "Next steps" candidate already holds this link, so a cancelled invitation (a hold) must close it too.
     const live = await linkSentAt(db, cap.id);
     open = !!live && (!live.sentAt || now.getTime() - live.sentAt.getTime() < config.onsiteFollowUp.expireDays * DAY);
+  } else if (linked && cap.kind !== "paper-visit" && NEXT_STEPS_OPEN.includes(candidate.stage)) {
+    subject ??= nextStepsSubject(candidate, config);
+    if (!subject) throw new HiringError(409, onLine("There are no open visit times at the moment. Please try again later."));
+    open = true;
   } else open = false;
   if (!open) throw new HiringError(404, onLine("This booking link is no longer active."));
-  return { candidate, subject: candidate.visitSubject!, rows };
+  return { candidate, subject: subject!, rows };
 }
 
 /** Why this booked visit cannot move, or null. send_new_link needs a visit with no confirmed rows, and the next booking has no `reschedule_of`, so that click resets the count. */
@@ -1629,24 +1633,6 @@ const offeredSlots = async (db: Database, config: HiringConfig, subject: Subject
 export async function visitView(token: string, db: Database = getDb(), now = new Date()) {
   const cap = visitToken(token, now);
   const { config } = await settings(db);
-  const waiting = answersFirst(await candidateById(db, cap.id), cap);
-  if (waiting)
-    return {
-      kind: "visit" as const,
-      paired: true,
-      twoDay: cap.kind === "two-day",
-      mockSlots: [] as { date: string; start: string; end: string }[],
-      subject: "",
-      location: config.location,
-      enabled: false,
-      slots: [],
-      visit: null,
-      canMove: false,
-      notice: ANSWERS_FIRST[waiting],
-      checkedAt: null,
-      waiting: waiting as "answers" | "checking" | null,
-      formUrl: (waiting === "answers" ? PRE_SCREEN_URL : null) as string | null,
-    };
   const { subject, rows } = await openVisit(db, cap, config, now);
   const enabled = bookable(config, cap.id);
   const exam = examOf(rows);
@@ -2081,7 +2067,6 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
   const priorRows = await visitRows(db, cap.id);
   if (same(priorRows)) return examOf(priorRows)!;
   const open = await openVisit(db, cap, config, now);
-  // After `openVisit`, so a link that still waits for the answers says that first.
   if (twoDay && mockStart === null) throw new HiringError(400, "Choose a mock teaching time too.");
   if (cap.kind === "paper-visit" && !open.rows.some((row) => row.kind === "mock")) {
     return withDatabaseTransaction(db, async (tx) => {
@@ -2213,7 +2198,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
       .returning();
     await tx
       .update(s.hiringCandidates)
-      .set({ stage: "onsite_booked", revision: candidate.revision + 1, updatedAt: new Date() })
+      .set({ stage: "onsite_booked", visitSubject: subject, revision: candidate.revision + 1, updatedAt: new Date() })
       .where(eq(s.hiringCandidates.id, candidate.id));
     if (candidate.email)
       await enqueue(tx, {
@@ -2373,7 +2358,7 @@ export async function reviewCandidate(
         input.action === "send_new_link" || unsent ? `${id}:visit-invite:${c.revision + 1}` : `${id}:visit-invite`;
       const subject = await inviteToVisit(tx, c, config, key, now, resend);
       await tx.update(s.hiringCandidates).set({ reviewNote: input.reason }).where(eq(s.hiringCandidates.id, id));
-      detail = { subject, score: preScreenTotal(c, config), passScore: config.preScreenThreshold };
+      detail = { subject, score: c.preScreen && c.preScreenAssessment ? preScreenTotal(c, config) : null, passScore: config.preScreenThreshold };
     } else if (input.action === "cancel_visit" || input.action === "mark_no_show") {
       const rows = await visitRows(tx, id);
       const exam = examOf(rows);

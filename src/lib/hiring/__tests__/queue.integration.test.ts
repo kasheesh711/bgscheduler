@@ -858,7 +858,7 @@ describe("university result on a live reply", () => {
 });
 
 describe("Next steps after a good R1 (Kevin, 22 Nov 2026)", () => {
-  it("sends the form and the visit link together; the link waits for the answers, then books on the same link", async () => {
+  it("sends the form and the visit link together; the link books before the answers and keeps working after them", async () => {
     const row = await seed();
     expect((await releaseQueues(db)).preScreen).toBe(1);
     const [form] = await forms();
@@ -870,10 +870,8 @@ describe("Next steps after a good R1 (Kevin, 22 Nov 2026)", () => {
     expect(JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString()).kind).toBe("two-day");
     const expires = (await candidate(row.id)).inviteExpiresAt;
     expect(expires).not.toBeNull();
-    // Before the answers: the page asks for them, and a booking is refused with the same words.
-    expect(await visitView(token, db)).toMatchObject({ waiting: "answers", slots: [], formUrl: expect.stringContaining("docs.google.com/forms") });
-    await expect(bookVisit(token, { start: "2026-11-07T03:00:00.000Z", subject: "Mathematics", onsiteConfirmed: true, teachingCommitmentConfirmed: true }, db))
-      .rejects.toMatchObject({ status: 409, message: expect.stringMatching(/answer the pre-screening questions first/) });
+    // Before the answers the same link already books (Kevin, 24 Nov 2026: the answers never gate booking).
+    expect(await visitView(token, db)).toMatchObject({ waiting: null, subject: "Mathematics" });
     // The reminder carries the same link.
     await db.update(s.hiringOutbox).set({ status: "sent", sentAt: after(-1) }).where(eq(s.hiringOutbox.id, form.id));
     vi.setSystemTime(after(2));
@@ -929,13 +927,13 @@ describe("Next steps after a good R1 (Kevin, 22 Nov 2026)", () => {
     await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
     expect(await candidate(row.id)).toMatchObject({ preScreen: { testSubject: "Physics" }, preScreenResubmitted: true });
   });
-  it("says the answers are being checked while a person decides", async () => {
+  it("keeps the link bookable while a person decides on the answers", async () => {
     const expires = new Date(Math.floor(after(30).getTime() / 1000) * 1000);
     const row = await replied({ inviteExpiresAt: expires, preScreenOverride: { score: 10 } as never });
     await runHiringCycle(db, (_s, _k, kind) => assessment(kind));
     expect((await candidate(row.id)).stage).toBe("pre_screen");
     const token = visitLink(row.id, expires).split("/hiring/book/")[1];
-    expect(await visitView(token, db)).toMatchObject({ waiting: "checking", formUrl: null });
+    expect(await visitView(token, db)).toMatchObject({ waiting: null, subject: "Mathematics", formUrl: null });
   });
 });
 
