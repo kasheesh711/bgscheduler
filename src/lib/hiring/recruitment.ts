@@ -85,7 +85,7 @@ export async function queueRecruitmentHeadDecision(db: Database, candidate: { id
   const { config } = await settings(db);
   if (!config.recruitmentLineGroupId) return;
   await enqueue(db, `head-decision:${input.key}`, config.recruitmentLineGroupId,
-    `Head decision: ${input.decision === "hire" ? "HIRE" : "DO NOT HIRE"}\nCandidate: ${candidate.name} — ${input.subject ?? "Subject not recorded"}\nHead: ${input.head}\nReason: ${input.reason || "None given"}\n${input.decision === "hire" ? "HR: add the pre-screen call assessment and send the packet to Gift." : "The rejection email is queued."}`,
+    `Head decision: ${input.decision === "hire" ? "HIRE" : "DO NOT HIRE"}\nCandidate: ${candidate.name} — ${input.subject ?? "Subject not recorded"}\nHead: ${input.head}\nReason: ${input.reason || "None given"}\n${input.decision === "hire" ? "Kevin: add the assessment and send the packet to Gift." : "The rejection email is queued."}`,
     null, "head_decision");
 }
 

@@ -121,7 +121,7 @@ export async function queueFinalResult(tx: Database, candidate: Awaited<ReturnTy
       ? new URL(`/hiring/onboarding/${bookingToken(row.id, "onboarding", expires)}`, hiringOrigin()).toString()
       : null;
     message.subject = "Your BeGifted offer letter";
-    const invitation = `${offer}\n\nBook a 30-minute onsite appointment with HR to sign your contract.`;
+    const invitation = `${offer}\n\nBook a 30-minute onsite appointment to sign your contract.`;
     const setup = "Complete the tutor onboarding form before your appointment.";
     archivedBody = `${invitation}\n${link}`;
     // The dashboard reads the archived body. Keep the intake link in the outbox only.
@@ -158,7 +158,7 @@ export async function saveBriefDecision(token: string, input: { decision: Decisi
     const last = await headRecommendation(tx, candidate.id);
     if (last?.detail.bookingId === mock.id) {
       if (last.detail.decision === input.decision && last.detail.reason === reason) return { queued: null };
-      throw new HiringError(409, "Your recommendation is already recorded. Contact HR if it needs a correction.");
+      throw new HiringError(409, "Your recommendation is already recorded. Contact Kevin if it needs a correction.");
     }
     const head = mock.interviewerKey ?? "Interviewer";
     const actor = `interviewer:${head}`;

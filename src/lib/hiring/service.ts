@@ -2643,7 +2643,7 @@ export async function bookContract(token: string, value: unknown, db: Database =
       subject: "BeGifted contract signing confirmed", preheader: bangkok(booking.startTime),
       hero: "offer",
       title: "Your contract signing is confirmed", name: current.name,
-      paragraphs: ["Please meet our HR team at the location below."],
+      paragraphs: ["Please meet our team at the location below."],
       details: [
         { label: "Time", value: `${bangkok(booking.startTime)}–${bangkokTime(booking.endTime)} (Bangkok)` },
         { label: "Location", value: latest.config.location },

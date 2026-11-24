@@ -58,7 +58,7 @@ describe("InterviewerBrief", () => {
     const closed = html({ form: "closed", recommendationReady: true });
     expect(closed).toContain("Scores are recorded. Ask admin to edit scores.");
     expect(closed).not.toContain('type="radio"');
-    expect(closed.indexOf("Yes, send to HR")).toBeLessThan(closed.indexOf("Candidate files"));
+    expect(closed.indexOf("Yes, send for final review")).toBeLessThan(closed.indexOf("Candidate files"));
     expect(closed).toContain("No queues a rejection email to the candidate.");
     const page = html();
     expect(page).not.toContain("<select");
@@ -80,7 +80,7 @@ describe("InterviewerBrief", () => {
     expect(page).not.toContain("Scores sent");
     expect(page).toContain("Send your scores first.");
     expect(page).not.toContain("Reason for No (5+ characters)");
-    expect(page).not.toContain("Yes, send to HR");
+    expect(page).not.toContain("Yes, send for final review");
   });
 
   it.each([
@@ -91,7 +91,7 @@ describe("InterviewerBrief", () => {
     expect(page.split(message)).toHaveLength(2);
     expect(page.indexOf(message)).toBeLessThan(page.indexOf("Candidate files"));
     expect(page.includes(">Check again</button>")).toBe(retry);
-    expect(page).not.toContain("Yes, send to HR");
+    expect(page).not.toContain("Yes, send for final review");
     expect(page).not.toContain("No, reject");
   });
 

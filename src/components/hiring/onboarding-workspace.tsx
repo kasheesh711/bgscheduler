@@ -160,7 +160,7 @@ function Hire({ item, template, pending, send }: { item: Hires[number]; template
         {fields.map(([label, value]) => <div key={label}><dt className="text-muted-foreground">{label}</dt><dd className="break-words">{value}</dd></div>)}
         <div><dt className="text-muted-foreground">Verified LINE account</dt>
           <dd className="break-all">{record.lineUserId ? [record.lineName, record.lineUserId].filter(Boolean).join(" · ") : "Awaiting LINE sign-in"}</dd></div>
-        <div><dt className="text-muted-foreground">Contract signed</dt><dd>{record.signedAt ? date(record.signedAt) : "Awaiting HR confirmation"}</dd></div>
+        <div><dt className="text-muted-foreground">Contract signed</dt><dd>{record.signedAt ? date(record.signedAt) : "Awaiting confirmation"}</dd></div>
       </dl>
       {stage !== "hired" ? <p>This application is no longer active.</p> : <>
         {!record.signedAt && <Form pending={pending} label="Record signed contract" onSubmit={() => action("signed")}>

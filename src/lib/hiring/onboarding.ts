@@ -62,10 +62,10 @@ export async function submitOnboarding(db: Database, token: string, raw: unknown
       await audit(tx, "candidate-link", "onboarding-submitted", offer.candidateId, {});
       return { linked: false };
     }
-    if (row.decisionId !== offer.decisionId) throw new HiringError(409, "Ask HR to review your existing submission.");
+    if (row.decisionId !== offer.decisionId) throw new HiringError(409, "Ask BeGifted to review your existing submission.");
     const changed = (Object.keys(intake) as (keyof OnboardingIntake)[]).some((key) => intake[key] !== row.intake[key]);
     if (!changed) return { linked: Boolean(row.lineUserId) };
-    if (row.signedAt) throw new HiringError(409, "Ask HR to correct your details after signing.");
+    if (row.signedAt) throw new HiringError(409, "Ask BeGifted to correct your details after signing.");
     const relink = row.intake.lineId !== intake.lineId;
     await tx.update(o).set({ intake, ...(relink ? { lineUserId: null, lineName: null } : {}) })
       .where(eq(o.candidateId, offer.candidateId));
@@ -83,7 +83,7 @@ export async function linkOnboardingLine(db: Database, token: string, profile: {
     await deliveredOffer(tx, token, now);
     const [row] = await tx.select().from(o).where(and(eq(o.candidateId, offer.candidateId), eq(o.decisionId, offer.decisionId))).for("update");
     if (row?.lineUserId === profile.sub) return;
-    if (!row || row.lineUserId) throw new HiringError(409, "Ask HR to review the linked LINE account.");
+    if (!row || row.lineUserId) throw new HiringError(409, "Ask BeGifted to review the linked LINE account.");
     await tx.update(o).set({ lineUserId: profile.sub, lineName: profile.name?.slice(0, 120) || null }).where(eq(o.candidateId, row.candidateId));
     await audit(tx, "candidate-link", "onboarding-line-linked", row.candidateId, {});
   });

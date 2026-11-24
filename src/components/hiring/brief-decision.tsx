@@ -50,7 +50,7 @@ export function BriefDecision({ sent, onSent, url, hasScores, unsent, pending, s
       )}
       {sent && (
         <p ref={recorded} role="status" className={c.success} tabIndex={-1}>
-          Recommendation recorded: <strong>{LABEL[sent]}</strong>. {sent === "hire" ? "HR prepares the review for Gift." : "The rejection email is queued."}
+          Recommendation recorded: <strong>{LABEL[sent]}</strong>. {sent === "hire" ? "Kevin prepares the review for Gift." : "The rejection email is queued."}
         </p>
       )}
       {!sent && (
@@ -62,7 +62,7 @@ export function BriefDecision({ sent, onSent, url, hasScores, unsent, pending, s
           </label>
           <div className={c.decisionActions}>
             <button type="button" className={c.button} disabled={!!pending} onClick={() => void send("hire")}>
-              Yes, send to HR
+              Yes, send for final review
             </button>
             <button type="button" className={`${c.ghost} ${c.reject}`} disabled={!!pending || reasonTooShort} aria-describedby={reasonTooShort ? reasonHintId : undefined} onClick={() => void send("reject")}>
               No, reject

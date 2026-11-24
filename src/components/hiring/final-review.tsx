@@ -195,7 +195,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
               setReview(current);
               setBehavioral(current.packet.behavioral);
               setOfferType(current.packet.offerType ?? "");
-              setError({ text: "HR sent a new packet. Read it again." });
+              setError({ text: "A new packet was sent. Read it again." });
             } else {
               setReview((previous) => previous && { ...previous, packetValid: current.packet?.id === body.packetId ? current.packetValid : false });
             }
@@ -289,7 +289,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       else closePacket();
     } else {
       closePacket();
-      if (current) setError({ text: "HR sent a new packet. Read it again." });
+      if (current) setError({ text: "A new packet was sent. Read it again." });
     }
     setBusy(null);
   }
@@ -318,7 +318,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
         : <button type="button" className={css.secondary} onClick={() => void act()}>{signing ? "Check contract signing" : "Open final review"}</button>)}
       {(awaitingSignOff || stale) && packet && <>
         {pauseReason && <p id={pauseReason} className={css.reviewStatus}>{pausedStatus}</p>}
-        <p id={ready ? undefined : instruction} className={ready ? css.reviewStatus : css.inspectorMeta} role="status">{stale ? (review?.packetValid === null ? "Could not check the packet just now." : "Evidence changed. Ask HR for a new packet.")
+        <p id={ready ? undefined : instruction} className={ready ? css.reviewStatus : css.inspectorMeta} role="status">{stale ? (review?.packetValid === null ? "Could not check the packet just now." : "Evidence changed. Ask Kevin for a new packet.")
           : ready ? "Ready for sign-off." : sharedBlock ?? (viewed && error?.retry ? "Retry the review check to unlock sign-off." : "Read the packet to unlock sign-off.")}</p>
         {ready && <p id={instruction} className="sr-only">Approve, or write a note and reject.</p>}
         {stale && <button type="button" ref={retryButton} className={`${css.primary} mt-2.5 min-h-11 min-w-11`} disabled={!!busy} onClick={() => void act()}>Check again</button>}
@@ -401,7 +401,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
           </div>
           {busy === "sign" && <p role="status" className={css.inspectorMeta}>Saving sign-off…</p>}
         </>
-      ) : <p>Waiting for HR to send the packet. <button type="button" className={css.secondary} disabled={!!busy} onClick={() => void act()}>Check again</button></p>)}
+      ) : <p>Waiting for the packet. <button type="button" className={css.secondary} disabled={!!busy} onClick={() => void act()}>Check again</button></p>)}
       <p ref={outcome} role="status" tabIndex={-1}>{closed && (stage === "hired" ? (review?.appointment
         ? `Contract signing booked for ${new Date(review.appointment).toLocaleString("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium", timeStyle: "short" })} (Bangkok).`
         : packet ? (signedStage ? "Offer approved. The offer email is queued." : "Offer approved.") : "There is no contract booking on record.")

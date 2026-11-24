@@ -72,13 +72,16 @@ const VIEWS = {
   offer: "Offer & signing",
   setup: "Rules and setup",
   // The simple screens, one for each role. Each has its own link: /hiring?view=hr, admin or heads.
-  hr: "HR",
+  hr: "Final review",
   admin: "Admin",
   heads: "Heads",
 };
 export type HiringView = keyof typeof VIEWS;
-const STEPS = ["seek", "calls", "prescreen", "assessment", "mock", "review", "offer"] as const;
-const TOOLS = ["overview", "capacity", "visitday", "setup", "hr", "admin", "heads"] as const;
+// Kevin, 24 Nov 2026: there is no HR team now. SEEK intake and HR calls are retired from the tabs, and the HR role screen
+// has no button. The screens stay in the code, and `?view=seek`, `?view=calls` and `?view=hr` still open them: Gift's
+// review link uses `?view=hr`.
+const STEPS = ["prescreen", "assessment", "mock", "review", "offer"] as const;
+const TOOLS = ["overview", "capacity", "visitday", "setup", "admin", "heads"] as const;
 /** One line under the tabs, so a new user can name what each tab is for. */
 const PURPOSE: Record<Exclude<HiringView, "hr" | "heads">, string> = {
   overview: "Where every candidate stands, and who is ready for the next step.",
@@ -88,9 +91,9 @@ const PURPOSE: Record<Exclude<HiringView, "hr" | "heads">, string> = {
   prescreen: "Review the candidate’s form and invite them to sit the paper test.",
   visitday: "See arrival times, papers to print and the tutors assigned to mock teaching.",
   assessment: "Admin uploads the scanned paper for grading. The candidate waits until you confirm a pass and send the mock invitation.",
-  mock: "The tutor gets the graded paper and résumé before the mock. After the rubric, Yes goes to HR and No queues a rejection email.",
-  review: "HR adds the behavioral assessment and sends the packet to Gift for approval or rejection.",
-  offer: "After approval, the candidate receives an offer letter and can book a 30-minute signing with HR on site.",
+  mock: "The tutor gets the graded paper and résumé before the mock. After the rubric, Yes goes to the final review and No queues a rejection email.",
+  review: "Kevin adds the behavioral assessment and sends the packet to Gift for approval or rejection.",
+  offer: "After approval, the candidate receives an offer letter and can book a 30-minute signing on site.",
   setup: "Scores, limits, heads and messages. A change applies to every tab.",
   admin: "Who comes when, the paper to print, and where to upload the completed paper.",
 };

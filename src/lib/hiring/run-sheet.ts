@@ -58,7 +58,7 @@ export const NO_ROOM = "Needs review: no room is booked for this visit";
 export const NO_SUBJECT = "Needs review: no subject";
 export const NO_MARK_SCHEME = "No mark scheme: marking cannot run";
 export const NO_PASS_MARK = "No pass mark";
-export const UNRECORDED_OWNER = "HR — record the visit or move the stage";
+export const UNRECORDED_OWNER = "Kevin — record the visit or move the stage";
 /** Stages that say a visit is booked (the old flow's paper_booked and mock_booked included). */
 const VISIT_BOOKED_STAGES = ["onsite_booked", "paper_booked", "mock_booked"];
 export const MOCK_ONLY = "Mock only: no paper sitting is booked";
@@ -256,12 +256,12 @@ export function headUpcomingMessage(rows: RunSheetRow[], headKey: string, from: 
 /** Who must act to close each gap. */
 export function gapOwner(reason: string) {
   if (reason === NO_ROOM) return "Kevin: decide where hiring visit rooms are stored";
-  if (reason === NO_SUBJECT) return "HR: set the visit subject on the candidate";
+  if (reason === NO_SUBJECT) return "Kevin: set the visit subject on the candidate";
   if (reason.includes("question paper") || reason === NO_MARK_SCHEME) return "Kevin: add the file in Rules and setup, Paper library";
   if (reason === NO_PASS_MARK) return "Kevin: set the pass mark in Rules and setup, Paper pass marks";
-  if (reason.includes(" subjects (")) return "HR: book one subject per visit";
+  if (reason.includes(" subjects (")) return "Kevin: book one subject per visit";
   if (reason.includes("head")) return "Kevin: set the heads in Rules and setup";
-  return "HR: open the candidate record";
+  return "Kevin: open the candidate record";
 }
 
 /** Replay counts: how many visits the run sheet can fully staff, and every gap by reason. */

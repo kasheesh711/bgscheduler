@@ -36,7 +36,7 @@ export async function GET(request: Request, { params }: Context) {
   try {
     const actor = await requireHiringAdmin();
     const access = finalReviewAccess(actor);
-    if (!access.hr && !access.gift) throw new HiringError(403, "This review is for HR and Gift.");
+    if (!access.hr && !access.gift) throw new HiringError(403, "This review is for the sender and Gift.");
     const id = z.uuid().parse((await params).id);
     const db = getDb();
     const candidate = await candidateById(db, id);
@@ -56,11 +56,11 @@ export async function GET(request: Request, { params }: Context) {
     const draft = new URL(request.url).searchParams.has("draft");
     if (draft && file !== "resume" && file !== "paper") throw new HiringError(404, "File unavailable.");
     const packet = draft ? await draftReviewPacket(db, id, actor) : saved;
-    if (!packet) throw new HiringError(404, "HR has not submitted this review.");
+    if (!packet) throw new HiringError(404, "This review is not submitted.");
     const [paper] = await db.select().from(p).where(and(eq(p.id, packet.evidence.paper.id), eq(p.candidateId, id)));
     if (!paper || paper.updatedAt.toISOString() !== packet.evidence.paper.updatedAt ||
       candidate.resumeSha256 !== packet.evidence.resumeSha256)
-      throw new HiringError(409, "A source file changed. Ask HR to submit a new review packet.");
+      throw new HiringError(409, "A source file changed. Ask Kevin to submit a new review packet.");
     if (file === "html") return new Response(await reviewDocument(packet, `/api/hiring/review/${id}?file=resume`, `/api/hiring/review/${id}?file=paper`), {
       headers: { ...headers, "Content-Type": "text/html; charset=utf-8",
         "Content-Security-Policy": csp },

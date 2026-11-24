@@ -26,14 +26,15 @@ const SUBJECTS_SHOWN: Subject[] = ["Mathematics", "Physics", "Chemistry", "Biolo
 
 /** The steps, in the order Kevin presents them. `view` is the Hiring screen that shows the step. */
 export const DEMO_STEPS = [
-  { key: "apply", title: "Application and ATS score", view: "seek", who: "System", say: "The candidate applied on SEEK. The system read the résumé and gave a score. A high score gets a link to book the HR call.", act: "Find the demo candidate in the list. Then select Next." },
-  { key: "call", title: "HR call", view: "hr", who: "HR", say: "The candidate booked a 30-minute call. HR speaks to the candidate, writes notes and records the result.", act: "Select Good call on the demo candidate." },
+  { key: "apply", title: "Application and ATS score", view: "overview", who: "System", say: "The candidate applied on SEEK. The system read the résumé and gave a score out of 100.", act: "Find the demo candidate in the list. Then select Next." },
+  // Kevin, 24 Nov 2026: no HR call. This step keeps its place so the step numbers of the demo state stay the same.
+  { key: "gate", title: "Gate check", view: "overview", who: "System", say: "There is no HR call. The system checks the score, the work-rights answer and the subject. A pass gets the next steps email.", act: "Select Next: the email goes to the candidate." },
   { key: "form", title: "Next steps email", view: "prescreen", who: "Candidate", say: "One email went to the candidate: the questions form and the link to book the onsite visit.", act: "Select Next: the candidate answers the form and books a visit." },
   { key: "prepare", title: "Admin prepares the paper test", view: "admin", who: "Admin", say: "The visit is booked for tomorrow. Admin sees who comes, at what time, and prints the paper.", act: "Show the visit card. Then select Next: it is now the visit day." },
   { key: "paper", title: "Paper test", view: "admin", who: "Admin", say: "The candidate did the paper. Admin scans it and uploads the PDF. The system marks it in 5 to 10 minutes.", act: "Select Upload the completed paper and choose a PDF, or select Next." },
   { key: "mock", title: "Mock teaching", view: "heads", who: "Head teacher", say: "The candidate passed, so the mock lesson took place. The head opens the candidate page, gives the scores and says Yes or No.", act: "Choose Kru Peat. Open the candidate page, send the scores, then select Yes." },
-  { key: "review", title: "Final review", view: "review", who: "HR, then Gift", say: "HR writes the behaviour notes and selects the standard offer letter, then sends the packet to Gift. Gift reads the packet and approves or rejects.", act: "Select Open final review. Select the offer letter, preview the packet, then select Send to Gift." },
-  { key: "offer", title: "Offer and signing", view: "offer", who: "Candidate and HR", say: "The offer email went to the candidate with a link to book a 30-minute signing at the school.", act: "Show the approved offer. The demo ends here." },
+  { key: "review", title: "Final review", view: "review", who: "Kevin, then Gift", say: "Kevin writes the behaviour notes and selects the standard offer letter, then sends the packet to Gift. Gift reads the packet and approves or rejects.", act: "Select Open final review. Select the offer letter, preview the packet, then select Send to Gift." },
+  { key: "offer", title: "Offer and signing", view: "offer", who: "Candidate", say: "The offer email went to the candidate with a link to book a 30-minute signing at the school.", act: "Show the approved offer. The demo ends here." },
 ] as const;
 
 type DemoState = {
@@ -74,7 +75,7 @@ export const resetDemo = () => set(START);
 /** The upload button in demo mode: the demo candidate's paper shows as uploaded and marked. No file is read. */
 export const markDemoPaper = () => state.step === 4 && set({ marked: true });
 
-const BEHAVIORAL = "Calm and clear on the call. Gave a specific example of how she changed a lesson for a weak student.";
+const BEHAVIORAL = "Calm and clear in the mock lesson. Gave a specific example of how she changed a lesson for a weak student.";
 const OFFER = OFFER_LETTERS.part_time.text(NAME, "Mathematics");
 export const demoRubric = (): MockRubric => ({
   items: Object.fromEntries(RUBRIC_ITEMS.map((id, index) => [id, index % 3 ? 10 : 7])) as MockRubric["items"],
@@ -206,15 +207,14 @@ export function demoPayload(now = new Date()) {
   const other = others(now);
   const good = step > 1;
   const booked = step > 2;
-  const callStart = ago(now, 20);
   // Step 3: the visit is tomorrow. Step 4: the paper has ended and the mock runs. Later: the mock has ended.
   const paperStart = step === 3 ? at(now, 1, 10) : step === 4 ? ago(now, 180) : ago(now, 270);
   const decided = step > 5 && !closed;
   const hired = step > 6 && !closed;
   const stage = closed ?? (hired ? "hired" : booked ? "onsite_booked" : good ? "pre_screen" : "new");
   const candidate = person(now, DEMO_ID, NAME, SUBJECT, {
-    stage, profileScore: 88, callInvited: true, phone: "081 234 5678",
-    callReview: { good: good ? { at: new Date(now.getTime() - 3 * HOUR).toISOString(), by: "hr@example.test" } : null, tries: [], ...(notes ? { notes } : {}) },
+    stage, profileScore: 88, callInvited: false, phone: null,
+    callReview: notes ? { good: null, tries: [], notes } : null,
     visitSubject: booked ? SUBJECT : null,
     inviteExpiresAt: good ? new Date(now.getTime() + 14 * DAY) : null,
     ...(booked ? replied(now, 0.1) : {}),
@@ -230,13 +230,12 @@ export function demoPayload(now = new Date()) {
   const levels = ["IGCSE / GCSE", "AS / A-Level"];
   const config = baseConfigSchema.parse({
     // Both on, so the demo buttons are not blocked by a switch. Nothing can leave: demoFetch answers every request.
-    enabled: true, deliveryEnabled: true, connectedEmail: "demo@example.test", profileThreshold: 60, callThreshold: 80, preScreenThreshold: 50, acceptedWorkRights: ["I am a Thai citizen"],
+    enabled: true, deliveryEnabled: true, connectedEmail: "demo@example.test", profileThreshold: 60, callThreshold: null, preScreenThreshold: 50, acceptedWorkRights: ["I am a Thai citizen"],
     seekJobs: [{ jobId: "90000001", label: "Demo tutor ad", active: true }], interviewers,
     paperPassRules: SUBJECTS_SHOWN.flatMap((subject) => levels.map((level) => ({ subject, level, percent: 80 }))),
   });
   const outbox = [
     ...other.outbox,
-    sent(DEMO_ID, "call-invite", new Date(now.getTime() - DAY)),
     ...(good ? [sent(DEMO_ID, "pre-screen", new Date(now.getTime() - 3 * HOUR), "pre_screen")] : []),
     ...(hired ? [sent(DEMO_ID, "result:approved", now)] : []),
   ];
@@ -245,11 +244,11 @@ export function demoPayload(now = new Date()) {
     config, configSaved: true, configProblems: [], revision: 1, workerAt: new Date(now.getTime() - 5 * 60_000), workerError: null, writeGate: true,
     workerSummary: { scanned: 140, imported: 3, remaining: 0, folders: [{ status: "Inbox", count: 140, imported: 140 }] },
     usage: { preScreen: { perDay: 2, perWeek: 6, waiting: 1, unbooked: 2, bySubject: {} }, onsite: { perDay: 1, perWeek: 3, waiting: 0, unbooked: 1, bySubject: {} } },
-    holds: {}, preScreenOrder: [], callOrder: good || closed ? other.callOrder : [DEMO_ID, ...other.callOrder],
+    holds: {}, preScreenOrder: [], callOrder: [],
     headMocks: {}, heads: {},
     candidates: [candidate, ...other.candidates],
     bookings: [...visitRows, ...other.bookings],
-    calls: [...(step === 1 && !closed ? [{ candidateId: DEMO_ID, start: callStart, end: new Date(callStart.getTime() + HOUR / 2) }] : []), ...other.calls],
+    calls: [],
     missedCalls: [],
     headDecisions: [
       ...(decided ? [{ candidateId: DEMO_ID, bookingId: MOCK_ID, decision: "hire", reason: state.reason || "Clear and well-paced lesson.", head: "Kru Peat", draftProblem: null, at: now }] : []),
@@ -259,8 +258,6 @@ export function demoPayload(now = new Date()) {
     visitClashes: { candidateIds: [], stale: false, clashes: {} },
     outbox, inviteOutbox: outbox, audit: [],
     funnelEvents: [
-      { candidateId: DEMO_ID, action: "call-booked", at: new Date(now.getTime() - 20 * HOUR) },
-      ...other.calls.map((call) => ({ candidateId: call.candidateId, action: "call-booked", at: new Date(now.getTime() - DAY) })),
     ],
     papers: [
       ...(booked && (marked || step > 4) ? [result(now, RESULT_ID, DEMO_ID, PAPER_ID, SUBJECT, { markSchemeUsed: true, marks: { missingPages: null, comment: "Strong algebra and calculus. One slip in vectors.", questions: [...questions("IGCSE / GCSE", [9, 10, 9]), ...questions("AS / A-Level", [8, 9, 8])] } })] : []),
@@ -332,7 +329,7 @@ const packetHtml = (packet = state.packet) => `<!doctype html><html lang="en"><h
 <style>body{font:16px/1.5 system-ui,sans-serif;margin:32px auto;max-width:720px;color:#1c2a3a}h1{font-size:28px}h2{font-size:18px;margin-top:28px;border-bottom:1px solid #cfe0f0;padding-bottom:4px}dt{color:#5b6b7b;font-size:13px}dd{margin:0 0 10px}</style></head>
 <body><h1>${NAME}</h1><p>Mathematics · Demo packet. Every value is made up.</p>
 <h2>Scores</h2><dl><dt>ATS (application)</dt><dd>88 / 100</dd><dt>Paper test</dt><dd>53 / 60 (88%). Pass mark 80%.</dd><dt>Mock teaching (Kru Peat)</dt><dd>${state.rubric ? Object.values(state.rubric.items).reduce<number>((sum, value) => sum + (value ?? 0), 0) : 0} / ${RUBRIC_ITEMS.length * ITEM_MAX}. Recommendation: Yes.</dd></dl>
-<h2>HR behavioural assessment</h2><p>${escapeHtml(packet?.behavioral ?? "")}</p>
+<h2>Behavioural assessment</h2><p>${escapeHtml(packet?.behavioral ?? "")}</p>
 <h2>Proposed offer</h2><p style="white-space:pre-wrap">${escapeHtml(packet?.offer ?? "")}</p>
 <h2>Files</h2><p>The real packet holds the original résumé and the marked paper.</p></body></html>`;
 const escapeHtml = (text: string) => text.replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]!);

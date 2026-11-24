@@ -273,6 +273,13 @@ export function HrScreen({ data, command, busy, onOpenResults, readOnly = false,
     if (result === "bad" && !window.confirm(`Stop ${c.name}? Nothing is sent to them, and they leave every queue.`)) return;
     void command(callCommand(c, result));
   };
+  // With HR calls off and no call on record, this screen is only the final review list (Kevin, 24 Nov 2026).
+  if (data.config.callThreshold === null && !data.calls.length && !rows.length)
+    return (
+      <div className={`${r.screen} ${r.hrScreen}`}>
+        <ReviewRecommendations data={data} onOpenResults={onOpenResults} readOnly={readOnly} linkedReview={linkedReview} />
+      </div>
+    );
   return (
     <div className={`${r.screen} ${r.hrScreen}`}>
       <TodayCalls data={data} command={command} busy={busy} readOnly={readOnly}>

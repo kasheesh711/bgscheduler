@@ -564,6 +564,8 @@ Kevin asked for both on 23 November 2026, to present the process to the heads, G
 
 ## Role screens
 
+**No HR team (Kevin, 24 November 2026).** The tabs no longer show **SEEK intake** and **HR calls**, and the HR role screen has no button. The screens stay in the code: `/hiring?view=seek`, `?view=calls` and `?view=hr` still open them, and Gift's review link uses `?view=hr`. With the HR call score blank and no call on record, the `?view=hr` screen shows only the final review list. The pipeline board shows its HR call column only while a call is booked. Kevin sends the final review packet to Gift: set `HIRING_HR_EMAIL` to his Hiring sign-in. Gift approves a candidate from her own mock, because the sender (Kevin) is a different person. Screen, email and candidate-page texts on the active path no longer name HR. The texts of the R1 call (emails, call booking page, Calls screen) keep their wording: they cannot be reached while the call score is blank.
+
 Kevin's decision, 18 November 2026: the full dashboard stays for the owner. HR, Admin and the heads each get one simple screen in `/hiring`, built from the same `GET /api/hiring` payload (`src/components/hiring/role-screens.tsx`, helpers in `src/lib/hiring/role-views.ts`).
 
 | Link | For | Shows |
