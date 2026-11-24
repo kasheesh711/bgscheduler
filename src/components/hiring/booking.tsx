@@ -136,7 +136,7 @@ const Fact = ({ icon, label, children }: { icon: ReactNode; label: string; child
 /** When the times were checked against live Wise. Nothing shows when the list came from the Wise copy. */
 /** How fresh the chosen day's times are: live-checked days say when; later days are checked when the candidate books. */
 const Live = ({ at, live }: { at: string; live: boolean }) => (
-  <span className={live ? c.live : cs.later}>{live ? `Times checked at ${time(at)}.` : "Confirmed when you book."}</span>
+  <span className={live ? c.live : cs.later}>{live ? `Times checked at ${time(at)}.` : "We check availability when you confirm."}</span>
 );
 
 const NOON = (date: string) => `${date}T12:00:00+07:00`;
@@ -218,7 +218,7 @@ function Picker<T extends { date: string }>({
     const el = strip.current;
     if (!el) return;
     const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    el.scrollTo({ left: weeks.indexOf(w) * el.clientWidth, behavior: smooth && !reduce ? "smooth" : "auto" });
+    el.scrollTo({ left: weeks.indexOf(w) * ((el.scrollWidth + 2) / weeks.length), behavior: smooth && !reduce ? "smooth" : "auto" });
   };
   useEffect(() => {
     if (week !== weeks[0]) scrollToWeek(week, false);
@@ -276,7 +276,7 @@ function Picker<T extends { date: string }>({
         data-scroll-x=""
         onScroll={(e) => {
           const el = e.currentTarget;
-          const w = weeks[Math.round(el.scrollLeft / Math.max(1, el.clientWidth))];
+          const w = weeks[Math.round(el.scrollLeft / Math.max(1, (el.scrollWidth + 2) / weeks.length))];
           if (w && w !== week) setWeek(w);
         }}
       >
@@ -393,12 +393,12 @@ const VisitPlan = () => (
 );
 
 /** Questions → Times → Booked, so a candidate always sees where they are. */
-function Steps({ at }: { at: 0 | 1 | 2 | 3 }) {
+function Steps({ at, booked = false }: { at: 0 | 1 | 2 | 3; booked?: boolean }) {
   return (
     <ol className={cs.steps} aria-label="Steps">
       {["Questions", "Times", "Booked"].map((name, i) => (
-        <li key={name} data-state={i < at ? "done" : i === at ? "now" : undefined} aria-current={i === at ? "step" : undefined}>
-          {i < at && <Check aria-hidden size={14} />}
+        <li key={name} data-state={i < at || (booked && i === 2) ? "done" : i === at ? "now" : undefined} aria-current={i === at ? "step" : undefined}>
+          {(i < at || (booked && i === 2)) && <Check aria-hidden size={14} />}
           {name}
         </li>
       ))}
@@ -558,7 +558,8 @@ export function VisitBooking({
         top={
           <>
             {/* While moving, the candidate is choosing times again (Opus r10). */}
-            {view.twoDay && <Steps at={view.visit && !moving ? 3 : 1} />}
+            {/* While moving, Times is the step in hand and the visit stays booked (Opus r16). */}
+            {view.twoDay && <Steps at={view.visit && !moving ? 3 : 1} booked={!!view.visit} />}
             {saved && <Saved>{saved}</Saved>}
             <div className={c.facts}>
               <Fact icon={<BookOpen aria-hidden />} label="Subject">
@@ -618,8 +619,9 @@ export function VisitBooking({
                           <span className={cs.nowrap}>
                             {time(view.visit.mockStart)}–{time(view.visit.mockEnd)}
                           </span>
-                          {view.visit.head && <span className={cs.nowrap}>{` · ${view.visit.head}`}</span>}
                         </small>
+                        {/* Its own line, so a long name is never cut off on a narrow phone (Opus r16). */}
+                        {view.visit.head && <small>with {view.visit.head}</small>}
                         <small>If you pass the test</small>
                       </div>
                     )}
@@ -673,6 +675,8 @@ export function VisitBooking({
                 selected={start}
                 onSelect={(s) => {
                   setStart(s.examStart);
+                  // A mock time that cannot follow the new test is dropped, so it never comes back by itself (Sol r17).
+                  if (mockChosen && !mockCanFollow(s.examEnd, mockChosen)) setMock("");
                   // The mock list opens below the test list: bring it into view (Sol r1).
                   if (view.twoDay && !slot) reveal("mock-start");
                 }}
@@ -700,7 +704,7 @@ export function VisitBooking({
                 id="mock-start"
                 currentKey={moving ? (view.visit?.mockStart ?? undefined) : undefined}
                 currentOpen
-                legend="Mock teaching time"
+                legend={moving ? "New mock teaching time" : "Mock teaching time"}
                 hint="1 hour, if you pass."
                 checkedAt={null}
                 items={laterMocks}
@@ -716,10 +720,10 @@ export function VisitBooking({
               />
             )}
             {/* While a time is still missing: once both are chosen, nothing is blocked. */}
-            {/* Until the booking is confirmed, a way to ask stays on the page (Sol r13). */}
-            {showForm && (
+            {/* While a time is missing: a way out when none works. Once both are chosen, the footer has the link (Sol r17). */}
+            {showForm && (!slot || (view.twoDay && !mock)) && (
               <p className={c.help}>
-                {!slot ? "No time works? " : view.twoDay && !mock ? "No mock time works? " : ""}
+                {!slot ? "No time works? " : "No mock time works? "}
                 <a href={LINE_URL} rel="noreferrer">
                   Contact BeGifted on LINE
                 </a>
@@ -735,6 +739,7 @@ export function VisitBooking({
               {moving && <p className={c.note}>You can move this visit once. Your current times stay booked until you confirm.</p>}
               {keep}
               <VisitConfirm
+                compact={!slot}
                 error={error}
                 // One next step at a time (Sol r9).
                 missing={
@@ -776,8 +781,8 @@ export function VisitBooking({
           )
         }
       />
-      {/* While choosing, LINE help sits in the notices and errors; the footer comes back once a visit is booked (Sol r4–r5). */}
-      {!notice && !showForm && <Help />}
+      {/* The footer link: when nothing is being chosen, or once every time is chosen (Sol r4–r5, r17). */}
+      {!notice && (!showForm || (!!slot && (!view.twoDay || !!mock))) && <Help />}
     </>
   );
 }

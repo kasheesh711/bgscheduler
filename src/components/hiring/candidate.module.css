@@ -111,8 +111,10 @@
     border-color 0.12s,
     color 0.12s;
 }
-.chip:hover {
-  border-color: #b8ae98;
+@media (hover: hover) {
+  .chip:hover {
+    border-color: #b8ae98;
+  }
 }
 /* The check sits in the chip's own padding, so the label stays centred and the width never changes (Sol r7, Opus r8). */
 .chip {
@@ -173,8 +175,7 @@
   background: #fff;
 }
 .known[data-ok] {
-  border-color: var(--ok);
-  background: var(--ok-soft);
+  border-color: var(--ink);
 }
 .known p {
   display: grid;
@@ -216,10 +217,11 @@
   background: transparent;
   color: var(--ink);
 }
+/* Chosen looks the same everywhere: navy with a check (Opus r16); green is for status only. */
 .known[data-ok] .knownActions button[aria-pressed="true"] {
-  border-color: var(--ok);
-  background: var(--ok);
-  color: #fff;
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fbf7ee;
 }
 
 /* Week grid (Mobbin: Bonsai, Calendly, Outlook "tap the time slots"). */
@@ -304,8 +306,10 @@
 .cell[data-weekend] {
   background: #fdf9f1;
 }
-.cell:hover {
-  border-color: #b8ae98;
+@media (hover: hover) {
+  .cell:hover {
+    border-color: #6f6757;
+  }
 }
 .cell[aria-pressed="true"] {
   border-color: var(--ink);
@@ -367,9 +371,9 @@
 }
 @media (max-width: 359px) {
   .grid {
-    grid-template-columns: 20px repeat(7, minmax(0, 1fr));
-    gap: 1px;
-    margin: 0 -8px 0 -14px;
+    grid-template-columns: 16px repeat(7, minmax(0, 1fr));
+    gap: 2px;
+    margin: 0 -10px 0 -14px;
   }
   .dates {
     margin: 0 -14px;
@@ -492,9 +496,11 @@
 .date:disabled i {
   visibility: hidden;
 }
-.date:not(:disabled):hover {
-  border-color: var(--line);
-  background: #fff;
+@media (hover: hover) {
+  .date:not(:disabled):hover {
+    border-color: var(--line);
+    background: #fff;
+  }
 }
 /* Stronger than the hover rule, so the chosen day stays navy under the pointer. */
 .date[aria-pressed="true"],
@@ -558,8 +564,10 @@
   font-size: 12px;
   color: var(--muted);
 }
-.time:hover {
-  border-color: var(--ink);
+@media (hover: hover) {
+  .time:hover {
+    border-color: var(--ink);
+  }
 }
 .time:has(input:checked) {
   border-color: var(--ink);
@@ -916,11 +924,12 @@
 }
 
 .preset[data-full] {
-  border-color: var(--ok);
-  color: var(--ok);
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fbf7ee;
 }
 .preset[data-full] small {
-  color: var(--ok);
+  color: #d9d4c8;
 }
 .help {
   font-size: 13px;
@@ -1163,4 +1172,18 @@
 }
 .dateLabel {
   font-weight: 650;
+}
+
+@media (max-width: 359px) {
+  .dateWeek {
+    padding: 6px 6px;
+  }
+  .dateWeek b {
+    font-size: 13px;
+  }
+  .hour,
+  .hourEnd {
+    font-size: 9px;
+    padding-right: 1px;
+  }
 }

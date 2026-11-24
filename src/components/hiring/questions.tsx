@@ -197,9 +197,10 @@ export function PreScreenQuestions({
   };
   // Each question, whether it is answered, and where it is: the rail lists the open ones as jump links.
   const checks: [string, string, boolean][] = [
-    ["q-degree", "Degree", !!answers.degree && !!answers.field.trim()],
+    // The names match the field labels, so "Next: …" points at what the candidate sees (Opus r16).
+    ["q-degree", knownDegree && degreeMode !== "ask" ? "Your degree" : "Highest degree", !!answers.degree && !!answers.field.trim()],
     ["q-english", "English level", !!answers.english],
-    ["q-experience", "Experience", !!answers.experience],
+    ["q-experience", "Teaching experience", !!answers.experience],
     ["q-subjects", "Subjects", subjects.length > 0],
     // Art & Design needs its portfolio (a file or a link): its own step, so "Next" names it (Sol r13).
     ...(subjects.includes(ART) ? [["q-portfolio", "Portfolio", !!fileName || !!portfolio.trim()] as [string, string, boolean]] : []),
@@ -207,8 +208,8 @@ export function PreScreenQuestions({
     [subjects.length > 1 ? "q-test" : "q-subjects", "Test subject", !!test],
     ["q-curricula", "Curricula", curricula.length > 0],
     ["q-years", "Year groups", yearGroups.length > 0],
-    ["q-hours", "Teaching hours", weekHoursCount(week) > 0],
-    ["q-weekly", "Hours a week", !!answers.weeklyHours],
+    ["q-hours", "Your hours", weekHoursCount(week) > 0],
+    ["q-weekly", "Weekly hours", !!answers.weeklyHours],
     ["q-why", "Why BeGifted", !!motivation.trim()],
     ["q-approach", "Your approach", !!teachingApproach.trim()],
   ];
@@ -409,8 +410,9 @@ export function PreScreenQuestions({
           compact
           error={error}
           disabled={busy}
-          label={busy ? "Saving…" : "Save and see times"}
-          onConfirm={send}
+          // Until every answer is in, the button takes the candidate to the next open question (Sol r17).
+          label={busy ? "Saving…" : open.length ? `Next: ${open[0][1]}` : "Save and see times"}
+          onConfirm={() => (open.length ? reveal(open[0][0], true) : send())}
           summary={
             <>
               <div className={s.progress}>
@@ -421,20 +423,7 @@ export function PreScreenQuestions({
                   <i style={{ width: `${(answered / done.length) * 100}%` }} />
                 </span>
               </div>
-              {open.length > 0 && (
-                <p className={s.open}>
-                  Next:{" "}
-                  <a
-                    href={`#${open[0][0]}`}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      reveal(open[0][0], true);
-                    }}
-                  >
-                    {open[0][1]}
-                  </a>
-                </p>
-              )}
+
             </>
           }
         />
