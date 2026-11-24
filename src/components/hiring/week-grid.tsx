@@ -251,6 +251,8 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
                 data-cell={`${d},${h}`}
                 className={s.cell}
                 data-weekend={d > 4 || undefined}
+                // A line at 15:00 across the weekdays shows where the "weekday at or after 15:00" rule starts (Sol r20).
+                data-from15={(d < 5 && h === 15) || undefined}
                 aria-pressed={has(value, d, h)}
                 aria-label={`${DAY_NAMES[d]} ${hh(h)} to ${hh(h + 1)}`}
                 tabIndex={focus[0] === d && focus[1] === h ? 0 : -1}

@@ -299,7 +299,11 @@ function Picker<T extends { date: string }>({
         onScroll={(e) => {
           const el = e.currentTarget;
           const w = weeks[Math.round(el.scrollLeft / Math.max(1, (el.scrollWidth + 2) / weeks.length))];
-          if (w && w !== week) setWeek(w);
+          if (!w || w === week) return;
+          setWeek(w);
+          // A swipe to another week shows that week's first open day, so the marked week and the times agree (Sol r20).
+          // A scroll that follows keyboard focus inside the strip leaves the chosen day alone.
+          if (!el.contains(document.activeElement)) setPicked(firstOpen(w) ?? "");
         }}
       >
         {weeks.flatMap((w) => Array.from({ length: 7 }, (_, i) => plusDays(w, i))).map((date) => {
@@ -755,11 +759,6 @@ export function VisitBooking({
           showForm && (
             <>
               <Checks onsite={onsite} commitment={commitment} setOnsite={setOnsite} setCommitment={setCommitment} fromAnswers={view.timeRuleMet} />
-              {view.timeRuleMet && (
-                <p className={cs.ruleMet} role="status">
-                  <Check aria-hidden size={14} /> Your hours meet the weekend and 15:00 rule.
-                </p>
-              )}
               {moving && <p className={c.note}>Your current times stay booked until you confirm.</p>}
               <VisitConfirm
                 compact={!slot}

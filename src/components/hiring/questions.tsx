@@ -326,7 +326,7 @@ export function PreScreenQuestions({
         <p className={c.note}>Choose all that apply.</p>
         <Q id="q-subjects" title="Subjects you teach confidently">
           <Chips name="subjects" choices={shownSubjects} value={subjects} onChange={setSubjects} many disabled={busy} />
-          {rest.length > 0 && (
+          {rest.length > 0 && (showRest || rest.some((v) => !subjects.includes(v))) && (
             <div>
               <button type="button" className={s.more} aria-expanded={showRest} onClick={() => setMoreOpen(!showRest)}>
                 <ChevronDown aria-hidden size={16} style={showRest ? { transform: "rotate(180deg)" } : undefined} />
@@ -335,17 +335,28 @@ export function PreScreenQuestions({
             </div>
           )}
         </Q>
-        {/* The page chose the only possible subject: say so here, not first on Times (Sol r6). */}
-        {test && (subjects.length === 1 || testable.length === 1) && !(subjects.length > 1 && testChoices.length > 1) && (
+        {/* With one subject ticked there is no choice to show: one line says what the test is in (Sol r6, r20). */}
+        {subjects.length === 1 && test && (
           <p className={c.note} role="status">
             Test and mock teaching subject: <b>{test}</b>
           </p>
         )}
-        {/* The page chose the only possible subject: say so here, not first on Times (Sol r6). */}
-        {test && (subjects.length === 1 || testable.length === 1) && !(subjects.length > 1 && testChoices.length > 1) && (
-          <p className={c.note} role="status">
-            Test and mock teaching subject: <b>{test}</b>
-          </p>
+        {subjects.length > 1 && testChoices.length > 0 && (
+          <Q
+            id="q-test"
+            title="Subject for your test and mock teaching"
+            tag="choose one"
+            hint={testable.length && testable.length < subjects.length ? "Greyed: not tested." : undefined}
+          >
+            <Chips
+              name="testSubject"
+              choices={subjects}
+              value={test ? [test] : []}
+              onChange={setTestSubject}
+              disabled={busy}
+              off={testable.length ? subjects.filter((v) => !testable.includes(v)) : []}
+            />
+          </Q>
         )}
         {subjects.includes(ART) && (
           <Q id="q-portfolio" title="Portfolio" tag="file or link">
@@ -371,31 +382,14 @@ export function PreScreenQuestions({
             {text("Portfolio link", portfolio, setPortfolio, 500, "A link that opens without a password")}
           </Q>
         )}
-        {subjects.length > 1 && testChoices.length > 0 && (
-          <Q
-            id="q-test"
-            title="Subject for your test and mock teaching"
-            tag="choose one"
-            hint={testable.length && testable.length < subjects.length ? "Greyed: not tested." : undefined}
-          >
-            <Chips
-              name="testSubject"
-              choices={subjects}
-              value={test ? [test] : []}
-              onChange={setTestSubject}
-              disabled={busy}
-              off={testable.length ? subjects.filter((v) => !testable.includes(v)) : []}
-            />
-          </Q>
-        )}
-        <Q id="q-curricula" title="Curricula taught">
+        <Q id="q-curricula" title="Curricula">
           <Chips name="curricula" choices={ANSWER_CHOICES.curricula} value={curricula} onChange={setCurricula} many disabled={busy} />
         </Q>
         <Q id="q-years" title="Year groups">
           <Chips name="yearGroups" choices={ANSWER_CHOICES.yearGroups} value={yearGroups} onChange={setYearGroups} many disabled={busy} />
         </Q>
       </Section>
-      <Section title="Availability">
+      <Section title="Onsite hours">
         <Q id="q-hours" title="Tap hours, or hold and drag" tag="Bangkok time">
           <WeekGrid value={week} onChange={setWeek} disabled={busy} />
         </Q>

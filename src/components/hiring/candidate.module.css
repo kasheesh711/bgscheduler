@@ -1224,3 +1224,17 @@
     font-size: 10px;
   }
 }
+
+.cell[data-from15] {
+  border-top: 2px solid #b0391a;
+}
+/* Single-choice chips: the radio dot sits in line, with even padding on both sides (Sol r20). */
+.chip[data-one] {
+  padding: 0 16px 0 12px;
+  gap: 8px;
+}
+.chip[data-one] svg {
+  position: static;
+  width: 14px;
+  height: 14px;
+}
