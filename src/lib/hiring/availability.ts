@@ -237,7 +237,8 @@ export async function availableSlots(
   if (index) assertFreshIndex(index, now);
   for (const date of dates) {
     const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
-    const headCounts = kind === "mock" ? headWeekMocks(bookings, instant(date, 0)) : {};
+    // A move gives up the candidate's own mock, so it does not count toward the head's week either.
+    const headCounts = kind === "mock" ? headWeekMocks(bookings.filter((b) => b.candidateId !== movingCandidate), instant(date, 0)) : {};
     const office = config.paperOfficeHours.find((w) => w.weekday === weekday);
     const begin = kind === "mock" ? 600 : office?.startMinute;
     const finish = kind === "mock" ? 960 : office?.endMinute;

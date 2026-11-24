@@ -387,7 +387,7 @@ export function AdminScreen({ data, reload, readOnly = false, onOpenResults }: {
         <Section title="Papers to upload or review" count={waiting.length}>
           <div className={r.cards}>
             {waiting.map((row) => (
-              <AdminCard key={row.visitId} row={{ ...row, paper: null }} data={data} reload={reload} readOnly={readOnly} onOpenResults={onOpenResults} />
+              <AdminCard key={`${row.visitId}:${row.date}`} row={{ ...row, paper: null }} data={data} reload={reload} readOnly={readOnly} onOpenResults={onOpenResults} />
             ))}
           </div>
         </Section>
@@ -397,7 +397,7 @@ export function AdminScreen({ data, reload, readOnly = false, onOpenResults }: {
         <Section key={day.date} title={dayTitle(day.date, today)} count={day.rows.length}>
           <div className={r.cards}>
             {day.rows.map((row) => (
-              <AdminCard key={row.visitId} row={row} data={data} reload={reload} readOnly={readOnly} onOpenResults={onOpenResults} />
+              <AdminCard key={`${row.visitId}:${row.date}`} row={row} data={data} reload={reload} readOnly={readOnly} onOpenResults={onOpenResults} />
             ))}
           </div>
         </Section>

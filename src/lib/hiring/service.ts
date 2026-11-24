@@ -389,7 +389,9 @@ export async function inviteToPreScreen(db: Database, candidate: Candidate, now 
     payload: {
       to: candidate.email,
       workflowStage: "pre_screen",
-      ...preScreenEmail(candidate.name, candidate.email, false, visitLink(candidate.id, expires), !!(await callInviteSentAt(db, candidate.id))),
+      ...preScreenEmail(candidate.name, candidate.email, false, visitLink(candidate.id, expires),
+        // Not for a candidate whose HR interview took place and went well: for them the sentence would be false.
+        !candidate.callReview?.good && !!(await callInviteSentAt(db, candidate.id))),
     },
   });
   if (queued)
