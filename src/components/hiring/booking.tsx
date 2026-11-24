@@ -135,7 +135,10 @@ const Fact = ({ icon, label, children }: { icon: ReactNode; label: string; child
 );
 
 /** When the times were checked against live Wise. Nothing shows when the list came from the Wise copy. */
-const Live = ({ at }: { at: string | null }) => (at ? <span className={c.live}>Checked at {time(at)}</span> : null);
+/** How fresh the chosen day's times are: live-checked days say when; later days are checked when the candidate books. */
+const Live = ({ at, live }: { at: string; live: boolean }) => (
+  <span className={live ? c.live : cs.later}>{live ? `Checked at ${time(at)}.` : "Confirmed when you book."}</span>
+);
 
 const NOON = (date: string) => `${date}T12:00:00+07:00`;
 const plusDays = (date: string, n: number) => new Date(Date.parse(NOON(date)) + n * 86_400_000).toISOString().slice(0, 10);
@@ -207,7 +210,6 @@ function Picker<T extends { date: string }>({
     <fieldset className={c.step} id={id} tabIndex={-1}>
       <legend className={c.stepHead}>
         <span className={c.stepTitle}>{legend}</span>
-        <Live at={checkedAt && liveDates.includes(active) ? checkedAt : null} />
       </legend>
       {hint && <p className={c.note}>{hint}</p>}
       {/* One button per week, so a later week is one tap away (Sol r9), and the shown week is named. */}
@@ -256,6 +258,8 @@ function Picker<T extends { date: string }>({
           );
         })}
       </div>
+      {/* Under the chosen day, so it is clear which times it speaks for (Sol r11). */}
+      {checkedAt && active && <Live at={checkedAt} live={liveDates.includes(active)} />}
       {PARTS.map((p, n) => {
         const times = shown.filter((i) => hourOf(startOf(i)) < p.until && hourOf(startOf(i)) >= (PARTS[n - 1]?.until ?? 0));
         if (!times.length) return null;
@@ -321,7 +325,7 @@ const VisitPlan = () => (
     </li>
     <li>
       <b>Mock teaching</b>
-      <span>1 hour, if you pass</span>
+      <span>1 hour</span>
     </li>
   </ol>
 );
@@ -363,7 +367,7 @@ function Checks({
   return (
     <div className={c.checks}>
       {row("check-address", onsite, setOnsite, "I will come to this address.")}
-      {row("check-hours", commitment, setCommitment, "I can teach onsite on weekends and a weekday after 15:00.")}
+      {row("check-hours", commitment, setCommitment, "I can teach onsite on weekends and a weekday from 15:00.")}
     </div>
   );
 }
@@ -466,7 +470,7 @@ export function VisitBooking({
               <>
                 <Steps at={0} />
                 <VisitPlan />
-                <p className={c.note}>After these questions, book both times. They can be on different days.</p>
+                <p className={c.note}>Book both times now. You teach the mock lesson only if you pass the test.</p>
               </>
             }
           />
@@ -548,6 +552,7 @@ export function VisitBooking({
                         <small>If you pass the test</small>
                       </div>
                     )}
+                    <small className={cs.zone}>Bangkok time</small>
                   </div>
                 </div>
                 {!view.canMove && !notice && <p className={c.note}>This visit can no longer be moved online.</p>}
@@ -639,7 +644,7 @@ export function VisitBooking({
             {/* While a time is still missing: once both are chosen, nothing is blocked. */}
             {showForm && (!slot || (view.twoDay && !mock) || !onsite || !commitment) && (
               <p className={c.help}>
-                No time works?{" "}
+                {slot && view.twoDay && !mock ? "No mock time works?" : "No time works?"}{" "}
                 <a href={LINE_URL} rel="noreferrer">
                   Contact BeGifted on LINE
                 </a>
@@ -862,7 +867,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
           <VisitConfirm
             error={error}
             missing={
-              !start ? ["choose a time", "call-times"] : !phoneOk ? [phone.trim() ? "check your phone number, with the country code" : "add your phone number", "call-phone"] : null
+              !start ? ["choose a time", "call-times"] : !phoneOk ? [phone.trim() ? "check your phone number" : "add your phone number", "call-phone"] : null
             }
             disabled={busy || !start || !phoneOk}
             label={busy ? "Confirming…" : view.call ? "Confirm new time" : `Confirm ${appointment}`}

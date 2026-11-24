@@ -87,7 +87,7 @@ function Chips<T extends string>({
   return (
     <div className={s.chips}>
       {choices.map((choice) => (
-        <label key={choice} className={s.chip}>
+        <label key={choice} className={s.chip} data-long={(SHORT[choice] ?? choice).length > 16 || undefined}>
           <input
             className={c.hidden}
             type={many ? "checkbox" : "radio"}
@@ -294,7 +294,7 @@ export function PreScreenQuestions({
             <Q id="q-degree" title="Highest degree">
               <Chips name="degree" choices={ANSWER_CHOICES.degree} value={degree} onChange={setDegree} disabled={busy} />
             </Q>
-            {text("Field of study", field, setField, 200, "For example: Chemistry")}
+            {text("Field of study", field, setField, 200)}
           </>
         )}
         <Q id="q-english" title="English level">

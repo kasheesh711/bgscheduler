@@ -1059,3 +1059,20 @@
     padding: 6px 12px 6px 22px;
   }
 }
+
+.later {
+  font-size: 12px;
+  color: var(--muted);
+}
+.zone {
+  font-size: 12px;
+  color: #d9d4c8;
+}
+@media (max-width: 359px) {
+  .chip {
+    padding: 6px 10px 6px 20px;
+  }
+  .chip[data-long] {
+    grid-column: 1 / -1;
+  }
+}

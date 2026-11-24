@@ -48,7 +48,7 @@ describe("VisitBooking", () => {
     expect(html).not.toContain("docs.google.com");
     for (const question of ["Highest degree", "Field of study", "Subjects you can teach confidently", "English level", "Tap the hours you can teach", "Why do you want to tutor with BeGifted?", "Save and see times"])
       expect(html).toContain(question);
-    expect(html).toContain("1 hour, if you pass");
+    expect(html).toContain("You teach the mock lesson only if you pass the test.");
     expect(html).not.toContain("I will come to this address.");
   });
   it("shows the résumé's degree as one line to confirm, in place of the two degree questions", () => {

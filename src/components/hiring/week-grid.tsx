@@ -308,7 +308,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
           </span>
           <span data-ok={late || undefined}>
             {late && <Check aria-hidden size={14} />}
-            {late ? "A weekday after 15:00" : "Needs a weekday after 15:00"}
+            {late ? "A weekday from 15:00" : "Needs a weekday from 15:00"}
           </span>
         </p>
       </div>
