@@ -247,7 +247,8 @@ summary{width:fit-content;min-height:44px;padding:10px 0;cursor:pointer}details 
 <header><img alt="BeGifted Education" src="data:image/png;base64,${logo}">
 <p class="eyebrow">Confidential</p>
 <h1>Hiring <em>review</em></h1>
-<p class="candidate">${escape(value.name)}</p><p>${escape(value.subject)} tutor</p><p class="meta">${packet.id === "draft" ? "Preview. Not sent to Gift." : `Submitted ${date(packet.at)} by ${escape(packet.author)}`}</p></header>
+<p class="candidate">${escape(value.name)}</p><p>${escape(value.subject)} tutor</p><p class="meta">${packet.id === "draft" ? "Preview. Not sent to Gift." : `Submitted ${date(packet.at)} by ${escape(packet.author)}`}</p>
+<p><a href="#offer" target="_self">View offer terms ↓</a></p></header>
 <section><h2>Assessment summary</h2><div class="tiles">
 <div class="tile"><h3>ATS</h3>${gauge(atsValue, " / 100", null, atsScore)}</div>
 <div class="tile"><h3>Paper</h3>${gauge(paperPercent, "%", paperTarget)}
@@ -290,6 +291,6 @@ ${mockUsed.has("hygiene") ? `<p class="meta">Stress Test ticks: ${escape(STRESS_
 <p class="copy">${escape(mock.rubric.comments)}</p></section>
 <section><h2>${value.call ? "Pre-screen call" : "Behavioural assessment"}</h2><p class="meta">${value.call ? `Call result recorded ${date(value.call)}` : "Written for the final review"}</p>
 <p class="copy">${escape(packet.behavioral)}</p></section>
-<section><h2>Proposed offer letter</h2><p class="copy">${escape(packet.offer)}</p></section>
+<section id="offer"><h2>Proposed offer letter</h2><p class="copy">${escape(packet.offer)}</p></section>
 </main></body></html>`;
 }

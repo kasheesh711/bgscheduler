@@ -326,8 +326,13 @@ export function HrScreen({ data, command, busy, onOpenResults, readOnly = false,
 function useMinute() {
   const [minute, setMinute] = useState(() => Math.floor(Date.now() / 60000));
   useEffect(() => {
-    const timer = window.setInterval(() => setMinute(Math.floor(Date.now() / 60000)), 60000);
-    return () => window.clearInterval(timer);
+    // On the minute boundary, then every minute, so "Mock now" shows when the mock starts.
+    const tick = () => setMinute(Math.floor(Date.now() / 60000));
+    let timer = window.setTimeout(function next() {
+      tick();
+      timer = window.setTimeout(next, 60000 - (Date.now() % 60000));
+    }, 60000 - (Date.now() % 60000));
+    return () => window.clearTimeout(timer);
   }, []);
   return minute;
 }
@@ -495,7 +500,7 @@ function visitItem(visit: ReturnType<typeof headVisit>, today: string, live = fa
     action: due && open ? (scored ? "Recommend Yes or No" : "Score mock") : live && open ? "Score mock"
       : !checkingScores && (needsCheck || (mock && !path && !status && missingOutcome)) ? "Ask admin" : undefined,
     note: checkingScores ? "Admin checking scores"
-      : needsCheck ? null
+      : needsCheck ? (open ? null : "to check the scores")
       : mock && !path && !status ? (missingOutcome ? "to record the outcome" : "No brief yet")
       : path && !active ? "Brief closed"
       : candidate?.resumeState === "none" ? "No résumé"
@@ -542,6 +547,8 @@ function ItemLink({ item, selected, onSelect, wide, readOnly, paneId }: { item: 
         if (!wide || event.metaKey || event.ctrlKey || event.shiftKey) return;
         event.preventDefault();
         onSelect();
+        // From the keyboard (no pointer), move on to the page that just opened.
+        if (event.detail === 0) window.setTimeout(() => document.getElementById("open-item")?.focus());
       }}>
       {body}
     </a>
@@ -581,7 +588,9 @@ function ItemPane({ item, data, readOnly, reload }: { item: HeadItem; data: Hiri
     return (
       <>
         {!loaded && <p role="status" className={`${r.quiet} ${r.opening}`}>Opening…</p>}
-        <iframe key={item.id} className={r.paneFrame} src={src ?? embedded(item.href)} title={`${item.task}: ${item.name}`} onLoad={() => setLoaded(true)} />
+        {/* Hidden until it has loaded, so the page's own loading frame never shows in the pane. */}
+        <iframe key={item.id} className={r.paneFrame} src={src ?? embedded(item.href)} title={`${item.task}: ${item.name}`} onLoad={() => setLoaded(true)}
+          style={{ visibility: loaded ? "visible" : "hidden" }} />
       </>
     );
   }
@@ -640,6 +649,9 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   const Rail = wide ? "nav" : "section";
   // A score sent in the open page shows in the list when the head comes back to it (not more than once in 30 seconds).
   const loadedAt = useRef(0);
+  // "Saved for …" stays under To do until another row opens, so the head sees the save where they started.
+  const [savedFor, setSavedFor] = useState<{ id: string; text: string } | null>(null);
+  const openNameRef = useRef<{ id: string; text: string } | null>(null);
   // The dashboard passes a new function on each render; the listeners use the latest one without subscribing again.
   const reloadRef = useRef(reload);
   useEffect(() => {
@@ -658,6 +670,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     // A save in the open brief or paper check reloads the list at once, so the row leaves To do.
     const saved = (event: MessageEvent) => {
       if (event.origin !== window.location.origin || event.data?.type !== "hiring-saved") return;
+      setSavedFor(openNameRef.current);
       loadedAt.current = Date.now();
       void reloadRef.current?.().catch(() => {});
     };
@@ -736,6 +749,9 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   // On arrival: a mock in progress (Kevin, 24 Nov 2026), else the first job that needs the head, else the next mock.
   const selected = wide ? found ?? keep ?? (mockNow ? nextItem : undefined) ?? all.find((item) => item.urgent) ?? nextItem ?? all[0] : found;
   if ((selected?.id ?? null) !== (shown?.id ?? null)) setShown(selected ?? null);
+  useEffect(() => {
+    openNameRef.current = selected ? { id: selected.id, text: `${selected.task === "Check paper" ? "Marks saved" : "Scores sent"} for ${selected.name}` } : null;
+  }, [selected]);
   const paneId = useId();
   // Gift's review link: on a phone the row may sit below the fold.
   useEffect(() => {
@@ -777,16 +793,17 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
           <a className={r.skip} href="#open-item" onClick={(event) => {
             event.preventDefault();
             document.getElementById("open-item")?.focus();
-          }}>Skip to the open page</a>
+          }}>Skip to open item</a>
         )}
         <p className="sr-only" role="status">{name && `${name} · ${nextMock
-          ? `next mock ${shortDay(nextMock.row.date)}, ${nextMock.row.mockStart}` : "no mock booked"}`}</p>
+          ? `${mockNow ? "mock now" : "next mock"} ${shortDay(nextMock.row.date)}, ${nextMock.row.mockStart}` : "no mock booked"}`}</p>
         {groups.map((group) => (group.items.length > 0 || (group.title === "Next mock" && givesMocks) || (group.title === "To do" && (givesMocks || reviewer))) && (
           <section key={group.title} className={r.group} data-tone={group.title === "To do" && group.items.length ? "todo" : undefined}>
             <h2 className={r.groupTitle}>
               {group.title}
               {group.items.length > 1 && <span className={r.count}>{group.items.length}</span>}
             </h2>
+            {group.title === "To do" && savedFor && selected?.id === savedFor.id && <p role="status" className={r.saved}>{savedFor.text}</p>}
             {group.items.length ? list(group.items) : <p className={r.quiet}>{group.title === "To do" ? (reviewer ? "Nothing to score or sign now." : "Nothing to do now.") : "No mock booked. New bookings also come by LINE."}</p>}
           </section>
         ))}
@@ -809,7 +826,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
       {wide && (
         <section id="open-item" tabIndex={-1} className={r.pane} aria-label={selected ? `${selected.task}: ${selected.name}` : "Nothing open"}>
           {selected ? <ItemPane key={selected.id} item={selected} data={data} readOnly={readOnly || (!fixedHead && !chosen)} reload={reload} />
-            : <p className={r.quiet}>Nothing to do.</p>}
+            : null}
         </section>
       )}
     </div>

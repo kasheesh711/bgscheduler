@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { paperCheckView } from "@/lib/hiring/paper-check";
 import { tellHiringList } from "./brief";
 import { PdfPages } from "./pdf-pages";
@@ -38,6 +38,18 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   // Marks not sent yet stay in this browser, so opening another row and coming back loses nothing. The link token is
   // signed again on each list load, so the draft is keyed by the result, and kept only while the AI marks are the same.
+  // On a wide pane the questions scroll in their own area; the cue shows while some are still below it.
+  const questionList = useRef<HTMLOListElement>(null);
+  const [more, setMore] = useState(false);
+  const checkMore = () => {
+    const list = questionList.current;
+    setMore(!!list && list.scrollHeight - list.scrollTop - list.clientHeight > 8);
+  };
+  useEffect(() => {
+    checkMore();
+    window.addEventListener("resize", checkMore);
+    return () => window.removeEventListener("resize", checkMore);
+  }, []);
   const draftKey = `hiring-paper-draft:${view.id}`;
   const [restored, setRestored] = useState(false);
   useEffect(() => {
@@ -124,7 +136,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
       </section>
       <section className={`${c.facts} ${k.marks}`}>
         <h2 className={c.stepTitle}>Your marks <span className={c.note}>{view.questions.length} questions · half marks allowed</span></h2>
-        <ol className={k.questions}>
+        <ol className={k.questions} ref={questionList} onScroll={checkMore}>
           {view.questions.map((q) => (
             <li key={q.id} className={k.question}>
               <div className={k.head}>
@@ -151,6 +163,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
             </li>
           ))}
         </ol>
+        {more && <p className={k.more} aria-hidden="true">More questions below ↓</p>}
         <label className={c.field}>
           <span>Comment (optional)</span>
           <textarea className={c.input} rows={3} maxLength={4000} value={comment} onChange={(event) => setComment(event.target.value)} />

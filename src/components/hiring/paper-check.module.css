@@ -101,3 +101,22 @@
 .mark {
   scroll-margin-bottom: 200px;
 }
+
+/* A wide pane: the questions scroll in their own area and the score and Submit sit below it, never over a question. */
+@media (min-width: 700px) {
+  .questions {
+    max-height: calc(100dvh - 360px);
+    min-height: 200px;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+  .submit {
+    position: static;
+  }
+}
+.more {
+  margin: 0;
+  color: var(--muted, #5b6478);
+  font-size: 13px;
+  font-weight: 600;
+}

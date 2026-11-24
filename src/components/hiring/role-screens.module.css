@@ -150,3 +150,6 @@ summary.groupTitle::after { content: "▸"; margin-left: auto; color: var(--mute
 details[open] > summary.groupTitle::after { content: "▾"; }
 .opening { padding: 12px 20px; }
 .inlinePane .paneFacts { padding-inline: 0; }
+.saved { margin: 0; padding: 6px 10px; border-radius: 8px; background: color-mix(in oklch, var(--good) 14%, var(--paper)); color: var(--good); font-size: 14px; font-weight: 600; }
+/* On a phone the row above already names the candidate. */
+.inlinePane .paneName { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
