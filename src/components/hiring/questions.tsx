@@ -207,7 +207,13 @@ export function PreScreenQuestions({
   // Each question, whether it is answered, and where it is: the rail lists the open ones as jump links.
   const checks: [string, string, boolean][] = [
     // The names match the field labels, so "Next: …" points at what the candidate sees (Opus r16).
-    ["q-degree", knownDegree && degreeMode !== "ask" ? "Your degree" : "Highest degree", !!answers.degree && !!answers.field.trim()],
+    // Asked as two questions, counted as two, so a tap on a degree moves the count and "Go to" reaches the field (Opus r26).
+    ...((knownDegree && degreeMode !== "ask"
+      ? [["q-degree", "Your degree", !!answers.degree && !!answers.field.trim()]]
+      : [
+          ["q-degree", "Highest degree", !!answers.degree],
+          ["q-field", "Field of study", !!answers.field.trim()],
+        ]) as [string, string, boolean][]),
     ["q-english", "English level", !!answers.english],
     ["q-experience", "Teaching experience", !!answers.experience],
     ["q-subjects", "Subjects", subjects.length > 0],
@@ -259,8 +265,8 @@ export function PreScreenQuestions({
       setBusy(false);
     }
   }
-  const text = (label: string, value: string, set: (v: string) => void, max: number, placeholder?: string, optional?: boolean) => (
-    <label className={c.field}>
+  const text = (label: string, value: string, set: (v: string) => void, max: number, placeholder?: string, optional?: boolean, id?: string) => (
+    <label className={c.field} id={id} tabIndex={id ? -1 : undefined}>
       <span className={s.qTitle}>
         {label}
         {optional && <small>optional</small>}
@@ -310,7 +316,7 @@ export function PreScreenQuestions({
             <Q id="q-degree" title="Highest degree">
               <Chips name="degree" choices={ANSWER_CHOICES.degree} value={degree} onChange={setDegree} disabled={busy} />
             </Q>
-            {text("Field of study", field, setField, 200)}
+            {text("Field of study", field, setField, 200, undefined, false, "q-field")}
           </>
         )}
         <Q id="q-english" title="English level">
@@ -366,7 +372,7 @@ export function PreScreenQuestions({
         {subjects.length > 1 && testChoices.length > 0 && (
           <Q
             id="q-test"
-            title="Subject for your test and mock teaching"
+            title="Test and mock teaching subject"
             tag="choose one"
             hint={testable.length && testable.length < subjects.length ? "Greyed: not tested." : undefined}
           >

@@ -748,7 +748,7 @@ export function VisitBooking({
                 <h2 className={c.stepTitle} id="mock-wait">
                   Mock teaching time
                 </h2>
-                <p className={c.note}>1 hour, if you pass. Shown after you choose a test time.</p>
+                <p className={c.note}>1 hour, if you pass.</p>
               </section>
             )}
             {/* A test with no mock time after it: say so where the mock list would be, so "Next" has a place (Sol r22). */}
@@ -949,7 +949,7 @@ export function CallBooking({ token, view, reload }: { token: string; view: Call
               </div>
             </div>
           </div>
-          {!view.canMove && !notice && <p className={c.note}>To change this visit, contact BeGifted on LINE.</p>}
+          {!view.canMove && !notice && <p className={c.note}>To change this time, contact BeGifted on LINE.</p>}
           {view.canMove && !moving && (
             <div className={c.move}>
               <p className={c.note}>You can move this {appointment} once, before it starts.</p>
