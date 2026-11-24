@@ -178,10 +178,12 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
         closePacket();
       }
     }
-    window.addEventListener("popstate", closeReader);
+    // The packet that opens by itself beside Gift's decision pushed no history entry, so Back does not close it.
+    const onBack = inline && !phone ? undefined : closeReader;
+    if (onBack) window.addEventListener("popstate", onBack);
     window.addEventListener("keydown", onKeyDown);
     return () => {
-      window.removeEventListener("popstate", closeReader);
+      if (onBack) window.removeEventListener("popstate", onBack);
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [openPage, phone, inline, closeReader, closePacket]);

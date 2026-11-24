@@ -548,6 +548,9 @@ function ItemLink({ item, selected, onSelect, wide, readOnly, paneId }: { item: 
 
 /** The right side: the real brief or paper check page, or the résumé when there is no page to open. */
 function ItemPane({ item, data, readOnly, reload }: { item: HeadItem; data: HiringData; readOnly: boolean; reload?: () => Promise<void> }) {
+  // The paper-check link is signed again on every list load. Keep the first address, so a list refresh never reloads
+  // the open page and loses marks the head is typing (code review, 24 Nov 2026). The pane is keyed by the row.
+  const [src] = useState(() => (item.href ? embedded(item.href) : null));
   // Only Gift signs. A preview or another account sees the facts and the résumé.
   if (item.review && data.reviewAccess?.gift && !readOnly) {
     return (
@@ -568,7 +571,7 @@ function ItemPane({ item, data, readOnly, reload }: { item: HeadItem; data: Hiri
   // A preview must not score or mark in the head's name, so it shows only the résumé.
   if (item.href && !readOnly) {
     return (
-      <iframe key={item.id} className={r.paneFrame} src={embedded(item.href)} title={`${item.task}: ${item.name}`} />
+      <iframe key={item.id} className={r.paneFrame} src={src ?? embedded(item.href)} title={`${item.task}: ${item.name}`} />
     );
   }
   return (
@@ -739,7 +742,13 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
             </select>
           </label>
         )}
-        {wide && selected && <a className={r.skip} href="#open-item">Skip to the open page</a>}
+        {wide && selected && (
+          // Focus only: a hash change would drop the review link Gift came in on.
+          <a className={r.skip} href="#open-item" onClick={(event) => {
+            event.preventDefault();
+            document.getElementById("open-item")?.focus();
+          }}>Skip to the open page</a>
+        )}
         <p className="sr-only" role="status">{name && `${name} · ${nextMock
           ? `next mock ${shortDay(nextMock.row.date)}, ${nextMock.row.mockStart}` : "no mock booked"}`}</p>
         {reviewer && !reviews.length && (
@@ -774,7 +783,7 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
       </nav>
       {wide && (
         <section id="open-item" tabIndex={-1} className={r.pane} aria-label={selected ? `${selected.task}: ${selected.name}` : "Nothing open"}>
-          {selected ? <ItemPane key={selected.id} item={selected} data={data} readOnly={readOnly} reload={reload} />
+          {selected ? <ItemPane key={selected.id} item={selected} data={data} readOnly={readOnly || (!fixedHead && !chosen)} reload={reload} />
             : <p className={r.quiet}>Nothing to do.</p>}
         </section>
       )}
