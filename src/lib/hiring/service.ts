@@ -7,7 +7,7 @@ import { and, asc, desc, eq, getTableColumns, gte, inArray, isNotNull, like, ne,
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
-import { availableSlots, availableVisitSlots, callSlots, r1Slots, readLiveBusy, verifyLiveSlot, type LiveBusy } from "./availability";
+import { availableSlots, availableVisitSlots, callSlots, r1Slots, readLiveBusy, readWiseWindows, verifyLiveSlot, type LiveBusy } from "./availability";
 import {
   baseConfigSchema,
   withSeekJobs,
@@ -228,13 +228,16 @@ export async function saveHeadDays(
   const current = await settings(db);
   const stale = () => new HiringError(409, "Settings changed. Refresh this page.");
   if (!current.row) throw new HiringError(409, "Save the rules and setup once before you change head days.");
-  if (!current.config.interviewers.some((i) => i.canonicalKey === key)) throw new HiringError(404, "Head not found.");
+  const target = current.config.interviewers.find((i) => i.canonicalKey === key);
+  if (!target) throw new HiringError(404, "Head not found.");
   if (current.row.revision !== revision) throw stale();
   const [enrollment] = await db
     .select()
     .from(s.tutorAttendanceEnrollments)
     .where(eq(s.tutorAttendanceEnrollments.canonicalKey, key));
 
+  if (!enrollment && target.hoursFromWise)
+    throw new HiringError(409, "This head's hours come from Wise. Change them in Wise, or untick Hours from Wise first.");
   if (!enrollment) {
     const saved = await withDatabaseTransaction(db, async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-settings'))`);
@@ -872,7 +875,14 @@ export async function dashboard(db: Database = getDb()) {
   }
   // visitClashes is one shared read for all heads. It never fails the dashboard: a missing index reports stale.
   // The queue gates below run after the suggested heads above, because they read config.
-  const clashes = await visitClashes(db, bookings);
+  const [clashes, wiseWindows] = await Promise.all([
+    visitClashes(db, bookings),
+    // Like visitClashes, this never fails the dashboard: on an error the Rules row shows no Wise hours.
+    readWiseWindows(db, config.interviewers.filter((h) => h.hoursFromWise).map((h) => h.canonicalKey)).catch((error) => {
+      console.error("Hiring dashboard could not read Wise hours", error instanceof Error ? error.name : "UnknownError");
+      return {} as Awaited<ReturnType<typeof readWiseWindows>>;
+    }),
+  ]);
   const usage = { preScreen: preScreenUsage, onsite: onsiteUsage };
   const holds: Record<string, QueueHold> = {};
   let preScreenOrder: string[] = [];
@@ -904,7 +914,7 @@ export async function dashboard(db: Database = getDb()) {
     callOrder,
     headMocks: headWeekMocks(bookings, now),
     heads: Object.fromEntries(
-      config.interviewers.map((head) => [head.canonicalKey, headDayState(head, enrollments, schedules, localDate(now))]),
+      config.interviewers.map((head) => [head.canonicalKey, headDayState(head, enrollments, schedules, localDate(now), wiseWindows[head.canonicalKey])]),
     ),
     revision: row?.revision ?? 0,
     workerAt: row?.workerAt ?? null,
