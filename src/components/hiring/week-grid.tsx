@@ -194,7 +194,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
   return (
     <div className={s.week}>
       {/* The rule, fixed above the grid; the live ticks stay under it, where their changes move nothing (Sol r18). */}
-      <p className={s.hint}>Include a weekend hour and a weekday hour at or after 15:00.</p>
+      <p className={s.hint}>Tap, or hold and drag. Include a weekend hour and a weekday hour at or after 15:00. Bangkok time.</p>
       <div className={s.presets} role="group" aria-label="Quick fill">
         {PRESETS.map((p) => {
           // Add only; a check once every hour of it is in the week (Sol r6).
@@ -312,13 +312,13 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
         )}
         <p className={s.rules}>
           {/* What the booking asks for: a note to add, then a tick once the grid has it (Sol r2: not radio-like). */}
-          {/* Status, not actions: neutral until met, then a green tick (Opus r6). */}
+          {/* Status, not actions: a muted tick until met, then green (Opus r6, r20). */}
           <span data-ok={weekend || undefined}>
-            {weekend && <Check aria-hidden size={14} />}
+            <Check aria-hidden size={14} />
             Weekend
           </span>
           <span data-ok={late || undefined}>
-            {late && <Check aria-hidden size={14} />}
+            <Check aria-hidden size={14} />
             Weekday from 15:00
           </span>
         </p>
@@ -326,7 +326,7 @@ export function WeekGrid({ value, onChange, disabled }: { value: WeekHours; onCh
 
       {/* Read by screen readers always; shown when the keyboard reaches the grid (Opus r13). */}
       <p id="week-grid-keys" className={s.keysHint}>
-        Arrow keys move between hours. Space or Enter chooses or clears an hour.
+        Arrows move. Space chooses.
       </p>
 
     </div>

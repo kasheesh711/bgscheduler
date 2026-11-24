@@ -280,7 +280,7 @@ function Picker<T extends { date: string }>({
               ) : (
                 <>
                   <b>{label(w, { day: "numeric", month: "short" })}</b>
-                  <span>{label(plusDays(w, 6), { day: "numeric", month: "short" })}</span>
+                  <span>– {label(plusDays(w, 6), { day: "numeric", month: "short" })}</span>
                 </>
               )}
             </button>
@@ -438,7 +438,10 @@ function Checks({
   setOnsite,
   setCommitment,
   fromAnswers = false,
+  place,
 }: {
+  /** The visit address, named in the box so it reads without scrolling back up (Opus r20). */
+  place?: string;
   /** The teaching hours box was ticked from the saved answers: say so beside it (Sol r13). */
   fromAnswers?: boolean;
   onsite: boolean;
@@ -460,7 +463,7 @@ function Checks({
   );
   return (
     <div className={c.checks}>
-      {row("check-address", onsite, setOnsite, "I will come to this address.")}
+      {row("check-address", onsite, setOnsite, `I will come to ${place ?? "this address"}.`)}
       {/* Saved answers that already meet the rule need no second confirmation: the line under the boxes says so (Sol r18). */}
       {!fromAnswers && row("check-hours", commitment, setCommitment, "I can teach onsite on a Saturday or Sunday and a weekday at or after 15:00.")}
     </div>
@@ -622,24 +625,19 @@ export function VisitBooking({
                   <div className={cs.legs}>
                     <div>
                       <span>Test</span>
-                      <b>{short(view.visit.examStart)}</b>
-                      <small>
-                        <span className={cs.nowrap}>
-                          {time(view.visit.examStart)}–{time(view.visit.examEnd)}
-                        </span>
-                      </small>
+                      {/* Date and time on one line, one size (Opus r20). */}
+                      <b>
+                        {short(view.visit.examStart)} · <span className={cs.nowrap}>{time(view.visit.examStart)}–{time(view.visit.examEnd)}</span>
+                      </b>
                       <small aria-hidden />
                       <small aria-hidden />
                     </div>
                     {view.visit.mockStart && view.visit.mockEnd && (
                       <div>
                         <span>Mock teaching</span>
-                        <b>{short(view.visit.mockStart)}</b>
-                        <small>
-                          <span className={cs.nowrap}>
-                            {time(view.visit.mockStart)}–{time(view.visit.mockEnd)}
-                          </span>
-                        </small>
+                        <b>
+                          {short(view.visit.mockStart)} · <span className={cs.nowrap}>{time(view.visit.mockStart)}–{time(view.visit.mockEnd)}</span>
+                        </b>
                         {/* Its own line, so a long name is never cut off on a narrow phone (Opus r16). */}
                         {view.visit.head && <small>with {view.visit.head}</small>}
                         <small>If you pass the test</small>
@@ -758,7 +756,7 @@ export function VisitBooking({
         side={
           showForm && (
             <>
-              <Checks onsite={onsite} commitment={commitment} setOnsite={setOnsite} setCommitment={setCommitment} fromAnswers={view.timeRuleMet} />
+              <Checks onsite={onsite} commitment={commitment} setOnsite={setOnsite} setCommitment={setCommitment} fromAnswers={view.timeRuleMet} place={view.location} />
               {moving && <p className={c.note}>Your current times stay booked until you confirm.</p>}
               <VisitConfirm
                 compact={!slot}

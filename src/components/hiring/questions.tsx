@@ -203,14 +203,14 @@ export function PreScreenQuestions({
     ["q-english", "English level", !!answers.english],
     ["q-experience", "Teaching experience", !!answers.experience],
     ["q-subjects", "Subjects", subjects.length > 0],
-    // Art & Design needs its portfolio (a file or a link): its own step, so "Next" names it (Sol r13).
-    ...(subjects.includes(ART) ? [["q-portfolio", "Portfolio", !!fileName || !!portfolio.trim()] as [string, string, boolean]] : []),
     // Always counted; asked only when there is a choice (one subject is chosen for the candidate).
     [subjects.length > 1 ? "q-test" : "q-subjects", "Test subject", !!test],
+    // Art & Design needs its portfolio (a file or a link): its own step, so "Next" names it (Sol r13).
+    ...(subjects.includes(ART) ? [["q-portfolio", "Portfolio", !!fileName || !!portfolio.trim()] as [string, string, boolean]] : []),
     ["q-curricula", "Curricula", curricula.length > 0],
     ["q-years", "Year groups", yearGroups.length > 0],
     ["q-hours", "Your hours", weekHoursCount(week) > 0],
-    ["q-weekly", "Weekly hours", !!answers.weeklyHours],
+    ["q-weekly", "Hours a week", !!answers.weeklyHours],
     ["q-why", "Why BeGifted", !!motivation.trim()],
     ["q-approach", "Your approach", !!teachingApproach.trim()],
   ];
@@ -323,8 +323,7 @@ export function PreScreenQuestions({
         </Q>
       </Section>
       <Section title="What you teach">
-        <p className={c.note}>Choose all that apply.</p>
-        <Q id="q-subjects" title="Subjects you teach confidently">
+        <Q id="q-subjects" title="Subjects you teach confidently" tag="choose all">
           <Chips name="subjects" choices={shownSubjects} value={subjects} onChange={setSubjects} many disabled={busy} />
           {rest.length > 0 && (showRest || rest.some((v) => !subjects.includes(v))) && (
             <div>
@@ -344,8 +343,7 @@ export function PreScreenQuestions({
         {subjects.length > 1 && testChoices.length > 0 && (
           <Q
             id="q-test"
-            title="Subject for your test and mock teaching"
-            tag="choose one"
+            title="Choose one subject for your test and mock teaching"
             hint={testable.length && testable.length < subjects.length ? "Greyed: not tested." : undefined}
           >
             <Chips
@@ -359,7 +357,7 @@ export function PreScreenQuestions({
           </Q>
         )}
         {subjects.includes(ART) && (
-          <Q id="q-portfolio" title="Portfolio" tag="file or link">
+          <Q id="q-portfolio" title="Portfolio">
             <label className={s.drop}>
               <input
                 className={c.hidden}
@@ -379,21 +377,21 @@ export function PreScreenQuestions({
                 {fileNote}
               </p>
             )}
-            {text("Portfolio link", portfolio, setPortfolio, 500, "A link that opens without a password")}
+            {text("Link (no password)", portfolio, setPortfolio, 500)}
           </Q>
         )}
-        <Q id="q-curricula" title="Curricula">
+        <Q id="q-curricula" title="Curricula" tag="choose all">
           <Chips name="curricula" choices={ANSWER_CHOICES.curricula} value={curricula} onChange={setCurricula} many disabled={busy} />
         </Q>
-        <Q id="q-years" title="Year groups">
+        <Q id="q-years" title="Year groups" tag="choose all">
           <Chips name="yearGroups" choices={ANSWER_CHOICES.yearGroups} value={yearGroups} onChange={setYearGroups} many disabled={busy} />
         </Q>
       </Section>
-      <Section title="Onsite hours">
-        <Q id="q-hours" title="Tap hours, or hold and drag" tag="Bangkok time">
+      <Section title="When you can teach onsite">
+        <Q id="q-hours" title="Your weekly hours for teaching onsite" hideTitle>
           <WeekGrid value={week} onChange={setWeek} disabled={busy} />
         </Q>
-        <Q id="q-weekly" title="Weekly hours">
+        <Q id="q-weekly" title="Hours a week you can commit">
           <Chips name="weeklyHours" choices={ANSWER_CHOICES.weeklyHours} value={weeklyHours} onChange={setWeeklyHours} disabled={busy} />
         </Q>
       </Section>

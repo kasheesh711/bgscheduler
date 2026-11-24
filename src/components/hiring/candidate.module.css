@@ -73,6 +73,8 @@
 }
 .qTitle {
   padding: 0;
+  /* A legend sits outside the fieldset's gap: space it from its first row of chips here (Sol r21). */
+  margin-bottom: 8px;
   font-size: 15px;
   font-weight: 650;
   line-height: 1.35;
@@ -1237,4 +1239,42 @@
   position: static;
   width: 14px;
   height: 14px;
+}
+
+/* One glyph slot on every chip: a muted tick or dot until chosen, 8 px to the label, even padding (Opus r20). */
+.chip,
+.chip[data-one] {
+  padding: 0 16px 0 12px;
+  gap: 8px;
+}
+.chip svg,
+.chip[data-one] svg {
+  position: static;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  visibility: visible;
+  color: #a99f88;
+}
+.chip:has(input:checked) svg {
+  color: currentColor;
+}
+@media (max-width: 359px) {
+  .chip,
+  .chip[data-one] {
+    padding: 0 12px 0 10px;
+  }
+}
+/* The ticket's own two columns (date stub + body) load later than .ticketRows: span both so the legs use the
+   full width (Opus r20: the right half was empty). */
+.legs {
+  grid-column: 1 / -1;
+}
+/* The time inside the date line keeps the date's size, not the small label style of .legs span (Opus r20). */
+.legs b span {
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+  color: inherit;
 }
