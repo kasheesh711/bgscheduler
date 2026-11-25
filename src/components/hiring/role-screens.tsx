@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { formatInTimeZone } from "date-fns-tz";
 import { checkRubric, rubricNeedsCheck } from "@/lib/hiring/marking-sheet";
@@ -7,9 +9,11 @@ import { isDecided, localDate, shiftDate, ZONE, type Subject } from "@/lib/hirin
 import { buildRunSheet, headName, headVisits, pastVisits, upcoming, type RunSheetRow } from "@/lib/hiring/run-sheet";
 import { dayTitle, headKeys, nickname, openHeadDecisions, weekCalls, type HeadDecisionRow } from "@/lib/hiring/role-views";
 import { universityName } from "@/lib/hiring/seek-view";
-import { ContractTemplates, SignedContract } from "./contract-templates";
+import { offerAge, offerNext } from "@/lib/hiring/offer-rows";
+import { OFFER_LETTERS, type OfferType } from "@/lib/hiring/offer-letters";
+import { ContractTemplates, PrintContract, SignedContract, useContractTemplates } from "./contract-templates";
 import { FinalReview, reviewBlocks } from "./final-review";
-import { resultEmailState, ResultUpload } from "./assessment-screen";
+import { ResultUpload } from "./assessment-screen";
 import { callCommand, callState, callSubjects, triesText } from "./calls-screen";
 import { PhoneLink, ResumePeek, SeekApplicationReview } from "./candidate-inspector";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
@@ -210,12 +214,14 @@ function ReviewRecommendations({ data, onOpenResults, readOnly, reload, linkedRe
   );
 }
 
-export function HiringReviewScreen({ data, offers, onOpenResults, reload, linkedReview }: {
+export function HiringReviewScreen({ data, offers, onOpenResults, reload, linkedReview, onFinalReview, onOpenEmailLog }: {
   data: HiringData;
   offers: boolean;
   onOpenResults: (id: string | null) => void;
   reload: () => Promise<void>;
   linkedReview?: string;
+  onFinalReview: () => void;
+  onOpenEmailLog: (key: string | null) => void;
 }) {
   if (!offers) return (
     <div className={r.screen} data-heads-review="">
@@ -223,31 +229,208 @@ export function HiringReviewScreen({ data, offers, onOpenResults, reload, linked
     </div>
   );
 
-  const candidates = new Map(data.candidates.filter((candidate) => candidate.stage === "hired").map((candidate) => [candidate.id, candidate]));
-  const approved = data.decisions.filter((decision) => decision.status === "sent" && decision.decision === "hire" && candidates.has(decision.candidateId));
+  return <OfferList data={data} reload={reload} onFinalReview={onFinalReview} onOpenEmailLog={onOpenEmailLog} />;
+}
+
+const OFFER_EMAIL = {
+  pending: "Queued", processing: "Queued", sent: "Sent", failed: "Email failed",
+  uncertain: "Delivery unconfirmed", cancelled: "Cancelled",
+};
+
+function OfferList({ data, reload, onFinalReview, onOpenEmailLog }: {
+  data: HiringData;
+  reload: () => Promise<void>;
+  onFinalReview: () => void;
+  onOpenEmailLog: (key: string | null) => void;
+}) {
+  const demo = useSearchParams().get("demo") === "1";
+  const [files, setFiles] = useState<Record<string, string | null>>({});
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [missingPdfs, setMissingPdfs] = useState<Partial<Record<OfferType, { uploadedAt: string; decisionId: string }>>>({});
+  const addTemplateFocus = useRef<string | null>(null);
+  const [templateRetry, setTemplateRetry] = useState<{ decisionId?: string; status: "loading" | "loaded" | "failed" }>();
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState(false);
+  useMinute();
+  const now = new Date();
+  const today = localDate(now);
+  const tomorrow = shiftDate(today, 1);
+  const rows = (data.offers ?? []).map((row) => {
+    const uploadedAt = !row.uploadedAt && files[row.candidateId];
+    const offer = uploadedAt ? { ...row, uploadedAt, unknown: { ...row.unknown, pdf: false } } : row;
+    return { offer, next: offerNext(offer, now) };
+  }).sort((a, b) => a.next.rank - b.next.rank ||
+    (a.offer.booking?.start ?? a.offer.sentAt ?? "").localeCompare(b.offer.booking?.start ?? b.offer.sentAt ?? ""));
+  const firstTemplateRow = rows.find(({ offer, next }) => offer.offerType && next.action === "print");
+  const library = useContractTemplates(templatesOpen || !!firstTemplateRow);
+  const retryRow = rows.find(({ offer, next }) => offer.offerType && next.action === "print"
+    && offer.decisionId === templateRetry?.decisionId);
+  const retrying = templateRetry?.status === "loading";
+  const showPanelError = templatesOpen && (!retryRow || templateRetry?.status === "loaded");
+  const failureRowId = showPanelError ? undefined : (retryRow ?? firstTemplateRow)?.offer.decisionId;
+
+  async function retryTemplates(decisionId?: string) {
+    setTemplateRetry({ decisionId, status: "loading" });
+    const loaded = await library.reload();
+    setTemplateRetry({ decisionId, status: loaded ? "loaded" : "failed" });
+    return loaded;
+  }
+
+  function openTemplates(type: OfferType) {
+    setTemplatesOpen(true);
+    requestAnimationFrame(() => document.getElementById(`contract-template-${type}`)?.focus());
+  }
+
   return (
-    <div className={r.screen}>
-      <Section title="Approved offers" count={approved.length}>
-        {!approved.length && <p className={r.quiet}>There are no approved offers.</p>}
-        <div className={r.cards}>
-          {approved.map((decision) => {
-            const email = resultEmailState(decision.outboxKey, data.inviteOutbox);
-            return (
-              <article key={decision.id} className={r.card}>
-                <div className={r.cardMain}>
-                  <p className={r.name}>{candidates.get(decision.candidateId)?.name}</p>
-                  <p className={r.meta}>Offer email <strong>{email.label}</strong></p>
-                </div>
-                <div className={r.actions}>
-                  <SignedContract candidateId={decision.candidateId} name={candidates.get(decision.candidateId)?.name ?? "the tutor"} />
-                  {(data.reviewAccess?.hr || data.reviewAccess?.gift) && <FinalReview id={decision.candidateId} signing />}
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      </Section>
-      <Section title="Contract templates"><ContractTemplates /></Section>
+    <div className={`${r.screen} ${r.offers}`}>
+      <section id="approved-offers" aria-label="Approved offers" tabIndex={-1}>
+        {!rows.length ? (
+          <>
+            <p>No approved offers.</p>
+            <Link href="?view=review" className={r.offerControl} onClick={(event) => {
+              if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+              event.preventDefault();
+              onFinalReview();
+            }}>Final review</Link>
+          </>
+        ) : (
+          <table className={r.offerTable} role="table" aria-label="Offer status">
+            <thead className={r.offerHead} role="rowgroup"><tr role="row">
+              {["Tutor", "Offer email", "Signing", "Signed PDF", "Onboarding form", "Next"].map((label) => (
+                <th key={label} role="columnheader" scope="col">{label}</th>
+              ))}
+            </tr></thead>
+            <tbody role="rowgroup">
+              {rows.map(({ offer, next }) => {
+                const age = offerAge(offer.sentAt, now);
+                const sentAge = offer.emailStatus === "sent" && !offer.booking && !offer.unknown.booking && age !== null
+                  ? age === 0 ? "Sent today" : `Sent ${age} day${age === 1 ? "" : "s"} ago`
+                  : null;
+                const day = offer.booking ? localDate(new Date(offer.booking.start)) : null;
+                const visitEnded = offer.booking && Date.parse(offer.booking.end) <= now.getTime();
+                const signing = offer.booking
+                  ? `${day === today ? "Today" : day === tomorrow ? "Tomorrow" : formatInTimeZone(offer.booking.start, ZONE, "d MMM")} ${formatInTimeZone(offer.booking.start, ZONE, "HH:mm")}`
+                  : null;
+                const type = offer.offerType;
+                const pdf = library.templates?.find((file) => file.type === type && file.format === "pdf");
+                const missingPdf = pdf && missingPdfs[pdf.type];
+                const pdfMissing = !!pdf && missingPdf?.uploadedAt === pdf.uploadedAt;
+                const word = library.templates?.some((file) => file.type === type && file.format === "docx");
+                const rowRetry = retryRow?.offer.decisionId === offer.decisionId ? templateRetry?.status : undefined;
+                const retryNote = rowRetry === "loading" ? "Loading templates…"
+                  : rowRetry === "loaded" && library.templates ? "Templates loaded."
+                  : library.templates === null && !retrying && failureRowId === offer.decisionId ? "Could not load templates."
+                  : null;
+                return (
+                  <tr key={offer.decisionId} className={r.offerRow} role="row" data-state={next.state} data-sent-age={sentAge ? "" : undefined}>
+                    <th className={r.offerTutor} role="rowheader" scope="row"
+                      aria-label={offer.subject ? `${offer.name}, ${offer.subject}` : undefined}>
+                      <span>{offer.name}</span>
+                      {offer.subject && <span className={r.offerNote}>{offer.subject}</span>}
+                    </th>
+                    <td className={r.offerEmail} role="cell">
+                      <span className={r.offerCaption} aria-hidden="true">Email </span>
+                      <span data-tone={offer.emailStatus ?? "unknown"}>{sentAge ?? (offer.emailStatus ? OFFER_EMAIL[offer.emailStatus] : "Unknown")}</span>
+                    </td>
+                    <td className={r.offerSigning} role="cell"
+                      aria-label={signing && visitEnded && !offer.uploadedAt ? `${signing}, visit ended` : undefined}>
+                      {signing ? (
+                        <><time dateTime={offer.booking?.start}>{signing}</time>
+                          {visitEnded && !offer.uploadedAt && <span className={r.offerNote}>Visit ended</span>}</>
+                      ) : offer.unknown.booking ? "Signing unknown" : "Unbooked"}
+                    </td>
+                    <td className={r.offerPdf} role="cell">
+                      <span className={r.offerCaption} aria-hidden="true">PDF </span>
+                      {offer.uploadedAt ? <time dateTime={offer.uploadedAt}>Filed {formatInTimeZone(offer.uploadedAt, ZONE, "d MMM")}</time>
+                        : files[offer.candidateId] === null ? "Unconfirmed" : offer.unknown.pdf ? "Unknown" : "Due"}
+                    </td>
+                    <td className={r.offerForm} role="cell">
+                      <span className={r.offerCaption} aria-hidden="true">Onboarding form </span>
+                      {offer.submittedAt ? <time dateTime={offer.submittedAt}>Received {formatInTimeZone(offer.submittedAt, ZONE, "d MMM")}</time>
+                        : offer.unknown.form ? "Unknown" : "Pending"}
+                    </td>
+                    <SignedContract candidateId={offer.candidateId} name={offer.name} canUpload={next.action === "upload"}
+                      templateMissing={next.action === "print" && pdfMissing && missingPdf?.decisionId === offer.decisionId}
+                      templateRetryNote={retryNote}
+                      onUnverified={() => setFiles((saved) => ({ ...saved, [offer.candidateId]: null }))}
+                      onVerified={async (date) => {
+                        setFiles((saved) => ({ ...saved, [offer.candidateId]: date }));
+                        await reload().catch(() => { /* Keep the verified date if the list cannot reload. */ });
+                      }}>
+                        {next.action === "print" ? (
+                          !type ? <span>Ask Kevin for the contract type.</span>
+                            : pdf && !pdfMissing ? <PrintContract type={type} onMissing={() => {
+                              addTemplateFocus.current = offer.decisionId;
+                              setMissingPdfs((missing) => ({ ...missing, [type]: { uploadedAt: pdf.uploadedAt, decisionId: offer.decisionId } }));
+                            }} />
+                            : word && !pdfMissing ? <a className={r.offerControl} href={`/api/hiring/contracts?type=${type}&format=docx`}>Download Word</a>
+                            : library.templates === undefined ? <span role="status">Checking template…</span>
+                            : library.templates === null ? <button type="button" className={r.offerControl}
+                              aria-disabled={retrying || undefined} onClick={async (event) => {
+                                if (retrying) return;
+                                const button = event.currentTarget;
+                                const cell = button.parentElement;
+                                button.focus();
+                                const loaded = await retryTemplates(offer.decisionId);
+                                if (loaded && (document.activeElement === button || document.activeElement === document.body)) {
+                                  requestAnimationFrame(() => {
+                                    if (document.activeElement === document.body) cell?.querySelector<HTMLElement>("button, a")?.focus();
+                                  });
+                                }
+                              }}>Retry templates</button>
+                            : <><span className={r.offerNote}>{`No ${OFFER_LETTERS[type].label.toLowerCase()}${pdfMissing && word ? " PDF" : ""} template.`}</span>
+                              <button type="button" className={r.offerControl} ref={(button) => {
+                                if (button && addTemplateFocus.current === offer.decisionId) {
+                                  addTemplateFocus.current = null;
+                                  button.focus();
+                                }
+                              }} onClick={() => openTemplates(type)}>Add template</button></>
+                        ) : next.state === "failed" ? (
+                          <Link href={demo ? "?view=setup&demo=1#messages" : "?view=setup#messages"} className={r.offerControl} onClick={(event) => {
+                            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                            event.preventDefault();
+                            onOpenEmailLog(offer.outboxKey ?? null);
+                          }}>Open email log</Link>
+                        ) : next.action === "onboarding" ? (
+                          // The onboarding page checks access itself; there is no HR team now (Kevin, 24 Nov 2026).
+                          <Link href="/hiring/onboarding" className={r.offerControl} data-offer-next={offer.candidateId}>Onboarding</Link>
+                        ) : next.action === "refresh" ? (
+                          <button type="button" className={r.offerControl} data-offer-next={offer.candidateId}
+                            aria-disabled={refreshing || undefined} onClick={async () => {
+                            if (refreshing) return;
+                            setRefreshing(true);
+                            setRefreshError(false);
+                            try {
+                              await reload();
+                            } catch {
+                              setRefreshError(true);
+                            } finally {
+                              setRefreshing(false);
+                            }
+                          }}>{refreshing ? "Checking…" : next.label}</button>
+                        ) : <span className={next.state === "chase" ? r.offerTag : undefined}
+                          data-offer-next={next.state === "awaitForm" ? offer.candidateId : undefined}
+                          tabIndex={next.state === "awaitForm" ? -1 : undefined}>{next.label}</span>}
+                    </SignedContract>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+        {refreshError && <p className={r.offerNote} role="alert">Could not check offers. Try again.</p>}
+      </section>
+      <details className={r.offerTemplates} open={templatesOpen} onToggle={(event) => {
+        const open = event.currentTarget.open;
+        setTemplatesOpen(open);
+        if (open) setTemplateRetry((retry) => retry?.status === "failed" ? undefined : retry);
+      }}>
+        <summary className={r.offerControl}>Templates</summary>
+        {templatesOpen && <ContractTemplates reload={library.reload} showLoadError={showPanelError}
+          retrying={retrying} onRetry={() => void retryTemplates()} templates={library.templates?.filter(
+          (file) => file.format !== "pdf" || missingPdfs[file.type]?.uploadedAt !== file.uploadedAt,
+        ) ?? library.templates} />}
+      </details>
     </div>
   );
 }

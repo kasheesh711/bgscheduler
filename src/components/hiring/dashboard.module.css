@@ -40,7 +40,7 @@
   outline-offset: 2px;
 }
 .surface i { display: inline-block; font-style: normal; }
-.surface[data-heads-review] {
+.surface:is([data-heads-review], [data-offer]) {
   --serif: var(--font-cormorant, "Cormorant Garamond"), Georgia, serif;
 }
 .surface[data-heads-review] :is(.topbar, .purpose) {
@@ -49,7 +49,10 @@
 }
 /* The head's list and the open page use the full width, so the header does too. */
 .surface[data-heads-review] .topbar[data-heads] { padding: 6px 16px; }
-.topbar[data-heads] .title { font-size: 24px; }
+.topbar[data-heads] .title, .surface[data-offer] .title { font-size: 24px; }
+.surface[data-offer] .topbar { padding: 6px 16px; font-size: 14px; }
+.surface[data-offer] .topbar button { min-width: 44px; min-height: 44px; }
+.surface[data-offer] .notice:empty { display: none; }
 
 /* Header */
 .topbar {
@@ -82,6 +85,9 @@
 @media (width < 720px) {
   .statusSubtitle { display: none; }
   .mobileStatus { display: block; }
+}
+@media (width <= 480px) {
+  .surface .stepMenu > summary, .surface .stepMenu button { font-size: 16px; }
 }
 .alert { margin: 8px 24px 0; padding: 8px 12px; border-radius: 8px; background: #fdecec; color: var(--danger); }
 .loading { padding: 32px 24px; color: var(--muted); }
@@ -326,6 +332,7 @@
 .folderShare { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
 .railList { display: grid; gap: 6px; }
 .railList li { display: grid; }
+.railList .selectedMessage { background: var(--tint); border-inline-start: 3px solid var(--accent-text); padding: 4px 8px; }
 .railName { color: var(--ink); font-weight: 500; }
 .surface .railLink { color: var(--ink); font-weight: 500; text-align: left; text-decoration: underline; text-decoration-color: var(--stone); text-underline-offset: 2px; }
 .railMeta { color: var(--muted); }
@@ -855,3 +862,4 @@
 /* A head's list retry: a full touch target in the workspace navy, dimmed while it retries (critic review, round 21). */
 .primary.retry { min-height: 44px; padding-inline: 18px; background: #14213d; color: #fff; font-size: 15px; }
 .primary.retry[aria-disabled="true"] { opacity: 0.55; cursor: progress; }
+@media (max-width: 719px) { .retry.offerRetry { font-size: 16px; } }

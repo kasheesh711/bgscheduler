@@ -1,5 +1,6 @@
 "use client";
 
+import { useLayoutEffect, useRef } from "react";
 import { workerWarning } from "@/lib/hiring/status";
 import type { HiringData } from "./dashboard";
 import type { Insights } from "./pipeline-charts";
@@ -42,6 +43,7 @@ export function OperationsRail({
   connect,
   onSelect,
   now,
+  messageKey,
 }: {
   data: HiringData;
   insights: Insights;
@@ -49,14 +51,25 @@ export function OperationsRail({
   connect: () => void;
   onSelect: (id: string) => void;
   now?: Date;
+  messageKey?: string | null;
 }) {
-  const nameOf = (id: string | null) => data.candidates.find((c) => c.id === id)?.name ?? "Unknown candidate";
+  const messagesHeading = useRef<HTMLHeadingElement>(null);
+  useLayoutEffect(() => {
+    if (messageKey === undefined && window.location.hash !== "#messages") return;
+    messagesHeading.current?.scrollIntoView({ block: "center" });
+    messagesHeading.current?.focus({ preventScroll: true });
+  }, [messageKey]);
+  const nameOf = (id: string | null) => data.candidates.find((c) => c.id === id)?.name
+    ?? data.offers?.find((offer) => offer.candidateId === id)?.name ?? "Unknown candidate";
   const folders = data.workerSummary?.folders.filter((f) => f.count) ?? [];
   const folderTotal = folders.reduce((n, f) => n + f.count, 0);
   const uploadsFailed = data.workerSummary?.resumeUploadsFailed ?? 0;
   const locked = data.workerSummary?.resumeLocked ?? 0;
   const noResumeFile = data.candidates.filter((c) => c.resumeState === "none").length;
-  const problems = data.outbox.filter((j) => j.status === "failed" || j.status === "uncertain");
+  const target = messageKey ? data.outbox.find((j) => j.key === messageKey)
+    ?? data.inviteOutbox.find((j) => j.key === messageKey) : undefined;
+  const problems = data.outbox.filter((j) => j.key !== messageKey && (j.status === "failed" || j.status === "uncertain"));
+  const messages = target ? [{ ...target, kind: "Offer email" }, ...problems] : problems;
   const appointments = [...data.bookings].sort(
     (a, b) => new Date(String(b.startTime)).getTime() - new Date(String(a.startTime)).getTime(),
   );
@@ -172,14 +185,14 @@ export function OperationsRail({
       </section>
 
       <section className={css.railSection}>
-        <h2 className={css.railTitle}>Messages</h2>
+        <h2 id="messages" ref={messagesHeading} className={css.railTitle} tabIndex={-1}>Messages</h2>
         <p className={css.railLede}>
           {insights.messages.sent} sent · {insights.messages.waiting} waiting · {insights.messages.problems} problems
         </p>
-        {problems.length > 0 && (
+        {messages.length > 0 && (
           <ul className={css.railList}>
-            {problems.map((j) => (
-              <li key={j.id}>
+            {messages.map((j) => (
+              <li key={j.key} className={j.key === messageKey ? css.selectedMessage : undefined}>
                 <span className={css.railName}>{nameOf(j.candidateId)}</span>
                 <span className={css.railMeta}>{j.kind} · {j.status}</span>
                 {j.error && <span className={css.errorText}>{j.error}</span>}

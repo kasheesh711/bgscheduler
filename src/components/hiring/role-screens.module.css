@@ -71,6 +71,106 @@
 
 .screen[data-heads-review] .big { font-size: 16px; }
 
+.offers {
+  --offer-card: #fffbf2;
+  --offer-ink: #14213d;
+  --offer-coral: #b84434;
+  --offer-ring: #194c88;
+  gap: 12px;
+  max-width: none;
+  padding-block: 12px 24px;
+  padding-inline: 24px;
+  font-size: 16px;
+}
+:global(.dark) .offers {
+  --offer-card: var(--paper);
+  --offer-ink: var(--ink);
+  --offer-coral: #ffab9b;
+  --offer-ring: #b1cdff;
+}
+.offerTable { width: 100%; border-collapse: separate; border-spacing: 0; text-align: left; }
+.offerHead { color: var(--support); font-size: 14px; }
+.offerHead th { padding: 5px 10px; font-weight: 600; }
+.offerRow { background: var(--offer-card); color: var(--offer-ink); }
+.offerRow > :is(th, td) { padding: 6px 10px; border-top: 1px solid var(--line); vertical-align: middle; }
+.offerRow:last-child > :is(th, td) { border-bottom: 1px solid var(--line); }
+.offerRow[data-state="done"] { background: var(--paper); }
+.offerRow[data-state="done"] > :is(th, td) { padding-block: 3px; }
+.offerTutor { overflow-wrap: anywhere; font-family: var(--serif); font-size: 22px; font-weight: 650; line-height: 1.1; }
+.offerNote { display: block; color: var(--support); font-family: var(--sans); font-size: 14px; font-weight: 400; line-height: 1.4; }
+.offerNote:empty { margin: 0; padding: 0; }
+.offerType { margin-inline-start: 8px; }
+.offerCaption { display: none; }
+.offerSigning time { font-weight: 600; }
+.offerRow[data-state="today"] .offerSigning,
+.offerEmail [data-tone="failed"], .offerEmail [data-tone="uncertain"] { color: var(--offer-coral); font-weight: 600; }
+.offerTag { color: var(--offer-coral); font-size: 14px; font-weight: 600; }
+.offers .offerControl {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border: 1px solid var(--stone-dark);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+}
+.offers .offerControl[data-primary] { border-color: #14213d; background: #14213d; color: #fff; }
+:global(.dark) .offers .offerControl[data-primary] { border-color: #adc6f0; }
+.offers .offerControl:hover { box-shadow: inset 0 0 0 1px currentColor; }
+.offers .offerControl:focus-visible, .offers label.offerControl:focus-within,
+.offerNext [tabindex="-1"]:focus, .offerTemplates .card:focus, .offers > section:focus {
+  outline: 2px solid var(--offer-ring);
+  outline-offset: 2px;
+}
+.offers .offerControl[aria-disabled="true"], .offers label.offerControl:has(input[aria-disabled="true"]) { cursor: wait; }
+.offerTemplates > summary { margin-bottom: 4px; }
+.offerTemplates > summary::before { margin-right: 8px; content: "▸"; }
+.offerTemplates[open] > summary::before { content: "▾"; }
+.offerTemplates .card { background: var(--offer-card); }
+.offerTemplates .name { font-family: var(--serif); font-size: 22px; }
+
+@media (max-width: 719px) {
+  .offers { padding-inline: 16px; }
+  .offerTable, .offerTable tbody { display: block; }
+  .offerTable .offerHead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .offerRow {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px 8px;
+    margin-bottom: 8px;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow-wrap: anywhere;
+  }
+  .offerRow:last-child { margin-bottom: 0; }
+  .offerTable .offerRow > :is(th, td) { min-width: 0; padding: 0; border: 0; }
+  .offerTutor, .offerSigning, .offerNext { grid-column: 1 / -1; }
+  .offerTutor .offerNote { display: inline; margin-left: 8px; }
+  .offerSigning { grid-row: 2; }
+  .offerSigning .offerNote { display: inline; margin-left: 6px; }
+  .offerNext { grid-row: 3; }
+  .offerEmail, .offerPdf, .offerForm { grid-row: 4; }
+  .offerCaption { display: block; color: var(--support); font-size: 14px; }
+  .offerRow[data-sent-age] .offerSigning { grid-column: 1; }
+  .offerRow[data-sent-age] .offerEmail { grid-area: 2 / 2 / 3 / -1; align-self: center; }
+  .offerRow[data-sent-age] .offerEmail .offerCaption,
+  .offerEmail:has([data-tone="failed"]) .offerCaption { display: none; }
+  .offerRow[data-state="done"] { padding-block: 7px; }
+}
+
+@media (max-width: 480px) {
+  .offerTag, .offerNext, .offerNext [role="status"]:not([data-template-retry]), .offerNext [role="alert"], .offerPdf { font-size: 16px; }
+}
+
 @media (max-width: 719px) {
   .card { grid-template-columns: auto minmax(0, 1fr); }
   .reviewCard { grid-template-columns: minmax(0, 1fr); }
