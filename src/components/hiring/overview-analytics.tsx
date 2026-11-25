@@ -24,17 +24,17 @@ const dateLabel = (date: string) => formatInTimeZone(new Date(date), ZONE, "d MM
  */
 export function OverviewAnalytics({
   data,
+  now,
   capacity,
   onShow,
   onOpen,
 }: {
   data: HiringData;
+  now: Date;
   capacity: CapacityReport | null;
   onShow: Show;
   onOpen: (id: string) => void;
 }) {
-  // "now" moves with each load of the data, not with each render.
-  const now = useMemo(() => new Date(), [data]); // eslint-disable-line react-hooks/exhaustive-deps
   const report = useMemo(() => buildFunnel(data, now), [data, now]);
   const stages = useMemo(() => currentStageRows(data, report, now), [data, report, now]);
   const [group, setGroup] = useState("all");

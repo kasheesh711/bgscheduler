@@ -94,7 +94,14 @@ export function CandidateTable({
   funnelData?: FunnelInput;
 }) {
   // "now" moves with each load of the data, as on the funnel board.
-  const pipeline = useMemo(() => (funnelData ? buildFunnel(funnelData, new Date()).byCandidate : {}), [funnelData]);
+  const pipeline = useMemo(
+    () => {
+      if (!funnelData) return {};
+      const now = insights.observedAt ? new Date(insights.observedAt) : new Date();
+      return buildFunnel(funnelData, now).byCandidate;
+    },
+    [funnelData, insights.observedAt],
+  );
   const [tableTools, setTableTools] = useState({
     query: "",
     sort: { key: "score" as SortKey, descending: true },
