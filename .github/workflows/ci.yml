@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to a PR cancels that PR's older run. A push to main gets its own group, so it is never cancelled.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 env:
   DATABASE_URL: postgresql://user:password@localhost:5432/test
   AUTH_GOOGLE_ID: test-google-client-id
@@ -31,11 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/install
       - run: npm run lint
 
   typecheck:
@@ -43,37 +44,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/install
       - run: npm run typecheck
 
-  unit-tests:
-    name: unit-tests
+  unit-test-shards:
+    name: unit-tests shard ${{ matrix.shard }}/3
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: npm test
+      - uses: ./.github/actions/install
+      - run: npm test -- --shard=${{ matrix.shard }}/3
+
+  # Branch protection requires a check named unit-tests. always() makes this job run and fail
+  # when a shard fails or is cancelled: a skipped required check would count as passed.
+  unit-tests:
+    name: unit-tests
+    needs: unit-test-shards
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.unit-test-shards.result }}" = success
 
   build:
     name: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
+      - uses: ./.github/actions/install
+      # next build also runs the TypeScript check, with its generated route types.
       - run: npm run build
-      - run: npm run typecheck
 
   release-guards:
     name: release-guards
@@ -82,11 +85,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # The guard script uses only Node built-ins, so this job needs no npm install.
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-      - run: npm ci
       - run: npm run guard:production-route-surface
       - name: Check whitespace in changed files
         shell: bash

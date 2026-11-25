@@ -112,15 +112,20 @@ node scripts/check-production-route-surface.mjs --update
 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) fires on pull requests to `main` and
 pushes to `main`, on Node 24, with placeholder env values (`DATABASE_URL`, `AUTH_*`, `WISE_*`,
 `CRON_SECRET`, `ENABLE_AI_SCHEDULER=false`, `ENABLE_LINE_SCHEDULER=false`, `TZ=Asia/Bangkok`;
-[`:14-26`](../../.github/workflows/ci.yml)). Five jobs:
+[`:19-31`](../../.github/workflows/ci.yml)). A newer push to a PR cancels that PR's older run; runs
+on `main` are never cancelled ([`:14-17`](../../.github/workflows/ci.yml)). Every job except
+`release-guards` and the `unit-tests` result job installs through
+[`.github/actions/install`](../../.github/actions/install/action.yml): it restores `node_modules`
+from a cache keyed on `package.json` and `package-lock.json`, and runs `npm ci` only on a cache
+miss. Five required checks:
 
 | Job | Runs |
 |---|---|
-| `lint` | `npm run lint` ([`:29-39`](../../.github/workflows/ci.yml)) |
-| `typecheck` | `npm run typecheck` ([`:41-51`](../../.github/workflows/ci.yml)) |
-| `unit-tests` | `npm test` ([`:53-63`](../../.github/workflows/ci.yml)) |
-| `build` | `npm run build`, then `npm run typecheck` ([`:65-76`](../../.github/workflows/ci.yml)) |
-| `release-guards` | `guard:production-route-surface`, then `git diff --check` over the changed range ([`:78-98`](../../.github/workflows/ci.yml)) |
+| `lint` | `npm run lint` ([`:34-40`](../../.github/workflows/ci.yml)) |
+| `typecheck` | `npm run typecheck` ([`:42-48`](../../.github/workflows/ci.yml)) |
+| `unit-tests` | `npm test`, split into three parallel `unit-tests shard N/3` jobs; `unit-tests` passes only when all three pass ([`:50-70`](../../.github/workflows/ci.yml)) |
+| `build` | `npm run build`, which also runs the TypeScript check ([`:72-79`](../../.github/workflows/ci.yml)) |
+| `release-guards` | `guard:production-route-surface`, then `git diff --check` over the changed range; no npm install ([`:81-100`](../../.github/workflows/ci.yml)) |
 
 The former Sales Dashboard-only workflow and script have been removed. All features use these five checks; protected files also require Kevin's CODEOWNERS approval. CI never runs integration tests, migrations, or seeds.
 
