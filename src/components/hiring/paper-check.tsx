@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { paperCheckView } from "@/lib/hiring/paper-check";
+import { OVERRIDE_REASON_MIN } from "@/lib/hiring/model";
 import { tellHiringList } from "./brief";
 import { PdfPages } from "./pdf-pages";
 import c from "./booking.module.css";
@@ -33,6 +34,9 @@ const RESULT: Record<Outcome, string> = {
 export function PaperCheck({ view, token }: { view: View; token: string }) {
   const [marks, setMarks] = useState<Record<string, string>>(() => Object.fromEntries(view.questions.map((q) => [q.id, q.marks === null ? "" : String(q.marks)])));
   const [comment, setComment] = useState(view.comment);
+  // Kevin, 25 Nov 2026: a near miss can still pass on the head's word, with the reason written down.
+  const [override, setOverride] = useState(false);
+  const [reason, setReason] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [outcome, setOutcome] = useState<Outcome | null>(null);
@@ -94,6 +98,9 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
   });
   const percent = Math.round(bestPercent(view.questions, marks) * 10) / 10;
   const passes = view.passMark !== null && percent >= view.passMark;
+  const canOverride = view.passMark !== null && !passes && percent >= view.overrideFrom;
+  const overriding = canOverride && override;
+  const reasonShort = overriding && reason.trim().length < OVERRIDE_REASON_MIN;
 
   async function send() {
     setPending(true);
@@ -102,7 +109,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
       const response = await fetch(`/api/hiring/paper-check/${token}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ updatedAt: view.updatedAt, comment, marks: Object.fromEntries(view.questions.map((q) => [q.id, Number(marks[q.id])])) }),
+        body: JSON.stringify({ updatedAt: view.updatedAt, comment, ...(overriding ? { override: reason.trim() } : {}), marks: Object.fromEntries(view.questions.map((q) => [q.id, Number(marks[q.id])])) }),
       });
       const body = (await response.json().catch(() => ({}))) as { error?: string; outcome?: Outcome };
       if (response.ok && body.outcome) {
@@ -135,7 +142,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
       <>
         {header}
         <p role="status" tabIndex={-1} ref={result} className={outcome === "rejected" || view.done?.passed === false ? c.notice : c.success}>
-          {outcome ? `${outcome === "none" || outcome === "check" ? "" : "Marks saved. "}${RESULT[outcome]}` : `${view.done!.head}'s check is recorded: ${view.done!.percent}%, ${view.done!.passed ? "pass" : "not passed"}.`}
+          {outcome ? `${outcome === "none" || outcome === "check" ? "" : "Marks saved. "}${RESULT[outcome]}` : `${view.done!.head}'s check is recorded: ${view.done!.percent}%, ${view.done!.passed ? (view.done!.override ? "pass by head override" : "pass") : "not passed"}.`}
         </p>
       </>
     );
@@ -208,10 +215,24 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
         <div className={k.submit}>
           <p className={k.total} role="status">
             Score with these marks: <strong>{percent}%</strong>
-            {view.passMark !== null && <> — {passes ? "pass: goes on to mock teaching" : "not passed: the candidate gets the rejection email"}</>}
+            {view.passMark !== null && <> — {passes ? "pass: goes on to mock teaching" : overriding ? "pass by your override: goes on to mock teaching" : "not passed: the candidate gets the rejection email"}</>}
           </p>
+          {canOverride && (
+            <div className={c.field}>
+              <label>
+                <input type="checkbox" checked={override} onChange={(event) => setOverride(event.target.checked)} />{" "}
+                Pass anyway (head override, {view.overrideFrom}% up to the pass mark)
+              </label>
+              {override && (
+                <label className={c.field}>
+                  <span>Why should we hire this candidate? (required, at least {OVERRIDE_REASON_MIN} characters)</span>
+                  <textarea className={c.input} rows={3} maxLength={2000} value={reason} aria-invalid={reasonShort || undefined} onChange={(event) => setReason(event.target.value)} />
+                </label>
+              )}
+            </div>
+          )}
           {bad.length > 0 && <p className={c.note}>Give a mark from 0 to the maximum for question {bad.map((q) => q.id).join(", ")}.</p>}
-          <button type="button" className={c.button} disabled={pending || bad.length > 0} onClick={() => void send()}>
+          <button type="button" className={c.button} disabled={pending || bad.length > 0 || reasonShort} onClick={() => void send()}>
             {pending ? "Saving…" : "Submit my marks"}
           </button>
           <p className={c.note}>Your marks are final.</p>
