@@ -56,7 +56,6 @@ it("creates one calendar event with both attendees and recovers it by identity o
   expect(creates).toHaveLength(1);
   expect(creates[0][0]).toContain("sendUpdates=all");
   expect(JSON.parse(creates[0][1]!.body as string).attendees).toEqual([
-    { email: "peat@example.com" },
     { email: "candidate@example.com" },
     { email: "people@begiftededucation.com" },
     { email: "admin@begiftededucation.com" },
@@ -73,7 +72,7 @@ it("creates one calendar event with both attendees and recovers it by identity o
   ).toHaveLength(1);
 });
 
-it("titles a visit's two private events, and only the mock invites the head", async () => {
+it("titles a visit's two private events and invites no head to either", async () => {
   const db = {
     select: () => ({
       from: () => ({ where: async () => [{ refreshTokenCiphertext: "encrypted", scope: GOOGLE_SCOPES.join(" ") }] }),
@@ -112,11 +111,11 @@ it("titles a visit's two private events, and only the mock invites the head", as
   expect(events.map((e) => e.visibility)).toEqual(["private", "private"]);
   // Only R1 is on Google Meet. The visit is onsite.
   expect(events.map((e) => e.conferenceData)).toEqual([undefined, undefined]);
-  // Kevin, 23 Nov 2026: HR, Admin and Kevin are guests on both visit events, once each. Kevin, 25 Nov 2026: the head is a
-  // guest on the mock only, not on the paper test.
-  const staff = ["people@begiftededucation.com", "admin@begiftededucation.com", "kevhsh7@gmail.com", "peat@example.com"].map((email) => ({ email }));
-  expect(events[0].attendees).toEqual([{ email: "candidate@example.com" }, ...staff.filter((g) => g.email !== "peat@example.com")]);
-  expect(events[1].attendees).toEqual([{ email: "peat@example.com" }, { email: "candidate@example.com" }, ...staff.filter((g) => g.email !== "peat@example.com")]);
+  // Kevin, 23 Nov 2026: HR, Admin and Kevin are guests on both visit events, once each. Kevin, 25 Nov 2026: no head is a
+  // guest on either event.
+  const staff = ["people@begiftededucation.com", "admin@begiftededucation.com", "kevhsh7@gmail.com"].map((email) => ({ email }));
+  expect(events[0].attendees).toEqual([{ email: "candidate@example.com" }, ...staff]);
+  expect(events[1].attendees).toEqual([{ email: "candidate@example.com" }, ...staff]);
   // A paper row outside a visit (old flow, delivery test) keeps no staff guests.
   await deliverCalendar({ ...row("paper", "00000000-0000-4000-8000-000000000004", null), visitId: null }, candidate, "BeGifted", db, false, []);
   expect(events[2].attendees).toEqual([{ email: "candidate@example.com" }]);
@@ -149,7 +148,9 @@ it("renames and colors an event made before the named titles, with no new invita
   const patches = fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH");
   expect(patches).toHaveLength(1);
   expect(patches[0][0]).toContain("sendUpdates=none");
-  expect(JSON.parse(patches[0][1]!.body as string)).toEqual({ summary: "BeGifted mock teaching: Karawat Saijanyon · Mathematics · Head: Ek", colorId: "2" });
+  // The head invited before 25 Nov 2026 comes off in the same update, with no email.
+  expect(JSON.parse(patches[0][1]!.body as string)).toEqual({ attendees: staff.slice(0, 3).map((email) => ({ email })),
+    summary: "BeGifted mock teaching: Karawat Saijanyon · Mathematics · Head: Ek", colorId: "2" });
 });
 
 it("adds staff to an existing mock once, preserving guests and their responses", async () => {
