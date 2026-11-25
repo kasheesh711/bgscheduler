@@ -346,7 +346,7 @@ async function softRejectAndBringBack(tx: Database, config: HiringConfig, now: D
     if (row.stage !== "new" && row.stage !== "review") continue;
     await tx
       .update(c)
-      .set({ stage: "soft_rejected", softRejectedAt: now, reviewNote: `Soft rejected: profile score ${Math.round(score)} is under ${config.profileThreshold}.`, revision: row.revision + 1, updatedAt: now })
+      .set({ stage: "soft_rejected", softRejectedAt: now, reviewNote: `Soft rejected: profile score ${score.toFixed(1)} is under ${config.profileThreshold}.`, revision: row.revision + 1, updatedAt: now })
       .where(eq(c.id, id));
     await audit(tx, "hiring-queue", "soft-reject", id, { score, threshold: config.profileThreshold });
   }
