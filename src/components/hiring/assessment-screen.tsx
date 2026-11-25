@@ -46,7 +46,7 @@ type PaperCheck = HiringData["paperChecks"][number];
 /** The check of this result: open, or done with the head's answer. */
 export const checkOf = (paper: Pick<Paper, "id">, checks: HiringData["paperChecks"]) => checks.find((check) => check.resultId === paper.id);
 const checkWords = (check: PaperCheck) => check.done
-  ? `${check.done.head}'s check: ${check.done.percent}%, ${check.done.passed ? "pass" : "not passed"}`
+  ? `${check.done.head}'s check: ${check.done.percent}%, ${check.done.passed ? (check.done.override ? `pass by head override (${check.done.override})` : "pass") : "not passed"}`
   : `with ${check.headLabel ?? "a head"} for a check`;
 
 export function mockCell(mock: Mock) {
@@ -816,7 +816,8 @@ function AssessmentPanel({
         ))}
         {candidate.stage === "onsite_booked" && papers.some((paper) =>
           paper.subject === row.subject && paper.status === "done" && paper.fileId && paper.marks &&
-          computeSheet(paper.marks, passRulesFor(data.config, paper.subject)).result === "passed"
+          // A head's override passes a near miss too (Kevin, 25 Nov 2026).
+          paperScore(paper, data.config, checkOf(paper, data.paperChecks)).verdict === "pass"
         ) && !data.bookings.some((booking) => booking.candidateId === candidate.id && booking.kind === "mock" && booking.status === "confirmed") && (
           <button type="button" className={css.primary} disabled={busy} onClick={() => {
             if (window.confirm("Confirm the paper pass and invite this candidate to mock teaching?"))

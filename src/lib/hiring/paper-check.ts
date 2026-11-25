@@ -43,6 +43,24 @@ async function checkRows(db: Database, resultIds: string[]) {
     .where(and(inArray(s.hiringAudit.action, [PAPER_CHECK_REQUESTED, PAPER_CHECK_DONE]), inArray(sql`${s.hiringAudit.detail}->>'resultId'`, resultIds)))
     .orderBy(desc(s.hiringAudit.createdAt));
 }
+/*
+ * Kevin, 25 Nov 2026: after the check, a head may still pass a paper from PAPER_CHECK_FROM_PERCENT up to the pass mark,
+ * with a written reason. The reason sits on the check's own audit row, and it stands while the marks are the ones the head
+ * checked (`marksAt`): a later change of marks lets the marks decide again.
+ */
+type AuditRow = typeof s.hiringAudit.$inferSelect;
+export const overrideStands = (done: AuditRow | undefined, result: { updatedAt: Date }) =>
+  typeof done?.detail.override === "string" && done.detail.marksAt === result.updatedAt.toISOString();
+/** A head's override that still stands on this result. */
+export async function headOverride(db: Database, result: { id: string; updatedAt: Date }) {
+  return overrideStands(stateOf(await checkRows(db, [result.id]), result.id).done, result);
+}
+/** The refusal for an override outside the near-miss band, or null. */
+export const overrideRefusal = (sheet: PaperSheet) =>
+  sheet.result === "not_passed" && bestPercent(sheet) >= PAPER_CHECK_FROM_PERCENT
+    ? null
+    : `A head can pass a paper only from ${PAPER_CHECK_FROM_PERCENT}% up to the pass mark. Your marks do not need it.`;
+
 const stateOf = (rows: Awaited<ReturnType<typeof checkRows>>, resultId: string) => ({
   requested: rows.find((row) => row.action === PAPER_CHECK_REQUESTED && row.detail.resultId === resultId),
   done: rows.find((row) => row.action === PAPER_CHECK_DONE && row.detail.resultId === resultId),
@@ -71,14 +89,14 @@ async function requestCheck(tx: Database, fail: NonNullable<Awaited<ReturnType<t
 }
 
 /** Tells the recruitment group the head's answer and what the tool did. A missing group is not an error. */
-async function noticeCheckDone(tx: Database, input: { name: string; subject: Subject; head: string; percent: number; outcome: string; held: string | null; mockAt: Date | null; resultId: string; config: { recruitmentLineGroupId: string | null } }) {
+async function noticeCheckDone(tx: Database, input: { name: string; subject: Subject; head: string; percent: number; outcome: string; override: string | null; held: string | null; mockAt: Date | null; resultId: string; config: { recruitmentLineGroupId: string | null } }) {
   if (!input.config.recruitmentLineGroupId) return;
   const next = input.outcome === "passed"
     ? (input.mockAt ? `Done: the mock stays booked, ${lineWhen(input.mockAt)}.` : "Next: invite the candidate to a mock.")
     : input.outcome === "rejected" ? "Done: the mock is cancelled and the rejection email is sent."
       : `Next: Admin, open the Hiring page and send the result. No email was sent.${input.held ? ` (${input.held})` : ""}`;
   await enqueueRecruitmentLine(tx, `paper-check-done:${input.resultId}`, input.config.recruitmentLineGroupId,
-    `${input.outcome === "passed" ? "✅ Paper PASS" : "❌ Paper NOT PASSED"} · ${input.percent}% · checked by ${input.head}\n${lineWho(input.name, input.subject)}\n${next}`, null, "paper_check_done");
+    `${input.outcome === "passed" ? "✅ Paper PASS" : "❌ Paper NOT PASSED"} · ${input.percent}% · checked by ${input.head}${input.override ? ` (head override)\nWhy: ${input.override}` : ""}\n${lineWho(input.name, input.subject)}\n${next}`, null, "paper_check_done");
 }
 
 /**
@@ -86,7 +104,7 @@ async function noticeCheckDone(tx: Database, input: { name: string; subject: Sub
  * Never throws for a result that is not a counted fail. `checkedBy` records a head's check before the decision.
  * Returns what happened, for tests and the head's page.
  */
-export async function afterPaperCounted(db: Database, candidateId: string, subject: Subject, actor: string, now = new Date(), checkedBy?: string) {
+export async function afterPaperCounted(db: Database, candidateId: string, subject: Subject, actor: string, now = new Date(), checkedBy?: string, override?: string) {
   let outboxKey: string | null = null;
   let heldFor: string | null = null;
   const outcome = await withDatabaseTransaction(db, async (tx): Promise<"none" | "check" | "rejected" | "held" | "passed"> => {
@@ -95,13 +113,18 @@ export async function afterPaperCounted(db: Database, candidateId: string, subje
     await tx.select({ id: s.hiringCandidates.id }).from(s.hiringCandidates).where(eq(s.hiringCandidates.id, candidateId)).for("update");
     const candidate = await candidateById(tx, candidateId);
     if (["stopped", "hired", "rejected"].includes(candidate.stage)) return "none";
-    let check: { resultId: string; percent: number; passed: boolean } | null = null;
+    let check: { resultId: string; percent: number; passed: boolean; override?: string; marksAt?: string } | null = null;
     if (checkedBy) {
       const { config } = await settings(tx);
       const [result] = await tx.select().from(p).where(and(eq(p.candidateId, candidateId), eq(p.subject, subject)));
       if (!result?.marks) throw new HiringError(409, "This paper has no marks. Refresh the page.");
       const sheet = computeSheet(result.marks, passRulesFor(config, subject));
-      check = { resultId: result.id, percent: round(bestPercent(sheet)), passed: sheet.result === "passed" };
+      const refused = override ? overrideRefusal(sheet) : null;
+      if (refused) throw new HiringError(400, refused);
+      check = {
+        resultId: result.id, percent: round(bestPercent(sheet)), passed: sheet.result === "passed" || !!override,
+        ...(override ? { override, marksAt: result.updatedAt.toISOString() } : {}),
+      };
       await audit(tx, actor, PAPER_CHECK_DONE, candidateId, { ...check, subject, head: checkedBy });
     }
     const decide = async () => {
@@ -126,7 +149,7 @@ export async function afterPaperCounted(db: Database, candidateId: string, subje
       const otherChecks = await checkRows(tx, others.map((o) => o.id));
       const open = others.find((o) => {
         const waiting = stateOf(otherChecks, o.id);
-        return o.status !== "done" || !o.marks?.questions.some((q) => q.attempted) || (waiting.requested && !waiting.done)
+        return o.status !== "done" || !o.marks?.questions.some((q) => q.attempted) || (waiting.requested && !waiting.done) || overrideStands(waiting.done, o)
           || computeSheet(o.marks, passRulesFor(config, o.subject)).result !== "not_passed";
       });
       if (open) return hold(`The ${open.subject} paper is not a clear fail, so a person sends the result.`);
@@ -153,7 +176,7 @@ export async function afterPaperCounted(db: Database, candidateId: string, subje
     if (check && checkedBy) {
       const { config } = await settings(tx);
       const mock = await futureMock(tx, candidateId, subject, now);
-      await noticeCheckDone(tx, { name: candidate.name, subject, head: checkedBy, percent: check.percent, outcome, held: heldFor, mockAt: mock?.startTime ?? null, resultId: check.resultId, config });
+      await noticeCheckDone(tx, { name: candidate.name, subject, head: checkedBy, percent: check.percent, outcome, override: check.override ?? null, held: heldFor, mockAt: mock?.startTime ?? null, resultId: check.resultId, config });
     }
     return outcome;
   });
@@ -197,7 +220,7 @@ export async function paperChecks(db: Database, now: Date) {
       line: row.detail.line === true,
       requestedAt: row.createdAt.toISOString(),
       path,
-      done: done ? { passed: done.detail.passed === true, percent: Number(done.detail.percent), head: String(done.detail.head), at: done.createdAt.toISOString() } : null,
+      done: done ? { passed: done.detail.passed === true, percent: Number(done.detail.percent), head: String(done.detail.head), at: done.createdAt.toISOString(), override: typeof done.detail.override === "string" ? done.detail.override : null } : null,
     }];
   });
 }
@@ -223,11 +246,12 @@ export async function paperCheckView(token: string, db: Database = getDb(), now 
     head: typeof state.requested.detail.head === "string" ? state.requested.detail.head : null,
     aiPercent: Number(state.requested.detail.percent),
     passMark: bestPassMark(sheet),
+    overrideFrom: PAPER_CHECK_FROM_PERCENT,
     mock: mock ? `${when(mock.startTime)} (Bangkok)` : null,
     updatedAt: result.updatedAt.toISOString(),
     questions: result.marks.questions.map((q) => ({ id: q.id, level: q.level, max: q.max, marks: q.marks, reason: q.reason })),
     comment: result.marks.comment,
-    done: state.done ? { passed: state.done.detail.passed === true, percent: Number(state.done.detail.percent), head: String(state.done.detail.head) } : null,
+    done: state.done ? { passed: state.done.detail.passed === true, percent: Number(state.done.detail.percent), head: String(state.done.detail.head), override: typeof state.done.detail.override === "string" ? state.done.detail.override : null } : null,
     // A person's change since the request can already pass the paper, or the application can close.
     open: !state.done && result.status === "done" && sheet.result === "not_passed",
   };

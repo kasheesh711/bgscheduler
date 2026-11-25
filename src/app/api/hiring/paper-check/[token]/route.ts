@@ -9,6 +9,8 @@ const body = z.object({
   updatedAt: z.iso.datetime({ offset: true }),
   marks: z.record(z.string().max(60), z.number().min(0).max(1000)),
   comment: z.string().trim().max(4000),
+  // A head's pass of a near miss, with the reason (Kevin, 25 Nov 2026).
+  override: z.string().trim().max(2000).optional(),
 }).strict();
 
 /**
