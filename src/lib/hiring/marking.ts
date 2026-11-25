@@ -332,17 +332,21 @@ export const readMockRubric = (id: string, actor: string, db: Database, callMode
     now,
   );
 
+/** A person's marks over the saved ones. The override check and the save read the same result. */
+const withPersonMarks = (marks: PaperMarks, input: Record<string, number | null>) =>
+  marks.questions.map((q) => {
+    // The AI names the ids, so "constructor" must not read a value from the object's prototype.
+    if (!Object.hasOwn(input, q.id) || input[q.id] === q.marks) return q;
+    const value = input[q.id];
+    // The AI's points no longer add up to a mark that a person set, so they go. The AI's first answer keeps them.
+    return value === null ? { ...q, marks: null, readable: false, points: [] } : { ...q, marks: value, readable: true, attempted: true, points: [] };
+  });
+
 /** A person's change. The AI's first answer stays. The server recalculates the sheet from these marks. */
 export async function changePaperMarks(id: string, input: { updatedAt: string; marks: Record<string, number | null>; comment: string }, actor: string, db: Database, now = new Date(), followUp = true) {
   const [row] = await db.select().from(p).where(eq(p.id, id));
   if (!row?.marks || !["done", "needs_check"].includes(row.status)) throw new HiringError(409, "This paper has no marks to change yet.");
-  const questions = row.marks.questions.map((q) => {
-    // The AI names the ids, so "constructor" must not read a value from the object's prototype.
-    if (!Object.hasOwn(input.marks, q.id) || input.marks[q.id] === q.marks) return q;
-    const value = input.marks[q.id];
-    // The AI's points no longer add up to a mark that a person set, so they go. The AI's first answer keeps them.
-    return value === null ? { ...q, marks: null, readable: false, points: [] } : { ...q, marks: value, readable: true, attempted: true, points: [] };
-  });
+  const questions = withPersonMarks(row.marks, input.marks);
   const marks: PaperMarks = { ...row.marks, questions, comment: input.comment };
   const problems = checkPaperMarks(marks);
   if (problems.length) throw new HiringError(400, problems.join(" "));
@@ -375,7 +379,7 @@ export async function submitPaperCheck(token: string, input: { updatedAt: string
     // Checked before the marks save, so a refused override changes nothing.
     const [row] = await db.select().from(s.hiringPaperResults).where(eq(s.hiringPaperResults.id, view.id));
     const { config } = await settings(db);
-    const marks = { ...row.marks!, questions: row.marks!.questions.map((q) => Object.hasOwn(input.marks, q.id) ? { ...q, marks: input.marks[q.id], attempted: true } : q) };
+    const marks = { ...row.marks!, questions: withPersonMarks(row.marks!, input.marks) };
     const refused = overrideRefusal(computeSheet(marks, passRulesFor(config, row.subject)));
     if (refused) throw new HiringError(400, refused);
   }

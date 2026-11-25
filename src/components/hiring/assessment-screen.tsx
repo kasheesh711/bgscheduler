@@ -817,7 +817,8 @@ function AssessmentPanel({
         ))}
         {candidate.stage === "onsite_booked" && papers.some((paper) =>
           paper.subject === row.subject && paper.status === "done" && paper.fileId && paper.marks &&
-          computeSheet(paper.marks, passRulesFor(data.config, paper.subject)).result === "passed"
+          // A head's override passes a near miss too (Kevin, 25 Nov 2026).
+          paperScore(paper, data.config, checkOf(paper, data.paperChecks)).verdict === "pass"
         ) && !data.bookings.some((booking) => booking.candidateId === candidate.id && booking.kind === "mock" && booking.status === "confirmed") && (
           <button type="button" className={css.primary} disabled={busy} onClick={() => {
             if (window.confirm("Confirm the paper pass and invite this candidate to mock teaching?"))
