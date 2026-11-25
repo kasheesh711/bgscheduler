@@ -1481,6 +1481,7 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     form: own.form,
     recommendationReady,
     // The head scores while they watch; only the recommendation waits for the lesson to end.
+    mockStarted: now >= mock.startTime,
     mockEnded: now >= mock.endTime,
     recommendationBlock: own.form !== "closed" || recommendationReady || now < mock.endTime ? null : checking ? ("checking" as const) : ("admin" as const),
   };

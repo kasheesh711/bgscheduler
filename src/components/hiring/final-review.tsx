@@ -46,7 +46,7 @@ function subscribeToPhoneReader(change: () => void) {
   return () => query.removeEventListener("change", change);
 }
 
-export function FinalReview({ id, signing = false, autoLoad = false, hideHeading = false, inline = false, approveBlock, rejectBlock, pausedStatus, onChanged }: {
+export function FinalReview({ id, signing = false, autoLoad = false, hideHeading = false, inline = false, signed, approveBlock, rejectBlock, pausedStatus, onChanged }: {
   id: string;
   /** Gift's Hiring screen: on a wide screen the packet opens at once beside her decision, so she reads and writes together
    * (Kevin, 24 Nov 2026). Opening it is still what unlocks sign-off. A phone keeps the full-screen reader. */
@@ -57,7 +57,9 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   approveBlock?: string;
   rejectBlock?: string;
   pausedStatus?: string;
-  onChanged?: (signed: boolean) => Promise<void>;
+  /** A review signed in this session that mounts again (a phone row that moved to Just finished) keeps its receipt. */
+  signed?: "hired" | "rejected";
+  onChanged?: (signed: "hired" | "rejected" | false) => Promise<void>;
 }) {
   const url = `/api/hiring/review/${id}`;
   const controlId = useId();
@@ -77,10 +79,12 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   const [viewedId, setViewedId] = useState<string>();
   const [busy, setBusy] = useState<"review" | "packet" | "sign" | null>(null);
   const [saved, setSaved] = useState(false);
-  const [signedStage, setSignedStage] = useState<"hired" | "rejected">();
+  const [signedStage, setSignedStage] = useState<"hired" | "rejected" | undefined>(signed);
   const [error, setError] = useState<{ text: string; retry?: boolean; packetLoad?: boolean }>();
   const packet = review?.packet;
   const openPage = packetPage?.id === packet?.id ? packetPage : undefined;
+  // A standard letter's third paragraph is its terms ("Dear …", "We are pleased …", terms, …); offer-letters.ts builds it so.
+  const offerTerms = packet?.offerType && packet.offerType in OFFER_LETTERS ? packet.offer.split(/\n\s*\n/)[2]?.trim() || null : null;
   // A signed or closed review never shows the stale alert; the contract-signing card neither.
   const stale = !!packet && !signing && !["hired", "rejected", "stopped"].includes(review?.stage ?? "") && review?.packetValid !== true;
   const viewed = !!packet && !stale && packet.id === viewedId;
@@ -110,9 +114,10 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
     loadStarted.current = true;
     void load();
   }, [autoLoad, load, signing]);
+  // Also after a load, so a review that mounts again after sign-off puts focus on its receipt once it shows.
   useEffect(() => {
     if (signedStage) outcome.current?.focus();
-  }, [signedStage]);
+  }, [signedStage, review]);
   const autoOpened = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (!openPage || !phone) return;
@@ -230,7 +235,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
         if (body.action === "sign") setSignedStage(body.decision === "hire" ? "hired" : "rejected");
       }
       await load(!!body);
-      if (body) await onChanged?.(body.action === "sign").catch(() => {
+      if (body) await onChanged?.(body.action === "sign" && (body.decision === "hire" ? "hired" : "rejected")).catch(() => {
         setError((current) => current ?? { text: "Could not refresh the dashboard." });
       });
     } catch (error) {
@@ -256,8 +261,12 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       const html = await response.text();
       const head = /<head\b[^>]*>/i;
       const base = '<base target="_blank">';
-      const source = head.test(html) ? html.replace(head, `$&${base}`) : html.replace(/<html\b[^>]*>/i, `$&<head>${base}`);
-      if (source === html) throw new Error();
+      // In a srcdoc frame "#…" resolves against the outer page and empties the frame; about:srcdoc keeps it inside.
+      // Beside Gift's decision the packet gets a shorter masthead (data-inline), so the score tiles fit on a laptop.
+      // Beside the decision, a standard offer's terms already show by Approve, so the packet hides its copy (data-terms).
+      const inFrame = html.replaceAll('href="#', 'href="about:srcdoc#').replace("<html ", remember ? "<html " : offerTerms ? "<html data-inline data-terms " : "<html data-inline ");
+      const source = head.test(inFrame) ? inFrame.replace(head, `$&${base}`) : inFrame.replace(/<html\b[^>]*>/i, `$&<head>${base}`);
+      if (source === inFrame) throw new Error();
       const titleTag = html.match(/<title>[^<]*<\/title>/i)?.[0] ?? "";
       const name = new DOMParser().parseFromString(titleTag, "text/html").title.replace(/^Hiring review \| /, "");
       // The Back button closes a reader the head opened; the packet that opens by itself in Gift's screen has no reader to close.
@@ -279,7 +288,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "preview", behavioral, offerType }) });
       if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? "Could not open the preview. Try again.");
       // Without the tag, a file link opens inside the preview frame.
-      setDraftHtml((await response.text()).replace(/<head\b[^>]*>/i, '$&<base target="_blank">'));
+      setDraftHtml((await response.text()).replaceAll('href="#', 'href="about:srcdoc#').replace(/<head\b[^>]*>/i, '$&<base target="_blank">'));
     } catch (error) {
       setError({ text: (error instanceof Error && error.message) || "Could not open the preview. Try again." });
     } finally {
@@ -313,11 +322,12 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   const packetTitle = openPage && `Review packet for ${openPage.name}`;
   const besideDecision = inline && !phone;
   useEffect(() => {
-    if (!besideDecision || !packet || stale || !review?.access.gift || openPage || busy || autoOpened.current === packet.id) return;
+    // In the head list the packet opens with the row: beside the decision, or full screen on a phone, where Back closes it.
+    if (!inline || closed || !packet || stale || !review?.access.gift || openPage || busy || autoOpened.current === packet.id) return;
     autoOpened.current = packet.id;
-    void readPacket(packet.id, false);
+    void readPacket(packet.id, !besideDecision);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- readPacket is a plain function; the guard runs it once per packet.
-  }, [besideDecision, packet, stale, review, openPage, busy]);
+  }, [inline, besideDecision, closed, packet, stale, review, openPage, busy]);
   const packetFrame = openPage && (
     <iframe title={packetTitle} srcDoc={openPage.html}
       className={phone ? "block h-full min-h-0 w-full border-0" : undefined}
@@ -327,7 +337,6 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
   return (
     <section className={signing ? css.finalReview : `${css.inspectorSection} ${css.finalReview}`} id={`review-${id}`} aria-label={signing ? "Contract signing" : "Final hiring review"}
       data-inline={besideDecision ? "" : undefined}>
-      {besideDecision && openPage && <div className={css.inlinePacket} id={`${controlId}-packet`}>{packetFrame}</div>}
       {!signing && !hideHeading && <h3 className={css.inspectorHeading}>Final hiring review</h3>}
       {!review && !error && (autoLoad || busy
         ? <p className={css.inspectorMeta} role="status">Loading the review…</p>
@@ -342,7 +351,7 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       {!signing && review && packet && (
         <div className={`${css.decisionActions} ${css.packetActions}`}>
           {besideDecision && openPage ? null : review.access.gift ? (
-            <button type="button" className={viewed ? css.secondary : css.primary} ref={readButton} disabled={stale && awaitingSignOff} aria-expanded={!!openPage} aria-disabled={!!busy || !!openPage || (stale && awaitingSignOff)}
+            <button type="button" className={viewed || closed ? css.secondary : css.primary} ref={readButton} disabled={stale && awaitingSignOff} aria-expanded={!!openPage} aria-disabled={!!busy || !!openPage || (stale && awaitingSignOff)}
               aria-controls={openPage ? `${controlId}-packet` : undefined}
               onClick={() => { if (!busy && !openPage) void readPacket(packet.id); }}>{viewed ? "Read packet again" : "Read review packet"}</button>
           ) : <a className={css.secondary} href={`${url}?file=html`} target="_blank" rel="noreferrer">Read review packet</a>}
@@ -395,11 +404,9 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
       )}
       {awaitingSignOff && (packet ? (
         <>
-          <label className={css.fieldLabel}>
-            <span id={rejectHint}>Rejection note (5+ characters)</span>
-            <textarea className={css.textarea} rows={2} maxLength={2000} value={reason} readOnly={busy === "sign"} disabled={!viewed}
-              onChange={(event) => setReason(event.target.value)} />
-          </label>
+          {/* What Gift approves, beside the button: the terms paragraph of the stored letter, the text the candidate is sent
+              (Sol review, rounds 11–12; code review, round 20). Without one, the letter is only in the packet. */}
+          {offerTerms && <p className={css.inspectorMeta}><strong>Proposed offer:</strong> {offerTerms}</p>}
           <div className={css.signOffActions}>
             <div>
               <button type="button" ref={approveButton} className={css.primary} disabled={signOffDisabled || !!approveBlock} aria-describedby={[pauseReason, instruction, approveReason].filter(Boolean).join(" ")} onClick={() => {
@@ -408,7 +415,13 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
               }}>Approve and send offer</button>
               {approveReason && <p id={approveReason} className={css.inspectorMeta}>{approveBlock}</p>}
             </div>
-            <div>
+            {/* The note belongs to Reject, so it sits with it, below Approve. */}
+            <div className={css.rejectGroup}>
+              <label className={css.fieldLabel}>
+                <span id={rejectHint}>Rejection note (5+ characters)</span>
+                <textarea className={css.textarea} rows={2} maxLength={2000} value={reason} readOnly={busy === "sign"} disabled={!viewed}
+                  onChange={(event) => setReason(event.target.value)} />
+              </label>
               <button type="button" className={css.secondary} disabled={signOffDisabled || reason.trim().length < 5 || !!rejectBlock} aria-describedby={[pauseReason, instruction, rejectReason, rejectHint].filter(Boolean).join(" ")} onClick={() => {
                 if (window.confirm("Reject this application and inform the candidate?"))
                   void act({ action: "sign", packetId: packet.id, decision: "reject", reason });
@@ -419,15 +432,17 @@ export function FinalReview({ id, signing = false, autoLoad = false, hideHeading
           {busy === "sign" && <p role="status" className={css.inspectorMeta}>Saving sign-off…</p>}
         </>
       ) : <p>Waiting for the packet. <button type="button" className={css.secondary} disabled={!!busy} onClick={() => void act()}>Check again</button></p>)}
-      <p ref={outcome} role="status" tabIndex={-1}>{closed && (stage === "hired" ? (review?.appointment
+      <p ref={outcome} role="status" tabIndex={-1} className={css.receipt}>{closed && (stage === "hired" ? (review?.appointment
         ? `Contract signing booked for ${new Date(review.appointment).toLocaleString("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium", timeStyle: "short" })} (Bangkok).`
-        : packet ? (signedStage ? "Offer approved. The offer email is queued." : "Offer approved.") : "There is no contract booking on record.")
+        : packet || signedStage ? (signedStage ? "Offer approved. The offer email is queued." : "Offer approved.") : "There is no contract booking on record.")
         : stage === "rejected" ? (signedStage ? "Application rejected. The email is queued." : "Application rejected.") : "Application stopped.")}</p>
       {saved && !signedStage && <p role="status">Saved.</p>}
       {error && !error.packetLoad && <div role="alert" className={css.errorText}>
         <p>{error.text}</p>
         {error.retry && <button type="button" className={css.secondary} disabled={!!busy} onClick={() => void act()}>Retry</button>}
       </div>}
+      {/* After the decision in the reading and tab order; CSS puts it in the right column (critic review, round 13). */}
+      {besideDecision && openPage && <div className={css.inlinePacket} id={`${controlId}-packet`}>{packetFrame}</div>}
     </section>
   );
 }

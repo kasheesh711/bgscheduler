@@ -154,6 +154,10 @@ export default edgeAuth(async (req) => {
       response.headers.set("Cache-Control", "private, no-store");
       response.headers.set("Referrer-Policy", "no-referrer");
       response.headers.set("X-Robots-Tag", "noindex, nofollow");
+      // The Hiring screen frames the brief and the paper check pages itself; no other site may. Pages only: a file route
+      // keeps its own stricter Content-Security-Policy, which a proxy header would replace.
+      if (pathname.startsWith("/hiring/brief/") || pathname.startsWith("/hiring/paper-check/"))
+        response.headers.set("Content-Security-Policy", "frame-ancestors 'self'");
     }
     return response;
   }

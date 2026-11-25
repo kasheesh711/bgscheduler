@@ -142,16 +142,24 @@
 }
 /* Inside the head's Hiring screen (embed=1) there is no hero: the sheet starts at the top and uses the pane's width. */
 .page[data-bare] {
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   background: transparent;
 }
 .page[data-bare] .sheet {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
   max-width: none;
   margin-top: 0;
   padding: 0;
 }
 /* No frame, and the facts on one line, so the paper and the marks start near the top (Kevin: "so much white space"). */
 .page[data-bare] .card {
+  flex: 1;
+  min-height: 0;
   gap: 14px;
   padding: 14px 20px 32px;
   border: 0;
@@ -717,6 +725,10 @@ input[type="file"].input {
 }
 .ghost:hover:not(:disabled) {
   background: #f1ebde;
+}
+.button[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: progress;
 }
 .button:disabled,
 .ghost:disabled {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { paperCheckView } from "@/lib/hiring/paper-check";
 import { tellHiringList } from "./brief";
 import { PdfPages } from "./pdf-pages";
@@ -36,6 +36,58 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  // Marks not sent yet stay in this browser, so opening another row and coming back loses nothing. The link token is
+  // signed again on each list load, so the draft is keyed by the result, and kept only while the AI marks are the same.
+  // On a wide pane the questions scroll in their own area; the cue shows while some are still below it.
+  const questionList = useRef<HTMLDivElement>(null);
+  // Submit leaves the page with the result, so focus moves to it.
+  const result = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (outcome) result.current?.focus();
+  }, [outcome]);
+  const [more, setMore] = useState<string | null>(null);
+  const checkMore = () => {
+    const list = questionList.current;
+    if (!list) return setMore(null);
+    // The first question whose box ends below the visible area, else the comment if it is below it; nothing when all show.
+    const bottom = list.getBoundingClientRect().bottom + 1;
+    // A question counts as hidden only when its mark field is cut off, not its card's padding (reviews, round 14).
+    const next = [...list.querySelectorAll<HTMLLIElement>("li[data-question]")].find((item) => (item.querySelector("input") ?? item).getBoundingClientRect().bottom > bottom);
+    if (next) return setMore(next.dataset.question ?? null);
+    const comment = list.querySelector("textarea");
+    // Only when the comment's label and first line are hidden, not for a box that is nearly all in view.
+    setMore(comment && comment.getBoundingClientRect().top + 32 > bottom ? "" : null);
+  };
+  useEffect(() => {
+    checkMore();
+    // The area also changes size when the facts above it wrap, not only with the window.
+    if (typeof ResizeObserver === "undefined" || !questionList.current) return;
+    const observer = new ResizeObserver(checkMore);
+    observer.observe(questionList.current);
+    return () => observer.disconnect();
+  }, []);
+  const draftKey = `hiring-paper-draft:${view.id}`;
+  const [restored, setRestored] = useState(false);
+  // The marks and comment as the page opened, so a copy is kept only after a change.
+  const [start] = useState(() => JSON.stringify({ marks, comment }));
+  useEffect(() => {
+    // For this tab only (sessionStorage), and only after a change: marks and comments do not stay on a shared device
+    // (code review, round 20).
+    try {
+      if (!restored) {
+        setRestored(true);
+        localStorage.removeItem(draftKey);
+        const draft = JSON.parse(sessionStorage.getItem(draftKey) ?? "null") as { updatedAt?: string; marks?: Record<string, string>; comment?: string } | null;
+        if (draft?.updatedAt === view.updatedAt && draft.marks) {
+          setMarks((current) => Object.fromEntries(Object.keys(current).map((id) => [id, typeof draft.marks?.[id] === "string" ? draft.marks[id] : current[id]])));
+          if (typeof draft.comment === "string") setComment(draft.comment);
+        }
+      } else if (outcome || view.done || !view.open || JSON.stringify({ marks, comment }) === start) sessionStorage.removeItem(draftKey);
+      else sessionStorage.setItem(draftKey, JSON.stringify({ updatedAt: view.updatedAt, marks, comment }));
+    } catch {
+      // Private mode or a full store: the page still works, without the copy.
+    }
+  }, [draftKey, restored, start, outcome, view.done, view.open, view.updatedAt, marks, comment]);
   const bad = view.questions.filter((q) => {
     const value = Number(marks[q.id]);
     return marks[q.id] === "" || !Number.isFinite(value) || value < 0 || value > q.max;
@@ -55,7 +107,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
       const body = (await response.json().catch(() => ({}))) as { error?: string; outcome?: Outcome };
       if (response.ok && body.outcome) {
         setOutcome(body.outcome);
-        tellHiringList();
+        tellHiringList("marks");
       }
       else setError(body.error ?? "Your marks were not saved. Try again.");
     } catch {
@@ -71,9 +123,9 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
       <dl className={`${c.answers} ${c.briefDetails}`}>
         <div><dt className={c.factLabel}>Subject</dt><dd>{view.subject}</dd></div>
         <div><dt className={c.factLabel}>AI score</dt><dd>{view.aiPercent}%{view.passMark !== null && ` (pass mark ${view.passMark}%)`}</dd></div>
+        {outcome && <div><dt className={c.factLabel}>Your score</dt><dd>{percent}%</dd></div>}
         <div><dt className={c.factLabel}>Mock teaching</dt><dd>{view.mock ?? "Not booked yet"}</dd></div>
       </dl>
-      <a className={`${c.ghost} ${c.jumpLink}`} href={`/api/hiring/paper-check/${token}/paper`} target="_blank" rel="noreferrer">Open marked paper</a>
       <p className={c.note}>Personal data. Do not share.</p>
     </section>
   );
@@ -82,8 +134,8 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
     return (
       <>
         {header}
-        <p role="status" className={outcome === "rejected" || view.done?.passed === false ? c.notice : c.success}>
-          {outcome ? `Marks saved: ${percent}%. ${RESULT[outcome]}` : `${view.done!.head}'s check is recorded: ${view.done!.percent}%, ${view.done!.passed ? "pass" : "not passed"}.`}
+        <p role="status" tabIndex={-1} ref={result} className={outcome === "rejected" || view.done?.passed === false ? c.notice : c.success}>
+          {outcome ? `${outcome === "none" || outcome === "check" ? "" : "Marks saved. "}${RESULT[outcome]}` : `${view.done!.head}'s check is recorded: ${view.done!.percent}%, ${view.done!.passed ? "pass" : "not passed"}.`}
         </p>
       </>
     );
@@ -100,14 +152,20 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
       <div className={k.split}>
       {/* The paper beside the marks on a wide screen, above them on a phone. Drawn on the page: a PDF frame is blank on Safari and phones. */}
       <section className={k.paper} aria-label="Marked paper">
-        <h2 className={c.stepTitle}>Marked paper</h2>
+        {/* The link sits beside the heading, not in it, so it is not part of the heading's name (code review, round 20). */}
+        <div className={k.paperHead}>
+          <h2 className={c.stepTitle}>Marked paper</h2>
+          <a className={k.fullPaper} href={`/api/hiring/paper-check/${token}/paper`} target="_blank" rel="noreferrer" aria-label="View full paper, opens in a new tab">View full paper <span aria-hidden="true">↗</span></a>
+        </div>
         <PdfPages src={`/api/hiring/paper-check/${token}/paper`} runtime={`/api/hiring/paper-check/${token}/runtime`} title={`Marked paper of ${view.name}`} maxPages={40} />
       </section>
       <section className={`${c.facts} ${k.marks}`}>
-        <h2 className={c.stepTitle}>Your marks</h2>
-        <ol className={k.questions}>
+        <h2 className={c.stepTitle}>Your marks <span className={c.note}>{view.questions.length} questions · half marks allowed</span></h2>
+        {/* The questions and the comment scroll together, so the score and Submit below them stay in view. */}
+        <div className={k.questions} ref={questionList} onScroll={checkMore}>
+        <ol className={k.questionList}>
           {view.questions.map((q) => (
-            <li key={q.id} className={k.question}>
+            <li key={q.id} className={k.question} data-question={q.id}>
               <div className={k.head}>
                 <label htmlFor={`q-${q.id}`} className={k.label}>Question {q.id}</label>
                 <span className={k.level}>{q.level}</span>
@@ -133,9 +191,19 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
           ))}
         </ol>
         <label className={c.field}>
-          <span>Comment (optional)</span>
+          {/* A comment already on the result is the marker's; the head may keep or change it, and it saves with the marks. */}
+          <span>{view.comment ? "Marking comment (optional)" : "Comment (optional)"}</span>
           <textarea className={c.input} rows={3} maxLength={4000} value={comment} onChange={(event) => setComment(event.target.value)} />
         </label>
+        </div>
+        {more !== null && (
+          <button type="button" className={k.more} onClick={() => {
+            // The question, or the comment field's label (Sol review, round 17); focus goes to its field.
+            const target = more ? questionList.current?.querySelector<HTMLElement>(`li[data-question="${CSS.escape(more)}"]`) : questionList.current?.querySelector("textarea")?.closest("label");
+            target?.scrollIntoView({ block: "nearest" });
+            target?.querySelector<HTMLElement>("input, textarea")?.focus({ preventScroll: true });
+          }}>{more ? `Go to question ${more} ↓` : "Go to the comment ↓"}</button>
+        )}
         {/* The score and the send stay in view while the head works down the questions. */}
         <div className={k.submit}>
           <p className={k.total} role="status">
