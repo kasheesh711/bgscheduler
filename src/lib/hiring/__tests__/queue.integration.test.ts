@@ -620,7 +620,7 @@ describe("form queue", () => {
     });
     const pass = await seed({ profileAssessment: five(["Mathematics"]) as never });
     const lowNew = await seed({ profileAssessment: weak("Mathematics") as never });
-    const lowReview = await seed({ stage: "review", profileAssessment: weak("Physics") as never });
+    const lowReview = await seed({ stage: "review", reviewNote: "SEEK status: Shortlist.", profileAssessment: weak("Physics") as never });
     const old = await seed({ stage: "soft_rejected", profileAssessment: weak("Physics") as never });
     const result = await releaseQueues(db);
     expect(result).toMatchObject({ softRejected: 2, broughtBack: 1 });
@@ -634,8 +634,30 @@ describe("form queue", () => {
     expect((await stage(pass.id)).stage).toBe("pre_screen");
     // Soft reject sends nothing.
     expect((await forms()).map((j) => j.candidateId).sort()).toEqual([pass.id, old.id].sort());
-    // A brought-back row is never soft rejected again, and a second cycle changes nothing.
-    expect(await releaseQueues(db)).toMatchObject({ softRejected: 0 });
+    // Mathematics is empty now, so its soft-rejected row from New comes back and is emailed. Physics is empty too, but
+    // its only soft-rejected row came from review: only a person emails a review row.
+    expect(await releaseQueues(db)).toMatchObject({ softRejected: 0, broughtBack: 1, preScreen: 1 });
+    expect((await stage(lowNew.id)).stage).toBe("pre_screen");
+    expect((await stage(lowReview.id)).stage).toBe("soft_rejected");
+    // A lowered pass score restores the review row to review, with its note then; it is never emailed.
+    expect((await stage(lowReview.id)).softRejectedNote).toBe("SEEK status: Shortlist.");
+    await setConfig({ profileThreshold: 0, bringBackFloor: null, subjectPriority: [{ subject: "Physics", hiring: true }, { subject: "Mathematics", hiring: true }] });
+    expect(await releaseQueues(db)).toMatchObject({ broughtBack: 1, preScreen: 0 });
+    expect((await stage(lowReview.id)).stage).toBe("review");
+    expect((await stage(lowReview.id)).reviewNote).toBe("SEEK status: Shortlist.");
+    expect((await forms()).map((j) => j.candidateId)).not.toContain(lowReview.id);
+  });
+  it("brings a soft-rejected candidate back by hand, where they came from, and refuses anyone else", async () => {
+    const weak = { ...five(["Mathematics"]), criteria: ids.map((id) => ({ id, result: ["degree", "subject"].includes(id) ? "met" : "not_met", evidence: id, reason: "Source" })) };
+    const row = await seed({ stage: "soft_rejected", softRejectedFrom: "new", profileAssessment: weak as never });
+    const other = await seed();
+    await expect(reviewCandidate(other.id, { revision: other.revision, action: "bring_back", subjects: [], reason: "Bring them back" }, "kevin", db)).rejects.toMatchObject({ status: 409 });
+    await reviewCandidate(row.id, { revision: row.revision, action: "bring_back", subjects: [], reason: "Bring them back" }, "kevin", db);
+    const back = await candidate(row.id);
+    expect([back.stage, back.revision, back.broughtBackAt !== null]).toEqual(["new", row.revision + 1, true]);
+    // The pass score no longer holds them: the next cycle sends the form.
+    expect(await releaseQueues(db)).toMatchObject({ preScreen: 2 });
+    expect((await candidate(row.id)).stage).toBe("pre_screen");
   });
   it("only stage new enters the form queue", async () => {
     const paused = await seed();

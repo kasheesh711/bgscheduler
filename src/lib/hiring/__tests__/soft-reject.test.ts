@@ -23,6 +23,7 @@ const row = (id: string, stage: Stage, subject: string, english: "met" | "not_me
   id,
   stage,
   broughtBackAt: null,
+  softRejectedFrom: null,
   createdAt: new Date("2026-11-01T00:00:00Z"),
   email: `${id}@example.com`,
   previouslyContacted: false,
@@ -94,6 +95,18 @@ describe("soft reject (Kevin, 25 Nov 2026)", () => {
     expect(softRejectPlan([], soft, { ...config, bringBackFloor: null }).bringBack).toEqual([]);
     expect(softRejectPlan([], soft, { ...config, bringBackFloor: 61 }).bringBack).toEqual([]);
     expect(softRejectPlan([], soft, { ...config, bringBackFloor: 60 }).bringBack.map((r) => r.id)).toEqual(["chem"]);
+  });
+
+  it("never brings back a row that came from review, and never soft rejects one that got the HR call link", () => {
+    const fromReview = [row("chem", "soft_rejected", "Chemistry", "not_met", { softRejectedFrom: "review" })];
+    expect(softRejectPlan([], fromReview, config).bringBack).toEqual([]);
+    expect(softRejectPlan([row("x", "new", "Physics", "not_met", { callInvited: true })], [], config).reject).toEqual([]);
+  });
+
+  it("breaks a tie by the earlier application", () => {
+    const later = row("later", "soft_rejected", "Chemistry", "not_met", { createdAt: new Date("2026-11-03T00:00:00Z") });
+    const earlier = row("earlier", "soft_rejected", "Chemistry", "not_met", { createdAt: new Date("2026-11-02T00:00:00Z") });
+    expect(softRejectPlan([], [later, earlier], config).bringBack.map((r) => r.id)).toEqual(["earlier"]);
   });
 
   it("restores a soft-rejected row that now passes, after the pass score is lowered", () => {

@@ -90,7 +90,8 @@ export async function assessCandidates(
       scoreOnly
         ? (candidateId ? eq(s.hiringCandidates.id, candidateId) : undefined)
         : or(
-            inArray(s.hiringCandidates.stage, ["new", "review", "pre_screen", "no_reply"]),
+            // Soft rejected is scored again too, so a new résumé can restore it (Kevin, 25 Nov 2026).
+            inArray(s.hiringCandidates.stage, ["new", "review", "pre_screen", "no_reply", "soft_rejected"]),
             // Answers from the booking page can open booking before the AI reads them. They are scored once, for staff.
             and(
               inArray(s.hiringCandidates.stage, SELF_SERVED),
@@ -147,12 +148,12 @@ export async function assessCandidates(
             .update(s.hiringCandidates)
             .set({
               // An invited or booked candidate keeps the visit: the score is for staff to read, not a gate.
-              ...(scoreOnly || SELF_SERVED.includes(candidate.stage) ? {} : { stage: "review" as const }),
+              ...(scoreOnly || SELF_SERVED.includes(candidate.stage) || candidate.stage === "soft_rejected" ? {} : { stage: "review" as const }),
               ...(phase === "pre"
                 ? { preScreenHash: hash, preScreenAssessment: null }
                 : { profileHash: hash, profileAssessment: null }),
               // A row already in review keeps its note (a hard stop from the booking page, for example).
-              ...(SELF_SERVED.includes(candidate.stage) || (candidate.stage === "review" && candidate.reviewNote) ? {} : { reviewNote:
+              ...(SELF_SERVED.includes(candidate.stage) || candidate.stage === "soft_rejected" || (candidate.stage === "review" && candidate.reviewNote) ? {} : { reviewNote:
                 "AI evidence could not be verified. Review this application before advancing it." }),
               // The visit reminder is tied to the row's revision, so an invited row keeps it.
               revision: candidate.revision + (SELF_SERVED.includes(candidate.stage) ? 0 : 1),

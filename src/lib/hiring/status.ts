@@ -209,6 +209,8 @@ export function holdNote(
       ],
     };
   }
+  if (candidate.stage === "soft_rejected")
+    return { short: "Soft rejected", long: ["Under the pass score and never emailed. Bring back puts them where they were."] };
   if (candidate.stage === "new" && !candidate.preScreen) {
     const gate = profileGate(candidate, config);
     if (gate.eligible) return null;

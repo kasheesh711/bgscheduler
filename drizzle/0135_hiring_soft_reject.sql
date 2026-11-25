@@ -7,3 +7,8 @@ ALTER TABLE "hiring_candidates" ADD CONSTRAINT "hiring_stage" CHECK (stage IN ('
 ALTER TABLE "hiring_candidates" ADD COLUMN "soft_rejected_at" timestamp with time zone;
 --> statement-breakpoint
 ALTER TABLE "hiring_candidates" ADD COLUMN "brought_back_at" timestamp with time zone;
+--> statement-breakpoint
+-- Where the row was (new or review) and its note then, so a restore or a bring-back returns it there as it was.
+ALTER TABLE "hiring_candidates" ADD COLUMN "soft_rejected_from" text;
+--> statement-breakpoint
+ALTER TABLE "hiring_candidates" ADD COLUMN "soft_rejected_note" text;

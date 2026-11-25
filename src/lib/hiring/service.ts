@@ -80,6 +80,7 @@ import {
   preScreenEntries,
   preScreenTotal,
   readLimitUsage,
+  unsoftReject,
 } from "./queue";
 import { profileGate } from "./insights";
 import { FUNNEL_AUDIT_ACTIONS, windowStart } from "./funnel";
@@ -2568,9 +2569,10 @@ export async function reviewCandidate(
       // Kevin, 25 Nov 2026: a soft-rejected candidate comes back to New, and the pass score no longer holds them.
       // The worker's gate and queue then decide as for anyone else. No email here.
       if (c.stage !== "soft_rejected") throw new HiringError(409, "Only a soft-rejected candidate can be brought back.");
+      // Back where they were: a review row goes back to review, where only a person emails it.
       await tx
         .update(s.hiringCandidates)
-        .set({ stage: "new", broughtBackAt: now, reviewNote: input.reason, revision: c.revision + 1, updatedAt: now })
+        .set({ ...unsoftReject(c), broughtBackAt: now, reviewNote: input.reason, revision: c.revision + 1, updatedAt: now })
         .where(eq(s.hiringCandidates.id, id));
     } else if (input.action === "stop") {
       if (isDecided(c.stage)) throw new HiringError(409, "A result was already sent to this candidate. Send a new decision to change it.");

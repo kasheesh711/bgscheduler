@@ -88,6 +88,9 @@ export const hiringCandidates = pgTable(
     softRejectedAt: timestamp("soft_rejected_at", { withTimezone: true }),
     /** When a person or the worker brought a soft-rejected candidate back: the pass score no longer holds them. */
     broughtBackAt: timestamp("brought_back_at", { withTimezone: true }),
+    /** The stage a soft-rejected row came from (new or review) and its note then: a restore returns it there as it was. */
+    softRejectedFrom: text("soft_rejected_from").$type<"new" | "review">(),
+    softRejectedNote: text("soft_rejected_note"),
     callReview: jsonb("call_review").$type<import("@/lib/hiring/limits").CallReview>(),
     /** A person's pre-screen score. The AI assessment stays unchanged. */
     preScreenOverride: jsonb("pre_screen_override").$type<import("@/lib/hiring/limits").ScoreOverride>(),
