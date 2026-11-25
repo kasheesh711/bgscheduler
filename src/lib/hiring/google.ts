@@ -112,13 +112,14 @@ export async function deliverCalendar(
     {},
     db,
   );
-  // Kevin, 23 Nov 2026: every visit event (test and mock) goes to HR, Admin and Kevin. Kevin, 25 Nov 2026: no head is a
-  // guest on a visit event (test or mock); the title and color still name the head, and LINE tells the head.
+  // Kevin, 23 Nov 2026: every visit event (test and mock) goes to HR, Admin and Kevin. Kevin, 25 Nov 2026: the head is a
+  // guest on the mock teaching only, never on the paper test; the test title and color still name the head.
   // A paper row with no visitId is the old flow or the delivery test, which stay as they were.
-  const visit = booking.kind === "mock" || (booking.kind === "paper" && !!booking.visitId);
-  const staff = visit ? VISIT_STAFF : [];
-  const headEmails = new Set(visit ? [...heads.map((head) => head.email), booking.interviewerEmail ?? ""].map((email) => email.toLowerCase())
-    .filter((email) => !staff.includes(email)) : []);
+  const staff = booking.kind === "mock" ? [...new Set([...VISIT_STAFF, ...heads.map((head) => head.email.toLowerCase())])]
+    : booking.kind === "paper" && booking.visitId ? VISIT_STAFF : [];
+  // A head invited to a visit's paper test before 25 Nov 2026 is taken off (no email); the mock keeps its head.
+  const paperHeads = new Set(booking.kind === "paper" && booking.visitId
+    ? heads.map((head) => head.email.toLowerCase()).filter((email) => !staff.includes(email)) : []);
   // R1: HR Interview: the guests are HR (`interviewerEmail`) and the candidate, by the same rule as a visit. Google adds a
   // Meet link (Kevin, 22 Nov 2026), and its own invitation gives the candidate the join button.
   const call = booking.kind === "call";
@@ -166,8 +167,7 @@ export async function deliverCalendar(
         "The Calendar copy was changed. Review this appointment.",
       );
     const existingAttendees = (existing.attendees ?? []) as Array<{ email: string; [key: string]: unknown }>;
-    // A head invited before 25 Nov 2026 is taken off without an email.
-    const attendees = existingAttendees.filter((a) => !headEmails.has(a.email?.toLowerCase()));
+    const attendees = existingAttendees.filter((a) => !paperHeads.has(a.email?.toLowerCase()));
     const missing = staff.filter(email => !attendees.some(a => a.email?.toLowerCase() === email));
     // An event made before the current title or color is brought up to date without a new invitation email.
     const changes = {
@@ -185,7 +185,7 @@ export async function deliverCalendar(
   if (cancel) return { id, cancelled: true };
   const attendees = [
     ...new Set(
-      [visit ? null : booking.interviewerEmail, candidate.email, ...staff].filter(
+      [booking.interviewerEmail, candidate.email, ...staff].filter(
         (v): v is string => !!v,
       ),
     ),

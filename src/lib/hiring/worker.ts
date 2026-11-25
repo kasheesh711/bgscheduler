@@ -766,9 +766,9 @@ export async function deliverOutbox(
 }
 
 /**
- * The head named on a visit's events (Kevin, 23 Nov 2026: only the relevant head; 25 Nov: named in the title and color, never a guest). A paired
+ * The head named on a visit's events (Kevin, 23 Nov 2026: only the relevant head; 25 Nov: a guest on the mock only). A paired
  * visit names its mock's head. A test-only visit has no head yet, so it goes to the roster heads of its subject. A mock
- * names its own head, for the title and the color.
+ * names its own head (already its guest), for the title and the color.
  */
 /** Google event colors, most different first: Tomato, Basil, Banana, Grape, Tangerine, Flamingo, Sage, Lavender, Peacock, Blueberry. No Graphite (looks like a declined event). */
 export const HEAD_COLORS = ["11", "10", "5", "3", "6", "4", "2", "1", "7", "9"];
