@@ -11,6 +11,7 @@ import {
   UNRECORDED_OWNER,
   unrecordedVisits,
   NO_ROOM,
+  NO_HIRING_ROOM,
   pastVisits,
   printDays,
   staffGap,
@@ -284,5 +285,23 @@ describe("booked-stage candidates with no booking row", () => {
     expect(unrecordedVisits({ ...stageIn("onsite_booked"), bookings: [booking({})] })).toHaveLength(0);
     expect(unrecordedVisits(stageIn("invited"))).toHaveLength(0);
     expect(unrecordedVisits(stageIn("onsite_booked", "2026-08-01T00:00:00Z"))).toHaveLength(0);
+  });
+});
+
+describe("weekend test rooms on the run sheet", () => {
+  it("shows the given room, flags a full weekend, and keeps weekday visits at no room", () => {
+    const rows = buildRunSheet({
+      ...base,
+      bookings: [
+        booking({ id: "w1", candidateId: "c1", room: "Hope (online)" }),
+        booking({ id: "w2", candidateId: "c2", room: null, subjects: ["English Language"] }),
+        booking({ id: "w3", candidateId: "c3" }),
+      ],
+    });
+    expect(rows.map((r) => [r.room, r.roomReason])).toEqual([
+      ["Hope (online)", null],
+      [null, NO_HIRING_ROOM],
+      [null, NO_ROOM],
+    ]);
   });
 });

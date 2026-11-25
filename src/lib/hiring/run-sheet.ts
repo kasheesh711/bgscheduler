@@ -13,6 +13,8 @@ export interface RunSheetBooking {
   startTime: Date | string;
   status: string;
   visitId: string | null;
+  /** Set by the server for a weekend paper test (rooms.ts): the room, or null when every hiring room is taken. */
+  room?: string | null;
 }
 export interface RunSheetInput {
   bookings: RunSheetBooking[];
@@ -46,8 +48,9 @@ export interface RunSheetRow {
   hodReason: string | null;
   paper: { id: string; name: string; markScheme: boolean } | null;
   paperReason: string | null;
-  room: null;
-  roomReason: string;
+  room: string | null;
+  /** Null when a room is given. */
+  roomReason: string | null;
   status: string;
   /** Roster heads who take the subject. A paper-only visit shows to each of them. */
   subjectHeads: string[];
@@ -55,6 +58,7 @@ export interface RunSheetRow {
 }
 
 export const NO_ROOM = "Needs review: no room is booked for this visit";
+export const NO_HIRING_ROOM = "Needs review: I learned, Hope and the HR room are all taken at this time";
 export const NO_SUBJECT = "Needs review: no subject";
 export const NO_MARK_SCHEME = "No mark scheme: marking cannot run";
 export const NO_PASS_MARK = "No pass mark";
@@ -146,9 +150,9 @@ export function buildRunSheet({ bookings, candidates, config, library, tutors }:
       hodReason,
       paper,
       paperReason,
-      // No room is stored for a hiring visit today (no column, no reservation link).
-      room: null,
-      roomReason: NO_ROOM,
+      // Only a weekend test gets a room (rooms.ts); a weekday visit still has none.
+      room: paperRow?.room ?? null,
+      roomReason: paperRow?.room ? null : paperRow?.room === null ? NO_HIRING_ROOM : NO_ROOM,
       status: confirmed.length ? "confirmed" : first.status,
       subjectHeads,
       issues,
@@ -234,7 +238,7 @@ export function adminPrintListMessage(rows: RunSheetRow[], date: string) {
     `Print list for ${dayName(date)}: ${day.length} visit${day.length === 1 ? "" : "s"}, ${review} need review.`,
     ...day.map(
       (r, i) =>
-        `${i + 1}. ${timeText(r)}. ${r.candidateName}. ${r.subject ?? NO_SUBJECT}. Paper: ${r.paper?.name ?? r.paperReason}. Room: ${r.roomReason}.`,
+        `${i + 1}. ${timeText(r)}. ${r.candidateName}. ${r.subject ?? NO_SUBJECT}. Paper: ${r.paper?.name ?? r.paperReason}. Room: ${r.room ?? r.roomReason}.`,
     ),
   ].join("\n");
 }
@@ -256,6 +260,7 @@ export function headUpcomingMessage(rows: RunSheetRow[], headKey: string, from: 
 /** Who must act to close each gap. */
 export function gapOwner(reason: string) {
   if (reason === NO_ROOM) return "Kevin: decide where hiring visit rooms are stored";
+  if (reason === NO_HIRING_ROOM) return "Kevin: move the test or free I learned, Hope or the HR room";
   if (reason === NO_SUBJECT) return "Kevin: set the visit subject on the candidate";
   if (reason.includes("question paper") || reason === NO_MARK_SCHEME) return "Kevin: add the file in Rules and setup, Paper library";
   if (reason === NO_PASS_MARK) return "Kevin: set the pass mark in Rules and setup, Paper pass marks";

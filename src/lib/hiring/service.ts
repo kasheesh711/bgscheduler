@@ -7,6 +7,7 @@ import { and, asc, desc, eq, getTableColumns, gte, inArray, isNotNull, like, ne,
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
+import { weekendTestRooms } from "./rooms";
 import { availableSlots, availableVisitSlots, callSlots, r1Slots, readLiveBusy, readWiseWindows, verifyLiveSlot, type LiveBusy } from "./availability";
 import {
   baseConfigSchema,
@@ -879,12 +880,17 @@ export async function dashboard(db: Database = getDb()) {
   }
   // visitClashes is one shared read for all heads. It never fails the dashboard: a missing index reports stale.
   // The queue gates below run after the suggested heads above, because they read config.
-  const [clashes, wiseWindows] = await Promise.all([
+  const [clashes, wiseWindows, testRooms] = await Promise.all([
     visitClashes(db, bookings),
     // Like visitClashes, this never fails the dashboard: on an error the Rules row shows no Wise hours.
     readWiseWindows(db, config.interviewers.filter((h) => h.hoursFromWise).map((h) => h.canonicalKey)).catch((error) => {
       console.error("Hiring dashboard could not read Wise hours", error instanceof Error ? error.name : "UnknownError");
       return {} as Awaited<ReturnType<typeof readWiseWindows>>;
+    }),
+    // A failed read leaves every weekend test at "no room" on the run sheet; it never fails the dashboard.
+    weekendTestRooms(db, bookings).catch((error) => {
+      console.error("Hiring dashboard could not read weekend test rooms", error instanceof Error ? error.name : "UnknownError");
+      return new Map<string, string | null>();
     }),
   ]);
   const usage = { preScreen: preScreenUsage, onsite: onsiteUsage };
@@ -969,7 +975,7 @@ export async function dashboard(db: Database = getDb()) {
         callBooked: calls.some((call) => call.candidateId === c.id),
       };
     }),
-    bookings,
+    bookings: bookings.map((b) => (testRooms.has(b.id) ? { ...b, room: testRooms.get(b.id) } : b)),
     calls,
     missedCalls,
     headDecisions: headDecisionRows.map((row) => ({
