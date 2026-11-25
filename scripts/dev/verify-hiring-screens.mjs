@@ -238,7 +238,7 @@ if (prescreenFixture !== null) {
   };
   if (prescreenFixture === "1") {
     if (offerFixture.get("remaining") !== "1") {
-      replied("cora", "Cora Pan", 4);
+      replied("cora", "Cora Pan", 4, { preScreenAssessment: null, preScreenScore: null, preScreenParts: null });
       replied("ben", "Ben Lee", 6);
       replied("arun", "Arun Dee", 6, { preScreenScore: 41 });
       replied("dao", "Dao Kim", 3);
@@ -568,6 +568,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       if (failPreScreenAction) {
         failPreScreenAction = false;
         return new Response(JSON.stringify({ error: "Sample service failure." }), { status: 503 });
+      }
+      if (offerFixture.get("act") === "fail-standard") {
+        return new Response(JSON.stringify({ error: "Hiring could not complete this request. Check setup and try again." }), { status: 503 });
+      }
+      if (offerFixture.get("act") === "refuse") {
+        return new Response(JSON.stringify({ error: "This candidate has a future appointment. Resolve it with the hiring coordinator before stopping processing." }), { status: 409 });
       }
       const candidate = payload.candidates.find((row) => row.id === body.id);
       if (!candidate) return new Response(JSON.stringify({ error: "Candidate not found." }), { status: 404 });
@@ -2636,7 +2642,7 @@ try {
         await open();
         assert.deepEqual(await names(), expected);
         await list.getByRole("button", { name: "Needs decision (8)" }).waitFor();
-        await list.getByRole("row", { name: /Arun Dee/ }).getByRole("cell", { name: "Below pass · replied 6d ago", exact: true }).waitFor();
+        await list.getByRole("row", { name: /Arun Dee/ }).getByRole("cell", { name: "Below pass · replied 6 days ago", exact: true }).waitFor();
         await list.getByRole("row", { name: /Eve Sen/ }).getByText("Changed", { exact: true }).waitFor();
         const unscored = list.getByRole("row", { name: /Gus Po/ });
         assert.equal(await unscored.getByText("Not scored", { exact: true }).count(), 1);
@@ -2657,6 +2663,11 @@ try {
           assert.ok(rowWords <= 160, "Queue rows exceed 160 words");
         }
 
+        await review("Cora Pan").click();
+        await dialog.getByText("AI could not score this reply.", { exact: true }).waitFor();
+        assert.equal(await dialog.locator("dt:text-is('Visit email') + dd").innerText(), "Not sent");
+        await tab.keyboard.press("Escape");
+
         await review("Gus Po").click();
         await reason().fill("Checked the written answers");
         const changeScore = dialog.getByRole("button", { name: "Change score", exact: true });
@@ -2665,7 +2676,7 @@ try {
           await score().fill(value);
           await scoreError.waitFor();
           // The résumé preview can raise its own "Preview unavailable." alert; only one score message may show.
-          assert.equal(await dialog.getByRole("alert").filter({ hasText: /score/i }).count(), 1);
+          assert.equal(await scoreError.count(), 1);
           assert.equal(await score().getAttribute("aria-describedby"), await scoreError.getAttribute("id"));
           assert.equal(await score().getAttribute("aria-invalid"), "true");
           assert.equal(await changeScore.isDisabled(), true);
@@ -2680,20 +2691,26 @@ try {
 
         const lastScore = list.getByRole("status").filter({ hasText: "Score changed for Gus Po. Decision still needed." });
         await lastScore.waitFor();
-        await switchTo("Waiting 3+ days");
+        await switchTo("Waiting");
         await lastScore.waitFor({ state: "detached" });
+        assert.deepEqual(await names(), ["Waiting 3", "Waiting 2"]);
+        await switchTo("Waiting 3+ days");
         assert.deepEqual(await names(), ["Waiting 3"]);
         await list.getByText("Awaiting reply · 3 days", { exact: true }).waitFor();
         await capture("waiting");
         await review("Waiting 3").click();
         assert.match(await dialog.locator("dt:text-is('Form') + dd").innerText(), /^Sent \d+ \w+, \d{2}:\d{2}$/);
-        assert.equal(await dialog.locator("dt:text-is('Visit email') + dd").innerText(), "Not sent yet");
+        assert.equal(await dialog.locator("dt:text-is('Visit email') + dd").innerText(), "Not sent");
         assert.equal(await dialog.getByRole("heading", { name: "Form answers" }).count(), 0);
         await tab.keyboard.press("Escape");
         await switchTo("Set aside");
         assert.deepEqual(await names(), ["Sample Aside"]);
         await list.getByRole("cell", { name: "Set aside", exact: true }).waitFor();
         await capture("set-aside");
+        await review("Sample Aside").click();
+        await dialog.getByRole("button", { name: "Stop", exact: true }).waitFor();
+        await changeScore.waitFor();
+        await tab.keyboard.press("Escape");
         await switchTo("Invited/booked");
         assert.deepEqual(await names(), ["Sample Invited", "Sample Booked", "Booked Without Answers", "Sample Failed"]);
         await review("Booked Without Answers").click();
@@ -2718,6 +2735,8 @@ try {
         await open();
 
         await switchTo("All");
+        assert.deepEqual(await names(), [...expected, "Waiting 3", "Waiting 2", "Sample Invited", "Sample Booked",
+          "Booked Without Answers", "Sample Failed", "Sample Aside", "Sample Held", "Sample Stopped", "No Reply Yet"]);
         await list.getByRole("row", { name: /Arun Dee/ }).getByRole("cell", { name: "Below pass score · in review", exact: true }).waitFor();
         await list.getByRole("row", { name: /Sample Aside/ }).getByRole("cell", { name: "Set aside", exact: true }).waitFor();
         await list.getByRole("row", { name: /No Reply Yet/ }).getByText("Email failed", { exact: true }).waitFor();
@@ -2732,14 +2751,24 @@ try {
           .filter({ has: tab.getByText("No Reply Yet", { exact: true }) })
           .getByText("Sample email failure.", { exact: true }).waitFor();
         await open();
-        await switchTo("All");
+        await switchTo("Held");
+        assert.deepEqual(await names(), ["Sample Held"]);
         await list.getByText("Capacity hold", { exact: true }).waitFor();
-        await list.getByText("Stopped", { exact: true }).waitFor();
-        await list.getByText("Awaiting reply · 2 days", { exact: true }).waitFor();
         await review("Sample Held").click();
         await dialog.getByText("Raise the daily limit in Rules and setup.", { exact: true }).waitFor();
+        await dialog.getByRole("button", { name: "Stop", exact: true }).waitFor();
+        await changeScore.waitFor();
+        assert.equal(await dialog.getByRole("button", { name: /Invite to visit|Invite anyway/ }).count(), 0);
         assert.doesNotMatch(await dialog.innerText(), /undefined/);
+        await reason().fill("Does not meet the review criteria");
+        await dialog.getByRole("button", { name: "Stop", exact: true }).press("Enter");
+        await dialog.getByText("Stopped for Sample Held.", { exact: true }).waitFor();
         await tab.keyboard.press("Escape");
+        await list.getByRole("heading", { name: "No candidates held." }).waitFor();
+        assert.equal(await list.getByRole("button", { name: "Held", exact: true }).getAttribute("aria-pressed"), "true");
+        await switchTo("Stopped");
+        assert.deepEqual(await names(), ["Sample Held", "Sample Stopped"]);
+        await switchTo("All");
         await list.getByText("More filters", { exact: true }).click();
         await list.getByLabel("Visit email sent from").fill("2026-11-25");
         await list.getByLabel("Visit email sent to").fill("2026-11-25");
@@ -2748,7 +2777,6 @@ try {
         await list.getByRole("heading", { name: "No match." }).waitFor();
         await list.getByRole("status").filter({ hasText: /^0 results$/ }).waitFor();
         assert.equal(await search.and(tab.locator(":focus")).count(), 1, "Search must keep focus while typing");
-        assert.equal(await list.getByRole("link", { name: "Waiting", exact: true }).count(), 0);
         await list.getByRole("button", { name: "Clear filters" }).click();
         assert.equal(await list.getByRole("button", { name: "All", exact: true }).getAttribute("aria-pressed"), "true");
         assert.equal(await search.inputValue(), "");
@@ -2814,6 +2842,7 @@ try {
         assert.equal(await reason().inputValue(), "");
         assert.equal(await score().inputValue(), "");
         await dialog.getByText("79/100", { exact: true }).waitFor();
+        assert.equal(await dialog.locator("dt:text-is('Visit email') + dd").innerText(), "Not sent");
         await tab.keyboard.press("Escape");
         await review(expected[0]).click();
         await dialog.getByText("79/100", { exact: true }).waitFor();
@@ -2826,7 +2855,7 @@ try {
         await stopped.waitFor();
         if (width < 720) assert.equal(await font(stopped), "16px");
         await capture("queue-empty");
-        await list.getByRole("link", { name: "Waiting", exact: true }).click();
+        await switchTo("Waiting");
         await stopped.waitFor({ state: "detached" });
         assert.deepEqual(await names(), ["Waiting 3", "Waiting 2"]);
         await switchTo("All");
@@ -2838,13 +2867,31 @@ try {
         await tab.keyboard.press("Escape");
 
         await switchTo("Invited/booked");
+        await list.getByText("More filters", { exact: true }).click();
+        const from = list.getByLabel("Visit email sent from");
+        const to = list.getByLabel("Visit email sent to");
+        await search.fill("Sample Booked");
+        await from.fill("2026-11-22");
+        await to.fill("2026-11-22");
         await review("Sample Booked").click();
         await dialog.getByText("Visit booked", { exact: true }).waitFor();
+        await reason().fill("Checked the written answers");
+        await score().fill("79");
+        await changeScore.press("Enter");
+        await dialog.getByText("Score changed for Sample Booked.", { exact: true }).waitFor();
+        assert.equal(await dialog.locator("dt:text-is('Visit email') + dd").innerText(), "Sent 22 Nov, 12:00");
         await reason().fill("Stopped after the visit");
         await dialog.getByRole("button", { name: "Stop", exact: true }).press("Enter");
-        await empty.waitFor();
-        await switchTo("Invited/booked");
+        await dialog.getByRole("status").filter({ hasText: /^Stopped for Sample Booked\.$/ }).waitFor();
+        await dialog.getByRole("heading", { name: "Sample Booked", exact: true }).waitFor();
+        assert.equal(await dialog.locator("dt:text-is('Current status') + dd").innerText(), "Stopped");
+        await tab.keyboard.press("Escape");
+        assert.equal(await list.getByRole("button", { name: "Invited/booked", exact: true }).getAttribute("aria-pressed"), "true");
+        assert.equal(await search.inputValue(), "Sample Booked");
+        assert.equal(await from.inputValue(), "2026-11-22");
+        assert.equal(await to.inputValue(), "2026-11-22");
         assert.equal(await review("Sample Booked").count(), 0);
+        await list.getByRole("button", { name: "Clear filters" }).click();
         await switchTo("All");
         await list.getByRole("row", { name: /Sample Booked/ }).getByText("Stopped", { exact: true }).waitFor();
         await review("Sample Booked").click();
@@ -2858,7 +2905,7 @@ try {
         await reason().fill("Ready for the paper test");
         const stop = dialog.getByRole("button", { name: "Stop", exact: true });
         await stop.press("Enter");
-        const error = dialog.getByRole("alert").filter({ hasText: "Could not stop. Try again." });
+        const error = dialog.getByRole("alert").filter({ hasText: /^Sample service failure\. Try again\.$/ });
         await error.waitFor();
         assert.equal(await reason().inputValue(), "Ready for the paper test");
         assert.equal(await stop.and(tab.locator(":focus")).count(), 1, "Failed action must regain focus");
@@ -2868,6 +2915,18 @@ try {
         await tab.keyboard.press("Enter");
         await next.waitFor();
         await capture("retry");
+
+        await open("&act=fail-standard");
+        await review(expected[0]).click();
+        await reason().fill("Ready for the paper test");
+        await stop.press("Enter");
+        assert.equal(await dialog.getByRole("alert").innerText(), "Hiring could not complete this request. Check setup and try again.");
+
+        await open("&act=refuse");
+        await review(expected[0]).click();
+        await reason().fill("Ready for the paper test");
+        await stop.press("Enter");
+        await dialog.getByRole("alert").filter({ hasText: /^This candidate has a future appointment\. Resolve it with the hiring coordinator before stopping processing\.$/ }).waitFor();
 
         await open("&act=stale&refresh=fail");
         await review(expected[0]).click();
@@ -2908,6 +2967,7 @@ try {
 
         await open("&prescreen=0");
         await list.getByRole("heading", { name: "No forms sent." }).waitFor();
+        assert.equal(await list.getByRole("button", { name: /^(Held|Stopped)$/ }).count(), 0);
         await capture("no-forms");
         await list.getByRole("link", { name: "Open overview" }).click();
         await tab.waitForURL(/view=overview/);
@@ -2924,23 +2984,28 @@ try {
           await reason().fill("Ready for the paper test");
           await dialog.getByRole("button", { name: "Invite to visit" }).click();
           await dialog.getByRole("alert").filter({ hasText: "Saved. Could not refresh the list." }).waitFor();
-          await dialog.getByRole("button", { name: "Refresh list" }).click();
+          const refreshList = tab.getByRole("button", { name: "Refresh list", exact: true });
+          await refreshList.and(tab.locator(":focus")).waitFor();
+          await tab.keyboard.press("Escape");
+          assert.equal(await review(expected[0]).isDisabled(), true);
+          await refreshList.and(tab.locator(":focus")).press("Enter");
           await next.waitFor();
           assert.equal(await tab.evaluate(() => window.posted.length), 1);
           await tab.keyboard.press("Escape");
 
           await switchTo("Set aside");
+          await search.fill("Sample Aside");
           await review("Sample Aside").click();
           await reason().fill("Review the additional evidence");
           await dialog.getByRole("button", { name: "Bring back" }).click();
-          await dialog.getByText("Brought back for Sample Aside. Next: Arun Dee.").waitFor();
+          await dialog.getByText("Sample Aside is back in review. Decision needed.", { exact: true }).waitFor();
+          await dialog.getByRole("heading", { name: "Sample Aside", exact: true }).and(tab.locator(":focus")).waitFor();
           assert.equal(await tab.evaluate(() => window.posted.at(-1).action), "bring_back");
-          await tab.keyboard.press("Escape");
-          await review("Sample Aside").click();
           await dialog.getByRole("button", { name: "Invite anyway", exact: true }).waitFor();
           assert.equal(await dialog.getByRole("button", { name: "Bring back", exact: true }).count(), 0);
           await tab.keyboard.press("Escape");
-          await switchTo("Set aside");
+          assert.equal(await list.getByRole("button", { name: "Set aside", exact: true }).getAttribute("aria-pressed"), "true");
+          assert.equal(await search.inputValue(), "Sample Aside");
           assert.equal(await review("Sample Aside").count(), 0);
 
           await tab.goto(origin + "/hiring?view=prescreen&prescreen=1&failFirst=1");
