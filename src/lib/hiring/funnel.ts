@@ -106,6 +106,13 @@ export type GroupFunnel = {
   furthest: Record<FunnelStep, number>;
   /** Share of the step before, 3 places; `null` when the step before has nobody. */
   conv: Record<Exclude<FunnelStep, "applied">, number | null>;
+  /**
+   * The same people at both ends (Overview, 25 Nov 2026): candidates whose furthest step is this one or later. A skipped
+   * step (call-first flow) still counts as passed, so `atLeast` never grows and step-to-step shares stay at or below 100%.
+   */
+  atLeast: Record<FunnelStep, number>;
+  /** Ids whose furthest step is this one, split into still open and closed or parked. */
+  stopped: Record<FunnelStep, { open: string[]; closed: string[] }>;
   stuck: number;
   /**
    * Weeks the group's applicants span: 1 for a week group; a month group is its part of the window, to now at most;
@@ -204,6 +211,13 @@ export function buildFunnel(data: FunnelInput, now: Date): FunnelReport {
   const nowMs = now.getTime();
   const start = windowStart(now);
   const sent = minBy(data.inviteOutbox.filter((o) => o.status === "sent"), (o) => o.key, (o) => ms(o.sentAt));
+  // The newest visit link, a re-sent one (`:visit-invite:<n>`) included: the onsite-invited clock starts there.
+  const latestVisitLink = minBy(
+    data.inviteOutbox.filter((o) => o.status === "sent" && o.key.includes(":visit-invite")),
+    (o) => o.key.split(":")[0],
+    (o) => ms(o.sentAt),
+    greatest,
+  );
   const event = (action: string, pick = least) =>
     minBy(data.funnelEvents.filter((e) => e.action === action), (e) => e.candidateId, (e) => ms(e.at), pick);
   const reviewAt = event("move-to-review", greatest);
@@ -272,7 +286,7 @@ export function buildFunnel(data: FunnelInput, now: Date): FunnelReport {
     else if (stage === "review") since = review ?? created;
     else if (stage === "pre_screen") since = formSent ?? created;
     else if (stage === "no_reply") since = noReplyAt.get(id) ?? created;
-    else if (stage === "onsite_invited") since = visitInv ?? created;
+    else if (stage === "onsite_invited") since = latestVisitLink.get(id) ?? visitInv ?? created;
     else if (stage === "no_booking") since = noBookingAt.get(id) ?? created;
     else if (stage === "onsite_booked") since = visited ?? booked ?? created;
     const stageKey =
@@ -377,5 +391,14 @@ function summarize(rows: Row[], weeks: number): GroupFunnel {
       stuckIds: list.filter((r) => r.stuck).map((r) => r.id),
     };
   }
-  return { reached, furthest, conv, stuck: rows.filter((r) => r.stuck).length, weeks, stepDays, currentStage };
+  const closedStages = new Set(STUCK_RULES.filter((r) => r.days === null).map((r) => r.stage));
+  const stopped = Object.fromEntries(FUNNEL_STEPS.map(([step]) => [step, { open: [] as string[], closed: [] as string[] }])) as GroupFunnel["stopped"];
+  for (const r of rows) {
+    const last = FUNNEL_STEPS.findLast(([step]) => r.reached[step])?.[0] ?? "applied";
+    stopped[last][closedStages.has(r.stage) ? "closed" : "open"].push(r.id);
+  }
+  let running = 0;
+  const atLeast = {} as Record<FunnelStep, number>;
+  for (const [step] of [...FUNNEL_STEPS].reverse()) atLeast[step] = running += furthest[step];
+  return { reached, furthest, conv, atLeast, stopped, stuck: rows.filter((r) => r.stuck).length, weeks, stepDays, currentStage };
 }

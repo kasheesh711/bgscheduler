@@ -129,7 +129,7 @@ export function CandidateTable({
   const isFiltered = filter.bucket !== null || !!filter.subject || filter.prescreen !== "all" || !!filter.ids || !!query;
 
   return (
-    <section className={css.tableSection} aria-label="Candidates">
+    <section id="candidate-table" className={css.tableSection} aria-label="Candidates">
       <div className={css.tableTools}>
         <div className={css.tabs} role="group" aria-label="Filter by stage">
           {tabs.map(([value, label, count]) => (
@@ -172,7 +172,7 @@ export function CandidateTable({
           <>
             {filter.bucket !== null && ` · Score ${filter.bucket}–${filter.bucket === 90 ? 100 : filter.bucket + 9}`}
             {filter.subject && ` · ${filter.subject}`}
-            {filter.ids && " · Stuck"}
+            {filter.ids && ` · ${filter.label ?? "Stuck"} (${filter.ids.length})`}
             {filter.prescreen !== "all" && ` · ${filter.prescreen === "Visit booked" ? "Visit booked" : `Pre-screen ${filter.prescreen.toLowerCase()}`}`}
             <button
               type="button"

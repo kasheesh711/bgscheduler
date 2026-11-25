@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { DEMO_ID, DEMO_STEPS, demoFetch, demoPacketRequest, demoPayload, demoPdf, demoRubric, demoState, markDemoPaper, resetDemo, setDemoStep } from "../demo";
 import { buildFunnel } from "../funnel";
-import { buildPipelineBoard } from "../pipeline-board";
+import { buildGems } from "../gems";
+import { buildNextEmails } from "../next-emails";
 import { buildRunSheet } from "../run-sheet";
 
 const now = new Date("2026-11-24T08:00:00Z");
@@ -23,16 +24,15 @@ describe("hiring demo mode", () => {
   });
 
   it("gives every step a payload that the screens' own builders accept", () => {
-    const columns = DEMO_STEPS.map((_, step) => {
+    DEMO_STEPS.forEach((_, step) => {
       setDemoStep(step);
       const data = wire();
-      expect(() => buildFunnel(data, now)).not.toThrow();
       expect(() => buildRunSheet({ ...data, now })).not.toThrow();
-      return buildPipelineBoard(data, now).columns.find((column) => column.cards.some((card) => card.id === DEMO_ID))?.key ?? null;
+      // The Overview board's builders.
+      const report = buildFunnel(data, now);
+      expect(() => buildGems(data.candidates, data.config, report.byCandidate)).not.toThrow();
+      expect(() => buildNextEmails(data, now)).not.toThrow();
     });
-    // Before the HR call the candidate is not on the board; then the candidate moves right and never back.
-    expect(columns[0]).toBeNull();
-    expect(new Set(columns.slice(1)).size).toBeGreaterThanOrEqual(5);
   });
 
   it("moves on when the presenter uses the real buttons", async () => {

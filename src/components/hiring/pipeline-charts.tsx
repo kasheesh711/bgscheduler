@@ -1,11 +1,10 @@
 "use client";
 
-import { averageValues, type buildInsights, RESULTS, STAGE_LABELS, type CriterionResult } from "@/lib/hiring/insights";
+import { type buildInsights, RESULTS, type CriterionResult } from "@/lib/hiring/insights";
 import { onsiteMeters, preScreenMeters, type LimitUsage, type Meter } from "@/lib/hiring/limits";
 import type { HiringConfig } from "@/lib/hiring/model";
 import type { PreScreenState } from "@/lib/hiring/status";
 import type { CandidateFilter } from "./dashboard";
-import { Pentagon } from "./pentagon";
 import css from "./dashboard.module.css";
 
 export type Insights = ReturnType<typeof buildInsights>;
@@ -38,71 +37,6 @@ export const PILL_CLASS: Record<PreScreenState, string> = {
   "Earlier contact": css.pillNoReply,
 };
 const percent = (part: number, whole: number) => (whole ? Math.round((part / whole) * 100) : 0);
-const round = (value: number) => Math.round(value * 10) / 10;
-
-function Tile({ label, value, note, meter }: { label: string; value: string | number; note: string; meter?: number }) {
-  return (
-    <div className={css.tile}>
-      <p className={css.tileLabel}>{label}</p>
-      <p className={css.tileValue}>{value}</p>
-      {meter !== undefined && (
-        <div className={css.meter} aria-hidden="true">
-          <span style={{ width: `${meter}%` }} />
-        </div>
-      )}
-      <p className={css.tileNote}>{note}</p>
-    </div>
-  );
-}
-
-export function KpiStrip({
-  insights: i,
-  threshold,
-  onShowReady,
-}: {
-  insights: Insights;
-  threshold: number;
-  onShowReady: () => void;
-}) {
-  return (
-    <section className={css.kpis} aria-label="Hiring summary">
-      <div className={css.hero}>
-        <p className={css.heroLabel}>Ready to invite · {percent(i.ready, i.active)}% of active</p>
-        <p className={css.heroValue}>{i.ready}</p>
-        <button type="button" className={css.heroLink} onClick={onShowReady} disabled={!i.ready}>
-          Show them <span aria-hidden="true">→</span>
-        </button>
-      </div>
-      <Tile
-        label="Candidates"
-        value={i.total}
-        note={`${i.active} active (${percent(i.active, i.total)}%)${i.parked ? `, including ${i.parked} with no reply or no booking` : ""}`}
-      />
-      <Tile
-        label="Scored"
-        value={`${percent(i.scored, i.scorable)}%`}
-        meter={percent(i.scored, i.scorable)}
-        note={`${i.scored} of ${i.scorable}${i.scorable < i.total ? `, ${i.total - i.scorable} with no source text` : ""}`}
-      />
-      <Tile
-        label={`At or above ${threshold}`}
-        value={i.aboveThreshold}
-        note={`${percent(i.aboveThreshold, i.scored)}% of scored · Median ${i.median === null ? "none" : round(i.median)}`}
-      />
-      <Tile label="Past review" value={i.pastReview} note={`${percent(i.pastReview, i.active)}% of active`} />
-      <Tile
-        label="Next 7 days"
-        value={i.appointmentsThisWeek}
-        note={`${round(i.appointmentsThisWeek / 7)} a day${i.bookedWithoutAppointment ? ` · ${i.bookedWithoutAppointment} not held here` : ""}`}
-      />
-      <Tile
-        label="Send issues"
-        value={i.messages.problems}
-        note={`${percent(i.messages.problems, i.messages.sent + i.messages.problems)}% of ${i.messages.sent + i.messages.problems} messages · ${i.messages.sent} sent`}
-      />
-    </section>
-  );
-}
 
 function MeterCard({ title, lede, meters, children }: { title: string; lede: string; meters: Meter[]; children?: React.ReactNode }) {
   return (
@@ -169,57 +103,6 @@ export function LimitMeters({
         <p className={`${css.railMeta} ${css.limitNote}`}>Automation or messages are paused, so nothing is sent.</p>
       )}
     </div>
-  );
-}
-
-export function StageChart({
-  insights: i,
-  filter,
-  setFilter,
-}: {
-  insights: Insights;
-  filter: CandidateFilter;
-  setFilter: (filter: CandidateFilter) => void;
-}) {
-  const max = Math.max(1, i.stages[0]?.reached ?? 0);
-  return (
-    <section className={css.panel}>
-      <h2 className={css.panelTitle}>Stages</h2>
-      <p className={css.panelLede}>
-        {i.pastReview} of {i.active} active are past review
-      </p>
-      <div className={css.stageRows}>
-        {i.stages.map((row) => (
-          <button
-            key={row.stage}
-            type="button"
-            className={css.stageRow}
-            aria-pressed={filter.stage === row.stage}
-            aria-label={`${row.label}: ${row.at} at this stage, ${row.reached} at this stage or later. Filter the table.`}
-            onClick={() => setFilter({ ...filter, stage: filter.stage === row.stage ? "all" : row.stage })}
-          >
-            <span className={css.stageLabel}>{row.label}</span>
-            <span className={css.stageTrack}>
-              <span className={css.stageReached} style={{ width: `${(row.reached / max) * 100}%` }} />
-              <span className={css.stageAt} style={{ width: `${(row.at / max) * 100}%` }} />
-            </span>
-            <span className={css.num}>{row.at}</span>
-          </button>
-        ))}
-      </div>
-      <p className={css.legend}>
-        <span><i className={css.keyAt} />At this stage</span>
-        <span><i className={css.keyReached} />This stage or later</span>
-        <button
-          type="button"
-          className={css.inlineLink}
-          aria-pressed={filter.stage === "stopped"}
-          onClick={() => setFilter({ ...filter, stage: filter.stage === "stopped" ? "all" : "stopped" })}
-        >
-          {STAGE_LABELS.stopped} {i.stopped}
-        </button>
-      </p>
-    </section>
   );
 }
 
@@ -313,32 +196,6 @@ export function EvidenceChart({ insights: i }: { insights: Insights }) {
           <span key={r}><i className={RESULT_CLASS[r]} />{RESULT_LABELS[r]}</span>
         ))}
       </p>
-    </section>
-  );
-}
-
-export function AveragePentagon({
-  candidates,
-}: {
-  candidates: Parameters<typeof averageValues>[0];
-}) {
-  const values = averageValues(candidates);
-  const scored = candidates.filter((c) => c.profileAssessment).length;
-  const count = `${scored} scored candidate${scored === 1 ? "" : "s"} in this filter`;
-  return (
-    <section className={`${css.panel} ${css.pentagonPanel}`}>
-      <div>
-        <h2 className={css.panelTitle}>Pipeline average</h2>
-        <p className={css.panelLede}>{scored ? count : "No scored candidates in this filter"}</p>
-      </div>
-      {scored > 0 && (
-        <Pentagon
-          size={290}
-          title={`Average DSCTE pentagon for ${count}`}
-          shapes={[{ label: "Average", values, tone: "profile" }]}
-          labels={Object.values(CRITERION_LABELS).map((name, i) => ({ name, value: `${Math.round(values[i] * 100)}%` }))}
-        />
-      )}
     </section>
   );
 }
