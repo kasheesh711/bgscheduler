@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 // The assertions that matter: a chat that is not a registered teacher chat for
 // this bot gets NOTHING (FB-BOT-G1), the reply holds ONE subject from all
 // tutors (FB-BOT-S1), and it stays under LINE's text limit.
@@ -201,13 +202,21 @@ describe("feedback link token (FB-BOT-L1)", () => {
 
   it("refuses a changed, malformed, or differently signed token", () => {
     const token = feedbackLinkToken("Arav.Sr", "Math", NOW)!;
-    const [payload, signature] = token.split(".");
-    const forged = Buffer.from(JSON.stringify({ c: "Other.St", s: "Math", exp: 9999999999 })).toString("base64url");
-    expect(readFeedbackLinkToken(`${forged}.${signature}`, NOW)).toBeNull();
-    expect(readFeedbackLinkToken(`${payload}.${signature}.x`, NOW)).toBeNull();
-    expect(readFeedbackLinkToken(payload, NOW)).toBeNull();
+    expect(token).not.toContain(".");
+    expect(token.length).toBeLessThan(60);
+    const flipped = token.slice(0, 8) + (token[8] === "A" ? "B" : "A") + token.slice(9);
+    expect(readFeedbackLinkToken(flipped, NOW)).toBeNull();
+    expect(readFeedbackLinkToken(`${token}.x`, NOW)).toBeNull();
+    expect(readFeedbackLinkToken(token.slice(0, -2), NOW)).toBeNull();
     expect(readFeedbackLinkToken("", NOW)).toBeNull();
     expect(readFeedbackLinkToken(token, NOW, "other-secret")).toBeNull();
+  });
+
+  it("still opens an older payload.signature link", () => {
+    const secret = "old-secret";
+    const payload = Buffer.from(JSON.stringify({ c: "Arav.Sr", s: "Math", exp: NOW.getTime() / 1000 + 3600 })).toString("base64url");
+    const signature = createHmac("sha256", secret).update(`feedback-link:${payload}`).digest("base64url");
+    expect(readFeedbackLinkToken(`${payload}.${signature}`, NOW, secret)).toMatchObject({ code: "Arav.Sr", subject: "Math" });
   });
 
   it("gives no link when the secret is not set", () => {

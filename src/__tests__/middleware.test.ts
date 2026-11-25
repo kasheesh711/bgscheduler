@@ -37,7 +37,7 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
     }
   });
   it("exposes candidate onboarding links without exposing the HR workspace or case API", async () => {
-    for (const path of ["/hiring/onboarding/signed.token", "/api/hiring/onboarding/signed.token",
+    for (const path of ["/hiring/onboarding/signed.token", "/hiring/onboarding/shortToken_-1", "/api/hiring/onboarding/shortToken_-1/line", "/api/hiring/onboarding/signed.token",
       "/api/hiring/onboarding/signed.token/line", "/api/hiring/onboarding/line-callback"]) {
       const response = await middleware(makeReq(path) as never, {} as never) as Response;
       expect(response.status).toBe(200);

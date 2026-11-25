@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
@@ -351,7 +352,21 @@ describe("hiring decision boundaries", () => {
       expiry,
       "test-secret",
     );
-    expect(readBookingToken(token, now, "test-secret").kind).toBe("mock");
+    expect(token).toHaveLength(50);
+    expect(() => bookingToken("not-a-uuid", "mock", expiry, "test-secret")).toThrow();
+    // Short links store the kind's position, so links already sent need this order (append only).
+    expect(tokenKindSchema.options).toEqual(["paper", "mock", "visit", "paper-visit", "two-day", "brief", "call", "contract", "onboarding", "paper-check"]);
+    expect(readBookingToken(token, now, "test-secret")).toEqual({
+      id: "00000000-0000-4000-8000-000000000001", kind: "mock", exp: expiry.getTime() / 1000,
+    });
+    expect(readBookingToken(bookingToken("00000000-0000-4000-8000-000000000001", "paper-check", expiry, "test-secret"), now, "test-secret").kind).toBe("paper-check");
+    const flipped = token.slice(0, 5) + (token[5] === "A" ? "B" : "A") + token.slice(6);
+    expect(() => readBookingToken(flipped, now, "test-secret")).toThrow();
+    // A link sent before 25 Nov 2026 (payload.signature) still opens until it expires.
+    const payload = Buffer.from(JSON.stringify({ id: "00000000-0000-4000-8000-000000000001", kind: "brief", exp: expiry.getTime() / 1000 })).toString("base64url");
+    const old = `${payload}.${createHmac("sha256", "test-secret").update(payload).digest("base64url")}`;
+    expect(readBookingToken(old, now, "test-secret").kind).toBe("brief");
+    expect(() => readBookingToken(old, expiry, "test-secret")).toThrow();
     expect(() => readBookingToken(token + "x", now, "test-secret")).toThrow();
     expect(() => readBookingToken(token, expiry, "test-secret")).toThrow();
     expect(() => readBookingToken(token, now, "wrong-secret")).toThrow();

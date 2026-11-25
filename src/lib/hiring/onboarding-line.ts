@@ -10,7 +10,7 @@ export const onboardingLineCookieOptions = {
 };
 
 const sessionSchema = z.object({
-  token: z.string().min(1).max(600).regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/),
+  token: z.string().min(1).max(600).regex(/^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?$/),
   state: z.string().length(43),
   nonce: z.string().length(43),
   verifier: z.string().length(43),
