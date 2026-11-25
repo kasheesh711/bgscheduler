@@ -185,15 +185,19 @@ if (offerFixture.get("offers") === "1") {
   payload.offers = [
     sampleOffer("queued", "Sample Ann", { emailStatus: "pending", sentAt: null }),
     sampleOffer("future", "Sample Ben", { booking: signing(1), offerType: "specialist" }),
-    sampleOffer("recent", "Sample Chai", { subject: "Mathematics" }),
+    sampleOffer("recent", "Sample Chai", { subject: "Mathematics", unknown: { pdf: true } }),
     sampleOffer("chase", "Sample Dao", { sentAt: offerDay(-5), subject: "History" }),
     sampleOffer("past", "Sample Eve", { booking: signing(-1), sentAt: offerDay(-3) }),
     sampleOffer("failed", "Sample Fah", { outboxKey: "failed:result:decision-failed", emailStatus: "failed", sentAt: null }),
     sampleOffer("done", "Sample Gus", { booking: signing(-2), uploadedAt: offerDay(-2, "16:00"), submittedAt: offerDay(-3) }),
     sampleOffer("today", "Sample Hana", { booking: signing(0), offerType: "full_time", subject: "Biology" }),
-    sampleOffer("filed", "Sample Ivan", { booking: signing(-2), uploadedAt: offerDay(-2, "16:00") }),
+    sampleOffer("filed", "Sample Ivan", { booking: signing(-2), uploadedAt: offerDay(-1, "16:00") }),
     sampleOffer(directHire.candidateId, "Sample Jai", { booking: signing(1), offerType: directHire.detail.offer }),
+    sampleOffer("missing", "Sample Mali", { outboxKey: "missing:result:decision-missing", emailStatus: null, sentAt: null }),
   ];
+  const failed = payload.offers.find((row) => row.candidateId === "failed")!;
+  if (offerFixture.get("emailLog") === "missing") failed.outboxKey = "failed:result:missing";
+  if (offerFixture.get("emailLog") === "invite") failed.outboxKey = "failed:pre-screen";
   payload.outbox.unshift(
     { id: "failed-invite", key: "failed:pre-screen", candidateId: "failed", kind: "email", status: "failed", error: "Sample invite failure.", sentAt: null, workflowStage: "pre_screen" },
     { id: "failed-offer", key: "failed:result:decision-failed", candidateId: "failed", kind: "email", status: "failed", error: "Sample offer failure.", sentAt: null, workflowStage: "hired" },
@@ -202,7 +206,10 @@ if (offerFixture.get("offers") === "1") {
 if (!offerFixture.has("offers") && offerFixture.has("pipeline")) {
   payload.offers = [sampleOffer("offer", "Sample Offer", { booking: signing(-1) })];
 }
-if (offerFixture.has("offers")) Object.assign(payload.config, { enabled: true, deliveryEnabled: true });
+if (offerFixture.has("offers")) {
+  Object.assign(payload, { reviewAccess: { hr: true, gift: false } });
+  Object.assign(payload.config, { enabled: true, deliveryEnabled: true });
+}
 let failOfferVerification = offerFixture.get("upload") === "verifyfail";
 let templateAttempts = 0;
 // ?analytics=1: ~600 made-up candidates spread over the stages, sends, reminders and queue holds, so the Overview
@@ -411,6 +418,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   if (url.pathname === "/api/hiring/contracts" && !url.searchParams.has("type")) {
     const templates = offerFixture.get("templates");
+    if (templates === "retry") await new Promise((resolve) => setTimeout(resolve, 700));
     if (templates === "fail" || (templates === "retry" && templateAttempts++ === 0)) return new Response(null, { status: 503 });
     return new Response(JSON.stringify({ templates: templates === "empty" ? [] : Object.keys(OFFER_LETTERS).map((type) => ({
       type, format: templates === "word" ? "docx" : "pdf", size: 1000, uploadedAt: offerDay(-10),
@@ -421,9 +429,20 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (init?.method === "POST") {
       await new Promise((resolve) => setTimeout(resolve, 200));
       if (!offer || offerFixture.get("upload") === "fail") return new Response(null, { status: 503 });
+      const { replace } = JSON.parse(String(init.body));
+      // A second uploader files the PDF after this tab's preflight but before its write.
+      if (offerFixture.get("upload") === "conflict") offer.uploadedAt ??= offerDay(-1);
+      if (offer.uploadedAt && replace !== true) return new Response(null, { status: 409 });
       // The signed-file check and every dashboard read in this page use this same saved date.
       offer.uploadedAt = new Date().toISOString();
       return new Response(JSON.stringify({ ok: true }));
+    }
+    if (offer?.candidateId === "recent" && !offer.uploadedAt) {
+      if (offerFixture.get("pdf") === "fail") return new Response(null, { status: 503 });
+      if (offerFixture.get("pdf") === "exists") return new Response(JSON.stringify({ uploadedAt: offerDay(-1) }));
+    }
+    if (offer?.candidateId === "past" && !offer.uploadedAt && offerFixture.get("pdf") === "due") {
+      return new Response(JSON.stringify({ uploadedAt: offerDay(-1) }));
     }
     if (failOfferVerification && offer?.uploadedAt) {
       failOfferVerification = false;
@@ -530,7 +549,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/hiring" && url.searchParams.get("head"))
     return new Response(JSON.stringify({ name: "Kru Peat", subjects: ["Mathematics"], days: [0, 1, 2, 3, 4].map((i) => ({ date: "2026-11-0" + (2 + i), office: { start: "09:00", end: "18:00" }, blocks: [] })), visits: [], mocks: 0, limit: 2, stale: false, staleReason: null, weekStart: "2026-11-02", head: "Peat" }));
   if (url.pathname === "/api/hiring") {
-    if (offerFixture.get("offers") === "fail") return new Response(JSON.stringify({ error: "Could not load offers." }), { status: 503 });
+    if (offerFixture.get("offers") === "fail") {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      return new Response(JSON.stringify({ error: "Could not load offers." }), { status: 503 });
+    }
     // ?failFirst=1: the first two list loads fail (the page retries once on its own), so the Try again button can be checked.
     const once = window as unknown as { failed?: number };
     if (location.search.includes("failFirst=1") && (once.failed ?? 0) < 2) {
@@ -611,7 +633,8 @@ const bundled = await build({
       export const upload = async (pathname, _file, options) => {
         window.uploaded.push(pathname);
         if (options?.handleUploadUrl === "/api/hiring/contracts/signed") {
-          const response = await fetch(options.handleUploadUrl + "?candidateId=" + encodeURIComponent(options.clientPayload), { method: "POST" });
+          const { candidateId } = JSON.parse(options.clientPayload);
+          const response = await fetch(options.handleUploadUrl + "?candidateId=" + encodeURIComponent(candidateId), { method: "POST", body: options.clientPayload });
           if (!response.ok) throw new Error("Fixture upload failed.");
         }
         return { pathname };
@@ -655,6 +678,11 @@ const server = createServer((request, response) => {
   if (url.pathname === "/api/hiring/contracts" && url.searchParams.has("type")) {
     response.writeHead(200, { "Content-Type": "application/pdf", "Content-Disposition": "attachment; filename=sample-contract.pdf" });
     response.end(samplePdf(`Sample contract - ${url.searchParams.get("type")}`));
+    return;
+  }
+  if (url.pathname === "/api/hiring/contracts/signed" && url.searchParams.get("file") === "1") {
+    response.writeHead(200, { "Content-Type": "application/pdf", "Content-Disposition": "attachment; filename=sample-signed.pdf" });
+    response.end(samplePdf("Signed sample"));
     return;
   }
   // The brief's résumé and the marked paper: a one-page made-up PDF, drawn by the real pdf.js runtime files.
@@ -1928,6 +1956,11 @@ try {
         await first().waitFor();
         await tab.getByText("Await form", { exact: true }).waitFor();
       };
+      const assertTaskFont = async (label) => {
+        await label.waitFor();
+        assert.ok(await label.evaluate((note) => parseFloat(getComputedStyle(note).fontSize) >= (innerWidth < 720 ? 16 : 14)),
+          `Task text is too small: ${await label.textContent()}`);
+      };
       const snapshots = {};
       async function capture(state) {
         const stem = `offer-${state}-${width}`;
@@ -2041,14 +2074,35 @@ try {
         await open();
         await ready();
         assert.deepEqual(await task.locator('th[scope="row"] > span:first-child').allTextContents(),
-          ["Sample Hana", "Sample Dao", "Sample Fah", "Sample Eve", "Sample Ben", "Sample Jai", "Sample Chai", "Sample Ann", "Sample Ivan", "Sample Gus"]);
-        await task.getByRole("row").filter({ hasText: "Sample Jai" }).getByRole("button", { name: "Print contract" }).waitFor();
+          ["Sample Hana", "Sample Dao", "Sample Fah", "Sample Eve", "Sample Ben", "Sample Jai", "Sample Chai", "Sample Ann", "Sample Mali", "Sample Ivan", "Sample Gus"]);
+        const daoCells = task.getByRole("row").filter({ hasText: "Sample Dao" }).getByRole("cell");
+        assert.equal((await daoCells.nth(2).innerText()).trim(), "Chase booking");
+        assert.match((await daoCells.nth(3).innerText()).trim(), /(^|\n)Due(\n|$)/);
+        await daoCells.nth(3).getByLabel("Upload PDF for Sample Dao").waitFor({ state: "attached" });
+        await past.getByRole("cell").nth(2).getByLabel("Upload signed PDF for Sample Eve").waitFor({ state: "attached" });
+        const booked = task.getByRole("row").filter({ hasText: "Sample Jai" });
+        await booked.getByRole("button", { name: "Print contract" }).waitFor();
+        await booked.getByLabel("Upload PDF for Sample Jai", { exact: true }).waitFor({ state: "attached" });
+        const noOutbox = task.getByRole("row").filter({ hasText: "Sample Mali" });
+        await noOutbox.getByRole("cell", { name: "Email not queued" }).waitFor();
+        await noOutbox.getByRole("link", { name: "Check email log" }).waitFor();
+        for (const name of ["Sample Fah", "Sample Ann", "Sample Mali"]) {
+          const action = task.getByRole("row").filter({ hasText: name }).getByLabel(`Upload PDF for ${name}`, { exact: true });
+          assert.equal(await action.locator("..").getAttribute("data-primary"), null);
+        }
+        assert.ok(await task.locator("tr").evaluateAll((rows) => rows.every((row) => row.querySelectorAll("[data-primary]").length <= 1)));
         await past.getByRole("rowheader", { name: "Sample Eve, Physics" }).waitFor();
         await past.getByRole("cell", { name: "24 Nov 14:00, visit ended" }).waitFor();
         assert.equal(await task.getByRole("link", { name: "Onboarding" }).getAttribute("href"), "/hiring/onboarding");
         await capture("list");
         assert.equal(snapshots.list.scrollBeforeFirstActionPx, 0);
-        if (width === 390) assert.ok(snapshots.list.wordsAboveFirstAction <= 30);
+        if (width === 390) {
+          assert.ok(snapshots.list.wordsAboveFirstAction <= 30);
+          await hana.getByRole("button", { name: "Print contract" }).press(name === "webkit" ? "Alt+Tab" : "Tab");
+          const hanaUpload = hana.getByLabel("Upload PDF for Sample Hana", { exact: true });
+          assert.equal(await hanaUpload.and(tab.locator(":focus")).count(), 1,
+            "Tab from Print contract must focus Upload PDF in Hana's card");
+        }
         assert.equal(snapshots.list.sidewaysScroll, false);
         await summary.click();
         await tab.getByRole("heading", { name: "Full-time tutor contract" }).waitFor();
@@ -2091,9 +2145,20 @@ try {
         assert.equal(await summary.evaluate((element) => element.parentElement.open), true);
 
         await open("templates=retry");
+        await assertTaskFont(hana.getByText("Checking template…", { exact: true }));
         await retry.click();
-        await hana.getByRole("status").getByText("Templates loaded.").waitFor();
+        await assertTaskFont(hana.getByText("Loading templates…", { exact: true }));
+        await assertTaskFont(hana.getByRole("status").getByText("Templates loaded."));
         await hana.getByRole("button", { name: "Print contract" }).and(tab.locator(":focus")).waitFor();
+
+        await open("templates=retry");
+        await summary.click();
+        const loadingPanel = tab.locator("details").filter({ has: summary });
+        await assertTaskFont(loadingPanel.getByText("Loading templates…", { exact: true }));
+        await panelRetry.press("Enter");
+        await assertTaskFont(loadingPanel.getByText("Loading templates…", { exact: true }));
+        await tab.getByRole("heading", { name: "Full-time tutor contract" }).waitFor();
+        await summary.and(tab.locator(":focus")).waitFor();
 
         await open();
         await ready();
@@ -2120,6 +2185,83 @@ try {
           return bounds.top >= 0 && bounds.bottom <= innerHeight;
         }), true);
         assert.match(await offerProblem.innerText(), /Sample Fah/);
+        if (width === 1440) {
+          await open("emailLog=missing");
+          await task.getByRole("link", { name: "Open email log" }).click();
+          const missingMessage = tab.getByText("Offer email not found in the log.", { exact: true });
+          await missingMessage.waitFor();
+          assert.equal(await missingMessage.count(), 1);
+          await open("emailLog=invite");
+          await task.getByRole("link", { name: "Open email log" }).click();
+          const invite = tab.getByRole("listitem").filter({ hasText: "Sample invite failure." });
+          await invite.waitFor();
+          assert.match(await invite.innerText(), /email · failed/);
+          assert.doesNotMatch(await invite.innerText(), /Offer email/);
+        }
+
+        await open();
+        const walkIn = task.getByRole("row").filter({ hasText: "Sample Chai" });
+        await walkIn.getByRole("cell", { name: "Unbooked" }).waitFor();
+        await walkIn.getByRole("cell", { name: "Unknown" }).waitFor();
+        const walkInUpload = walkIn.getByLabel("Upload PDF for Sample Chai", { exact: true });
+        assert.equal(await walkInUpload.locator("..").getAttribute("data-primary"), null);
+        await walkInUpload.setInputFiles(file);
+        await walkIn.getByRole("link", { name: "Signed PDF for Sample Chai, filed 25 Nov" }).waitFor();
+        await walkIn.getByText("Await form", { exact: true }).waitFor();
+        assert.deepEqual(await tab.evaluate(() => window.uploaded), ["hiring-signed-contracts/recent.pdf"]);
+
+        await open("pdf=exists");
+        await walkIn.getByRole("cell", { name: "Unknown" }).waitFor();
+        await walkInUpload.setInputFiles(file);
+        const discovered = walkIn.getByRole("link", { name: "Signed PDF for Sample Chai, filed 24 Nov" });
+        assert.equal(await discovered.getAttribute("href"), "/api/hiring/contracts/signed?candidateId=recent&file=1");
+        const replaceDiscovered = walkIn.getByLabel("Replace PDF for Sample Chai", { exact: true });
+        assert.equal(await replaceDiscovered.locator("..").getAttribute("data-primary"), null);
+        assert.deepEqual(await tab.evaluate(() => window.uploaded), []);
+        await replaceDiscovered.setInputFiles(file);
+        await walkIn.getByText("Filed 25 Nov", { exact: true }).waitFor();
+        assert.deepEqual(await tab.evaluate(() => window.uploaded), ["hiring-signed-contracts/recent.pdf"]);
+
+        await open("pdf=due");
+        await past.getByRole("cell", { name: "Due" }).waitFor();
+        await upload().setInputFiles(file);
+        await past.getByRole("link", { name: "Signed PDF for Sample Eve, filed 24 Nov" }).waitFor();
+        await past.getByLabel("Replace PDF for Sample Eve", { exact: true }).locator("..").waitFor();
+        await past.getByRole("status").getByText("Existing PDF found. Your file was not uploaded.", { exact: true }).waitFor();
+        assert.deepEqual(await tab.evaluate(() => window.uploaded), []);
+
+        await open("upload=conflict");
+        await past.getByRole("cell", { name: "Due", exact: true }).waitFor();
+        await upload().setInputFiles(file);
+        const preserved = past.getByRole("link", { name: "Signed PDF for Sample Eve, filed 24 Nov" });
+        assert.equal(await preserved.getAttribute("href"), "/api/hiring/contracts/signed?candidateId=past&file=1");
+        await past.getByRole("status").getByText("Existing PDF found. Your file was not uploaded.", { exact: true }).waitFor();
+        await past.getByLabel("Replace PDF for Sample Eve", { exact: true }).locator("..").waitFor();
+        assert.deepEqual(await tab.evaluate(() => window.uploaded), ["hiring-signed-contracts/past.pdf"]);
+        const storedDate = await tab.evaluate(async () => (await (await fetch("/api/hiring/contracts/signed?candidateId=past")).json()).uploadedAt);
+        assert.equal(storedDate.slice(0, 10), "2026-11-24", "A create-only upload must keep the previously filed PDF");
+
+        await open("pdf=fail");
+        await walkInUpload.setInputFiles(file);
+        await walkIn.getByRole("alert").filter({ hasText: "Could not check for a filed PDF. Try again." }).waitFor();
+        assert.deepEqual(await tab.evaluate(() => window.uploaded), []);
+
+        await open("upload=verifyfail");
+        const filed = task.getByRole("row").filter({ hasText: "Sample Ivan" });
+        const filedLink = filed.getByRole("link", { name: "Signed PDF for Sample Ivan, filed 24 Nov" });
+        assert.equal(await filedLink.getAttribute("href"), "/api/hiring/contracts/signed?candidateId=filed&file=1");
+        if (width === 1440) {
+          const download = tab.waitForEvent("download");
+          await filedLink.click();
+          assert.equal((await download).suggestedFilename(), "sample-signed.pdf");
+        }
+        const replace = filed.getByLabel("Replace PDF for Sample Ivan", { exact: true });
+        assert.equal(await replace.locator("..").getAttribute("data-primary"), null);
+        await replace.setInputFiles(file);
+        await filed.getByRole("button", { name: "Check file" }).click();
+        await filed.getByRole("link", { name: "Signed PDF for Sample Ivan, filed 25 Nov" }).waitFor();
+        await filed.getByRole("status").getByText("Sample Ivan's PDF filed.", { exact: true }).waitFor();
+        assert.deepEqual(await tab.evaluate(() => window.uploaded), ["hiring-signed-contracts/filed.pdf"]);
 
         await open("upload=verifyfail");
         await ready();
@@ -2157,6 +2299,29 @@ try {
         await past.getByText("Upload failed. Try again.", { exact: true }).waitFor();
         await capture("upload-fail");
 
+        if (width === 390 && height === 844) {
+          const lastUpload = task.locator('input[aria-label^="Upload PDF for"]').last();
+          assert.ok(await lastUpload.evaluate((input) => {
+            const label = input.closest("label");
+            const panel = label.closest("[data-offer]");
+            input.focus({ preventScroll: true });
+            panel.scrollTop += Math.floor(label.getBoundingClientRect().top - innerHeight + 8);
+            const top = label.getBoundingClientRect().top;
+            return top >= innerHeight - 8 && top < innerHeight;
+          }), "The lowest upload action must start at the bottom edge");
+          await lastUpload.setInputFiles(file);
+          const uploadError = noOutbox.getByRole("alert").filter({ hasText: "Upload failed. Try again." });
+          await uploadError.waitFor();
+          assert.ok(await uploadError.evaluate((error) => {
+            const input = error.parentElement.querySelector('input[type="file"]');
+            return document.activeElement === input && [input.closest("label"), error].every((element) => {
+              const box = element.getBoundingClientRect();
+              return box.top >= 0 && box.bottom <= innerHeight
+                && element.contains(document.elementFromPoint(box.left + box.width / 2, box.bottom - 1));
+            });
+          }), "The lowest upload action and its error must stay visible without moving focus");
+        }
+
         if (width !== 320) {
           await open();
           await tab.evaluate(() => document.documentElement.classList.add("dark"));
@@ -2164,9 +2329,16 @@ try {
           await capture("list-dark");
         }
         await open("offers=fail");
+        await assertTaskFont(tab.getByText("Loading hiring: Offer & signing…", { exact: true }));
         const retryOffers = tab.getByRole("button", { name: "Try again" });
         await retryOffers.waitFor();
-        if (width < 720) assert.equal(await retryOffers.evaluate((button) => getComputedStyle(button).fontSize), "16px");
+        if (width < 720) {
+          assert.equal(await retryOffers.evaluate((button) => getComputedStyle(button).fontSize), "16px");
+          const loadAlert = tab.getByRole("alert").filter({ hasText: /^Could not load offers\.$/ });
+          assert.equal(await loadAlert.evaluate((alert) => getComputedStyle(alert).fontSize), "16px");
+        }
+        await retryOffers.click();
+        await assertTaskFont(tab.getByText("Loading offers…", { exact: true }));
         if (width === 1440) {
           await open();
           await ready();
