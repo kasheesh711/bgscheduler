@@ -36,7 +36,7 @@ import {
 import { AWAITING_CALL, profileGate } from "./insights";
 import { audit, briefLink, candidateById, hasBookedCall, RESUME_ATTACHED, RESUME_NOT_ATTACHED, prestigeCatalogHash, settings, sourceHash } from "./service";
 import { callInviteSentAt, cancelOrphanCalls, formSentAt, releaseCallInvites, releaseQueues, remindCallInvites, replyCheck, runFollowUps } from "./queue";
-import { contactLines, deliverRecruitment, queueRecruitmentInvitation } from "./recruitment";
+import { contactLine, deliverRecruitment, lineSlot, lineWhen, lineWho, queueRecruitmentInvitation } from "./recruitment";
 import { deliverCalendar, type VisitHead } from "./google";
 import { hiringEmailHtmlFromText } from "./email";
 import { resumeAttachment } from "./resume-files";
@@ -693,13 +693,15 @@ export async function deliverOutbox(
               "The interviewer group registration changed. Review delivery.",
             );
           const movedFrom = job.payload.movedFrom as string | undefined;
-          const title =
-            notice === "moved"
-              ? `Mock teaching moved. The old time ${movedFrom ? `${new Date(movedFrom).toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok) ` : ""}is cancelled. The new time is below.`
-              : notice === "cancelled"
-                ? "Mock teaching cancelled"
-                : "Mock teaching interview";
-          const message = `${title}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nTime: ${booking.startTime.toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok)\nPlace: ${current.config.location}\nInterviewer: ${booking.interviewerKey}${booking.kind === "mock" && notice !== "cancelled" ? `\nCandidate page (answers and résumé): ${briefLink(booking)}` : ""}`;
+          const title = notice === "cancelled" ? "❌ Mock teaching cancelled" : `🧑‍🏫 Mock teaching ${notice === "moved" ? "moved" : "booked"}`;
+          const message = [
+            title,
+            lineWho(candidate.name, booking.subjects.join(", ")),
+            `${lineSlot(booking.startTime, booking.endTime)} · ${current.config.location}`,
+            ...(notice === "moved" && movedFrom ? [`Old time (cancelled): ${lineWhen(new Date(movedFrom))}`] : []),
+            contactLine(candidate),
+            ...(booking.kind === "mock" && notice !== "cancelled" ? [`\nCandidate page (answers, résumé):\n${briefLink(booking)}`] : []),
+          ].join("\n");
           receipt = {
             ...(await pushLineTextMessage({
               to: booking.lineGroupId,

@@ -336,10 +336,10 @@ describe("booking a call", () => {
       [`call:${moved.id}:moved:0000`, "moved", moved.id],
     ]);
     expect(rows[0].message).toBe(
-      `R1: HR Interview booked (Google Meet)\nCandidate: ${a.name}\nEmail: ${a.email}\nPhone: +66812345678\nSubject: Mathematics\nTime: 5 Nov 2026, 09:00–09:30 (Bangkok)\nRésumé: No file stored. See the Hiring page.`,
+      `📞 HR call booked\n${a.name} · Mathematics\nThu 5 Nov, 09:00–09:30 · Google Meet\n${a.email} · +66812345678\nRésumé: no file. See the Hiring page.`,
     );
-    expect(rows[1].message).toContain("R1: HR Interview moved");
-    expect(rows[1].message).toContain("Previous time: 5 Nov 2026, 09:00 (cancelled)");
+    expect(rows[1].message).toContain("📞 HR call moved");
+    expect(rows[1].message).toContain("· Google Meet\nOld time (cancelled): Thu 5 Nov, 09:00\n");
   });
 
   it("links the stored résumé in the call notice, and the link ends with the call", async () => {
