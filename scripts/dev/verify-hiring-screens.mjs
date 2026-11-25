@@ -16,7 +16,7 @@ import { chromium, webkit } from "playwright-core";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const OUT = process.argv[2];
 const CHROME = process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const OFFER_TIME = "2026-11-25T05:00:00Z";
+const CLIMB_TIME = "2026-11-25T05:00:00Z";
 const BRIEF_STATES = [
   ["wait", "Scores open after the mock.", "Check again"],
   ["checking", "Scores are being checked.", "Check again"],
@@ -209,6 +209,70 @@ if (!offerFixture.has("offers") && offerFixture.has("pipeline")) {
 if (offerFixture.has("offers")) {
   Object.assign(payload, { reviewAccess: { hr: true, gift: false } });
   Object.assign(payload.config, { enabled: true, deliveryEnabled: true });
+}
+const prescreenFixture = offerFixture.get("prescreen");
+let failPreScreenAction = offerFixture.get("act") === "fail";
+let stalePreScreenAction = offerFixture.get("act") === "stale";
+let failNextPreScreenRefresh = offerFixture.get("refresh") === "fail";
+let failPreScreenRefresh = false;
+if (prescreenFixture !== null) {
+  Object.assign(payload.config, { enabled: true, deliveryEnabled: true });
+  Object.assign(payload, { reviewAccess: { hr: true, gift: false }, holds: {}, preScreenOrder: [], callOrder: [] });
+  payload.candidates = [];
+  payload.outbox = [];
+  payload.inviteOutbox = payload.outbox;
+  payload.bookings = [];
+  const ago = (days: number) => new Date(Date.now() - days * 86400000).toISOString();
+  const add = (id: string, name: string, patch = {}) => payload.candidates.push(person(id, name, { subjects: ["Physics"], ...patch }));
+  const mail = (id: string, suffix: string, days: number, status = "sent") => {
+    payload.outbox.unshift({ id: id + "-" + suffix, key: id + ":" + suffix, candidateId: id, kind: "email", status,
+      error: status === "failed" ? "Sample email failure." : null, sentAt: status === "sent" ? ago(days) : null,
+      workflowStage: suffix === "pre-screen" ? "pre_screen" : "onsite_invited" });
+  };
+  const replied = (id: string, name: string, age: number, patch = {}) => {
+    const repliedAt = new Date(ago(age));
+    const submittedAt = repliedAt.getUTCDate() + "/" + (repliedAt.getUTCMonth() + 1) + "/" + repliedAt.getUTCFullYear() + ", " + repliedAt.toISOString().slice(11, 19);
+    add(id, name, { stage: "review", preScreen: { ...answers, submittedAt }, preScreenRepliedAt: ago(age), preScreenHash: id,
+      preScreenAssessment: { ...assessment("Clear answers."), universities: [] }, preScreenScore: 82, preScreenParts: parts, ...patch });
+    mail(id, "pre-screen", age + 1);
+  };
+  if (prescreenFixture === "1") {
+    if (offerFixture.get("remaining") !== "1") {
+      replied("cora", "Cora Pan", 4);
+      replied("ben", "Ben Lee", 6);
+      replied("arun", "Arun Dee", 6, { preScreenScore: 41 });
+      replied("dao", "Dao Kim", 3);
+      replied("eve", "Eve Sen", 2, { preScreenScore: 65, preScreenOverride: { score: 79, by: "Staff", reason: "Checked teaching evidence.", at: ago(1) } });
+      replied("fon", "Fon Jan", 1);
+      replied("gus", "Gus Po", 0.5, { preScreenScore: null });
+    }
+    replied("mali", "Mali Tan", 7, { preScreenScore: 71 });
+    for (const days of [2, 3]) {
+      add("waiting-" + days, "Waiting " + days, { stage: "pre_screen" });
+      mail("waiting-" + days, "pre-screen", days);
+    }
+    replied("invited", "Sample Invited", 5, { stage: "onsite_invited" });
+    mail("invited", "visit-invite", 2);
+    replied("booked", "Sample Booked", 4, { stage: "onsite_booked" });
+    mail("booked", "visit-invite", 3);
+    add("booked-no-reply", "Booked Without Answers", { stage: "onsite_booked" });
+    mail("booked-no-reply", "pre-screen", 2);
+    if (offerFixture.has("bookedSent")) mail("booked-no-reply", "visit-invite", 1);
+    payload.bookings.push(...[...visitFor("booked", "pv1", ago(1), "Peat", "Physics"),
+      ...visitFor("booked-no-reply", "pv2", ago(-2), "Peat", "Physics")] as never[]);
+    replied("aside", "Sample Aside", 3, { stage: "soft_rejected", preScreenScore: 34 });
+    replied("held", "Sample Held", 3);
+    Object.assign(payload.holds, { held: { funnel: "onsite", state: "held", position: 4, limit: "perDay", subject: "Physics" } });
+    replied("stopped", "Sample Stopped", 2, { stage: "stopped" });
+    replied("failed", "Sample Failed", 2, { stage: "onsite_invited" });
+    mail("failed", "visit-invite", 0, "failed");
+    add("failed-form", "No Reply Yet", { stage: "pre_screen" });
+    mail("failed-form", "pre-screen", 0, "failed");
+    payload.inviteOutbox = payload.outbox;
+    payload.outbox = payload.outbox.filter((job) => job.key !== "waiting-3:pre-screen");
+  } else {
+    add("new", "Sample Applicant");
+  }
 }
 let failOfferVerification = offerFixture.get("upload") === "verifyfail";
 let templateAttempts = 0;
@@ -500,6 +564,47 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/hiring" && init?.method === "POST") {
     const body = JSON.parse(String(init.body));
     (window as unknown as { posted: unknown[] }).posted.push(body);
+    if (["invite_onsite", "send_new_link", "stop", "bring_back", "pre_screen_score"].includes(body.action)) {
+      if (failPreScreenAction) {
+        failPreScreenAction = false;
+        return new Response(JSON.stringify({ error: "Sample service failure." }), { status: 503 });
+      }
+      const candidate = payload.candidates.find((row) => row.id === body.id);
+      if (!candidate) return new Response(JSON.stringify({ error: "Candidate not found." }), { status: 404 });
+      if (stalePreScreenAction) {
+        stalePreScreenAction = false;
+        candidate.revision++;
+        candidate.preScreenScore = 73;
+      }
+      if (offerFixture.get("act") === "stale" && body.revision !== candidate.revision) {
+        failPreScreenRefresh = failNextPreScreenRefresh;
+        failNextPreScreenRefresh = false;
+        return new Response(JSON.stringify({ error: "This candidate changed. Refresh the page." }), { status: 409 });
+      }
+      for (const job of payload.outbox) {
+        if (job.candidateId !== candidate.id) continue;
+        const stopping = body.action === "stop" && ["pending", "failed"].includes(job.status);
+        const resending = body.action === "send_new_link" && job.workflowStage === "onsite_invited"
+          && ["pending", "failed", "uncertain"].includes(job.status);
+        if (stopping || resending) job.status = "cancelled";
+      }
+      candidate.revision++;
+      if (body.action === "invite_onsite" || body.action === "send_new_link") {
+        candidate.stage = "onsite_invited";
+        const key = candidate.id + ":visit-invite:" + candidate.revision;
+        const job = { id: key, key, candidateId: candidate.id, kind: "email", status: "pending", error: null, sentAt: null, workflowStage: "onsite_invited" };
+        payload.outbox.unshift(job);
+        if (payload.inviteOutbox !== payload.outbox) payload.inviteOutbox.unshift(job);
+      }
+      if (body.action === "stop") candidate.stage = "stopped";
+      if (body.action === "bring_back") candidate.stage = "review";
+      if (body.action === "pre_screen_score") candidate.preScreenOverride = {
+        score: body.score, reason: body.reason, by: "fixture", at: new Date().toISOString(),
+      };
+      failPreScreenRefresh = failNextPreScreenRefresh;
+      failNextPreScreenRefresh = false;
+      return new Response(JSON.stringify({ ok: true }));
+    }
     if (body.action === "call_notes") {
       const candidate = payload.candidates.find((c) => c.id === body.id)!;
       const notes = { text: body.text, at: new Date().toISOString(), by: "fixture" };
@@ -535,9 +640,6 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       payload.preScreenOrder = [...body.ahead, body.id, ...rest];
       payload.candidates.find((c) => c.id === body.id)!.queueManual = true;
     }
-    if (body.action === "pre_screen_score") {
-      payload.candidates.find((c) => c.id === body.id)!.preScreenOverride = { score: body.score, reason: body.reason, by: "fixture", at: "" };
-    }
     if (body.action === "queue_reset") {
       payload.preScreenOrder = ["b", "a", "c2"];
       payload.candidates.forEach((c) => { c.queueManual = false; });
@@ -549,6 +651,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/hiring" && url.searchParams.get("head"))
     return new Response(JSON.stringify({ name: "Kru Peat", subjects: ["Mathematics"], days: [0, 1, 2, 3, 4].map((i) => ({ date: "2026-11-0" + (2 + i), office: { start: "09:00", end: "18:00" }, blocks: [] })), visits: [], mocks: 0, limit: 2, stale: false, staleReason: null, weekStart: "2026-11-02", head: "Peat" }));
   if (url.pathname === "/api/hiring") {
+    if (failPreScreenRefresh) {
+      failPreScreenRefresh = false;
+      return new Response(JSON.stringify({ error: "Could not refresh the list." }), { status: 503 });
+    }
     if (offerFixture.get("offers") === "fail") {
       await new Promise((resolve) => setTimeout(resolve, 700));
       return new Response(JSON.stringify({ error: "Could not load offers." }), { status: 503 });
@@ -692,7 +798,11 @@ const server = createServer((request, response) => {
       : runtime.endsWith(".bcmap") ? `cmaps/${runtime}` : /\.(pfb|ttf)$/.test(runtime) ? `standard_fonts/${runtime}` : `wasm/${runtime}`;
     try {
       const bytes = readFileSync(path.join(ROOT, "node_modules/pdfjs-dist", relative));
-      response.writeHead(200, { "Content-Type": runtime.endsWith(".mjs") || runtime.endsWith(".js") ? "text/javascript" : runtime.endsWith(".wasm") ? "application/wasm" : "application/octet-stream" });
+      response.writeHead(200, {
+        "Content-Type": runtime.endsWith(".mjs") || runtime.endsWith(".js") ? "text/javascript" : runtime.endsWith(".wasm") ? "application/wasm" : "application/octet-stream",
+        "Cache-Control": "private, max-age=86400",
+        "X-Content-Type-Options": "nosniff",
+      });
       response.end(bytes);
     } catch {
       response.writeHead(404);
@@ -706,19 +816,20 @@ const server = createServer((request, response) => {
     return;
   }
   if (url.pathname.startsWith("/api/hiring/resume/")) {
-    resumeRequests.push(url.pathname.split("/").pop());
+    const id = url.pathname.split("/").pop();
+    resumeRequests.push(id);
     response.writeHead(200, { "Content-Type": "application/pdf" });
-    response.end(PDF);
+    response.end(id === "arun" ? samplePdf("Arun Dee - Sample resume") : PDF);
     return;
   }
   response.writeHead(200, { "Content-Type": "text/html" });
   // Playwright fixes the clock in the check. A person opening the same fixture in SERVE mode needs the same time.
-  response.end(process.env.SERVE && url.searchParams.has("offers") ? html.replace("<body>", `<body><script>
-    const offerNow = Date.parse(${JSON.stringify(OFFER_TIME)});
+  response.end((url.searchParams.has("prescreen") || (process.env.SERVE && url.searchParams.has("offers"))) ? html.replace("<body>", `<body><script>
+    const fixtureNow = Date.parse(${JSON.stringify(CLIMB_TIME)});
     Date = new Proxy(Date, {
-      construct: (Date, args) => new Date(...(args.length ? args : [offerNow])),
-      apply: (Date) => new Date(offerNow).toString(),
-      get: (Date, key) => key === "now" ? () => offerNow : Reflect.get(Date, key)
+      construct: (Date, args) => new Date(...(args.length ? args : [fixtureNow])),
+      apply: (Date) => new Date(fixtureNow).toString(),
+      get: (Date, key) => key === "now" ? () => fixtureNow : Reflect.get(Date, key)
     });
   </script>`) : html);
 });
@@ -764,6 +875,116 @@ const axeProblems = async (page, { tags = ["wcag2a", "wcag2aa", "wcag21a", "wcag
     const result = await window.axe.run(document, { runOnly: opt.tags });
     return result.violations.filter((v) => opt.all || v.impact === "serious" || v.impact === "critical").flatMap((v) => (opt.first ? v.nodes.slice(0, 1) : v.nodes).map((n) => `${v.id}: ${n.target.join(" ")}`));
   }, { tags, all, first });
+};
+const climbLayout = async (tab, scopeSelector, actionSelector, includeDialog = true) => {
+  if (includeDialog) {
+    const resume = tab.locator("dialog[open] section").filter({ has: tab.getByRole("heading", { name: "Résumé", exact: true }) });
+    await resume.locator('[aria-busy="true"], [role="status"]').first().waitFor({ state: "hidden" });
+  }
+  return tab.evaluate(({ scopeSelector, actionSelector, includeDialog }) => {
+    const root = document.querySelector("#root");
+    const active = (includeDialog && root.querySelector("dialog[open]")) || root;
+    const shown = (el) => {
+      if (el.closest(".sr-only,[hidden]") || (innerWidth < 720 && el.closest("thead"))) return false;
+      for (let closed = el.parentElement?.closest("details:not([open])"); closed;
+        closed = closed.parentElement?.closest("details:not([open])")) {
+        if (!closed.querySelector(":scope > summary")?.contains(el)) return false;
+      }
+      const style = getComputedStyle(el);
+      return style.visibility === "visible" && el.getClientRects().length > 0;
+    };
+    const first = active.querySelector(actionSelector);
+    const top = first?.getBoundingClientRect();
+    const words = (str) => str.trim().split(/\s+/).filter(Boolean).length;
+    const text = [];
+    const walker = document.createTreeWalker(active, NodeFilter.SHOW_TEXT);
+    for (let node; (node = walker.nextNode());) {
+      const value = node.nodeValue.trim();
+      if (!value || !shown(node.parentElement)) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rect = range.getBoundingClientRect();
+      if (rect.width && rect.height) text.push({ value, rect, font: parseFloat(getComputedStyle(node.parentElement).fontSize) });
+    }
+    const smallTargets = [];
+    const controls = [];
+    const selector = "button,a[href],summary,input:not([type=hidden]),select,textarea"
+      + (includeDialog ? ',[tabindex="0"]' : "");
+    for (const el of active.querySelectorAll(selector)) {
+      const face = !includeDialog && el.closest("label") || el;
+      if (!shown(face) || el.disabled) continue;
+      const label = el.getAttribute("aria-label") || face.innerText.trim() || face.tagName;
+      const box = face.getBoundingClientRect();
+      const id = controls.push(label) - 1;
+      el.dataset.climbProbe = String(id);
+      if (box.width < 43.99 || box.height < 43.99) smallTargets.push({ label, width: box.width, height: box.height });
+    }
+    const scope = root.querySelector(scopeSelector);
+    const surface = root.firstElementChild;
+    const wide = (el) => Boolean(el && el.scrollWidth > el.clientWidth);
+    const overflow = {
+      document: wide(document.documentElement),
+      root: wide(root),
+      dashboard: wide(surface),
+      offerPanel: wide(includeDialog ? scope : scope?.parentElement),
+    };
+    const style = document.createElement("style");
+    style.textContent = ".sr-only,details:not([open]) > :not(summary){display:none!important}"
+      + (innerWidth < 720 ? "thead{display:none!important}" : "");
+    document.head.append(style);
+    const visibleText = active.innerText.replace(/\n{2,}/g, "\n").trim();
+    style.remove();
+    return {
+      visibleText,
+      words: words(visibleText),
+      scrollBeforeFirstActionPx: top ? Math.max(0, Math.ceil(top.bottom - innerHeight)) : null,
+      wordsAboveFirstAction: top ? text.filter(({ rect }) => rect.bottom <= top.top + 1).reduce((sum, { value }) => sum + words(value), 0) : null,
+      minFontPx: text.length ? Math.min(...text.map(({ font }) => font)) : null,
+      longSentences: visibleText.split(/[.!?](?:\s+|$)|\n+/).filter((line) => words(line) > 20).map((line) => line.trim()),
+      smallTargets,
+      overflow,
+      sidewaysScroll: overflow.document || overflow.offerPanel || (active !== root && wide(active)),
+      controls,
+    };
+  }, { scopeSelector, actionSelector, includeDialog });
+};
+const climbFocus = async (tab, controls, name, includeDialog = true) => {
+  if (includeDialog) await tab.evaluate(() => { window.climbFocusStart = document.activeElement; });
+  const focus = new Map();
+  for (const key of name === "webkit" ? ["Tab", "Alt+Tab"] : ["Tab"]) {
+    await tab.evaluate((includeDialog) => {
+      const start = document.createElement("span");
+      start.tabIndex = -1;
+      ((includeDialog && document.querySelector("dialog[open] header")) || document.body).prepend(start);
+      start.focus({ preventScroll: true });
+      start.addEventListener("focusout", () => start.remove(), { once: true });
+    }, includeDialog);
+    for (let i = 0; i < controls.length; i++) {
+      await tab.keyboard.press(key);
+      const check = await tab.evaluate(async (includeDialog) => {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const el = document.activeElement;
+        if (!el?.hasAttribute("data-climb-probe")) return null;
+        const face = !includeDialog && el.closest("label") || el;
+        const style = getComputedStyle(face);
+        const box = face.getBoundingClientRect();
+        const x = Math.max(0, Math.min(innerWidth - 1, box.x + box.width / 2));
+        const y = Math.max(0, Math.min(innerHeight - 1, box.y + box.height / 2));
+        return { id: el.dataset.climbProbe, ring: style.outlineStyle !== "none" && parseFloat(style.outlineWidth) > 0,
+          unobscured: face.contains(document.elementFromPoint(x, y)) };
+      }, includeDialog);
+      if (!check) break;
+      focus.set(check.id, check);
+    }
+  }
+  if (includeDialog) await tab.evaluate(() => {
+    window.climbFocusStart?.focus({ preventScroll: true });
+    delete window.climbFocusStart;
+  });
+  return controls.map((label, i) => {
+    const check = focus.get(String(i));
+    return { label, reached: !!check, visible: !!check?.ring, unobscured: !!check?.unobscured };
+  });
 };
 // Page-side measuring for the walkthrough. Installed before the page scripts run, so it also counts every scroll of the page.
 function installHelpers() {
@@ -1007,51 +1228,49 @@ try {
     assert.equal(await panel.locator("iframe").count(), 0);
     assert.ok(await panel.getByText("I require a visa").isVisible());
   });
-  await check("the pre-screen tab lists everyone sent a form, with proof of the visit email", async () => {
-    await page.getByRole("button", { name: "Pre-screen form" }).click();
+  await check("the pre-screen tab keeps the visit email date filter", async () => {
+    await page.goto(`${origin}/?view=prescreen`);
     const list = page.getByRole("region", { name: "Pre-screen responses" });
-    const rows = list.locator("tbody tr");
-    await rows.first().waitFor();
-    assert.deepEqual((await list.locator("tbody button").allInnerTexts()).slice(0, 2), ["Reply Passed", "Reply Low"]);
+    await list.getByRole("button", { name: "All", exact: true }).click();
+    const names = () => list.locator("th[scope=row] > span:first-child").allTextContents();
+    await list.getByRole("button", { name: "Review Reply Passed" }).waitFor();
     assert.ok(!(await list.getByText("Sample Ann").count()));
-    await list.getByText("Sent 2 Nov, 10:04").waitFor();
-    await list.getByText("Not sent: below pass score").waitFor();
-    await list.getByText("Waiting for reply").first().waitFor();
     await shot(page, "prescreen-list");
-    await list.getByRole("button", { name: /^Below pass score/ }).click();
-    assert.deepEqual(await list.locator("tbody button").allInnerTexts(), ["Reply Low"]);
-    await list.getByRole("button", { name: /^All/ }).click();
-    // The sent-date range uses the Bangkok day: 03:04 UTC on 2 Nov is 2 Nov.
+    await list.getByText("More filters", { exact: true }).click();
+    // 03:04 UTC on 2 Nov is 2 Nov in Bangkok.
     await list.getByLabel("Visit email sent from").fill("2026-11-02");
-    await list.getByLabel("to", { exact: true }).fill("2026-11-02");
-    assert.deepEqual(await list.locator("tbody button").allInnerTexts(), ["Reply Passed"]);
-    await list.getByText("1 shown with a visit email sent 2 Nov 2026 to 2 Nov 2026").waitFor();
+    await list.getByLabel("Visit email sent to").fill("2026-11-02");
+    assert.deepEqual(await names(), ["Reply Passed"]);
     await shot(page, "prescreen-sent-date");
-    // At 800 px the date boxes go to their own line, so no chip is cut off.
     await page.setViewportSize({ width: 800, height: 900 });
-    const chips = list.getByRole("group", { name: "Filter pre-screen responses" });
-    assert.ok(await chips.evaluate((el) => el.scrollWidth <= el.clientWidth + 1), "chips cut off at 800 px");
-    assert.ok((await list.getByLabel("Visit email sent from").boundingBox()).y > (await chips.boundingBox()).y + 10);
+    assert.ok(await list.evaluate((el) => el.scrollWidth <= el.clientWidth), "filters cut off at 800 px");
     await shot(page, "prescreen-sent-date-800");
     await page.setViewportSize({ width: 1440, height: 900 });
     await list.getByLabel("Visit email sent from").fill("2026-11-03");
-    await list.getByLabel("to", { exact: true }).fill("");
-    await list.getByText("No candidates match this filter.").waitFor();
+    await list.getByRole("alert").filter({ hasText: "End date must be on or after start date." }).waitFor();
+    assert.deepEqual(await names(), []);
+    await list.getByLabel("Visit email sent to").fill("");
+    await list.getByText("No match.", { exact: true }).waitFor();
     await list.getByRole("button", { name: "Clear dates" }).click();
-    assert.ok((await list.locator("tbody tr").count()) > 2);
+    assert.ok((await names()).length > 2);
   });
-  await check("the panel shows full answers, AI reasons and actions, and a score change posts only the change", async () => {
-    await page.getByRole("region", { name: "Pre-screen responses" }).getByRole("button", { name: "Reply Low" }).click();
-    const panel = page.getByRole("complementary", { name: "Pre-screen of Reply Low" });
+  await check("the pre-screen panel shows answers and a score change posts only the change", async () => {
+    await page.goto(`${origin}/?view=prescreen`);
+    const list = page.getByRole("region", { name: "Pre-screen responses" });
+    await list.getByRole("button", { name: "All", exact: true }).click();
+    await list.getByRole("button", { name: "Review Reply Low" }).click();
+    const panel = page.getByRole("dialog", { name: "Reply Low" });
     await panel.getByText("Worked examples, then the student tries one.").waitFor();
-    assert.ok(await panel.getByText("Why the AI scored it this way").isVisible());
-    assert.ok(await panel.getByRole("button", { name: "Invite despite low score" }).isDisabled());
-    await panel.getByLabel("Reason").fill("Strong in a call");
+    assert.ok(await panel.getByRole("button", { name: "Change score" }).isDisabled());
+    await panel.getByRole("textbox", { name: "Reason", exact: true }).fill("Strong in a call");
     await panel.getByLabel("New score").fill("70");
     await panel.getByRole("button", { name: "Change score" }).click();
-    await panel.getByText("changed the AI score").waitFor();
-    assert.ok(await panel.getByRole("button", { name: "Invite to visit" }).isVisible());
+    await list.getByText("Score changed for Reply Low.", { exact: true }).waitFor();
+    await list.getByRole("button", { name: "All", exact: true }).click();
+    await list.getByRole("button", { name: "Review Reply Low" }).click();
+    await panel.getByText(/changed the AI score/).waitFor();
     await shot(page, "prescreen-panel");
+    await panel.getByRole("button", { name: "Close" }).click();
     const posted = await page.evaluate(() => window.posted);
     assert.deepEqual(posted.at(-1), { action: "pre_screen_score", id: "r2", revision: 1, score: 70, reason: "Strong in a call" });
   });
@@ -1928,7 +2147,7 @@ try {
     await page.setViewportSize({ width: 1440, height: 900 });
   });
   await check("offer climb shots", async () => {
-    const fixedTime = new Date(OFFER_TIME);
+    const fixedTime = new Date(CLIMB_TIME);
     const axeTags = { tags: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"], all: true };
     const results = { chromium: {}, webkit: {} };
     const shotFor = async (engine, name, width, height) => {
@@ -1971,104 +2190,15 @@ try {
           mkdirSync(path.dirname(path.join(OUT, shotName)), { recursive: true });
           await shot(tab, shotName);
         }
-        const snap = await tab.evaluate(() => {
-          const root = document.querySelector("#root");
-          const shown = (el) => {
-            if (el.closest(".sr-only,[hidden]") || (innerWidth < 720 && el.closest("thead"))) return false;
-            const closed = el.closest("details:not([open])");
-            if (closed && !closed.querySelector("summary")?.contains(el)) return false;
-            const style = getComputedStyle(el);
-            return style.visibility === "visible" && el.getClientRects().length > 0;
-          };
-          const first = document.querySelector("#approved-offers button");
-          const top = first?.getBoundingClientRect();
-          const words = (str) => str.trim().split(/\s+/).filter(Boolean).length;
-          const text = [];
-          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-          for (let node; (node = walker.nextNode());) {
-            const value = node.nodeValue.trim();
-            if (!value || !shown(node.parentElement)) continue;
-            const range = document.createRange();
-            range.selectNodeContents(node);
-            const rect = range.getBoundingClientRect();
-            if (rect.width && rect.height) text.push({ value, rect, font: parseFloat(getComputedStyle(node.parentElement).fontSize) });
-          }
-          const smallTargets = [];
-          const controls = [];
-          for (const el of root.querySelectorAll("button,a[href],summary,input:not([type=hidden]),select,textarea")) {
-            const face = el.closest("label") ?? el;
-            if (!shown(face) || el.disabled) continue;
-            const label = el.getAttribute("aria-label") || face.innerText.trim() || face.tagName;
-            const box = face.getBoundingClientRect();
-            const id = controls.push(label) - 1;
-            el.dataset.offerProbe = String(id);
-            if (box.width < 43.99 || box.height < 43.99) smallTargets.push({ label, width: box.width, height: box.height });
-          }
-          const scope = root.querySelector("#approved-offers")?.parentElement;
-          const surface = root.firstElementChild;
-          const wide = (el) => Boolean(el && el.scrollWidth > el.clientWidth);
-          const overflow = {
-            document: wide(document.documentElement),
-            root: wide(root),
-            dashboard: wide(surface),
-            offerPanel: wide(scope),
-          };
-          const style = document.createElement("style");
-          style.textContent = ".sr-only,details:not([open]) > :not(summary){display:none!important}"
-            + (innerWidth < 720 ? "thead{display:none!important}" : "");
-          document.head.append(style);
-          const visibleText = root.innerText.replace(/\n{2,}/g, "\n").trim();
-          style.remove();
-          return {
-            visibleText,
-            words: words(visibleText),
-            scrollBeforeFirstActionPx: top ? Math.max(0, Math.ceil(top.bottom - innerHeight)) : null,
-            wordsAboveFirstAction: top ? text.filter(({ rect }) => rect.bottom <= top.top + 1).reduce((sum, { value }) => sum + words(value), 0) : null,
-            minFontPx: text.length ? Math.min(...text.map(({ font }) => font)) : null,
-            longSentences: visibleText.split(/[.!?](?:\s+|$)|\n+/).filter((line) => words(line) > 20).map((line) => line.trim()),
-            smallTargets,
-            overflow,
-            sidewaysScroll: overflow.document || overflow.offerPanel,
-            controls,
-          };
-        });
+        const snap = await climbLayout(tab, "#approved-offers", "#approved-offers button", false);
         if (OUT) {
           writeFileSync(path.join(OUT, `${shotName}.txt`), snap.visibleText + "\n");
           offerWords.push(`${shotName}: ${snap.words}`);
         }
         const axe = await axeProblems(tab, axeTags);
-        const focus = new Map();
-        for (const key of name === "webkit" ? ["Tab", "Alt+Tab"] : ["Tab"]) {
-          await tab.evaluate(() => {
-            const start = document.createElement("span");
-            start.tabIndex = -1;
-            document.body.prepend(start);
-            start.focus({ preventScroll: true });
-            start.addEventListener("focusout", () => start.remove(), { once: true });
-          });
-          for (let i = 0; i < snap.controls.length; i++) {
-            await tab.keyboard.press(key);
-            const check = await tab.evaluate(() => {
-              const el = document.activeElement;
-              if (!el?.hasAttribute("data-offer-probe")) return null;
-              const face = el.closest("label") ?? el;
-              const style = getComputedStyle(face);
-              const box = face.getBoundingClientRect();
-              const x = Math.max(0, Math.min(innerWidth - 1, box.x + box.width / 2));
-              const y = Math.max(0, Math.min(innerHeight - 1, box.y + box.height / 2));
-              return { id: el.dataset.offerProbe, ring: style.outlineStyle !== "none" && parseFloat(style.outlineWidth) > 0,
-                unobscured: face.contains(document.elementFromPoint(x, y)) };
-            });
-            if (!check) break;
-            focus.set(check.id, check);
-          }
-        }
         const { controls, ...metrics } = snap;
         delete metrics.visibleText;
-        snapshots[state] = { ...metrics, axe, focusVisible: controls.map((label, i) => {
-          const check = focus.get(String(i));
-          return { label, reached: !!check, visible: !!check?.ring, unobscured: !!check?.unobscured };
-        }) };
+        snapshots[state] = { ...metrics, axe, focusVisible: await climbFocus(tab, controls, name, false) };
       }
       try {
         await open();
@@ -2394,6 +2524,452 @@ try {
         mkdirSync(OUT, { recursive: true });
         writeFileSync(path.join(OUT, "metrics.json"), JSON.stringify(results, null, 2) + "\n");
         writeFileSync(path.join(OUT, "words.txt"), offerWords.join("\n") + "\n");
+      }
+      await wk?.close();
+    }
+  });
+  await check("prescreen climb shots", async () => {
+    const tags = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
+    const results = { chromium: {}, webkit: {} };
+    const words = [];
+    const failures = [];
+    const expected = ["Mali Tan", "Arun Dee", "Ben Lee", "Cora Pan", "Dao Kim", "Eve Sen", "Fon Jan", "Gus Po"];
+
+    async function run(engine, name, width, height) {
+      const context = await engine.newContext({ viewport: { width, height } });
+      await context.route("**/*", (route) => (route.request().url().startsWith(origin) ? route.continue() : route.abort()));
+      const tab = await context.newPage();
+      await tab.clock.setFixedTime(new Date(CLIMB_TIME));
+      const errors = [];
+      const list = tab.getByRole("region", { name: "Pre-screen responses" });
+      const dialog = tab.getByRole("dialog");
+      const preview = (person) => dialog.getByRole("region", { name: `Original résumé of ${person}`, exact: true });
+      const candidateHeading = "dialog[open] header h2";
+      let closingCandidate;
+      tab.on("pageerror", (error) => {
+        const lastCandidate = closingCandidate;
+        errors.push(tab.evaluate((selector) => document.querySelector(selector)?.textContent, candidateHeading)
+          .catch(() => undefined)
+          .then((candidate) => {
+            const message = `${candidate ?? lastCandidate ?? "No open candidate"}: ${error.name}: ${error.message}`;
+            process.stderr.write(`${name} ${width}×${height}: ${message}\n`);
+            return message;
+          }));
+      });
+      const switchTo = (label) => list.getByRole("button", { name: label, exact: true }).click();
+      const review = (person) => list.getByRole("button", { name: "Review " + person, exact: true });
+      const names = () => list.locator("th[scope=row] > span:first-child").allTextContents();
+      const reason = () => dialog.getByRole("textbox", { name: "Reason", exact: true });
+      const score = () => dialog.getByLabel("New score", { exact: true });
+      const font = (locator) => locator.evaluate((el) => getComputedStyle(el).fontSize);
+      const states = {};
+      const focusObscured = [];
+
+      async function fillVisible(field, value, name) {
+        const before = await tab.evaluate(() => [scrollX, scrollY]);
+        await field.fill(value);
+        await checkField(field, name, "focus", before);
+        await tab.setViewportSize({ width, height: 400 });
+        await checkField(field, name, "resize", before);
+        await tab.setViewportSize({ width, height });
+      }
+
+      async function checkField(field, name, event, before) {
+        const probe = await field.evaluate(async (input, { before, event }) => {
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          const box = input.getBoundingClientRect();
+          const sheet = input.closest("dialog");
+          const body = sheet.querySelector("header + div").getBoundingClientRect();
+          const footer = sheet.querySelector("footer");
+          const footerTop = footer.getBoundingClientRect().top;
+          const footerPosition = getComputedStyle(footer).position;
+          const style = getComputedStyle(input);
+          const ring = parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset);
+          const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+          return { field: box.toJSON(), body: body.toJSON(), footerTop, footerPosition, ring, hit: hit?.tagName,
+            visible: document.activeElement === input && ring >= 4 && box.top - ring >= body.top - 1
+              && box.bottom + ring <= Math.min(body.bottom, footerTop) + 1 && hit === input
+              && (event !== "resize" || (innerHeight === 400 && footerPosition === "static"))
+              && scrollX === before[0] && scrollY === before[1] };
+        }, { before, event });
+        focusObscured.push({ name, event, obscured: !probe.visible, ...probe });
+      }
+
+      async function open(query = "") {
+        // WebKit can reject a worker that starts while the fixture document is being replaced.
+        closingCandidate = await tab.evaluate((selector) => document.querySelector(selector)?.textContent, candidateHeading);
+        if (closingCandidate) {
+          await preview(closingCandidate).and(dialog.locator('[aria-busy="false"]'))
+            .or(dialog.getByText("Preview unavailable.", { exact: true })).waitFor();
+          await tab.keyboard.press("Escape");
+          await dialog.waitFor({ state: "hidden" });
+        }
+        const url = new URL("/hiring?view=prescreen&prescreen=1", origin);
+        for (const [key, value] of new URLSearchParams(query)) url.searchParams.set(key, value);
+        await tab.goto(url.href);
+        closingCandidate = undefined;
+        await list.waitFor();
+      }
+      async function capture(state) {
+        const stem = `prescreen-${state}-${width}`;
+        const shotName = name === "webkit" ? "webkit/" + stem : stem;
+        if (OUT) {
+          mkdirSync(path.dirname(path.join(OUT, shotName)), { recursive: true });
+          await shot(tab, shotName);
+        }
+        const metrics = await climbLayout(tab, "#prescreen-queue", "#prescreen-queue [data-review-id]");
+        if (OUT) {
+          writeFileSync(path.join(OUT, shotName + ".txt"), metrics.visibleText + "\n");
+          words.push(`${shotName}: ${metrics.words}`);
+        }
+        const { controls, ...layout } = metrics;
+        delete layout.visibleText;
+        const axe = await axeProblems(tab, { tags, all: true });
+        const focusVisible = await climbFocus(tab, controls, name);
+        states[state] = { ...layout, axe, focusVisible };
+        assert.equal(layout.sidewaysScroll, false, state + " has sideways scroll");
+        assert.deepEqual(axe, [], state + " has accessibility violations");
+        assert.deepEqual(layout.smallTargets, [], state + " has small targets");
+      }
+
+      try {
+        await open();
+        assert.deepEqual(await names(), expected);
+        await list.getByRole("button", { name: "Needs decision (8)" }).waitFor();
+        await list.getByRole("row", { name: /Arun Dee/ }).getByRole("cell", { name: "Below pass · replied 6d ago", exact: true }).waitFor();
+        await list.getByRole("row", { name: /Eve Sen/ }).getByText("Changed", { exact: true }).waitFor();
+        const unscored = list.getByRole("row", { name: /Gus Po/ });
+        assert.equal(await unscored.getByText("Not scored", { exact: true }).count(), 1);
+        await unscored.getByRole("cell", { name: "Replied today", exact: true }).waitFor();
+        if (width < 720) {
+          assert.equal(await font(unscored.getByText("Physics")), "16px");
+          assert.equal(await font(unscored.getByText("Not scored")), "16px");
+          assert.equal(await font(list.getByRole("row", { name: /Eve Sen/ }).getByText("Changed", { exact: true })), "14px");
+        }
+        await capture("queue");
+        assert.equal(states.queue.scrollBeforeFirstActionPx, 0);
+        assert.ok(states.queue.minFontPx >= 12);
+        if (width === 390) {
+          assert.ok(states.queue.wordsAboveFirstAction <= 30);
+          const rowWords = await list.locator("tbody").evaluate((tbody) =>
+            [...tbody.querySelectorAll("tr")].map((row) => row.innerText.replace(/ out of 100/g, ""))
+              .join(" ").trim().split(/\s+/).length);
+          assert.ok(rowWords <= 160, "Queue rows exceed 160 words");
+        }
+
+        await review("Gus Po").click();
+        await reason().fill("Checked the written answers");
+        const changeScore = dialog.getByRole("button", { name: "Change score", exact: true });
+        const scoreError = dialog.getByRole("alert").filter({ hasText: /^Enter a score from 0 to 100\.$/ });
+        for (const value of ["101", "-1"]) {
+          await score().fill(value);
+          await scoreError.waitFor();
+          // The résumé preview can raise its own "Preview unavailable." alert; only one score message may show.
+          assert.equal(await dialog.getByRole("alert").filter({ hasText: /score/i }).count(), 1);
+          assert.equal(await score().getAttribute("aria-describedby"), await scoreError.getAttribute("id"));
+          assert.equal(await score().getAttribute("aria-invalid"), "true");
+          assert.equal(await changeScore.isDisabled(), true);
+        }
+        await score().fill("74");
+        await scoreError.waitFor({ state: "detached" });
+        assert.equal(await score().getAttribute("aria-describedby"), null);
+        await changeScore.press("Enter");
+        assert.equal(await dialog.getByText("Staff set the score to 74.").innerText(),
+          "Staff set the score to 74.\nChecked the written answers");
+        await tab.keyboard.press("Escape");
+
+        const lastScore = list.getByRole("status").filter({ hasText: "Score changed for Gus Po. Decision still needed." });
+        await lastScore.waitFor();
+        await switchTo("Waiting 3+ days");
+        await lastScore.waitFor({ state: "detached" });
+        assert.deepEqual(await names(), ["Waiting 3"]);
+        await list.getByText("Awaiting reply · 3 days", { exact: true }).waitFor();
+        await capture("waiting");
+        await review("Waiting 3").click();
+        assert.match(await dialog.locator("dt:text-is('Form') + dd").innerText(), /^Sent \d+ \w+, \d{2}:\d{2}$/);
+        assert.equal(await dialog.locator("dt:text-is('Visit email') + dd").innerText(), "Not sent yet");
+        assert.equal(await dialog.getByRole("heading", { name: "Form answers" }).count(), 0);
+        await tab.keyboard.press("Escape");
+        await switchTo("Set aside");
+        assert.deepEqual(await names(), ["Sample Aside"]);
+        await list.getByRole("cell", { name: "Set aside", exact: true }).waitFor();
+        await capture("set-aside");
+        await switchTo("Invited/booked");
+        assert.deepEqual(await names(), ["Sample Invited", "Sample Booked", "Booked Without Answers", "Sample Failed"]);
+        await review("Booked Without Answers").click();
+        assert.equal(await dialog.locator("dt:text-is('Form') + dd").innerText(), "Awaiting reply");
+        assert.equal(await dialog.locator("dt:text-is('Visit') + dd").innerText(), "Booked 27 Nov, 12:00");
+        await tab.keyboard.press("Escape");
+        await review("Sample Failed").click();
+        const scoreLock = dialog.getByText("Score changes are locked.", { exact: true });
+        await scoreLock.waitFor();
+        assert.equal(await score().isDisabled(), true);
+        assert.equal(await score().getAttribute("aria-describedby"), await scoreLock.getAttribute("id"));
+        assert.equal(await dialog.locator("dt:text-is('Current status') + dd").innerText(), "Invited");
+        assert.equal(await dialog.locator("dt:text-is('Visit email') + dd").innerText(), "Failed, will retry");
+        assert.equal(await dialog.getByText("A visit email is waiting to send.", { exact: true }).count(), 0);
+        assert.equal(await dialog.getByRole("link", { name: "Open email log" }).getAttribute("href"), "?view=setup#messages");
+        await dialog.getByRole("link", { name: "Open email log" }).click();
+        await tab.waitForURL(/view=setup/);
+        await tab.getByRole("complementary", { name: "Operations" }).getByRole("listitem")
+          .and(tab.locator("li:not(details li)"))
+          .filter({ has: tab.getByText("Sample Failed", { exact: true }) })
+          .getByText("Sample email failure.", { exact: true }).waitFor();
+        await open();
+
+        await switchTo("All");
+        await list.getByRole("row", { name: /Arun Dee/ }).getByRole("cell", { name: "Below pass score · in review", exact: true }).waitFor();
+        await list.getByRole("row", { name: /Sample Aside/ }).getByRole("cell", { name: "Set aside", exact: true }).waitFor();
+        await list.getByRole("row", { name: /No Reply Yet/ }).getByText("Email failed", { exact: true }).waitFor();
+        await review("No Reply Yet").click();
+        assert.equal(await dialog.locator("dt:text-is('Current status') + dd").innerText(), "Email failed");
+        assert.equal(await dialog.locator("dt:text-is('Form') + dd").innerText(), "Failed");
+        assert.equal(await dialog.locator("dt:text-is('Visit email') + dd").innerText(), "Not sent");
+        await dialog.getByRole("link", { name: "Open email log" }).click();
+        await tab.waitForURL(/view=setup/);
+        await tab.getByRole("complementary", { name: "Operations" }).getByRole("listitem")
+          .and(tab.locator("li:not(details li)"))
+          .filter({ has: tab.getByText("No Reply Yet", { exact: true }) })
+          .getByText("Sample email failure.", { exact: true }).waitFor();
+        await open();
+        await switchTo("All");
+        await list.getByText("Capacity hold", { exact: true }).waitFor();
+        await list.getByText("Stopped", { exact: true }).waitFor();
+        await list.getByText("Awaiting reply · 2 days", { exact: true }).waitFor();
+        await review("Sample Held").click();
+        await dialog.getByText("Raise the daily limit in Rules and setup.", { exact: true }).waitFor();
+        assert.doesNotMatch(await dialog.innerText(), /undefined/);
+        await tab.keyboard.press("Escape");
+        await list.getByText("More filters", { exact: true }).click();
+        await list.getByLabel("Visit email sent from").fill("2026-11-25");
+        await list.getByLabel("Visit email sent to").fill("2026-11-25");
+        const search = list.getByRole("searchbox");
+        await search.pressSequentially("No matching tutor");
+        await list.getByRole("heading", { name: "No match." }).waitFor();
+        await list.getByRole("status").filter({ hasText: /^0 results$/ }).waitFor();
+        assert.equal(await search.and(tab.locator(":focus")).count(), 1, "Search must keep focus while typing");
+        assert.equal(await list.getByRole("link", { name: "Waiting", exact: true }).count(), 0);
+        await list.getByRole("button", { name: "Clear filters" }).click();
+        assert.equal(await list.getByRole("button", { name: "All", exact: true }).getAttribute("aria-pressed"), "true");
+        assert.equal(await search.inputValue(), "");
+        assert.equal(await list.getByLabel("Visit email sent from").inputValue(), "");
+        assert.equal(await list.getByLabel("Visit email sent to").inputValue(), "");
+        await list.getByText("More filters", { exact: true }).click();
+        await switchTo("Needs decision (8)");
+        await list.getByRole("status").filter({ hasText: /^8 results$/ }).waitFor();
+
+        const first = review(expected[0]);
+        await first.press("Enter");
+        const heading = dialog.getByRole("heading", { name: expected[0], exact: true });
+        assert.equal(await heading.and(tab.locator(":focus")).count(), 1, "Focus must enter the sheet");
+        if (width < 720) {
+          const box = await dialog.boundingBox();
+          assert.deepEqual([box.x, box.y, box.width, box.height], [0, 0, width, height]);
+        }
+        await dialog.getByText("Add a reason (5+ characters).", { exact: true }).waitFor();
+        await dialog.getByRole("heading", { name: "Résumé", exact: true }).waitFor();
+        await dialog.getByText("Extracted resume text for the fixture.", { exact: true }).waitFor();
+        await dialog.getByText("Preview unavailable.", { exact: true }).waitFor();
+        await dialog.getByRole("link", { name: "Download PDF", exact: true }).waitFor();
+        await capture("panel-open");
+        await tab.keyboard.press("Escape");
+        assert.equal(await first.and(tab.locator(":focus")).count(), 1, "Escape must return focus");
+        await first.press("Enter");
+        await fillVisible(reason(), "Ready for the paper test", "Reason");
+        await fillVisible(score(), "79", "New score");
+        await dialog.getByRole("button", { name: "Invite to visit" }).press("Enter");
+        const next = dialog.getByRole("heading", { name: expected[1], exact: true });
+        await next.waitFor();
+        const confirmation = dialog.getByRole("status").filter({ hasText: "Visit invite queued for Mali Tan. Next: Arun Dee." });
+        await confirmation.waitFor();
+        assert.equal(await next.and(tab.locator(":focus")).count(), 1, "Focus must move to the next candidate");
+        await dialog.getByText("Not sent", { exact: true }).waitFor();
+        const extracted = dialog.getByText("Extracted résumé text", { exact: true });
+        const arunPreview = preview(expected[1]).and(dialog.locator('[aria-busy="false"]'));
+        assert.ok(await arunPreview.locator("canvas").evaluate((canvas) =>
+          canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data.some(
+            (value, i, pixels) => i % 4 !== 3 && value < 255 && pixels[i - i % 4 + 3] > 0,
+          )), `${expected[1]}'s résumé must be drawn`);
+        process.stdout.write(`${name} ${width}×${height}: ${expected[1]}'s résumé drawn\n`);
+        assert.equal(await extracted.evaluate((summary) => summary.parentElement.open), false);
+        if (width < 720) {
+          assert.equal(await font(confirmation), "16px");
+          assert.equal(await font(extracted), "16px");
+        }
+        await capture("action-done");
+        await tab.keyboard.press("Escape");
+        assert.equal(await review(expected[0]).count(), 0);
+        await switchTo("Invited/booked");
+        await list.getByRole("row", { name: /Mali Tan/ }).getByRole("cell", { name: "Invite queued", exact: true }).waitFor();
+        await review(expected[0]).click();
+        assert.equal(await dialog.locator("dt:text-is('Current status') + dd").innerText(), "Invited");
+        assert.equal(await dialog.locator("dt:text-is('Visit email') + dd").innerText(), "Queued");
+
+        await open("&remaining=1");
+        await review(expected[0]).click();
+        await reason().fill("Checked the written answers");
+        await score().fill("79");
+        await dialog.getByRole("button", { name: "Change score" }).press("Enter");
+        await dialog.getByRole("status").filter({ hasText: "Score changed for Mali Tan. Decision still needed." }).waitFor();
+        assert.equal(await reason().inputValue(), "");
+        assert.equal(await score().inputValue(), "");
+        await dialog.getByText("79/100", { exact: true }).waitFor();
+        await tab.keyboard.press("Escape");
+        await review(expected[0]).click();
+        await dialog.getByText("79/100", { exact: true }).waitFor();
+        await reason().fill("Does not meet the review criteria");
+        await dialog.getByRole("button", { name: "Stop", exact: true }).click();
+        const empty = list.getByRole("heading", { name: "No replies need a decision." });
+        await empty.waitFor();
+        assert.equal(await empty.and(tab.locator(":focus")).count(), 1, "Focus must move to the empty state");
+        const stopped = list.getByRole("status").filter({ hasText: "Stopped for Mali Tan." });
+        await stopped.waitFor();
+        if (width < 720) assert.equal(await font(stopped), "16px");
+        await capture("queue-empty");
+        await list.getByRole("link", { name: "Waiting", exact: true }).click();
+        await stopped.waitFor({ state: "detached" });
+        assert.deepEqual(await names(), ["Waiting 3", "Waiting 2"]);
+        await switchTo("All");
+        await list.getByRole("row", { name: /Mali Tan/ }).getByRole("cell", { name: "Stopped", exact: true }).waitFor();
+        await review(expected[0]).click();
+        await dialog.getByText("Stopped", { exact: true }).waitFor();
+        assert.equal(await dialog.getByRole("button", { name: "Stop", exact: true }).count(), 0);
+        await dialog.getByRole("button", { name: "Invite to visit", exact: true }).waitFor();
+        await tab.keyboard.press("Escape");
+
+        await switchTo("Invited/booked");
+        await review("Sample Booked").click();
+        await dialog.getByText("Visit booked", { exact: true }).waitFor();
+        await reason().fill("Stopped after the visit");
+        await dialog.getByRole("button", { name: "Stop", exact: true }).press("Enter");
+        await empty.waitFor();
+        await switchTo("Invited/booked");
+        assert.equal(await review("Sample Booked").count(), 0);
+        await switchTo("All");
+        await list.getByRole("row", { name: /Sample Booked/ }).getByText("Stopped", { exact: true }).waitFor();
+        await review("Sample Booked").click();
+        await dialog.getByText("Stopped", { exact: true }).waitFor();
+        assert.equal(await dialog.getByText("Visit booked", { exact: true }).count(), 0);
+        assert.equal(await dialog.getByRole("button", { name: "Stop", exact: true }).count(), 0);
+        assert.equal(await dialog.getByRole("button", { name: "Invite to visit", exact: true }).count(), 0);
+
+        await open("&act=fail");
+        await review(expected[0]).click();
+        await reason().fill("Ready for the paper test");
+        const stop = dialog.getByRole("button", { name: "Stop", exact: true });
+        await stop.press("Enter");
+        const error = dialog.getByRole("alert").filter({ hasText: "Could not stop. Try again." });
+        await error.waitFor();
+        assert.equal(await reason().inputValue(), "Ready for the paper test");
+        assert.equal(await stop.and(tab.locator(":focus")).count(), 1, "Failed action must regain focus");
+        if (width < 720) assert.equal(await font(error), "16px");
+        await dialog.getByRole("heading", { name: expected[0], exact: true }).waitFor();
+        await capture("act-fail");
+        await tab.keyboard.press("Enter");
+        await next.waitFor();
+        await capture("retry");
+
+        await open("&act=stale&refresh=fail");
+        await review(expected[0]).click();
+        const draft = "Checked the candidate record";
+        await reason().fill(draft);
+        await stop.press("Enter");
+        await dialog.getByRole("alert").filter({ hasText: "This record changed. Refresh to see it." }).waitFor();
+        await heading.waitFor();
+        assert.equal(await stop.count(), 0);
+        const refresh = dialog.getByRole("button", { name: "Refresh", exact: true });
+        assert.equal(await refresh.and(tab.locator(":focus")).count(), 1, "Refresh must take focus after a conflict");
+        await tab.keyboard.press("Escape");
+        await review(expected[1]).click();
+        await stop.waitFor();
+        await dialog.getByRole("button", { name: "Close", exact: true }).click();
+        await review(expected[0]).click();
+        await dialog.getByRole("alert").filter({ hasText: "This record changed. Refresh to see it." }).waitFor();
+        assert.equal(await refresh.and(tab.locator(":focus")).count(), 1, "Refresh must take focus after reopening");
+        await reason().fill(draft);
+        assert.deepEqual(await dialog.locator("footer button:enabled").allTextContents(), ["Refresh"]);
+        await refresh.press("Enter");
+        await dialog.getByRole("alert").filter({ hasText: "Could not refresh. Try again." }).waitFor();
+        assert.deepEqual(await dialog.locator("footer button:enabled").allTextContents(), ["Refresh"]);
+        await refresh.press("Enter");
+        await dialog.locator("p > strong").filter({ hasText: /^73\/100$/ }).waitFor();
+        await heading.waitFor();
+        assert.equal(await reason().inputValue(), draft);
+        assert.deepEqual(await tab.evaluate(() => window.posted), [{ action: "stop", id: "mali", revision: 1, reason: draft, subjects: ["Physics"] }]);
+        await stop.press("Enter");
+        await next.waitFor();
+        assert.deepEqual(await tab.evaluate(() => window.posted.slice(1)), [{ action: "stop", id: "mali", revision: 2, reason: draft, subjects: ["Physics"] }]);
+
+        await open();
+        await tab.evaluate(() => document.documentElement.classList.add("dark"));
+        await capture("dark");
+        await review(expected[0]).click();
+        await capture("dark-panel");
+
+        await open("&prescreen=0");
+        await list.getByRole("heading", { name: "No forms sent." }).waitFor();
+        await capture("no-forms");
+        await list.getByRole("link", { name: "Open overview" }).click();
+        await tab.waitForURL(/view=overview/);
+
+        if (width === 1440) {
+          await open("&bookedSent=1");
+          await switchTo("Invited/booked");
+          await review("Booked Without Answers").click();
+          assert.equal(await dialog.locator("dt:text-is('Form') + dd").innerText(), "Awaiting reply");
+          assert.equal(await dialog.locator("dt:text-is('Visit email') + dd").innerText(), "Sent 24 Nov, 12:00");
+
+          await open("&refresh=fail");
+          await review(expected[0]).click();
+          await reason().fill("Ready for the paper test");
+          await dialog.getByRole("button", { name: "Invite to visit" }).click();
+          await dialog.getByRole("alert").filter({ hasText: "Saved. Could not refresh the list." }).waitFor();
+          await dialog.getByRole("button", { name: "Refresh list" }).click();
+          await next.waitFor();
+          assert.equal(await tab.evaluate(() => window.posted.length), 1);
+          await tab.keyboard.press("Escape");
+
+          await switchTo("Set aside");
+          await review("Sample Aside").click();
+          await reason().fill("Review the additional evidence");
+          await dialog.getByRole("button", { name: "Bring back" }).click();
+          await dialog.getByText("Brought back for Sample Aside. Next: Arun Dee.").waitFor();
+          assert.equal(await tab.evaluate(() => window.posted.at(-1).action), "bring_back");
+          await tab.keyboard.press("Escape");
+          await review("Sample Aside").click();
+          await dialog.getByRole("button", { name: "Invite anyway", exact: true }).waitFor();
+          assert.equal(await dialog.getByRole("button", { name: "Bring back", exact: true }).count(), 0);
+          await tab.keyboard.press("Escape");
+          await switchTo("Set aside");
+          assert.equal(await review("Sample Aside").count(), 0);
+
+          await tab.goto(origin + "/hiring?view=prescreen&prescreen=1&failFirst=1");
+          await tab.getByRole("alert").filter({ hasText: "Could not load pre-screen." }).waitFor();
+          await tab.getByRole("button", { name: "Try again" }).click();
+          await review(expected[0]).waitFor();
+        }
+        assert.deepEqual(focusObscured.filter((probe) => probe.obscured), [], "A sheet field is obscured");
+        assert.deepEqual(await Promise.all(errors), []);
+      } catch (error) {
+        process.stderr.write(`${name} ${width}×${height}: ${error.stack}\n`);
+        failures.push(`${name} ${width}×${height}: ${error.message.split("\n")[0]}`);
+      } finally {
+        results[name][width] = { width, height, ...states.queue, focusObscured, states };
+        await context.close();
+      }
+    }
+
+    let wk;
+    try {
+      for (const [width, height] of [[1440, 900], [390, 844], [320, 700]]) await run(browser, "chromium", width, height);
+      wk = await webkit.launch();
+      for (const [width, height] of [[1440, 900], [390, 844], [320, 700]]) await run(wk, "webkit", width, height);
+      assert.deepEqual(failures, []);
+    } finally {
+      if (OUT) {
+        mkdirSync(OUT, { recursive: true });
+        writeFileSync(path.join(OUT, "metrics.json"), JSON.stringify(results, null, 2) + "\n");
+        writeFileSync(path.join(OUT, "words.txt"), words.join("\n") + "\n");
       }
       await wk?.close();
     }
