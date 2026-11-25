@@ -178,7 +178,7 @@ if (location.search.includes("analytics=1")) {
   const LAST = ["Sample", "Example", "Testa", "Mockley", "Demo", "Fixture", "Placeholder", "Specimen"];
   const day = 86400000;
   const ago = (d: number) => new Date(Date.now() - d * day).toISOString();
-  const STAGES: [string, number][] = [["new", 0.36], ["review", 0.2], ["pre_screen", 0.1], ["onsite_invited", 0.02], ["onsite_booked", 0.02], ["no_reply", 0.02], ["no_booking", 0.01], ["stopped", 0.25], ["rejected", 0.01], ["hired", 0.01]];
+  const STAGES: [string, number][] = [["new", 0.16], ["review", 0.1], ["soft_rejected", 0.3], ["pre_screen", 0.1], ["onsite_invited", 0.02], ["onsite_booked", 0.02], ["no_reply", 0.02], ["no_booking", 0.01], ["stopped", 0.25], ["rejected", 0.01], ["hired", 0.01]];
   const stageOf = () => { let r = rand(); for (const [s, w] of STAGES) { if ((r -= w) < 0) return s; } return "new"; };
   const result = () => { const r = rand(); return r < 0.55 ? "met" : r < 0.8 ? "partial" : "not_met"; };
   const outbox = payload.outbox as Record<string, unknown>[];

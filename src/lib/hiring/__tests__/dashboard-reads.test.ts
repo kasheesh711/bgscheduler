@@ -25,6 +25,8 @@ const assessment = (result: "met" | "partial"): Assessment => ({
 });
 const row = (id: string, a: Assessment | null, createdAt: string): FormCandidate => ({
   id,
+  stage: "new",
+  broughtBackAt: null,
   createdAt: new Date(createdAt),
   email: `${id}@example.com`,
   previouslyContacted: false,
@@ -73,6 +75,8 @@ function fakeDb(answer: unknown[][] = []) {
 }
 const driverRows = rows.map((r) => [
   r.id,
+  r.stage,
+  r.broughtBackAt,
   r.createdAt.toISOString().replace("T", " ").replace("Z", "+00"),
   r.email,
   r.previouslyContacted,

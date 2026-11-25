@@ -119,6 +119,8 @@ export const stageSchema = z.enum([
   "stopped",
   "hired",
   "rejected",
+  // Under the pass score and never emailed (Kevin, 25 Nov 2026). Not stuck; comes back by a click or an empty subject.
+  "soft_rejected",
 ]);
 /** A person sent the result. No import, queue or automatic pass may move this stage. */
 export const DECIDED_STAGES = ["hired", "rejected"] as const;
@@ -258,6 +260,11 @@ export const baseConfigSchema = z
       .max(5)
       .default([{ jobId: LEGACY_SEEK_JOB_ID, label: "Tutor ad 2026", active: true }]),
     profileThreshold: z.number().int().min(0).max(100).default(60),
+    /**
+     * Soft reject (Kevin, 25 Nov 2026): when a subject has nobody left at the pass score, the worker brings back its best
+     * soft-rejected candidate at or above this profile score. Null turns the automatic bring-back off.
+     */
+    bringBackFloor: z.number().int().min(0).max(100).nullable().default(null),
     /** A gate pass at or above this profile score waits for HR's good call before the form can go. Null turns calls off. */
     callThreshold: z.number().int().min(0).max(100).nullable().default(80),
     profileWeights: profileWeightsSchema.default(DEFAULT_WEIGHTS),

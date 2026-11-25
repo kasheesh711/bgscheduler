@@ -82,13 +82,13 @@ describe("buildFunnel", () => {
   it("dates stages from events and marks stuck candidates", () => {
     // a's call is on 20 Nov, still ahead: days count from the call link (17 Nov), and it cannot be stuck yet.
     expect(all.currentStage["new (call booked)"]).toMatchObject({ n: 1, stuck: 0, stuckAfterDays: null, medianDays: 0.6 });
-    // c has no move-to-review event: its time starts at import, so it is stuck. d moved 2.6 days ago.
-    expect(all.currentStage.review).toMatchObject({ n: 2, stuck: 1, sinceIsImportTime: 1, stuckIds: ["c"] });
+    // c has no move-to-review event: its time starts at import. Never emailed, so never stuck (Kevin, 25 Nov 2026).
+    expect(all.currentStage.review).toMatchObject({ n: 2, stuck: 0, sinceIsImportTime: 1, stuckIds: [] });
     // The visit was 7.6 days ago, over the 3-day rule.
     expect(all.currentStage.onsite_booked).toMatchObject({ n: 1, stuck: 1, stuckAfterDays: 3, medianDays: 7.6 });
     expect(all.currentStage.paper_passed).toMatchObject({ stuck: 1, stuckAfterDays: 14 });
-    expect(all.currentStage.new).toMatchObject({ n: 2, stuck: 2 });
-    expect(all.stuck).toBe(5);
+    expect(all.currentStage.new).toMatchObject({ n: 2, stuck: 0 });
+    expect(all.stuck).toBe(2);
   });
 
   it("never gives negative days: a future call counts from its booking time", () => {
@@ -110,7 +110,8 @@ describe("buildFunnel", () => {
     );
     expect(r.byCandidate.x).toEqual({ stageKey: "new (call booked)", daysInStage: 2.6041666666666665, stuck: false });
     // y's call was 12 Nov and nobody recorded the result: 5.6 days after the call, over the 3-day rule.
-    expect(r.byCandidate.y).toMatchObject({ stageKey: "new (call booked)", stuck: true });
+    // Before any email nobody is stuck (Kevin, 25 Nov 2026), a call that has passed included.
+    expect(r.byCandidate.y).toMatchObject({ stageKey: "new (call booked)", stuck: false });
     expect(r.byCandidate.y.daysInStage).toBeCloseTo(5.604);
   });
 

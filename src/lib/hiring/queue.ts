@@ -16,6 +16,7 @@ import {
   normalizeSubjects,
   runtimeWritesAllowed,
   type HiringConfig,
+  type Stage,
   type Subject,
 } from "./model";
 import {
@@ -238,10 +239,12 @@ export const autoInviteEligible = (candidate: Candidate, sentAt: Date | null, co
  * Reads only the columns the gate and the score use, because profile text and the other large fields are not needed to rank.
  * A release locks and reads the full row before it sends anything.
  */
-export const formCandidates = (db: Database, id?: string) =>
+export const formCandidates = (db: Database, id?: string, stages: Stage[] = ["new"]) =>
   db
     .select({
       id: c.id,
+      stage: c.stage,
+      broughtBackAt: c.broughtBackAt,
       createdAt: c.createdAt,
       email: c.email,
       previouslyContacted: c.previouslyContacted,
@@ -268,7 +271,7 @@ export const formCandidates = (db: Database, id?: string) =>
     .where(
       and(
         id ? eq(c.id, id) : undefined,
-        eq(c.stage, "new"),
+        inArray(c.stage, stages),
         isNull(c.preScreen),
         notExists(db.select({ id: o.id }).from(o).where(and(eq(o.candidateId, c.id), isForm))),
       ),
@@ -296,6 +299,76 @@ export function preScreenEntries(rows: FormCandidate[], config: HiringConfig): Q
         ]
       : [];
   });
+}
+
+/**
+ * Soft reject and bring back (Kevin, 25 Nov 2026), from rows already read. Pure, so the rules are unit tested.
+ * - Soft reject: a never-emailed row at `new` or `review`, not brought back before, that the pass score holds
+ *   (the gate's own "Below profile threshold" reason, so a good call or a booked call still exempts it).
+ * - Restore: a soft-rejected row whose gate now passes (the pass score was lowered) goes back to `new` as it was.
+ * - Bring back: for each subject still hiring that has nobody in the form queue, the best soft-rejected row at or
+ *   above `bringBackFloor` whose gate passes once the pass score no longer holds it. One a subject per cycle, so the
+ *   queue limits pace them. A blank floor turns this off.
+ */
+export function softRejectPlan(
+  open: FormCandidate[],
+  softRejected: FormCandidate[],
+  config: HiringConfig,
+): { reject: { id: string; score: number }[]; restore: string[]; bringBack: { id: string; subject: Subject; score: number }[] } {
+  const score = (row: FormCandidate) =>
+    profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0, workRightsPenalty(row.workRightsAnswer, config), highSchoolFraction(row.profileAssessment, config));
+  const reject = open
+    .filter((row) => row.profileAssessment && !row.broughtBackAt && profileGate(row, config).short.includes("Below profile threshold"))
+    .map((row) => ({ id: row.id, score: score(row) }));
+  const rejected = new Set(reject.map((r) => r.id));
+  const restore = softRejected.filter((row) => row.profileAssessment && profileGate(row, config).eligible).map((row) => row.id);
+  const restored = new Set(restore);
+  const queued = new Set(
+    preScreenEntries([...open.filter((row) => row.stage === "new" && !rejected.has(row.id)), ...softRejected.filter((row) => restored.has(row.id))], config).map((e) => e.subject),
+  );
+  const best = new Map<Subject, { id: string; subject: Subject; score: number }>();
+  for (const row of softRejected) {
+    if (!row.profileAssessment || restored.has(row.id) || config.bringBackFloor === null || score(row) < config.bringBackFloor) continue;
+    const gate = profileGate({ ...row, broughtBackAt: new Date(0) }, config);
+    if (!gate.eligible || !gate.subject || queued.has(gate.subject)) continue;
+    const pick = { id: row.id, subject: gate.subject, score: score(row) };
+    const held = best.get(gate.subject);
+    if (!held || pick.score > held.score) best.set(gate.subject, pick);
+  }
+  return { reject, restore, bringBack: [...best.values()] };
+}
+
+/** Runs the plan inside the queue lock: rows move between `new`/`review` and `soft_rejected`. No email either way. */
+async function softRejectAndBringBack(tx: Database, config: HiringConfig, now: Date) {
+  const plan = softRejectPlan(await formCandidates(tx, undefined, ["new", "review"]), await formCandidates(tx, undefined, ["soft_rejected"]), config);
+  for (const { id, score } of plan.reject) {
+    const row = await lockCandidate(tx, id);
+    if (row.stage !== "new" && row.stage !== "review") continue;
+    await tx
+      .update(c)
+      .set({ stage: "soft_rejected", softRejectedAt: now, reviewNote: `Soft rejected: profile score ${Math.round(score)} is under ${config.profileThreshold}.`, revision: row.revision + 1, updatedAt: now })
+      .where(eq(c.id, id));
+    await audit(tx, "hiring-queue", "soft-reject", id, { score, threshold: config.profileThreshold });
+  }
+  for (const id of plan.restore) {
+    const row = await lockCandidate(tx, id);
+    if (row.stage !== "soft_rejected") continue;
+    await tx
+      .update(c)
+      .set({ stage: "new", reviewNote: "Back to New: the profile score now meets the pass score.", revision: row.revision + 1, updatedAt: now })
+      .where(eq(c.id, id));
+    await audit(tx, "hiring-queue", "soft-reject-restore", id, { threshold: config.profileThreshold });
+  }
+  for (const { id, subject, score } of plan.bringBack) {
+    const row = await lockCandidate(tx, id);
+    if (row.stage !== "soft_rejected") continue;
+    await tx
+      .update(c)
+      .set({ stage: "new", broughtBackAt: now, reviewNote: `Brought back: no candidate at the pass score was left for ${subject}.`, revision: row.revision + 1, updatedAt: now })
+      .where(eq(c.id, id));
+    await audit(tx, "hiring-queue", "bring-back", id, { subject, score, auto: true });
+  }
+  return { softRejected: plan.reject.length, broughtBack: plan.bringBack.length + plan.restore.length };
 }
 
 /**
@@ -555,7 +628,8 @@ export async function releaseQueues(db: Database, now = new Date()) {
   return withDatabaseTransaction(db, async (tx) => {
     await lockQueue(tx);
     const { config } = await settings(tx);
-    if (!allowed(config)) return { preScreen: 0, onsite: 0 };
+    if (!allowed(config)) return { preScreen: 0, onsite: 0, softRejected: 0, broughtBack: 0 };
+    const sorted = await softRejectAndBringBack(tx, config, now);
     let preScreen = 0,
       onsite = 0;
     const forms = releaseQueue(
@@ -596,7 +670,7 @@ export async function releaseQueues(db: Database, now = new Date()) {
       await audit(tx, "hiring-queue", "onsite-release", row.id, { subject, score: entry.score });
       onsite++;
     }
-    return { preScreen, onsite };
+    return { preScreen, onsite, ...sorted };
   });
 }
 

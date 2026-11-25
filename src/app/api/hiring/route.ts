@@ -120,7 +120,7 @@ const command = z.discriminatedUnion("action", [
     .strict(),
   z
     .object({
-      action: z.enum(["advance", "paper_pass", "stop", "invite_onsite", "send_new_link", "cancel_visit", "mark_no_show"]),
+      action: z.enum(["advance", "paper_pass", "stop", "invite_onsite", "send_new_link", "cancel_visit", "mark_no_show", "bring_back"]),
       id: z.uuid(),
       revision: z.number().int().nonnegative(),
       subjects: z.array(subjectSchema).max(18),

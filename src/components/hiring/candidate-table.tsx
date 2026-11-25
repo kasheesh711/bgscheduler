@@ -10,7 +10,7 @@ import { CRITERION_LABELS, PILL_CLASS, RESULT_CLASS, RESULT_LABELS, type Insight
 import css from "./dashboard.module.css";
 
 type SortKey = "name" | "stage" | "score" | "updated" | "days";
-const STAGE_ORDER = [...ACTIVE_STAGES, "no_reply", "no_booking", "hired", "rejected", "stopped"] as Stage[];
+const STAGE_ORDER = [...ACTIVE_STAGES, "no_reply", "no_booking", "soft_rejected", "hired", "rejected", "stopped"] as Stage[];
 const shortDate = (value: unknown) =>
   new Date(String(value)).toLocaleDateString("en-GB", {
     day: "numeric",

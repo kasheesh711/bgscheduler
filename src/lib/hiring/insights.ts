@@ -17,6 +17,7 @@ export const STAGE_LABELS: Record<Stage, string> = {
   stopped: "Stopped",
   hired: "Hired",
   rejected: "Rejected",
+  soft_rejected: "Soft rejected",
 };
 export const ACTIVE_STAGES: Stage[] = [
   "new",
@@ -130,6 +131,8 @@ export function profileGate(
     callInvited?: boolean;
     /** A confirmed HR call exists, ahead or started with no result yet. */
     callBooked?: boolean;
+    /** Brought back from soft rejected (Kevin, 25 Nov 2026): the pass score no longer holds them. */
+    broughtBackAt?: Date | string | null;
   },
   config: GateConfig,
 ): {
@@ -164,7 +167,7 @@ export function profileGate(
     // Kevin, 24 Nov 2026: a raised score does not undo a call that is booked or done. The booked call stays on the Calls
     // tab, and a good call still sends the form. A blank call score turns calls off and ends a booked call, as before.
     const booked = !!candidate.callBooked && config.callThreshold !== null;
-    if (score < config.profileThreshold && !called && !booked) add("The profile score is below the threshold.", "Below profile threshold");
+    if (score < config.profileThreshold && !called && !booked && !candidate.broughtBackAt) add("The profile score is below the threshold.", "Below profile threshold");
     awaitingCall = !called && ((config.callThreshold !== null && score >= config.callThreshold) || booked);
     if (assessment.criteria.some((c) => c.id === "degree" && c.result === "not_met"))
       final("The degree criterion is not met.", "Degree not met");
