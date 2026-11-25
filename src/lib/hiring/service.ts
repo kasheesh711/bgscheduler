@@ -80,6 +80,7 @@ import {
   preScreenEntries,
   preScreenTotal,
   readLimitUsage,
+  unsoftReject,
 } from "./queue";
 import { profileGate } from "./insights";
 import { FUNNEL_AUDIT_ACTIONS, windowStart } from "./funnel";
@@ -2499,7 +2500,7 @@ export async function reviewCandidate(
   id: string,
   input: {
     revision: number;
-    action: "advance" | "paper_pass" | "stop" | "invite_onsite" | "send_new_link" | "cancel_visit" | "mark_no_show";
+    action: "advance" | "paper_pass" | "stop" | "invite_onsite" | "send_new_link" | "cancel_visit" | "mark_no_show" | "bring_back";
     subjects: Subject[];
     reason: string;
   },
@@ -2564,6 +2565,15 @@ export async function reviewCandidate(
         })
         .where(eq(s.hiringCandidates.id, id));
       detail = { visitId: exam.visitId, examStart: exam.startTime.toISOString() };
+    } else if (input.action === "bring_back") {
+      // Kevin, 25 Nov 2026: a soft-rejected candidate comes back to New, and the pass score no longer holds them.
+      // The worker's gate and queue then decide as for anyone else. No email here.
+      if (c.stage !== "soft_rejected") throw new HiringError(409, "Only a soft-rejected candidate can be brought back.");
+      // Back where they were: a review row goes back to review, where only a person emails it.
+      await tx
+        .update(s.hiringCandidates)
+        .set({ ...unsoftReject(c), broughtBackAt: now, reviewNote: input.reason, revision: c.revision + 1, updatedAt: now })
+        .where(eq(s.hiringCandidates.id, id));
     } else if (input.action === "stop") {
       if (isDecided(c.stage)) throw new HiringError(409, "A result was already sent to this candidate. Send a new decision to change it.");
       // HR's bad call is this action, so a booked call never refuses it: one still ahead is cancelled first.

@@ -307,7 +307,7 @@ describe("usage counts", () => {
     const first = await seed({ stage: "pre_screen", subjects: ["Mathematics"] });
     await formRow(first.id, { status: "pending", sentAt: null });
     await seed();
-    expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+    expect(await releaseQueues(db)).toMatchObject({ preScreen: 0, onsite: 0 });
     expect(await forms()).toHaveLength(1);
   });
   it.each([
@@ -425,10 +425,10 @@ describe("a person's score", () => {
     expect((await onsiteQueue(db, await settingsConfig())).map((e) => e.id)).toEqual([row.id]);
     await db.update(s.hiringCandidates).set({ preScreenOverride: { score: 10, reason: "Weak", by: "o", at: "" } }).where(eq(s.hiringCandidates.id, row.id));
     expect(await onsiteQueue(db, await settingsConfig())).toEqual([]);
-    expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+    expect(await releaseQueues(db)).toMatchObject({ preScreen: 0, onsite: 0 });
     await db.update(s.hiringCandidates).set({ preScreenOverride: { score: 99, reason: "Strong", by: "o", at: "" } }).where(eq(s.hiringCandidates.id, row.id));
     expect(await onsiteQueue(db, await settingsConfig())).toEqual([]);
-    expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+    expect(await releaseQueues(db)).toMatchObject({ preScreen: 0, onsite: 0 });
   });
   it("the worker cycle leaves a changed score at its stage", async () => {
     const row = await seed({
@@ -492,11 +492,11 @@ describe("call queue", () => {
     const strong = await seed();
     const middle = await seed({ profileAssessment: seventy() as never });
     expect((await callQueue(db, await settingsConfig())).map((e) => e.id)).toEqual([strong.id]);
-    expect(await releaseQueues(db)).toEqual({ preScreen: 1, onsite: 0 });
+    expect(await releaseQueues(db)).toMatchObject({ preScreen: 1, onsite: 0 });
     expect((await forms()).map((f) => f.candidateId)).toEqual([middle.id]);
     await recordCall(strong.id, "good", hr, db);
     expect(await callQueue(db, await settingsConfig())).toEqual([]);
-    expect(await releaseQueues(db)).toEqual({ preScreen: 1, onsite: 0 });
+    expect(await releaseQueues(db)).toMatchObject({ preScreen: 1, onsite: 0 });
     expect((await forms()).map((f) => f.candidateId).sort()).toEqual([strong.id, middle.id].sort());
   });
   it("keeps private notes after a good call and refuses to overwrite a newer save", async () => {
@@ -525,7 +525,7 @@ describe("call queue", () => {
     const stored = await candidate(row.id);
     expect(stored).toMatchObject({ stage: "new", revision: row.revision });
     expect(stored.callReview).toEqual({ good: null, tries: [{ at: now.toISOString(), by: hr }, { at: after(1).toISOString(), by: hr }] });
-    expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+    expect(await releaseQueues(db)).toMatchObject({ preScreen: 0, onsite: 0 });
     expect(await outbox()).toEqual([]);
     expect((await callQueue(db, await settingsConfig())).map((e) => e.id)).toEqual([row.id]);
     const actions = (await db.select().from(s.hiringAudit)).map((a) => a.action);
@@ -553,7 +553,7 @@ describe("call queue", () => {
     await reviewCandidate(row.id, { revision: row.revision, action: "stop", subjects: ["Mathematics"], reason: "Bad call before the pre-screen form." }, hr, db);
     expect((await candidate(row.id)).stage).toBe("stopped");
     expect(await callQueue(db, await settingsConfig())).toEqual([]);
-    expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+    expect(await releaseQueues(db)).toMatchObject({ preScreen: 0, onsite: 0 });
     expect(await outbox()).toEqual([]);
   });
   it("needs no call when the call score is blank", async () => {
@@ -578,13 +578,13 @@ describe("form queue", () => {
     for (let i = 0; i < 2; i++) await seed({ profileAssessment: five(["Chemistry"]) as never });
     for (let i = 0; i < 34; i++) await seed();
     expect(await preScreenQueue(db, await settingsConfig())).toHaveLength(38);
-    expect(await releaseQueues(db)).toEqual({ preScreen: 5, onsite: 0 });
+    expect(await releaseQueues(db)).toMatchObject({ preScreen: 5, onsite: 0 });
     const released = await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.stage, "pre_screen"));
     expect(released).toHaveLength(5);
     // Physics ranks first, at its subject limit of 3. Chemistry is not hiring.
     expect(released.filter((c) => c.subjects[0] === "Physics")).toHaveLength(3);
     expect(released.filter((c) => c.subjects[0] === "Mathematics")).toHaveLength(2);
-    expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+    expect(await releaseQueues(db)).toMatchObject({ preScreen: 0, onsite: 0 });
     expect(await forms()).toHaveLength(5);
     // The next Bangkok day has room again, but each subject still holds its open places (3 Physics, 2 of 3 Mathematics).
     vi.setSystemTime(new Date("2026-11-04T17:00:00Z"));
@@ -605,6 +605,59 @@ describe("form queue", () => {
     const rows = await forms();
     expect(rows.map((j) => j.key)).toEqual([`${row.id}:pre-screen`]);
     expect(rows[0].payload.text).toContain("/hiring/book/");
+  });
+  it("soft rejects never-emailed rows under the pass score, and brings one back for a subject with nobody left", async () => {
+    await setConfig({
+      bringBackFloor: 0,
+      subjectPriority: [
+        { subject: "Physics", hiring: true },
+        { subject: "Mathematics", hiring: true },
+      ],
+    });
+    const weak = (subject: string) => ({
+      ...five([subject]),
+      criteria: ids.map((id) => ({ id, result: ["degree", "subject"].includes(id) ? "met" : "not_met", evidence: id, reason: "Source" })),
+    });
+    const pass = await seed({ profileAssessment: five(["Mathematics"]) as never });
+    const lowNew = await seed({ profileAssessment: weak("Mathematics") as never });
+    const lowReview = await seed({ stage: "review", reviewNote: "SEEK status: Shortlist.", profileAssessment: weak("Physics") as never });
+    const old = await seed({ stage: "soft_rejected", profileAssessment: weak("Physics") as never });
+    const result = await releaseQueues(db);
+    expect(result).toMatchObject({ softRejected: 2, broughtBack: 1 });
+    const stage = async (id: string) => (await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, id)))[0];
+    expect((await stage(lowNew.id)).stage).toBe("soft_rejected");
+    expect((await stage(lowNew.id)).softRejectedAt).not.toBeNull();
+    expect((await stage(lowReview.id)).stage).toBe("soft_rejected");
+    // Physics had nobody at the pass score: the soft-rejected row came back and its form went in the same cycle.
+    expect((await stage(old.id)).broughtBackAt).not.toBeNull();
+    expect((await stage(old.id)).stage).toBe("pre_screen");
+    expect((await stage(pass.id)).stage).toBe("pre_screen");
+    // Soft reject sends nothing.
+    expect((await forms()).map((j) => j.candidateId).sort()).toEqual([pass.id, old.id].sort());
+    // Mathematics is empty now, so its soft-rejected row from New comes back and is emailed. Physics is empty too, but
+    // its only soft-rejected row came from review: only a person emails a review row.
+    expect(await releaseQueues(db)).toMatchObject({ softRejected: 0, broughtBack: 1, preScreen: 1 });
+    expect((await stage(lowNew.id)).stage).toBe("pre_screen");
+    expect((await stage(lowReview.id)).stage).toBe("soft_rejected");
+    // A lowered pass score restores the review row to review, with its note then; it is never emailed.
+    expect((await stage(lowReview.id)).softRejectedNote).toBe("SEEK status: Shortlist.");
+    await setConfig({ profileThreshold: 0, bringBackFloor: null, subjectPriority: [{ subject: "Physics", hiring: true }, { subject: "Mathematics", hiring: true }] });
+    expect(await releaseQueues(db)).toMatchObject({ broughtBack: 1, preScreen: 0 });
+    expect((await stage(lowReview.id)).stage).toBe("review");
+    expect((await stage(lowReview.id)).reviewNote).toBe("SEEK status: Shortlist.");
+    expect((await forms()).map((j) => j.candidateId)).not.toContain(lowReview.id);
+  });
+  it("brings a soft-rejected candidate back by hand, where they came from, and refuses anyone else", async () => {
+    const weak = { ...five(["Mathematics"]), criteria: ids.map((id) => ({ id, result: ["degree", "subject"].includes(id) ? "met" : "not_met", evidence: id, reason: "Source" })) };
+    const row = await seed({ stage: "soft_rejected", softRejectedFrom: "new", profileAssessment: weak as never });
+    const other = await seed();
+    await expect(reviewCandidate(other.id, { revision: other.revision, action: "bring_back", subjects: [], reason: "Bring them back" }, "kevin", db)).rejects.toMatchObject({ status: 409 });
+    await reviewCandidate(row.id, { revision: row.revision, action: "bring_back", subjects: [], reason: "Bring them back" }, "kevin", db);
+    const back = await candidate(row.id);
+    expect([back.stage, back.revision, back.broughtBackAt !== null]).toEqual(["new", row.revision + 1, true]);
+    // The pass score no longer holds them: the next cycle sends the form.
+    expect(await releaseQueues(db)).toMatchObject({ preScreen: 2 });
+    expect((await candidate(row.id)).stage).toBe("pre_screen");
   });
   it("only stage new enters the form queue", async () => {
     const paused = await seed();
@@ -669,14 +722,14 @@ describe("form queue", () => {
     const before = await outbox();
     for (let day = 0; day < 4; day++) {
       vi.setSystemTime(after(day));
-      expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+      expect(await releaseQueues(db)).toMatchObject({ preScreen: 0, onsite: 0 });
       expect(await runFollowUps(db)).toEqual({ reminded: 0, expired: 0 });
       expect(await runHiringCycle(db, (_s, _k, kind) => assessment(kind))).toMatchObject({ preScreen: 0, onsite: 0, reminded: 0, expired: 0 });
     }
     expect(await outbox()).toEqual(before);
     expect((await candidate(waiting.id)).stage).toBe("pre_screen");
     await setConfig({ preScreenLimits: { perDay: 5, perWeek: 15, waiting: 15, perSubject: 8 } });
-    expect(await releaseQueues(db)).toEqual({ preScreen: 5, onsite: 1 });
+    expect(await releaseQueues(db)).toMatchObject({ preScreen: 5, onsite: 1 });
   });
 });
 
@@ -1360,7 +1413,7 @@ describe("reply rule", () => {
     const row = await replied();
     expect(await onsiteQueue(db, current)).toEqual([]);
     await expect(withDatabaseTransaction(db, (tx) => inviteToVisit(tx, row, current, "click"))).rejects.toThrow(/subject/);
-    expect(await releaseQueues(db)).toEqual({ preScreen: 0, onsite: 0 });
+    expect(await releaseQueues(db)).toMatchObject({ preScreen: 0, onsite: 0 });
     expect((await candidate(fresh.id)).stage).toBe("new");
     expect((await candidate(row.id)).stage).toBe("pre_screen");
   });
@@ -1523,7 +1576,6 @@ describe("profile gate sweep", () => {
       {},
       (row) => db.update(s.hiringCandidates).set({ workRightsAnswer: ACCEPTED }).where(eq(s.hiringCandidates.id, row.id)),
     ],
-    ["a score below the threshold", {}, { profileThreshold: 90 }, () => setConfig({})],
   ])("%s stays new and out of the queue, then enters after the change", async (_name, values, patch, cure) => {
     await setConfig(patch);
     const row = await scored(values);
@@ -1538,6 +1590,19 @@ describe("profile gate sweep", () => {
     expect((await preScreenQueue(db, await settingsConfig())).map((e) => e.id)).toEqual([row.id]);
     expect(await ready(row)).toBe(true);
     expect((await candidate(row.id)).stage).toBe("new");
+    expect(await runHiringCycle(db, noModel)).toMatchObject({ preScreen: 1 });
+    expect((await candidate(row.id)).stage).toBe("pre_screen");
+    expect(await forms()).toHaveLength(1);
+    expect(noModel).not.toHaveBeenCalled();
+  });
+  it("a score below the threshold is soft rejected, sends nothing, and comes back when the threshold is lowered", async () => {
+    await setConfig({ profileThreshold: 90 });
+    const row = await scored();
+    for (let cycle = 0; cycle < 2; cycle++) await runHiringCycle(db, noModel);
+    expect((await candidate(row.id)).stage).toBe("soft_rejected");
+    expect(await outbox()).toEqual([]);
+    expect(await moves()).toEqual([]);
+    await setConfig({});
     expect(await runHiringCycle(db, noModel)).toMatchObject({ preScreen: 1 });
     expect((await candidate(row.id)).stage).toBe("pre_screen");
     expect(await forms()).toHaveLength(1);

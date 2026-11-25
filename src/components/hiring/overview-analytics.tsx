@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { formatInTimeZone } from "date-fns-tz";
-import { buildFunnel, FUNNEL_STEPS, percentile, roundTo, STEP_TIMING, STUCK_RULES, type FunnelReport, type FunnelStep, type GroupFunnel } from "@/lib/hiring/funnel";
+import { buildFunnel, CLOSED_STAGES, FUNNEL_STEPS, percentile, roundTo, STEP_TIMING, STUCK_RULES, type FunnelReport, type FunnelStep, type GroupFunnel } from "@/lib/hiring/funnel";
 import { buildGems, schoolStrength, type Gem, type GemKind } from "@/lib/hiring/gems";
 import { buildNextEmails, type EmailKind, type NextEmail } from "@/lib/hiring/next-emails";
 import { buildForecast, type ForecastRow } from "@/lib/hiring/forecast";
@@ -15,7 +15,7 @@ import css from "./overview-analytics.module.css";
 /** Filters the candidate table below to these ids; `label` names them in the filter line. */
 type Show = (ids: string[], label: string) => void;
 const pct = (v: number) => `${Math.round(v * 100)}%`;
-const CLOSED = new Set(STUCK_RULES.filter((r) => r.days === null).map((r) => r.stage));
+const CLOSED = new Set<string>(CLOSED_STAGES);
 const DAY = 86_400_000;
 
 /**
@@ -152,13 +152,15 @@ function Pulse({ data, report, now, onShow }: { data: HiringData; report: Funnel
   const scored = all.filter((c) => c.profileScore !== null);
   const pass = scored.filter((c) => (c.profileScore ?? 0) >= data.config.profileThreshold);
   const stuck = open.filter((c) => report.byCandidate[c.id]?.stuck);
+  // Stuck can only start after the first email, so its share is of the emailed open candidates.
+  const emailed = open.filter((c) => c.stage !== "new" && c.stage !== "review");
   const hired = all.filter((c) => c.stage === "hired");
   const problems = data.outbox.filter((j) => j.status === "failed" || j.status === "uncertain").length;
   const minutes = data.workerAt ? Math.round((now.getTime() - new Date(data.workerAt).getTime()) / 60000) : null;
   const items: { label: string; n: number; of: number; ids: string[]; tone?: string }[] = [
     { label: "Open", n: open.length, of: all.length, ids: open.map((c) => c.id) },
     { label: `Score ${data.config.profileThreshold}+`, n: pass.length, of: scored.length, ids: pass.map((c) => c.id) },
-    { label: "Stuck", n: stuck.length, of: open.length, ids: stuck.map((c) => c.id), tone: css.warnBar },
+    { label: "Stuck (emailed)", n: stuck.length, of: emailed.length, ids: stuck.map((c) => c.id), tone: css.warnBar },
     { label: "Offer stage", n: hired.length, of: all.length, ids: hired.map((c) => c.id), tone: css.goodBar },
   ];
   const state = (on: boolean, label: string) => (
@@ -404,7 +406,9 @@ function Emails({ rows, scoreOf, pass, now, workerLate, onOpen, onShow }: { rows
 function Stages({ data, report, now, onShow }: { data: HiringData; report: FunnelReport; now: Date; onShow: Show }) {
   // Onsite booked splits at the visit time: before it the visit is ahead; after it a decision is due.
   const ahead = new Set(data.bookings.filter((b) => b.status === "confirmed" && new Date(b.startTime) > now).map((b) => b.candidateId));
-  const rules = STUCK_RULES.filter((r) => r.days !== null).flatMap((r) =>
+  // Every open stage. Before the first email (days null: New, In review) a row only counts; stuck and median start
+  // at the first email (Kevin, 25 Nov 2026).
+  const rules = STUCK_RULES.filter((r) => !CLOSED.has(r.stage)).flatMap((r) =>
     r.key === "onsite_booked"
       ? [
           { ...r, key: "visit_ahead", label: "Visit ahead", only: (id: string) => ahead.has(id) },
@@ -416,12 +420,13 @@ function Stages({ data, report, now, onShow }: { data: HiringData; report: Funne
     const list = data.candidates.filter((c) => report.byCandidate[c.id]?.stageKey === (r.key === "visit_ahead" || r.key === "decision_due" ? "onsite_booked" : r.key) && r.only(c.id));
     if (!list.length) return [];
     const stuck = list.filter((c) => report.byCandidate[c.id].stuck).map((c) => c.id);
-    const median = roundTo(percentile(list.map((c) => report.byCandidate[c.id].daysInStage), 0.5), 1);
+    const median = r.days === null ? null : roundTo(percentile(list.map((c) => report.byCandidate[c.id].daysInStage), 0.5), 1);
     return [{ rule: r, ids: list.map((c) => c.id), stuck, median }];
   });
   const offer = data.candidates.filter((c) => c.stage === "hired");
   const parked = data.candidates.filter((c) => c.stage === "no_reply" || c.stage === "no_booking");
   const closed = data.candidates.filter((c) => c.stage === "stopped" || c.stage === "rejected");
+  const soft = data.candidates.filter((c) => c.stage === "soft_rejected");
   const max = Math.max(1, ...rows.map((r) => r.ids.length));
   return (
     <div className={css.stageList} role="table" aria-label="Candidates by current stage">
@@ -430,7 +435,7 @@ function Stages({ data, report, now, onShow }: { data: HiringData; report: Funne
         <span role="columnheader" />
         <span role="columnheader" className={css.num}>Now</span>
         <span role="columnheader" className={css.num}>Stuck</span>
-        <span role="columnheader" className={css.num}>Median</span>
+        <span role="columnheader" className={css.num} title="Median days in the stage, from the first email on">Median</span>
       </div>
       {rows.map(({ rule: r, ids, stuck, median }) => (
         <div key={r.key} className={css.stageRow} role="row">
@@ -443,7 +448,7 @@ function Stages({ data, report, now, onShow }: { data: HiringData; report: Funne
           </span>
           <b role="cell" className={css.num}>{ids.length}</b>
           <span role="cell" className={`${css.num} ${stuck.length ? css.warn : css.dim}`}>{stuck.length || "–"}</span>
-          <span role="cell" className={`${css.num} ${css.dim}`}>{median}d</span>
+          <span role="cell" className={`${css.num} ${css.dim}`}>{median === null ? "–" : `${median}d`}</span>
         </div>
       ))}
       <div className={css.stageRow} role="row">
@@ -457,6 +462,7 @@ function Stages({ data, report, now, onShow }: { data: HiringData; report: Funne
       </div>
       {(
         [
+          ["Soft rejected (under pass)", soft],
           ["Parked (no reply or booking)", parked],
           ["Closed", closed],
         ] as const

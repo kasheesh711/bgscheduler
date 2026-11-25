@@ -72,10 +72,11 @@ export const PAYLOAD_ROW_CAP = 2000;
  * and the next action with its owner (service-blueprint.md RACI, "A" column).
  */
 export const STUCK_RULES: { key: string; stage: string; label: string; days: number | null; why: string; next: string; owner: string }[] = [
-  { key: "new", stage: "new", label: "New, no call link", days: 14, why: "The worker checks the gate each cycle. Two weeks means a setting holds it.", next: "Check the gate reason. Change the rules or stop the candidate.", owner: "Kevin" },
-  { key: "new (call link sent, no call)", stage: "new", label: "New, call link sent", days: 7, why: "A call link lasts 14 days. A week with no booking is a stall.", next: "Candidate books the HR call.", owner: "Kevin" },
-  { key: "new (call booked)", stage: "new", label: "New, call booked", days: 3, why: "After the call time, HR must record the result.", next: "Record the call result under HR calls.", owner: "Kevin" },
-  { key: "review", stage: "review", label: "In review", days: 7, why: "It waits on a person.", next: "Read the record. Invite, move on or stop.", owner: "Kevin" },
+  // Kevin, 25 Nov 2026: nobody is stuck before the first email (the Next steps email). New and In review only count.
+  { key: "new", stage: "new", label: "New", days: null, why: "Not emailed yet. The worker checks the gate each cycle.", next: "None. The queue sends the Next steps email.", owner: "Kevin" },
+  { key: "new (call link sent, no call)", stage: "new", label: "New, call link sent", days: null, why: "Old HR call flow (calls ended 24 Nov 2026).", next: "None.", owner: "Kevin" },
+  { key: "new (call booked)", stage: "new", label: "New, call booked", days: null, why: "Old HR call flow (calls ended 24 Nov 2026).", next: "None.", owner: "Kevin" },
+  { key: "review", stage: "review", label: "In review", days: null, why: "Not emailed yet. It waits on a person.", next: "Read the record. Invite, move on or stop.", owner: "Kevin" },
   { key: "pre_screen", stage: "pre_screen", label: "Pre-screen", days: 7, why: "Form and reminder window.", next: "Candidate sends the form. The worker sends a reminder.", owner: "Kevin" },
   { key: "onsite_invited", stage: "onsite_invited", label: "Onsite invited", days: 7, why: "Invite link lifetime.", next: "Candidate books a visit.", owner: "Kevin" },
   { key: "onsite_booked", stage: "onsite_booked", label: "Onsite booked", days: 3, why: "The clock starts at the visit time. After the visit, a decision is due.", next: "Mark the paper and the mock, then send Hire or Reject.", owner: "Kevin" },
@@ -88,7 +89,11 @@ export const STUCK_RULES: { key: string; stage: string; label: string; days: num
   { key: "hired", stage: "hired", label: "Hired", days: null, why: "Closed.", next: "Offer and onboarding. No process yet.", owner: "Needs review: no owner" },
   { key: "rejected", stage: "rejected", label: "Rejected", days: null, why: "Closed.", next: "None. Closed.", owner: "Kevin" },
   { key: "stopped", stage: "stopped", label: "Stopped", days: null, why: "Closed.", next: "None. Closed.", owner: "Kevin" },
+  { key: "soft_rejected", stage: "soft_rejected", label: "Soft rejected", days: null, why: "Under the pass score and never emailed.", next: "None. Comes back by a click, or when a subject runs out of candidates at the pass score.", owner: "Kevin" },
 ];
+
+/** Stages that have left the active pipeline: parked, closed, decided or soft rejected. */
+export const CLOSED_STAGES = ["no_reply", "no_booking", "stopped", "hired", "rejected", "soft_rejected"];
 
 export type Stat = { n: number; median: number; p90: number };
 export type StageStat = {
@@ -391,7 +396,7 @@ function summarize(rows: Row[], weeks: number): GroupFunnel {
       stuckIds: list.filter((r) => r.stuck).map((r) => r.id),
     };
   }
-  const closedStages = new Set(STUCK_RULES.filter((r) => r.days === null).map((r) => r.stage));
+  const closedStages = new Set(CLOSED_STAGES);
   const stopped = Object.fromEntries(FUNNEL_STEPS.map(([step]) => [step, { open: [] as string[], closed: [] as string[] }])) as GroupFunnel["stopped"];
   for (const r of rows) {
     const last = FUNNEL_STEPS.findLast(([step]) => r.reached[step])?.[0] ?? "applied";

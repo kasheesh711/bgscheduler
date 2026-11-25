@@ -207,6 +207,17 @@ export function SetupPanel({
             />
           </label>
           <label className={css.weightRow}>
+            Auto bring-back minimum score (blank: off)
+            <input
+              className={css.numberInput}
+              type="number"
+              min={0}
+              max={100}
+              value={config.bringBackFloor ?? ""}
+              onChange={(e) => setConfig({ ...config, bringBackFloor: e.target.value === "" ? null : Number(e.target.value) })}
+            />
+          </label>
+          <label className={css.weightRow}>
             HR call score (blank: no calls)
             <input
               className={css.numberInput}

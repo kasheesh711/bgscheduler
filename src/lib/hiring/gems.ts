@@ -8,7 +8,7 @@ import { highSchoolFraction } from "./scoring";
  * - `school`: strong university or tier-1 high school, total profile score under the pass score.
  * - `blocker`: score at or above the pass score, and exactly one gate reason holds them (work rights, subject, email…).
  * - `idle`: score at or above the pass score, still open, and 14 or more days in the same stage.
- * Only rows nobody is working on count for the first two: new, review and stopped (marked `closed`).
+ * Only rows nobody is working on count for the first two: new, review, soft rejected, and stopped (marked `closed`).
  * Each person sits in one group only, first match in this order: blocker, idle, school.
  */
 export type GemKind = "school" | "blocker" | "idle";
@@ -17,8 +17,9 @@ export type Gem = { id: string; name: string; subject: string | null; score: num
 /** University fraction (0–1) at or above which the school counts as strong. Tier 1 high school is 1. */
 export const STRONG_SCHOOL = 0.75;
 export const IDLE_DAYS = 14;
-const UNWORKED = new Set<Stage>(["new", "review", "stopped"]);
-const CLOSED = new Set<Stage>(["stopped", "rejected", "hired", "no_reply", "no_booking"]);
+// Soft rejected (Kevin, 25 Nov 2026) stays a gem source: "strong school, under pass" is exactly who it holds.
+const UNWORKED = new Set<Stage>(["new", "review", "stopped", "soft_rejected"]);
+const CLOSED = new Set<Stage>(["stopped", "rejected", "hired", "no_reply", "no_booking", "soft_rejected"]);
 // Reasons that are not one rule holding a strong profile.
 const STAGE_WORD: Partial<Record<Stage, string>> = { new: "new", review: "review", pre_screen: "pre-screen", onsite_invited: "visit invite", onsite_booked: "visit booked" };
 const NOT_A_BLOCKER = new Set(["Below profile threshold", "Not scored", "Waiting for a call"]);

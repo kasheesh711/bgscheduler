@@ -420,6 +420,8 @@ export function CandidateInspector({
   const started = !visit || new Date(visit.startTime) <= new Date();
   const ahead = !!visit?.visitId && !started;
   const actions = [
+    // Kevin, 25 Nov 2026: a soft-rejected candidate goes back to New; the pass score no longer holds them.
+    { action: "bring_back", label: "Bring back", allowed: candidate.stage === "soft_rejected" },
     {
       action: "advance",
       label: "Invite to pre-screen",
