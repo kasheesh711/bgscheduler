@@ -37,7 +37,7 @@ import { AWAITING_CALL, profileGate } from "./insights";
 import { audit, briefLink, candidateById, hasBookedCall, RESUME_ATTACHED, RESUME_NOT_ATTACHED, prestigeCatalogHash, settings, sourceHash } from "./service";
 import { callInviteSentAt, cancelOrphanCalls, formSentAt, releaseCallInvites, releaseQueues, remindCallInvites, replyCheck, runFollowUps } from "./queue";
 import { contactLines, deliverRecruitment, queueRecruitmentInvitation } from "./recruitment";
-import { deliverCalendar } from "./google";
+import { deliverCalendar, type VisitHead } from "./google";
 import { hiringEmailHtmlFromText } from "./email";
 import { resumeAttachment } from "./resume-files";
 import { syncTracker, mirrorTracker } from "./sources";
@@ -765,14 +765,27 @@ export async function deliverOutbox(
 /**
  * The head who must hear about a visit's test (Kevin, 23 Nov 2026: only the relevant head, never every head). A paired
  * visit names its mock's head. A test-only visit has no head yet, so it goes to the roster heads of its subject. A mock
- * already invites its own head.
+ * names its own head (already its guest), for the title and the color.
  */
-export async function visitHead(db: Database, booking: typeof s.hiringBookings.$inferSelect, interviewers: { email: string; subjects: string[] }[]) {
+/** Google event colors, most different first: Tomato, Basil, Banana, Grape, Tangerine, Flamingo, Sage, Lavender, Peacock, Blueberry. No Graphite (looks like a declined event). */
+export const HEAD_COLORS = ["11", "10", "5", "3", "6", "4", "2", "1", "7", "9"];
+export async function visitHead(
+  db: Database,
+  booking: typeof s.hiringBookings.$inferSelect,
+  interviewers: { canonicalKey: string; email: string; subjects: string[] }[],
+): Promise<VisitHead[]> {
+  const head = (key: string | null, email: string): VisitHead => {
+    const at = interviewers.findIndex((h) => h.canonicalKey === key);
+    // Kevin, 25 Nov 2026: each head has their own color, given in roster order.
+    // shortcut: a head's color moves if the roster is reordered or a head before them is removed; add a color setting then.
+    return { key, email, ...(at >= 0 && { colorId: HEAD_COLORS[at % HEAD_COLORS.length] }) };
+  };
+  if (booking.kind === "mock") return booking.interviewerEmail ? [head(booking.interviewerKey, booking.interviewerEmail)] : [];
   if (booking.kind !== "paper" || !booking.visitId) return [];
-  const [mock] = await db.select({ email: s.hiringBookings.interviewerEmail }).from(s.hiringBookings)
+  const [mock] = await db.select({ key: s.hiringBookings.interviewerKey, email: s.hiringBookings.interviewerEmail }).from(s.hiringBookings)
     .where(and(eq(s.hiringBookings.visitId, booking.visitId), eq(s.hiringBookings.kind, "mock")));
-  if (mock?.email) return [mock.email];
-  return interviewers.filter((head) => booking.subjects.some((subject) => head.subjects.includes(subject))).map((head) => head.email);
+  if (mock?.email) return [head(mock.key, mock.email)];
+  return interviewers.filter((h) => booking.subjects.some((subject) => h.subjects.includes(subject))).map((h) => head(h.canonicalKey, h.email));
 }
 
 /** Booking and final review messages can leave without the Mac. The cron retries failures. */

@@ -92,13 +92,15 @@ async function calendarRequest(
     : ((await response.json()) as Record<string, unknown>);
 }
 export const VISIT_STAFF = ["people@begiftededucation.com", "admin@begiftededucation.com", "kevhsh7@gmail.com"];
+/** A head on a visit event: roster key (shown in the title), email (a guest) and the head's own Google event color. */
+export type VisitHead = { key: string | null; email: string; colorId?: string };
 export async function deliverCalendar(
   booking: typeof hiringBookings.$inferSelect,
   candidate: Candidate,
   location: string,
   db: Database,
   cancel = false,
-  heads: string[] = [],
+  heads: VisitHead[] = [],
 ) {
   const id = createHash("sha256")
     .update("hiring:" + booking.id)
@@ -113,7 +115,23 @@ export async function deliverCalendar(
   // Kevin, 23 Nov 2026: every visit event (test and mock) goes to HR, Admin, Kevin and the visit's own head (`heads`).
   // A paper row with no visitId is the old flow or the delivery test, which stay as they were.
   const staff = booking.kind === "mock" || (booking.kind === "paper" && booking.visitId)
-    ? [...new Set([...VISIT_STAFF, ...heads.map((email) => email.toLowerCase())])] : [];
+    ? [...new Set([...VISIT_STAFF, ...heads.map((head) => head.email.toLowerCase())])] : [];
+  // R1: HR Interview: the guests are HR (`interviewerEmail`) and the candidate, by the same rule as a visit. Google adds a
+  // Meet link (Kevin, 22 Nov 2026), and its own invitation gives the candidate the join button.
+  const call = booking.kind === "call";
+  const contract = booking.kind === "contract";
+  // Kevin, 25 Nov 2026: a test or mock title names the candidate, the subjects and the head, and each head has a color.
+  // Google shows an event color only on the organizer's calendar (and to people who can edit it), not on guests' copies.
+  const headKeys = [...new Set(heads.flatMap((head) => (head.key ? [head.key] : [])))];
+  const summary = contract ? `BeGifted contract signing: ${candidate.name}` : call
+    ? `BeGifted R1: HR Interview: ${candidate.name}`
+    : [
+        `BeGifted ${booking.kind === "mock" ? "mock teaching" : booking.visitId ? "exam" : "paper assessment"}: ${candidate.name}`,
+        booking.subjects.join(", "),
+        headKeys.length ? `Head: ${headKeys.join(", ")}` : "",
+      ].filter(Boolean).join(" · ");
+  // A test with two possible heads (no mock booked yet) keeps the calendar's own color.
+  const colorId = heads.length === 1 ? heads[0].colorId : undefined;
   if (existing) {
     const properties = existing.extendedProperties as
       | { private?: { hiringBookingId?: string } }
@@ -146,9 +164,15 @@ export async function deliverCalendar(
       );
     const attendees = (existing.attendees ?? []) as Array<{ email: string; [key: string]: unknown }>;
     const missing = staff.filter(email => !attendees.some(a => a.email?.toLowerCase() === email));
-    if (missing.length) {
-      await calendarRequest(booking.calendarOwner, path + "/" + id + "?sendUpdates=all", {
-        method: "PATCH", headers: typeof existing.etag === "string" ? { "If-Match": existing.etag } : {}, body: JSON.stringify({ attendees: [...attendees, ...missing.map(email => ({ email }))] }),
+    // An event made before the current title or color is brought up to date without a new invitation email.
+    const changes = {
+      ...(missing.length > 0 && { attendees: [...attendees, ...missing.map(email => ({ email }))] }),
+      ...(existing.summary !== summary && { summary }),
+      ...(colorId && existing.colorId !== colorId && { colorId }),
+    };
+    if (Object.keys(changes).length) {
+      await calendarRequest(booking.calendarOwner, path + "/" + id + "?sendUpdates=" + (missing.length ? "all" : "none"), {
+        method: "PATCH", headers: typeof existing.etag === "string" ? { "If-Match": existing.etag } : {}, body: JSON.stringify(changes),
       }, db);
     }
     return { id, recovered: true };
@@ -161,10 +185,6 @@ export async function deliverCalendar(
       ),
     ),
   ].map((email) => ({ email }));
-  // R1: HR Interview: the guests are HR (`interviewerEmail`) and the candidate, by the same rule as a visit. Google adds a
-  // Meet link (Kevin, 22 Nov 2026), and its own invitation gives the candidate the join button.
-  const call = booking.kind === "call";
-  const contract = booking.kind === "contract";
   const result = await calendarRequest(
     booking.calendarOwner,
     path + "?sendUpdates=all" + (call ? "&conferenceDataVersion=1" : ""),
@@ -172,13 +192,8 @@ export async function deliverCalendar(
       method: "POST",
       body: JSON.stringify({
         id,
-        summary: contract ? `BeGifted contract signing: ${candidate.name}` : call
-          ? `BeGifted R1: HR Interview: ${candidate.name}`
-          : booking.visitId
-          ? booking.kind === "mock"
-            ? "BeGifted mock teaching"
-            : "BeGifted exam"
-          : `BeGifted ${booking.kind === "mock" ? "mock teaching" : "paper assessment"}: ${candidate.name}`,
+        summary,
+        ...(colorId && { colorId }),
         description: contract ? "Onsite contract signing with BeGifted." : call
           ? `R1: HR Interview, a ${Math.round((booking.endTime.getTime() - booking.startTime.getTime()) / 60000)}-minute Google Meet video call.\nJoin with the Google Meet link in this invitation.\n\nCandidate: ${candidate.name}\nSubject: ${booking.subjects.join(", ")}\nEmail: ${candidate.email ?? "not recorded"}\nPhone (backup): ${candidate.phone ?? "not recorded"}`
           : `${booking.visitId ? `Candidate: ${candidate.name}\n` : ""}Subjects: ${booking.subjects.join(", ")}\n${booking.kind === "mock" ? `${booking.visitId ? "This session takes place only if the candidate passes the paper. " : ""}The candidate prepares one lesson from an international school syllabus (IGCSE, A Level or IB). The interviewer also selects a topic.` : booking.visitId ? "The 2-hour paper assessment." : "Two hours are allocated per subject."}`,
