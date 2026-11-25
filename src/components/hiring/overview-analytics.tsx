@@ -2,41 +2,30 @@
 
 import { useMemo, useState } from "react";
 import { formatInTimeZone } from "date-fns-tz";
-import { bookingKnownAt, buildFunnel, cohortWindow, CLOSED_STAGES, FUNNEL_STEPS, roundTo, STEP_TIMING, type FunnelReport, type FunnelStep, type GroupFunnel } from "@/lib/hiring/funnel";
+import { bookingKnownAt, cohortWindow, CLOSED_STAGES, FUNNEL_STEPS, roundTo, STEP_TIMING, type FunnelReport, type FunnelStep, type GroupFunnel } from "@/lib/hiring/funnel";
 import { buildGems, schoolStrength, type Gem, type GemKind } from "@/lib/hiring/gems";
 import { buildNextEmails, type EmailKind, type NextEmail } from "@/lib/hiring/next-emails";
-import { currentStageRows, OverviewPriorities } from "./overview-priorities";
-import type { CapacityReport } from "@/lib/hiring/capacity";
+import type { currentStageRows } from "./overview-priorities";
 import { ZONE } from "@/lib/hiring/model";
 import { groupOptions, pickGroup } from "./funnel-panel";
 import type { HiringData } from "./dashboard";
 import css from "./overview-analytics.module.css";
 
 /** Filters the candidate table below to these ids; `label` names them in the filter line. */
-type Show = (ids: string[], label: string, opener?: HTMLElement, timingEvidence?: Record<string, string>) => void;
+export type Show = (ids: string[], label: string, opener?: HTMLElement, timingEvidence?: Record<string, string>) => void;
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 const CLOSED = new Set<string>(CLOSED_STAGES);
 const DAY = 86_400_000;
 const dateLabel = (date: string) => formatInTimeZone(new Date(date), ZONE, "d MMM yyyy");
 
-/**
- * The current decision and its evidence appear first. The detailed funnel, queues and candidate groups remain available.
- */
-export function OverviewAnalytics({
-  data,
-  now,
-  capacity,
-  onShow,
-  onOpen,
-}: {
+export function OverviewDetails({ data, now, report, stages, onShow, onOpen }: {
   data: HiringData;
   now: Date;
-  capacity: CapacityReport | null;
+  report: FunnelReport;
+  stages: ReturnType<typeof currentStageRows>;
   onShow: Show;
   onOpen: (id: string) => void;
 }) {
-  const report = useMemo(() => buildFunnel(data, now), [data, now]);
-  const stages = useMemo(() => currentStageRows(data, report, now), [data, report, now]);
   const [group, setGroup] = useState("all");
   const value = pickGroup(report, group);
   const g = report.groups[value];
@@ -66,10 +55,6 @@ export function OverviewAnalytics({
   const paused = !data.config.enabled || !data.config.deliveryEnabled;
   const scoreOf = useMemo(() => new Map(data.candidates.map((c) => [c.id, c.profileScore])), [data]);
   return (
-    <div className={css.board}>
-      <OverviewPriorities data={data} report={report} now={now} capacity={capacity} stages={stages} />
-      <details className={css.moreDetails}>
-      <summary>Pipeline details, send queues and candidate groups</summary>
       <div className={css.detailGrid}>
       <Pulse data={data} report={report} stages={stages} now={now} onShow={onShow} />
       <div className={`${css.col} ${css.colA}`}>
@@ -129,8 +114,6 @@ export function OverviewAnalytics({
       </section>
       </div>
       </div>
-      </details>
-    </div>
   );
 }
 

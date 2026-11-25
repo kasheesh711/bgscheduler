@@ -24,7 +24,7 @@ import { AdminScreen, HeadsScreen, HrScreen, HiringReviewScreen, TodayCalls } fr
 import { PreScreenScreen } from "./prescreen-screen";
 import { CallsScreen } from "./calls-screen";
 import { CapacityScreen } from "./capacity-screen";
-import { OverviewAnalytics } from "./overview-analytics";
+import { OverviewBoard } from "./overview-board";
 import type { CapacityReport } from "@/lib/hiring/capacity";
 import { DemoBar, useDemoState, type DemoView } from "./demo-bar";
 import { demoFetchInstalled, installDemoFetch } from "@/lib/hiring/demo";
@@ -619,7 +619,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
         {/* Keep the Overview state after its first visit, including its search, sort and open résumé. */}
         {showOverview && insights && <div className={css.layout} hidden={view !== "overview"}>
           <div className={css.main}>
-            <OverviewAnalytics
+            <OverviewBoard
               data={data}
               now={observedAt}
               capacity={capacity}
