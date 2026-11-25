@@ -1,0 +1,57 @@
+name: One-time hiring PDF check in Safari
+
+on:
+  push:
+    branches:
+      - codex/qualify-hiring-safari-db504838
+
+permissions:
+  contents: read
+
+jobs:
+  safari:
+    if: github.event.created && !github.event.deleted
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Verify the source revision
+        run: |
+          test "$(git rev-parse HEAD^)" = db5048388b5f57895ef7e19d61b0a36d16964590
+          git diff --quiet HEAD^ HEAD -- src package.json package-lock.json tsconfig.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Check the invented marked paper in Safari
+        run: |
+          mkdir -p evidence
+          if ! sudo -n safaridriver --enable; then
+            echo '{"candidate":"db5048388b5f57895ef7e19d61b0a36d16964590","status":"incomplete","error":"Hosted runner did not enable Safari WebDriver"}' > evidence/safari.json
+            exit 1
+          fi
+          node scripts/dev/safari-qualification/fixture.mjs &
+          server=$!
+          safaridriver --port 4810 &
+          driver=$!
+          trap 'kill "$server" "$driver" 2>/dev/null || true' EXIT
+          python3 scripts/dev/safari-qualification/check.py
+      - name: Read the page numbers from the Safari pixels
+        if: always()
+        run: |
+          mkdir -p evidence
+          xcrun clang -fobjc-arc -framework Vision -framework Foundation scripts/dev/safari-qualification/read-pages.m -o "$RUNNER_TEMP/read-pdf-pages"
+          "$RUNNER_TEMP/read-pdf-pages" evidence
+      - name: Keep the numbered pages and observations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hiring-pdf-safari-db504838
+          path: |
+            evidence/*.png
+            evidence/*.json
+          retention-days: 7
+          if-no-files-found: warn
