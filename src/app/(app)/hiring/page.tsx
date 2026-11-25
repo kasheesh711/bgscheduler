@@ -25,9 +25,10 @@ async function Body() {
   let head: string | null = null;
   let fullAccess = false;
   try {
-    const [{ config }, session] = await Promise.all([settings(getDb()), auth()]);
+    // First, so a settings failure below cannot strand a full-access head; null only for a full-access admin.
+    fullAccess = (await auth())?.user?.allowedPages === null;
+    const { config } = await settings(getDb());
     head = await headKeyFor(email, headKeys(config));
-    fullAccess = !session?.user?.allowedPages;
   } catch (error) {
     // Next's own signal that the render was abandoned is passed on, never swallowed (code review, round 20).
     if (typeof error === "object" && error !== null && (error as { digest?: unknown }).digest === "HANGING_PROMISE_REJECTION") throw error;
