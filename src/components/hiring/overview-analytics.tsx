@@ -151,6 +151,8 @@ function Pulse({ data, report, now, onShow }: { data: HiringData; report: Funnel
   const open = all.filter((c) => !CLOSED.has(c.stage));
   const scored = all.filter((c) => c.profileScore !== null);
   const pass = scored.filter((c) => (c.profileScore ?? 0) >= data.config.profileThreshold);
+  // The pass pool not yet used up (Kevin, 25 Nov 2026): pass-score candidates still open, of all pass-score candidates.
+  const passLeft = pass.filter((c) => !CLOSED.has(c.stage));
   const stuck = open.filter((c) => report.byCandidate[c.id]?.stuck);
   // Stuck can only start after the first email, so its share is of the emailed open candidates.
   const emailed = open.filter((c) => c.stage !== "new" && c.stage !== "review");
@@ -160,6 +162,7 @@ function Pulse({ data, report, now, onShow }: { data: HiringData; report: Funnel
   const items: { label: string; n: number; of: number; ids: string[]; tone?: string }[] = [
     { label: "Open", n: open.length, of: all.length, ids: open.map((c) => c.id) },
     { label: `Score ${data.config.profileThreshold}+`, n: pass.length, of: scored.length, ids: pass.map((c) => c.id) },
+    { label: `Score ${data.config.profileThreshold}+ left`, n: passLeft.length, of: pass.length, ids: passLeft.map((c) => c.id) },
     { label: "Stuck (emailed)", n: stuck.length, of: emailed.length, ids: stuck.map((c) => c.id), tone: css.warnBar },
     { label: "Offer stage", n: hired.length, of: all.length, ids: hired.map((c) => c.id), tone: css.goodBar },
   ];
