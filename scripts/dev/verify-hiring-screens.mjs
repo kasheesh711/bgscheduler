@@ -331,7 +331,7 @@ if (location.search.includes("visits=1")) {
   const paper = (id: string, candidateId: string, subject: string, status: string, questions: unknown[], extra = {}) =>
     papers.push({ id, candidateId, bookingId: candidateId + "e", subject, source: "ai", status, fileId: "f-" + id, updatedAt: "2026-11-24T00:00:00.000Z", markSchemeUsed: true, history: null, error: null, changedBy: null, marks: questions.length ? { missingPages: null, comment: "Made-up marking comment.", questions } : null, ...extra });
   const mock = (id: string, candidateId: string, subject: string, items: Record<string, number | null>, status = "done") =>
-    mocks.push({ id, candidateId, bookingId: candidateId + "m", subject, source: "ai", status, fileId: "f-" + id, updatedAt: "2026-11-24T00:00:00.000Z", history: null, error: null, changedBy: null, rubric: { comments: "Made-up rubric comment.", items, checksDone: true, stressTest: { listens: true, explains: true, plan: true } } });
+    mocks.push({ id, candidateId, bookingId: candidateId + "m", subject, source: "ai", status, fileId: "f-" + id, updatedAt: "2026-11-24T00:00:00.000Z", history: null, error: null, changedBy: null, rubric: { comments: "Made-up rubric comment.", items, stressTest: { listens: true, explains: true, plan: true } } });
   for (const [id, name, subject, head, day, hour, mockDay, mockHour, status] of visits) {
     const stage = id === "ve" || id === "vf" ? "rejected" : id.startsWith("v") ? "mock_booked" : "onsite_booked";
     candidates.push(person(id, name, { seekApplicationId: null, stage, subjects: [subject], visitSubject: subject }));
@@ -378,7 +378,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     (window as unknown as { posted: unknown[] }).posted.push(body);
     if (url.pathname.endsWith("/rubric")) {
       // Sent scores come back with the brief next time, as the server stores them.
-      try { localStorage.setItem("fixture:rubric", JSON.stringify({ items: body.items, comments: body.comments, stressTest: body.stressTest, checksDone: body.checksDone })); } catch {}
+      try { localStorage.setItem("fixture:rubric", JSON.stringify({ items: body.items, comments: body.comments, stressTest: body.stressTest })); } catch {}
       return new Response(JSON.stringify({ total: Object.values(body.items as Record<string, number>).reduce((a, b) => a + b, 0) }));
     }
     return new Response(JSON.stringify({ ok: true }));
@@ -483,7 +483,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   return realFetch(input, init);
 }) as typeof fetch;
-// ?brief=open|wait|closed|checking|admin: the interviewer's public page from the LINE link, with synthetic data.
+// ?brief=open|wait|closed|checking|admin: the interviewer's public page from the LINE link, with synthetic data. &owner=1: Gift's own mock.
 // The Heads screen opens the brief and the paper check in a frame, at their real paths.
 const briefState = new URLSearchParams(location.search).get("brief") ?? (location.pathname.startsWith("/hiring/brief/") ? "open" : null);
 const paperCheck = location.pathname.startsWith("/hiring/paper-check/");
@@ -500,7 +500,7 @@ const BRIEF = { ats: ATS, decision: null, name: briefFor.get("name") ?? "Sample 
   rubric: (() => { try { return JSON.parse(localStorage.getItem("fixture:rubric") ?? "null"); } catch { return null; } })(), form: recommendationBlock ? "closed" : briefState ?? "open", recommendationReady: briefState === "closed", recommendationBlock,
   // A blocked or closed brief is after the mock, as on the server.
   mockEnded: ["checking", "admin", "closed"].includes(briefState ?? "") };
-createRoot(document.getElementById("root")!).render(<Suspense fallback="Loading">{paperCheck ? <BookingShell kind="paper-check" bare={embed}>{!embed && <ScheduleLink />}<PaperCheck view={PAPER_VIEW as never} token="sample-token" /></BookingShell> : briefState ? location.pathname.startsWith("/hiring/brief/") ? <BriefShell bare={embed}>{!embed && <ScheduleLink />}<InterviewerBrief compact={embed} brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BriefShell> : <BookingShell kind="brief"><InterviewerBrief brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BookingShell> : location.search.includes("preview=1") ? <div className="flex min-h-0 flex-1 flex-col overflow-auto"><HiringStaffPreview role="hr" /></div> : <HiringDashboard />}</Suspense>);
+createRoot(document.getElementById("root")!).render(<Suspense fallback="Loading">{paperCheck ? <BookingShell kind="paper-check" bare={embed}>{!embed && <ScheduleLink />}<PaperCheck view={PAPER_VIEW as never} token="sample-token" /></BookingShell> : briefState ? location.pathname.startsWith("/hiring/brief/") ? <BriefShell bare={embed}>{!embed && <ScheduleLink />}<InterviewerBrief compact={embed} owner={location.search.includes("owner=1")} brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BriefShell> : <BookingShell kind="brief"><InterviewerBrief owner={location.search.includes("owner=1")} brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BookingShell> : location.search.includes("preview=1") ? <div className="flex min-h-0 flex-1 flex-col overflow-auto"><HiringStaffPreview role="hr" /></div> : <HiringDashboard />}</Suspense>);
 `;
 
 // Only the framework parts that need a Next.js server are replaced. The components stay real.
@@ -1585,9 +1585,6 @@ try {
     assert.equal(await tick.evaluate((el) => getComputedStyle(el).appearance), "auto");
     await page.emulateMedia({ forcedColors: "none" });
     for (let i = 0, n = await tiles.count(); i < n; i++) await tiles.nth(i).fill("8");
-    await page.getByRole("status").filter({ hasText: "Answer the required checks to send." }).waitFor();
-    assert.equal(await page.getByRole("button", { name: "Send scores" }).isDisabled(), true);
-    await page.locator("form label", { hasText: /^Yes$/ }).click();
     await page.getByRole("button", { name: /Send scores/ }).click();
     await page.getByText("112/140", { exact: true }).waitFor();
     await page.waitForFunction(() => document.activeElement?.matches('[role="group"][aria-label^="Scores sent"]'));
@@ -1887,7 +1884,6 @@ try {
           const tiles = tab.locator("form label:has(input[type=radio][value='8'])");
           for (let i = 0, n = await tiles.count(); i < n; i++) await tap(tiles.nth(i), `score 8, item ${i + 1}`);
           await snap();
-          await tap(tab.locator("form label", { hasText: /^Yes$/ }), "required checks: Yes");
           await tap(tab.getByRole("button", { name: /Send scores/ }), "Send scores");
           await tab.getByText(/Scores sent/).first().waitFor();
           m.scoreReceipt = await tab.getByRole("group", { name: /Scores sent/ }).evaluate((receipt) => {

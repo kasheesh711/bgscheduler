@@ -484,7 +484,8 @@ interface HeadItem {
   review?: HeadDecisionRow;
 }
 
-function visitItem(visit: ReturnType<typeof headVisit>, today: string, live = false): HeadItem {
+/** `owner`: Gift's own mock, which ends in her decision and the offer, not a recommendation (Kevin, 25 Nov 2026). */
+function visitItem(visit: ReturnType<typeof headVisit>, today: string, live = false, owner = false): HeadItem {
   const { row, candidate, active, path, decision, scored, checkingScores, needsCheck, due, missingOutcome, status, end } = visit;
   const mock = !!row.mockStart;
   const open = path && active;
@@ -500,9 +501,9 @@ function visitItem(visit: ReturnType<typeof headVisit>, today: string, live = fa
     tags: [
       ...(status ? [{ text: status }] : []),
       ...(scored && !decision && !due ? [{ text: "Scores sent", tone: "hire" as const }] : []),
-      ...(decision ? [{ text: `Recommendation: ${decision.decision === "hire" ? "Yes" : "No"}`, tone: decision.decision }] : []),
+      ...(decision ? [{ text: owner && candidate && isDecided(candidate.stage) ? `Decision: ${decision.decision === "hire" ? "Hire" : "Reject"}` : `Recommendation: ${decision.decision === "hire" ? "Yes" : "No"}`, tone: decision.decision }] : []),
     ],
-    action: due && open ? (scored ? "Recommend" : "Score mock") : live && open && !scored ? "Score mock"
+    action: due && open ? (scored ? (owner ? "Decide" : "Recommend") : "Score mock") : live && open && !scored ? "Score mock"
       : checkingScores ? undefined
       : needsCheck ? "Ask admin: check scores"
       : mock && !path && !status && missingOutcome ? "Ask admin: outcome missing" : undefined,
@@ -757,17 +758,18 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
         action: ready ? "Review packet" : undefined, urgent: ready, review: d };
     })
     : [];
+  const reviewer = !!key && key === data.finalReviewer;
+  const item = (visit: ReturnType<typeof headVisit>, live = false) => visitItem(visit, today, live, reviewer);
   // To do in the order of the work: papers to re-mark, then mocks to score; Gift's packets follow under Final review.
-  const actionVisits = ended.filter((visit) => visit.needsAction && !visit.checkingScores).map((visit) => visitItem(visit, today));
-  const checking = ended.filter((visit) => visit.needsAction && visit.checkingScores).map((visit) => visitItem(visit, today));
+  const actionVisits = ended.filter((visit) => visit.needsAction && !visit.checkingScores).map((visit) => item(visit));
+  const checking = ended.filter((visit) => visit.needsAction && visit.checkingScores).map((visit) => item(visit));
   // The next mock says what to do before it, where the head scans the list (Sol review, round 20).
-  const nextRow = nextMock ? visitItem(nextMock, today, mockNow) : undefined;
+  const nextRow = nextMock ? item(nextMock, mockNow) : undefined;
   const nextItem = nextRow && !mockNow && nextRow.href && !nextRow.note ? { ...nextRow, note: "Prepare" } : nextRow;
   // A signed review leaves Final review at once, before the reload drops it, and stays under Just finished for this visit.
   const signedIds = new Set(signedItems.map((item) => item.id));
   const unsigned = reviews.filter((item) => !signedIds.has(item.id));
   const stillSigned = signedItems;
-  const reviewer = !!key && key === data.finalReviewer;
   const ready = reviewer ? unsigned.filter((item) => item.urgent) : [];
   // Gift's sign-offs have their own heading under To do, so she sees at once whether a hire waits for her (Sol review, round 12).
   const groups: { title: string; label?: string; items: HeadItem[] }[] = [
@@ -777,14 +779,14 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
     { title: "Final review", items: ready },
     { title: "Just finished", items: stillSigned },
     { title: mockNow ? "Mock now" : "Next mock", items: nextItem ? [nextItem] : [] },
-    { title: "Coming up", items: coming.map((visit) => visitItem(visit, today)) },
+    { title: "Coming up", items: coming.map((visit) => item(visit)) },
     // Rows where the head can only wait: admin is checking the scores, or the packet is not ready.
     { title: "Waiting", items: [...checking, ...unsigned.filter((item) => !item.urgent)] },
   ];
   // A mock in progress leads the list.
   if (mockNow) groups.unshift(...groups.splice(groups.findIndex((group) => group.title === "Mock now"), 1));
-  const papers = paperTests.map((visit) => visitItem(visit, today));
-  const past = ended.filter((visit) => !visit.needsAction).slice(0, 6).map((visit) => visitItem(visit, today));
+  const papers = paperTests.map((visit) => item(visit));
+  const past = ended.filter((visit) => !visit.needsAction).slice(0, 6).map((visit) => item(visit));
   const all = [...groups.flatMap((group) => group.items), ...papers, ...past];
   // The most urgent page is already open: a paper to re-mark or a mock to score, else the next mock.
   // A save can take the open row off the list. Its page stays open, with its confirmation, until another row is chosen.

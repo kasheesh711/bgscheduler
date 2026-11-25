@@ -27,7 +27,6 @@ const html = (patch: Partial<typeof brief> = {}) =>
 const rubric: MockRubric = {
   items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 9])) as MockRubric["items"],
   comments: "Clear lesson.",
-  checksDone: true,
 };
 
 describe("InterviewerBrief", () => {
@@ -56,7 +55,6 @@ describe("InterviewerBrief", () => {
 
   it("shows the score form before and during the mock, and the recommendation only after it, with score choices for each item", () => {
     const wait = html({ form: "wait", mockEnded: false });
-    expect(wait).toContain('type="radio"');
     expect(wait).toContain("Send scores during the mock.");
     expect(wait).toContain("Recommend after the mock ends.");
     expect(wait).not.toContain("Yes, send for final review");
@@ -82,10 +80,11 @@ describe("InterviewerBrief", () => {
       }
     }
     expect(page.match(/type="range"/g)).toHaveLength(RUBRIC_ITEMS.length);
-    expect(page.match(/type="radio"/g)).toHaveLength(2);
+    // The school's required-checks question was removed (Kevin, 25 Nov 2026).
+    expect(page).not.toContain('type="radio"');
     expect(page.match(/type="checkbox"/g)).toHaveLength(3);
     expect(page).not.toContain("Suggested score");
-    expect(page).toContain("School&#x27;s required checks completed");
+    expect(page).not.toContain("required checks");
     expect(page).toContain("0/14 scored");
     // The level names show once, above the bars, and no level text shows until the head opens an item.
     expect(page.split("Needs improvement (4)")).toHaveLength(2);
@@ -97,6 +96,23 @@ describe("InterviewerBrief", () => {
     expect(page).toContain("Send your scores first.");
     expect(page).not.toContain("Reason for No (5+ characters)");
     expect(page).not.toContain("Yes, send for final review");
+  });
+
+  it("gives Gift a decision with an offer letter choice on her own mock, not a recommendation", () => {
+    const page = renderToStaticMarkup(<InterviewerBrief owner brief={{ ...brief, form: "closed", recommendationReady: true }} resumeUrl="/r" rubricUrl="/s" decisionUrl="/d" />);
+    expect(page).toContain("Your decision");
+    expect(page).not.toContain("Your recommendation");
+    expect(page).toContain("Offer letter");
+    expect(page).toContain("Part-time tutor");
+    expect(page).toContain("Hire, send offer");
+    expect(page).not.toContain("Yes, send for final review");
+    expect(page).toContain("Hire emails the offer letter and the contract-signing link now.");
+    // From the LINE link with no session of hers, the page sends her to sign in first.
+    const signedOut = renderToStaticMarkup(<InterviewerBrief owner signIn="/login?callbackUrl=%2Fhiring%2Fbrief%2Ft" brief={{ ...brief, form: "closed", recommendationReady: true }} resumeUrl="/r" rubricUrl="/s" decisionUrl="/d" />);
+    expect(signedOut).toContain('href="/login?callbackUrl=%2Fhiring%2Fbrief%2Ft"');
+    expect(signedOut).toContain("Sign in to send the offer");
+    expect(signedOut).not.toContain("Hire, send offer");
+    expect(renderToStaticMarkup(<InterviewerBrief owner brief={{ ...brief, form: "wait", mockEnded: false }} resumeUrl="/r" rubricUrl="/s" decisionUrl="/d" />)).toContain("Decide after the mock ends.");
   });
 
   it.each([

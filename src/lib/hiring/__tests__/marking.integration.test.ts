@@ -301,7 +301,7 @@ describe("a person's change", () => {
 describe("readMockRubric", () => {
   const items = (patch = {}) => ({ accuracy: 10, concepts: 10, clarity: 7, presentation: 7, interaction: 10, pace: 7, organization: 10, materials: 7, formative: 7, feedback: 9, hygiene: 10, stress: 7, safeguarding: 10, curiosity: 7, ...patch });
   const ticks = { listens: true, explains: true, plan: false };
-  const rubricAnswer = (patch = {}, comments = "Clear.", checksDone: boolean | null = true) => JSON.stringify({ items: items(patch), comments, stressTest: ticks, checksDone, oldForm: false });
+  const rubricAnswer = (patch = {}, comments = "Clear.") => JSON.stringify({ items: items(patch), comments, stressTest: ticks, oldForm: false });
   async function uploadedMock(candidateId: string) {
     const intent = await createFileIntent({ kind: "mock_rubric", subject: "Mathematics", candidateId, name: "rubric.pdf", size: PDF.length }, "owner", db);
     return (await finishFile(intent.id, "owner", db)).resultId!;
@@ -312,7 +312,7 @@ describe("readMockRubric", () => {
     const id = await uploadedMock(c.id);
     const call = model(rubricAnswer());
     expect(await readMockRubric(id, "owner", db, call)).toEqual({ status: "done", error: null });
-    expect(await mock(id)).toMatchObject({ status: "done", source: "ai", rubric: { items: items(), comments: "Clear.", stressTest: ticks, checksDone: true } });
+    expect(await mock(id)).toMatchObject({ status: "done", source: "ai", rubric: { items: items(), comments: "Clear.", stressTest: ticks } });
     expect((call.mock.calls[0][0] as unknown as { messages: { content: { type: string }[] }[] }).messages[1].content.filter((part) => part.type === "file")).toHaveLength(1);
     expect((await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, c.id)))[0].stage).toBe("onsite_booked");
     expect(await db.select().from(s.hiringOutbox)).toEqual([]);
@@ -321,7 +321,7 @@ describe("readMockRubric", () => {
     const blank = await uploadedMock((await candidate()).id);
     expect((await readMockRubric(blank, "owner", db, model(rubricAnswer({ pace: null })))).status).toBe("needs_check");
     const total = await uploadedMock((await candidate()).id);
-    expect((await readMockRubric(total, "owner", db, model(JSON.stringify({ items: items(), comments: "", stressTest: ticks, checksDone: true, oldForm: false, total: 140 })))).status).toBe("failed");
+    expect((await readMockRubric(total, "owner", db, model(JSON.stringify({ items: items(), comments: "", stressTest: ticks, oldForm: false, total: 140 })))).status).toBe("failed");
   });
   it.each([11, 0, 7.5])("keeps the nine good scores when a head wrote %s, and a person sets that one", async (score) => {
     const id = await uploadedMock((await candidate()).id);
@@ -349,26 +349,16 @@ describe("readMockRubric", () => {
     const conduct = { hygiene: null, stress: null, safeguarding: null, curiosity: null };
     const none = { listens: false, explains: false, plan: false };
     const old = await uploadedMock((await candidate()).id);
-    const oldAnswer = JSON.stringify({ items: items(conduct), comments: "", stressTest: none, checksDone: null, oldForm: true });
+    const oldAnswer = JSON.stringify({ items: items(conduct), comments: "", stressTest: none, oldForm: true });
     expect(await readMockRubric(old, "owner", db, model(oldAnswer))).toEqual({ status: "done", error: null });
     const stored = (await mock(old)).rubric!;
     expect(Object.keys(stored.items)).toHaveLength(10);
-    expect(stored).not.toHaveProperty("checksDone");
     expect(stored).not.toHaveProperty("oldForm");
-    // The AI says new form: the blanks need a person, and the checks rule still applies.
+    // The AI says new form: the blanks need a person.
     const fresh = await uploadedMock((await candidate()).id);
-    const newAnswer = JSON.stringify({ items: items(conduct), comments: "", stressTest: none, checksDone: null, oldForm: false });
+    const newAnswer = JSON.stringify({ items: items(conduct), comments: "", stressTest: none, oldForm: false });
     expect((await readMockRubric(fresh, "owner", db, model(newAnswer))).status).toBe("needs_check");
     expect(Object.keys((await mock(fresh)).rubric!.items)).toHaveLength(14);
-  });
-  it("needs a check when the required-checks answer cannot be read, and a person sets it", async () => {
-    const id = await uploadedMock((await candidate()).id);
-    expect((await readMockRubric(id, "owner", db, model(rubricAnswer({}, "Clear.", null)))).status).toBe("needs_check");
-    await changeRubric(id, { updatedAt: (await mock(id)).updatedAt.toISOString(), items: {}, comments: "Clear.", checksDone: true }, "person", db);
-    expect((await mock(id)).rubric).toMatchObject({ checksDone: true, stressTest: ticks });
-    expect((await mock(id)).aiRubric!.checksDone).toBeNull();
-    await clearResultCheck("mock", id, "person", db);
-    expect(await mock(id)).toMatchObject({ status: "done" });
   });
   it("refuses an old form, and a score off the scale from a person", async () => {
     const id = await uploadedMock((await candidate()).id);

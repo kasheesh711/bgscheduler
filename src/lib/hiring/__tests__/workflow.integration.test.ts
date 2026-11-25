@@ -1123,7 +1123,7 @@ describe("hiring workflow persistence", () => {
       await deliverOutbox(db, base);
       const token = vi.mocked(pushLineTextMessage).mock.calls[0][0].text.match(/\/hiring\/brief\/([\w.-]+)/)![1];
       const [, mock] = await rowsOf(row.id);
-      const rubric = (score: number | null) => ({ items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, score])), comments: "Clear lesson.", stressTest: TICKS, checksDone: true }) as MockRubric;
+      const rubric = (score: number | null) => ({ items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, score])), comments: "Clear lesson.", stressTest: TICKS }) as MockRubric;
       const queued = (await db.select().from(s.hiringOutbox)).length;
       const before = new Date(mock.startTime.getTime() - 1);
       expect(await briefView(token, db, before)).toMatchObject({ form: "wait", rubric: null, recommendationReady: false });
@@ -1135,7 +1135,7 @@ describe("hiring workflow persistence", () => {
       const ended = mock.endTime;
       // The head's form is always the 14-item form with the checks answer.
       const legacy = { ...rubric(7), items: Object.fromEntries(Object.entries(rubric(7).items).slice(0, 10)) } as MockRubric;
-      for (const bad of [rubric(null), rubric(11), rubric(7.5), { ...rubric(7), items: { ...rubric(7).items, accuracy: 0 } }, { ...rubric(7), checksDone: undefined }, legacy])
+      for (const bad of [rubric(null), rubric(11), rubric(7.5), { ...rubric(7), items: { ...rubric(7).items, accuracy: 0 } }, legacy])
         await expect(saveBriefRubric(token, bad, db, ended)).rejects.toMatchObject({ status: 400 });
       expect(await db.select().from(s.hiringMockResults)).toHaveLength(0);
       expect(await saveBriefRubric(token, rubric(7), db, ended)).toBe(98);
@@ -1172,7 +1172,7 @@ describe("hiring workflow persistence", () => {
         // Scores that are no longer the head's own are not shown.
         expect((await briefView(token, db, ended)).rubric).toBeNull();
       }
-      await db.update(s.hiringMockResults).set({ ...ownResult, source: "ai", rubric: { ...rubric(10), checksDone: null } });
+      await db.update(s.hiringMockResults).set({ ...ownResult, source: "ai", rubric: { ...rubric(10), items: { ...rubric(10).items, accuracy: null } } });
       expect(await briefView(token, db, ended)).toMatchObject({ form: "closed", recommendationReady: false });
       await db.update(s.hiringMockResults).set({ ...ownResult, rubric: rubric(10) });
       expect((await briefView(token, db, ended)).form).toBe("open");
@@ -1193,7 +1193,7 @@ describe("hiring workflow persistence", () => {
       const [, mock] = await rowsOf(row.id);
       const token = bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + 86400000));
       const yes = { decision: "hire" as const, reason: "" };
-      const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 7])), comments: "", stressTest: TICKS, checksDone: true } as MockRubric;
+      const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 7])), comments: "", stressTest: TICKS } as MockRubric;
       await expect(saveBriefDecision(token, yes, db, mock.startTime)).rejects.toMatchObject({ status: 409 });
       await expect(saveBriefDecision(token, yes, db, mock.endTime)).rejects.toThrow(/completed rubric/);
       await saveBriefRubric(token, rubric, db, mock.endTime);
@@ -1211,7 +1211,7 @@ describe("hiring workflow persistence", () => {
       const [, mock] = await rowsOf(row.id);
       const token = bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + 86400000));
       vi.setSystemTime(mock.endTime);
-      await saveBriefRubric(token, { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 4])), comments: "", stressTest: TICKS, checksDone: true } as MockRubric, db);
+      await saveBriefRubric(token, { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 4])), comments: "", stressTest: TICKS } as MockRubric, db);
       const no = { decision: "reject" as const, reason: "Weak subject knowledge." };
       const { queued } = await saveBriefDecision(token, no, db);
       await expect(saveBriefDecision(token, no, db)).rejects.toMatchObject({ status: 404 });
@@ -1219,6 +1219,49 @@ describe("hiring workflow persistence", () => {
       expect(await deliverOutbox(db, (await settings(db)).config, 20, true)).toBe(1);
       expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: row.email }));
       expect((await read(row.id)).stage).toBe("rejected");
+    });
+    it("sends the offer at once on Gift's own mock, with no recommendation or review packet", async () => {
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      const [paper, mock] = await rowsOf(row.id);
+      const token = bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + 86400000));
+      vi.setSystemTime(mock.endTime);
+      await saveBriefRubric(token, { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 8])), comments: "", stressTest: TICKS } as MockRubric, db);
+      const hire = { decision: "hire" as const, reason: "" };
+      const owner = { key: mock.interviewerKey!, offer: { actor: "gift@example.com", offerType: "part_time" as const } };
+      vi.mocked(googleConnectionStatus).mockResolvedValue({ connected: true, freeBusy: true, email: "", lastError: null });
+      vi.mocked(readHrBusy).mockResolvedValue([]);
+      await expect(saveBriefDecision(token, hire, db, mock.endTime, { ...owner, key: "Someone else" })).rejects.toMatchObject({ status: 403 });
+      // A plain recommendation on her own mock is refused, so it cannot start the packet loop.
+      await expect(saveBriefDecision(token, hire, db, mock.endTime, { key: mock.interviewerKey! })).rejects.toThrow(/your own mock/);
+      await expect(saveBriefDecision(token, { decision: "reject", reason: "Not this time." }, db, mock.endTime, owner)).rejects.toMatchObject({ status: 400 });
+      // The usual hire rules still hold: here, the paper has no result yet. Nothing is recorded.
+      await expect(saveBriefDecision(token, hire, db, mock.endTime, owner)).rejects.toThrow(/No paper result/);
+      expect((await dashboard(db)).headDecisions.filter((rec) => rec.candidateId === row.id)).toEqual([]);
+      const [file] = await db.insert(s.hiringAssessmentFiles).values({ candidateId: row.id, subject: "Mathematics",
+        kind: "paper_scan", name: "exam.pdf", path: "sample-exam.pdf", size: 100, status: "ready", uploadedBy: "staff" }).returning();
+      await db.insert(s.hiringPaperResults).values({ candidateId: row.id, subject: "Mathematics", fileId: file.id, bookingId: paper.id,
+        source: "person", status: "done", marks: { comment: "", missingPages: null, questions: [
+          { id: "1", level: "IGCSE / GCSE", attempted: true, readable: true, marks: 9, max: 10, reason: "Correct working." },
+        ] } });
+      // Messages off: refused, and nothing is recorded.
+      const { config: on } = await settings(db);
+      await db.update(s.hiringSettings).set({ config: { ...on, deliveryEnabled: false } });
+      await expect(saveBriefDecision(token, hire, db, mock.endTime, owner)).rejects.toThrow(/Automation and Messages/);
+      await db.update(s.hiringSettings).set({ config: on });
+      // A signing calendar that cannot be read: refused before anything is written.
+      vi.mocked(googleConnectionStatus).mockResolvedValueOnce({ connected: true, freeBusy: false, email: "", lastError: null });
+      await expect(saveBriefDecision(token, hire, db, mock.endTime, owner)).rejects.toThrow(/signing calendar/);
+      expect((await dashboard(db)).headDecisions.filter((rec) => rec.candidateId === row.id)).toEqual([]);
+      const { queued } = await saveBriefDecision(token, hire, db, mock.endTime, owner);
+      const mail = (await jobsOf(row.id)).find((job) => job.key === queued)!;
+      expect(mail.payload).toMatchObject({ to: row.email, subject: "Your BeGifted offer letter", workflowStage: "hired" });
+      expect(String(mail.payload.text)).toMatch(/part-time Mathematics tutor[\s\S]+\/hiring\/book\//);
+      expect((await read(row.id)).stage).toBe("hired");
+      expect(await latestReviewPacket(db, row.id)).toBeNull();
+      // A decided candidate closes the link, as after a rejection.
+      await expect(briefView(token, db, mock.endTime)).rejects.toMatchObject({ status: 404 });
+      expect((await dashboard(db)).headDecisions.filter((rec) => rec.candidateId === row.id)).toMatchObject([{ decision: "hire" }]);
     });
     it("separates paper and mock, requires Gift’s latest review, and books half an hour with HR", async () => {
       vi.stubEnv("HIRING_FINAL_REVIEWER_EMAIL", "gift@example.com");
@@ -1259,7 +1302,7 @@ describe("hiring workflow persistence", () => {
       });
       vi.setSystemTime(mock.endTime);
       const brief = bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + 86400000));
-      await saveBriefRubric(brief, { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 8])), comments: "Clear examples.", stressTest: TICKS, checksDone: true } as MockRubric, db);
+      await saveBriefRubric(brief, { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 8])), comments: "Clear examples.", stressTest: TICKS } as MockRubric, db);
       await saveBriefDecision(brief, { decision: "hire", reason: "Clear examples." }, db);
       const offerType = "part_time";
       const offer = `Dear ${row.name},\n\nWe are pleased to offer you the position of part-time Mathematics tutor`;
@@ -1289,17 +1332,7 @@ describe("hiring workflow persistence", () => {
         .where(eq(s.hiringAudit.id, latest.id));
       await expect(signOffReview(db, row.id, latest.id, "gift@example.com", "hire", "")).rejects.toThrow(/evidence changed/);
       await db.update(s.hiringAudit).set({ detail: stored.detail }).where(eq(s.hiringAudit.id, latest.id));
-      // The school's required checks must be Yes before Gift can approve a hire (Kevin, 20 Nov 2026).
-      const checked = latest.evidence.mock.rubric;
-      const ofCandidate = eq(s.hiringMockResults.candidateId, row.id);
-      await db.update(s.hiringMockResults).set({ rubric: { ...checked, checksDone: false } }).where(ofCandidate);
-      await submitReview(db, row.id, "hr@example.com", { behavioral: "Uses specific examples.", offerType });
-      const unchecked = (await latestReviewPacket(db, row.id))!;
-      await expect(signOffReview(db, row.id, unchecked.id, "gift@example.com", "hire", "")).rejects.toThrow(/required checks/);
-      await db.update(s.hiringMockResults).set({ rubric: checked }).where(ofCandidate);
-      await submitReview(db, row.id, "hr@example.com", { behavioral: "Uses specific examples.", offerType });
-      const final = (await latestReviewPacket(db, row.id))!;
-      const result = await signOffReview(db, row.id, final.id, "gift@example.com", "hire", "");
+      const result = await signOffReview(db, row.id, latest.id, "gift@example.com", "hire", "");
       const mail = (await jobsOf(row.id)).find((job) => job.key === result)!;
       expect(mail.payload.text).toEqual(expect.stringContaining(offer));
       const contract = String(mail.payload.text).match(/\/hiring\/book\/([\w.-]+)/)![1];

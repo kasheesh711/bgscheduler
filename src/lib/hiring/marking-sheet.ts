@@ -143,8 +143,9 @@ export const LEGACY_RUBRIC_ITEMS = RUBRIC_ITEMS.slice(0, 10);
 /** The Stress Test sub-rubric: (A) listens and acknowledges, (B) explains without blaming, (C) gives a concrete plan. */
 export type StressTicks = { listens: boolean; explains: boolean; plan: boolean };
 /**
- * A blank item could not be read. A legacy result has no Professional Conduct items, no ticks and no checks answer.
- * `checksDone` is the school's required checks (not scored); null means the AI could not read it.
+ * A blank item could not be read. A legacy result has no Professional Conduct items and no ticks.
+ * `checksDone` is the school's required-checks answer on results from 20–25 Nov 2026. Kevin removed the question
+ * on 25 Nov 2026, so nothing reads it.
  */
 type LegacyItem = Exclude<RubricItem, "hygiene" | "stress" | "safeguarding" | "curiosity">;
 export type MockRubric = {
@@ -166,11 +167,9 @@ export function checkRubric(rubric: MockRubric) {
     // Heads can write a score between the printed bands, so any whole number on the scale is kept.
     else if (score !== null && (!Number.isInteger(score) || score < 1 || score > ITEM_MAX)) problems.push(`${id} has the score ${score}.`);
   }
-  if (!isLegacy(rubric) && rubric.checksDone === undefined) problems.push("checksDone is missing.");
   return problems;
 }
-export const rubricNeedsCheck = (rubric: MockRubric) =>
-  rubricItems(rubric).some((id) => rubric.items[id] === null) || (!isLegacy(rubric) && rubric.checksDone === null);
+export const rubricNeedsCheck = (rubric: MockRubric) => rubricItems(rubric).some((id) => rubric.items[id] === null);
 export function rubricTotals(rubric: MockRubric) {
   const used = new Set<string>(rubricItems(rubric));
   const parts = RUBRIC.filter(({ items }) => items.some(([id]) => used.has(id))).map(({ part, items }) => ({
@@ -184,5 +183,3 @@ export function rubricTotals(rubric: MockRubric) {
 }
 /** The score the tick count suggests (interviewer guide). The head still chooses the score. */
 export const stressSuggestion = (ticks?: StressTicks) => [1, 4, 7, 10][ticks ? [ticks.listens, ticks.explains, ticks.plan].filter(Boolean).length : 0];
-/** Hire needs the school's required checks done (Kevin, 20 Nov 2026). Legacy results predate the rule, so they pass. */
-export const hireChecksMissing = (rubric: MockRubric) => !isLegacy(rubric) && rubric.checksDone !== true;
