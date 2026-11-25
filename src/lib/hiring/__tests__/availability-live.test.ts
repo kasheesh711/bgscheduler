@@ -3,7 +3,7 @@ import * as s from "@/lib/db/schema";
 import { ensureIndex, type IndexedTutorGroup } from "@/lib/search/index";
 import { fetchWiseSessionsForBangkokDates } from "@/lib/wise/day-sessions";
 import { fetchTeacherAvailability } from "@/lib/wise/fetchers";
-import { availableSlots, readLiveBusy, verifyLiveSlot } from "../availability";
+import { availableSlots, forgetLiveRefusals, readLiveBusy, verifyLiveSlot } from "../availability";
 import { configSchema, instant, type Slot } from "../model";
 
 vi.mock("@/lib/search/index", () => ({ ensureIndex: vi.fn() }));
@@ -134,12 +134,13 @@ describe("availableSlots (legacy mock)", () => {
       undefined,
       liveRead,
     );
-  beforeEach(() =>
-    vi.mocked(ensureIndex).mockResolvedValue(index(group(), new Date(NOW.getTime() - 60_000))),
-  );
+  beforeEach(() => {
+    forgetLiveRefusals();
+    vi.mocked(ensureIndex).mockResolvedValue(index(group(), new Date(NOW.getTime() - 60_000)));
+  });
   it("offers hourly mock slots to a head with saved hours and no Wise working hours", async () => {
     const slots = await run({ fallbackWeek: week });
-    expect(slots).toHaveLength(5 * 6); // 5 dates, 10:00 to 15:00 starts
+    expect(slots).toHaveLength(20 * 6); // 20 dates (four weeks), 10:00 to 15:00 starts
     expect(slots.every((x) => x.interviewerKey === "Peat")).toBe(true);
   });
   it("uses onsite Wise working hours for a head set to hours from Wise", async () => {
@@ -150,7 +151,17 @@ describe("availableSlots (legacy mock)", () => {
     ];
     vi.mocked(ensureIndex).mockResolvedValue(index(group({ availabilityWindows: windows }), new Date(NOW.getTime() - 60_000)));
     const slots = await run({ hoursFromWise: true, fallbackWeek: week });
-    expect(slots.map((x) => x.start)).toEqual([840, 900].map((m) => instant("2026-11-03", m).toISOString()));
+    expect(slots.filter((x) => x.date === "2026-11-03").map((x) => x.start)).toEqual([840, 900].map((m) => instant("2026-11-03", m).toISOString()));
+  });
+  it("after a confirm refusal, stops offering that head's busy hour even without a live read", async () => {
+    // The refused class is 11:40–12:40 on 2 Nov: the 11:00 and 12:00 mocks overlap it.
+    vi.mocked(fetchWiseSessionsForBangkokDates).mockResolvedValueOnce([session()] as never);
+    await expect(verifyLiveSlot(fakeDb(new Map([[s.tutorWiseAccounts, [account]]])), slot)).rejects.toThrow(/has a class/);
+    const slots = await run({ fallbackWeek: week });
+    expect(slots).toHaveLength(20 * 6 - 2);
+    expect(slots.some((x) => x.start === slot.start)).toBe(false);
+    forgetLiveRefusals();
+    expect(await run({ fallbackWeek: week })).toHaveLength(20 * 6);
   });
   it("offers none to a head with no saved hours", async () => {
     expect(await run({})).toEqual([]);
@@ -159,9 +170,9 @@ describe("availableSlots (legacy mock)", () => {
     const hour = { start: instant(DATE, 720), end: instant(DATE, 780) };
     const read = (head: object) => ({ checkedAt: "", snapshotId: "snap", heads: new Map([["Peat", head]]) }) as never;
     const slots = await run({ fallbackWeek: week }, read({ classes: [hour], leaves: [] }));
-    expect(slots).toHaveLength(5 * 6 - 1);
+    expect(slots).toHaveLength(20 * 6 - 1);
     expect(slots.some((x) => x.start === hour.start.toISOString())).toBe(false);
-    expect(await run({ fallbackWeek: week }, read({ classes: [], leaves: [hour] }))).toHaveLength(5 * 6 - 1);
+    expect(await run({ fallbackWeek: week }, read({ classes: [], leaves: [hour] }))).toHaveLength(20 * 6 - 1);
     expect(await run({ fallbackWeek: week }, read({ error: "Interviewer accounts need review." }))).toEqual([]);
     expect(await run({ fallbackWeek: week }, { checkedAt: "", snapshotId: "snap", heads: new Map() })).toEqual([]);
   });

@@ -19,7 +19,8 @@ const good: Answers = {
   englishEvidence: "",
   experience: "3-5 years",
   portfolio: "",
-  availability: ["Weekday Evening (17:00-21:00)", "Weekend Morning (before 12:00)"],
+  // Monday 17:00-21:00 and Saturday 09:00-12:00.
+  availability: [[17, 18, 19, 20], [], [], [], [], [9, 10, 11], []],
   weeklyHours: "11-20",
   motivation: "I want to help students who find physics hard to see why each step works.",
   teachingApproach: "First I ask the student what changed, then I set one small goal for each lesson.",
@@ -38,7 +39,7 @@ describe("answersSchema (the questions on the booking page)", () => {
       degree: "Master's",
       subjects: "Mathematics, Physics",
       testSubject: "Physics",
-      availability: "Weekday Evening (17:00-21:00), Weekend Morning (before 12:00)",
+      availability: "Weekdays: Mon 17:00-21:00, Weekend: Sat 09:00-12:00",
     });
     expect(stops({})).toEqual([]);
     expect(visitSubject(pre, ACCEPTED, config)).toBe("Physics");
@@ -50,6 +51,8 @@ describe("answersSchema (the questions on the booking page)", () => {
     expect(bad({ degree: undefined })).toBe(false);
     expect(bad({ subjects: [] })).toBe(false);
     expect(bad({ availability: [] })).toBe(false);
+    expect(bad({ availability: [[], [], [], [], [], [], []] })).toBe(false);
+    expect(bad({ availability: [[7], [], [], [], [], [], []] })).toBe(false);
     expect(bad({ english: undefined })).toBe(false);
     expect(bad({ english: "Fluent" })).toBe(false);
     // No minimum length (Kevin, 24 Nov 2026).
@@ -71,8 +74,10 @@ describe("answersSchema (the questions on the booking page)", () => {
   });
   it("lets every hard stop read the page's own choices", () => {
     expect(stops({ degree: "Below Bachelor's" })).toEqual(["No completed bachelor's degree."]);
-    expect(stops({ availability: ["Weekday Evening (17:00-21:00)"] })).toEqual(["Needs a weekend day and a weekday after 15:00."]);
-    expect(stops({ availability: ["Weekday Morning (before 12:00)", "Weekend Evening (17:00-21:00)"] })).toHaveLength(1);
+    expect(stops({ availability: [[17, 18], [], [], [], [], [], []] })).toEqual(["Needs a weekend day and a weekday after 15:00."]);
+    // A weekday hour that ends at 15:00 is not after 15:00; one that starts at 15:00 is.
+    expect(stops({ availability: [[13, 14], [], [], [], [], [], [19]] })).toHaveLength(1);
+    expect(stops({ availability: [[15], [], [], [], [], [], [19]] })).toEqual([]);
     // B1 meets no subject. B2 does not meet an English subject.
     expect(stops({ english: "Intermediate (B1)" })).toHaveLength(1);
     expect(stops({ english: "Upper-Intermediate (B2)", subjects: ["IELTS"], testSubject: "IELTS" })).toHaveLength(1);
