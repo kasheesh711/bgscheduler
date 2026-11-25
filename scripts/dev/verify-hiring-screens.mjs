@@ -1340,11 +1340,28 @@ try {
     await page.clock.install();
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`${origin}/?roles=1&me=Ek`);
+    // Log what the status line says from here on: the save must be announced once, with no schedule text in between.
+    await page.evaluate(() => {
+      const line = document.querySelector('p.sr-only[role="status"]');
+      const log = window.statusLog = [];
+      new MutationObserver(() => log.push(line.textContent ?? "")).observe(line, { childList: true, characterData: true, subtree: true });
+    });
     await page.frameLocator("#open-item iframe").getByRole("button", { name: "Submit my marks" }).click();
     await page.waitForFunction(() => [...document.querySelectorAll('p.sr-only[role="status"]')].some((p) => p.textContent === "Marks saved for Sample Joy"));
+    const said = (await page.evaluate(() => window.statusLog)).filter(Boolean);
+    assert.deepEqual(said, ["Marks saved for Sample Joy"]);
     await page.getByRole("navigation", { name: /hiring list/ }).getByRole("link", { name: /Reply Low/ }).click();
     await page.waitForFunction(() => [...document.querySelectorAll('p.sr-only[role="status"]')].some((p) => /next mock/.test(p.textContent ?? "")));
     // The mock starts: the line says so (critic review, round 23).
+    await page.clock.fastForward("26:05:00");
+    await page.waitForFunction(() => [...document.querySelectorAll('p.sr-only[role="status"]')].some((p) => /mock now/.test(p.textContent ?? "")));
+  });
+  await check("a mock that starts while the just-saved row stays open is still announced", async () => {
+    await page.clock.install();
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/?roles=1&me=Ek`);
+    await page.frameLocator("#open-item iframe").getByRole("button", { name: "Submit my marks" }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll('p.sr-only[role="status"]')].some((p) => p.textContent === "Marks saved for Sample Joy"));
     await page.clock.fastForward("26:05:00");
     await page.waitForFunction(() => [...document.querySelectorAll('p.sr-only[role="status"]')].some((p) => /mock now/.test(p.textContent ?? "")));
   });
@@ -1401,7 +1418,7 @@ try {
       assert.equal(await page.getByText(message, { exact: true }).count(), 1);
       assert.equal(await page.getByRole("button", { name: "Yes, send to HR" }).count(), state === "closed" ? 1 : 0);
       assert.equal(await page.getByRole("button", { name: "Check again" }).count(), button === "Check again" ? 1 : 0);
-      const resume = page.getByRole("link", { name: "Open résumé (PDF)" });
+      const resume = page.getByRole("link", { name: "Open résumé ↗ (PDF), opens in a new tab" });
       assert.equal(await resume.evaluate((el) => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
       await shot(page, `brief-${state}-phone`, true);
       if (button) {

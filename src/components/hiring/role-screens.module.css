@@ -101,7 +101,7 @@
    than the window, so a click that focuses the pane scrolls the whole page (critic review, round 14). */
 .rail { position: relative; display: flex; flex-direction: column; gap: 24px; min-width: 0; padding: 16px 16px 40px; }
 @media (min-width: 1024px) {
-  .workspace { grid-template-columns: clamp(280px, 21vw, 340px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); flex: 1 0 640px; }
+  .workspace { grid-template-columns: clamp(292px, 21vw, 340px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); flex: 1 0 640px; }
   .rail { overflow-y: auto; border-right: 1px solid var(--line); }
   /* Nothing in a head's list: the message takes the whole width, with no empty list column. */
   .workspace[data-empty] { grid-template-columns: minmax(0, 1fr); }

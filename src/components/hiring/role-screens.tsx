@@ -807,6 +807,15 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   }, [picked, selected]);
   // A mock that starts while its brief is open: the brief fetches itself again, so its label reads "Mock now" (critic, round 18).
   const liveId = mockNow ? nextItem?.id : undefined;
+  // A mock that starts ends the save receipt, so the status line says "mock now" even on the row just saved (critic, round 24).
+  const [seenLive, setSeenLive] = useState(liveId);
+  if (liveId !== seenLive) {
+    setSeenLive(liveId);
+    if (liveId) {
+      setSavedFor(null);
+      setAnnounce("");
+    }
+  }
   useEffect(() => {
     if (!liveId || !wide || selected?.id !== liveId) return;
     document.querySelector<HTMLIFrameElement>("#open-item iframe")?.contentWindow?.postMessage({ type: "hiring-refresh", part: "" }, window.location.origin);
