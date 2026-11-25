@@ -89,8 +89,8 @@ details[open] > summary.laneTitle::before { content: "▾"; }
 .dayDate { color: var(--muted); font-size: 12px; }
 .stack { display: flex; flex-direction: column; justify-content: flex-end; width: 22px; height: 100%; gap: 1px; }
 .stack span { display: block; border-radius: 3px; }
-[data-kind="paper"] { --kind: var(--ink); }
-[data-kind="mock"] { --kind: color-mix(in oklch, var(--primary) 75%, var(--paper)); }
+.board [data-kind="paper"] { --kind: var(--ink); }
+.board [data-kind="mock"] { --kind: color-mix(in oklch, var(--primary) 75%, var(--paper)); }
 .stack span, .legend i { background: var(--kind); }
 .daySplit { display: flex; flex-direction: column; align-items: center; gap: 0; color: var(--support); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .daySplit i { display: inline-block; width: 7px; height: 7px; margin-left: 3px; border-radius: 2px; background: var(--kind); }
@@ -157,7 +157,7 @@ details[open] > summary.laneTitle::before { content: "▾"; }
 .urgent label:hover { background: var(--support); }
 @container (max-width: 480px) { .slot .time { grid-row: span 2; } }
 .setsTag { display: block; color: var(--muted); font-size: 11px; font-weight: 600; }
-tr[data-sets] td { color: var(--ink); font-weight: 600; }
+.levelTable tr[data-sets] td { color: var(--ink); font-weight: 600; }
 .results { flex-direction: column; flex-wrap: nowrap; gap: 8px; }
 .levelTable { table-layout: fixed; }
 .levelTable th:first-child { width: 34%; }

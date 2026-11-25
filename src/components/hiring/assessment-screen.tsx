@@ -1164,7 +1164,7 @@ export function AssessmentScreen({
                 <section className={`${a.block} ${a.coming}`} aria-labelledby="coming-title">
                   <h2 id="coming-title" className={a.blockTitle}>Coming up</h2>
                   {weekStrip}
-                  
+
                   {perDay.filter(({ items }) => items.length).map(({ d, items }) => {
                     const today = day(d) === day(now);
                     // Earlier today is done or in the To do list; it folds away so the next arrival is on top.
