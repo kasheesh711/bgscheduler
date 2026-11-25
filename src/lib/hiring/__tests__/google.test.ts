@@ -100,10 +100,15 @@ it("titles a visit's two private events, and only the mock invites the head", as
       return Response.json(events.at(-1));
     }),
   );
-  const heads = ["Peat@example.com"];
+  const heads = [{ key: "Peat", email: "Peat@example.com", colorId: "1" }];
   await deliverCalendar(row("paper", "00000000-0000-4000-8000-000000000002", null), candidate, "BeGifted", db, false, heads);
   await deliverCalendar(row("mock", "00000000-0000-4000-8000-000000000003", "peat@example.com"), candidate, "BeGifted", db, false, heads);
-  expect(events.map((e) => e.summary)).toEqual(["BeGifted exam", "BeGifted mock teaching"]);
+  // Kevin, 25 Nov 2026: the title names the candidate, the subjects and the head, and the event has the head's color.
+  expect(events.map((e) => e.summary)).toEqual([
+    "BeGifted exam: Candidate · Mathematics · Head: Peat",
+    "BeGifted mock teaching: Candidate · Mathematics · Head: Peat",
+  ]);
+  expect(events.map((e) => e.colorId)).toEqual(["1", "1"]);
   expect(events.map((e) => e.visibility)).toEqual(["private", "private"]);
   // Only R1 is on Google Meet. The visit is onsite.
   expect(events.map((e) => e.conferenceData)).toEqual([undefined, undefined]);
@@ -112,14 +117,43 @@ it("titles a visit's two private events, and only the mock invites the head", as
   expect(events[0].attendees).toEqual([{ email: "candidate@example.com" }, ...staff]);
   expect(events[1].attendees).toEqual([{ email: "peat@example.com" }, { email: "candidate@example.com" }, ...staff.filter((g) => g.email !== "peat@example.com")]);
   // A paper row outside a visit (old flow, delivery test) keeps no staff guests.
-  await deliverCalendar({ ...row("paper", "00000000-0000-4000-8000-000000000004", null), visitId: null }, candidate, "BeGifted", db, false, heads);
+  await deliverCalendar({ ...row("paper", "00000000-0000-4000-8000-000000000004", null), visitId: null }, candidate, "BeGifted", db, false, []);
   expect(events[2].attendees).toEqual([{ email: "candidate@example.com" }]);
+  expect(events[2].summary).toBe("BeGifted paper assessment: Candidate · Mathematics");
   expect(String(events[1].description)).toContain("Candidate");
+  // A test-only visit with two possible heads names both and keeps the calendar's own color.
+  const both = [{ key: "Peat", email: "peat@example.com", colorId: "1" }, { key: "Ek", email: "ek@example.com", colorId: "2" }];
+  await deliverCalendar(row("paper", "00000000-0000-4000-8000-000000000005", null), candidate, "BeGifted", db, false, both);
+  expect(events[3].summary).toBe("BeGifted exam: Candidate · Mathematics · Head: Peat, Ek");
+  expect(events[3].colorId).toBeUndefined();
+});
+
+it("renames and colors an event made before the named titles, with no new invitation email", async () => {
+  const db = { select: () => ({ from: () => ({ where: async () => [{ refreshTokenCiphertext: "encrypted", scope: GOOGLE_SCOPES.join(" ") }] }) }) } as unknown as Database;
+  const booking = { id: "00000000-0000-4000-8000-000000000006", kind: "mock", visitId: "00000000-0000-4000-8000-000000000009",
+    calendarOwner: "owner@example.com", interviewerEmail: "ek@example.com", subjects: ["Mathematics"],
+    startTime: new Date("2026-11-27T08:00:00Z"), endTime: new Date("2026-11-27T09:00:00Z") } as typeof hiringBookings.$inferSelect;
+  const staff = ["people@begiftededucation.com", "admin@begiftededucation.com", "kevhsh7@gmail.com", "ek@example.com"];
+  let event: Record<string, unknown> = { summary: "BeGifted mock teaching", start: { dateTime: booking.startTime.toISOString() }, end: { dateTime: booking.endTime.toISOString() },
+    extendedProperties: { private: { hiringBookingId: booking.id } }, attendees: staff.map((email) => ({ email })) };
+  const fetcher = vi.fn(async (_url: string, init?: RequestInit) => {
+    if (init?.method === "PATCH") event = { ...event, ...JSON.parse(init.body as string) };
+    return Response.json(event);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  const head = [{ key: "Ek", email: "ek@example.com", colorId: "2" }];
+  const candidate = { name: "Karawat Saijanyon" } as Candidate;
+  await deliverCalendar(booking, candidate, "BeGifted", db, false, head);
+  await deliverCalendar(booking, candidate, "BeGifted", db, false, head);
+  const patches = fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH");
+  expect(patches).toHaveLength(1);
+  expect(patches[0][0]).toContain("sendUpdates=none");
+  expect(JSON.parse(patches[0][1]!.body as string)).toEqual({ summary: "BeGifted mock teaching: Karawat Saijanyon · Mathematics · Head: Ek", colorId: "2" });
 });
 
 it("adds staff to an existing mock once, preserving guests and their responses", async () => {
   const db = { select: () => ({ from: () => ({ where: async () => [{ refreshTokenCiphertext: "encrypted", scope: GOOGLE_SCOPES.join(" ") }] }) }) } as unknown as Database;
-  const booking = { id: "00000000-0000-4000-8000-000000000001", kind: "mock", calendarOwner: "owner@example.com",
+  const booking = { id: "00000000-0000-4000-8000-000000000001", kind: "mock", calendarOwner: "owner@example.com", subjects: ["Mathematics"],
     startTime: new Date("2026-11-17T03:00:00Z"), endTime: new Date("2026-11-17T04:00:00Z") } as typeof hiringBookings.$inferSelect;
   let event = { etag: "version-1", start: { dateTime: booking.startTime.toISOString() }, end: { dateTime: booking.endTime.toISOString() },
     extendedProperties: { private: { hiringBookingId: booking.id } }, attendees: [{ email: "candidate@example.com", responseStatus: "accepted" }] };
@@ -131,7 +165,11 @@ it("adds staff to an existing mock once, preserving guests and their responses",
   await deliverCalendar(booking, {} as Candidate, "BeGifted", db);
   await deliverCalendar(booking, {} as Candidate, "BeGifted", db);
   expect(fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1);
-  expect(new Headers(fetcher.mock.calls.find(([, init]) => init?.method === "PATCH")?.[1].headers).get("if-match")).toBe("version-1");
+  const patch = fetcher.mock.calls.find(([, init]) => init?.method === "PATCH")!;
+  expect(new Headers(patch[1].headers).get("if-match")).toBe("version-1");
+  // A new guest means one combined update with an email; the title comes along in the same call.
+  expect(patch[0]).toContain("sendUpdates=all");
+  expect(Object.keys(JSON.parse(patch[1].body))).toEqual(["attendees", "summary"]);
   expect(event.attendees[0]).toEqual({ email: "candidate@example.com", responseStatus: "accepted" });
   expect(event.attendees.map(a => a.email)).toContain("people@begiftededucation.com");
 });
