@@ -1,0 +1,1427 @@
+/* Candidate booking page parts: steps, question sections, week grid, subject picker, week date picker.
+   Colours come from the tokens on booking.module.css `.page`. */
+
+/* Steps: Questions → Times → Booked */
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.steps li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 10px;
+  border-top: 3px solid var(--line);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.steps li[data-state="done"] {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.steps li[data-state="now"] {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+.steps svg {
+  flex: none;
+}
+
+/* Question sections */
+.section {
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.sectionHead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0;
+  margin-bottom: 4px;
+  font-family: var(--serif);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+.sectionHead span {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  /* The coral of the page, darkened so small text passes AA on cream. */
+  color: #b0391a;
+}
+.q {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.qTitle {
+  padding: 0;
+  /* A legend sits outside the fieldset's gap: space it from its first row of chips here (Sol r21). */
+  margin-bottom: 8px;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+.qTitle small {
+  white-space: nowrap;
+  margin-left: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* Choice chips: 44 px targets, a check on the chosen ones (Mobbin: BFF, Perplexity). */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  font-size: 14px;
+  font-weight: 550;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+@media (hover: hover) {
+  .chip:hover {
+    border-color: #b8ae98;
+  }
+}
+/* The check sits in the chip's own padding, so the label stays centred and the width never changes (Sol r7, Opus r8). */
+.chip {
+  position: relative;
+  padding: 0 22px;
+}
+.chip svg {
+  position: absolute;
+  left: 6px;
+  width: 12px;
+  height: 12px;
+  visibility: hidden;
+}
+.chip:has(input:checked) {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fbf7ee;
+}
+.chip:has(input:checked) svg {
+  visibility: visible;
+}
+.chip:has(input:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.chip:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.more {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px dashed #cfc5ae;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.more:hover {
+  background: #f1ebde;
+}
+
+/* The résumé's degree, confirmed in one tap. */
+.known {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+}
+.known[data-ok] {
+  border-color: var(--ink);
+}
+.known p {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.known small {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.known b {
+  font-size: 16px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.knownActions {
+  display: flex;
+  gap: 8px;
+}
+.knownActions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--ink);
+  border-radius: 999px;
+  background: var(--ink);
+  color: #fbf7ee;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+/* "Correct" is an outline until tapped; then the card turns green and the button says "Confirmed" (Opus r5). */
+.knownActions button {
+  background: transparent;
+  color: var(--ink);
+}
+/* Chosen looks the same everywhere: navy with a check (Opus r16); green is for status only. */
+.known[data-ok] .knownActions button[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fbf7ee;
+}
+
+/* Week grid (Mobbin: Bonsai, Calendly, Outlook "tap the time slots"). */
+.week {
+  display: grid;
+  gap: 12px;
+}
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.preset,
+.clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.clear {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: 22px repeat(7, minmax(0, 1fr));
+  gap: 2px;
+  /* The hour labels sit in the card's left padding, so the cells keep 44 px at 390 px and end at the content edge. */
+  margin: 0 0 0 -14px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.row {
+  display: contents;
+}
+.dayHead {
+  padding-bottom: 4px;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-align: center;
+  color: var(--ink);
+}
+.dayHead[data-weekend] {
+  color: #b0391a;
+}
+/* Hour labels sit on the line where the hour starts, as in a calendar. */
+.hour {
+  align-self: start;
+  transform: translateY(-7px);
+  font-variant-numeric: lining-nums tabular-nums;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+  padding-right: 4px;
+}
+.cell {
+  height: 44px;
+  min-width: 0;
+  padding: 0;
+  /* 3:1 against every cell background (WCAG 1.4.11). */
+  border: 1px solid #958b76;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  /* A finger can still scroll the page up and down over the grid; a hold starts a drag (week-grid.tsx). */
+  touch-action: pan-y;
+  -webkit-touch-callout: none;
+  transition: background 0.08s;
+}
+.cell[data-weekend] {
+  background: #fdf9f1;
+}
+@media (hover: hover) {
+  .cell:hover {
+    border-color: #6f6757;
+  }
+}
+.cell[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--ink);
+}
+.cell:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 1px;
+  position: relative;
+  z-index: 1;
+}
+.readback {
+  display: grid;
+  gap: 8px;
+  font-size: 14px;
+}
+.readback > p:first-child {
+  color: var(--ink);
+  font-weight: 550;
+}
+.rules {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.rules span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.rules span svg {
+  color: #9a917d;
+}
+.rules span[data-ok] {
+  color: var(--ok);
+  font-weight: 600;
+}
+.rules span[data-ok] svg {
+  color: var(--ok);
+}
+.rules b {
+  margin-left: auto;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+@media (min-width: 640px) {
+  .grid {
+    grid-template-columns: 40px repeat(7, minmax(0, 1fr));
+    gap: 4px;
+    margin: 0;
+  }
+  .dayHead {
+    font-size: 13px;
+  }
+}
+@media (max-width: 359px) {
+  .grid {
+    grid-template-columns: 16px repeat(7, minmax(0, 1fr));
+    gap: 2px;
+    margin: 0 -10px 0 -14px;
+  }
+  .dates {
+    margin: 0 -14px;
+  }
+  .dayHead {
+    font-size: 11px;
+    letter-spacing: 0;
+  }
+  .hour {
+    padding-right: 2px;
+    font-size: 10px;
+  }
+}
+
+/* Footer of the questions: progress and the send button. */
+.progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.progressBar {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+.progressBar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ok);
+  transition: width 0.2s;
+}
+
+/* Week date picker (Mobbin: Preply, Alan): one week, arrows, times by part of day. */
+.weekNav {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 8px;
+}
+.weekNav b {
+  font-size: 14px;
+  font-weight: 650;
+  text-align: center;
+}
+.arrow {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+.arrow:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+/* One strip of all weeks: a week fills the width, the strip scrolls sideways a week at a time. */
+.dates {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: calc((100% - 12px) / 7);
+  gap: 2px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+.dates::-webkit-scrollbar {
+  display: none;
+}
+.date[data-monday] {
+  scroll-snap-align: start;
+}
+.date {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  min-height: 64px;
+  padding: 8px 0 6px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+.date span {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.date b {
+  font-variant-numeric: lining-nums tabular-nums;
+  font-family: var(--serif);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1;
+}
+.date i {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.date:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+.date:disabled i {
+  visibility: hidden;
+}
+@media (hover: hover) {
+  .date:not(:disabled):hover {
+    border-color: var(--line);
+    background: #fff;
+  }
+}
+/* Stronger than the hover rule, so the chosen day stays navy under the pointer. */
+.date[aria-pressed="true"],
+.date:not(:disabled)[aria-pressed="true"]:hover {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fbf7ee;
+}
+.date[aria-pressed="true"] span {
+  color: #d9d4c8;
+}
+.date[aria-pressed="true"] i {
+  background: #ffc9b8;
+}
+.date:focus-visible,
+.arrow:focus-visible,
+.preset:focus-visible,
+.clear:focus-visible,
+.more:focus-visible,
+.knownActions button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.part {
+  display: grid;
+  gap: 8px;
+}
+.partName {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.times {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.times[data-compact] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.time {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  min-height: 56px;
+  align-content: center;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  cursor: pointer;
+}
+.time b {
+  font-size: 18px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.time small {
+  font-size: 12px;
+  color: var(--muted);
+}
+@media (hover: hover) {
+  .time:hover {
+    border-color: var(--ink);
+  }
+}
+.time:has(input:checked) {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fbf7ee;
+}
+.time:has(input:checked) small {
+  color: #d9d4c8;
+}
+.time:has(input:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The chosen times in the sticky bar. */
+.chosen {
+  display: grid;
+  gap: 4px;
+  font-size: 14px;
+}
+.chosen div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.chosen span {
+  color: var(--muted);
+}
+.chosen b {
+  font-weight: 650;
+  text-align: right;
+}
+@media (prefers-reduced-motion: reduce) {
+  .progressBar i,
+  .cell,
+  .chip {
+    transition: none;
+  }
+}
+
+.hint {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Layout: one column on a phone (top, main, side). From 1024 px the main part is on the left; the top part and the
+   sticky side part are on the right. */
+.layout {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  min-width: 0;
+}
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  min-width: 0;
+}
+.top {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+/* On a phone the side parts join the column, so the confirm bar sticks to the bottom of the whole layout. */
+.side {
+  display: contents;
+}
+@media (min-width: 1024px) {
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    grid-template-rows: auto 1fr;
+    column-gap: 48px;
+    row-gap: 24px;
+    align-items: start;
+  }
+  .top {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .main {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+  }
+  .side {
+    grid-column: 2;
+    grid-row: 2;
+    position: sticky;
+    top: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+  }
+  .side [data-confirm] {
+    position: static;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    backdrop-filter: none;
+  }
+  /* In the narrow rail: the count, then the bar under it (Sol r8). */
+  .side .progress {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .side .progressBar {
+    flex: none;
+    width: 100%;
+  }
+}
+
+/* Booked ticket: the test and the mock teaching each with its own day. */
+.booked {
+  display: grid;
+  gap: 14px;
+}
+.legs {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+}
+.legs div {
+  display: grid;
+  gap: 1px;
+}
+/* On the navy ticket. */
+.legs span {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #d9d4c8;
+}
+.legs b {
+  font-size: 16px;
+  font-weight: 650;
+}
+.legs small {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  color: #fbf7ee;
+}
+.weekNav b {
+  display: grid;
+}
+.weekNav b small {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+@media (max-width: 359px) {
+  .steps li {
+    gap: 4px;
+    font-size: 12px;
+  }
+}
+
+/* The visit plan: two steps on one line, not tabs. */
+.plan {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+}
+.plan li {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.plan li + li::before {
+  content: "→";
+  margin-right: 4px;
+  color: var(--muted);
+}
+.plan b {
+  font-weight: 650;
+}
+.plan span {
+  color: var(--muted);
+}
+
+/* The next open question as a jump link, in the bar on a phone and in the rail on a wide screen (Opus r10). */
+.open {
+  display: block;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.rules span:not([data-ok]) {
+  color: var(--muted);
+}
+.file {
+  min-height: 56px;
+  border-style: dashed;
+  cursor: pointer;
+}
+/* A question jumped to from the rail or after a failed send: no box, the scroll is the cue. */
+.q:focus,
+.known:focus,
+.section :global(label):focus {
+  outline: none;
+}
+
+/* Art portfolio: a file box that matches the page, not the browser's own control. */
+.drop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 12px 16px;
+  border: 1.5px dashed #b8ae98;
+  border-radius: 16px;
+  background: #fff;
+  cursor: pointer;
+}
+.drop:hover {
+  border-color: var(--ink);
+}
+.drop:has(input:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.drop span {
+  display: grid;
+  min-width: 0;
+}
+.drop b {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.drop small {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.booked h2:focus {
+  outline: none;
+}
+
+.small {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.small small {
+  margin-left: 4px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.readline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.readline .clear {
+  flex: none;
+  min-height: 44px;
+  padding: 0 4px;
+}
+.stubSecond {
+  margin-top: 6px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+.timeCheck {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  display: none;
+  transform: translateY(-50%);
+}
+.time:has(input:checked) .timeCheck {
+  display: block;
+}
+
+.preset small {
+  margin-left: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+/* The questions' bar on a phone: count and button on one row. */
+@media (max-width: 1023px) {
+  .layout [data-confirm][data-compact] {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+  .layout [data-confirm][data-compact] > :not(button) {
+    grid-column: 1 / -1;
+  }
+  .layout [data-confirm][data-compact] > :first-child {
+    grid-column: 1;
+  }
+  .layout [data-confirm][data-compact] > button {
+    grid-column: 2;
+    grid-row: 1;
+    width: auto;
+  }
+  .layout [data-confirm][data-compact] .progress {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+}
+
+.hourEnd {
+  grid-column: 1;
+  height: 0;
+  font-variant-numeric: lining-nums tabular-nums;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+  padding-right: 4px;
+  transform: translateY(-9px);
+}
+.current {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.time:has(input:disabled) {
+  border-style: dashed;
+  cursor: not-allowed;
+}
+.time b {
+  white-space: nowrap;
+}
+@media (max-width: 359px) {
+  .time b {
+    font-size: 15px;
+  }
+  .time {
+    padding: 8px 10px;
+  }
+}
+
+.preset[data-full] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fbf7ee;
+}
+.preset[data-full] small {
+  color: #d9d4c8;
+}
+.help {
+  font-size: 13px;
+  color: var(--muted);
+}
+.help summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+.help summary:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.help p {
+  max-width: 60ch;
+}
+.weekNav[data-single] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.steps li {
+  gap: 6px;
+}
+@media (max-width: 359px) {
+  .layout [data-confirm][data-compact] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .layout [data-confirm][data-compact] > button {
+    grid-column: 1;
+    grid-row: auto;
+    width: 100%;
+  }
+}
+
+.arrow[hidden] {
+  display: none;
+}
+
+.readline {
+  min-height: 44px;
+}
+.empty {
+  color: var(--muted);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+.layout [data-confirm][data-compact] .progressBar {
+  flex: none;
+  width: 100%;
+}
+
+.touchTip {
+  display: none;
+  font-size: 13px;
+  color: var(--muted);
+}
+.touchTip[data-shown] {
+  display: block;
+}
+@media (pointer: coarse) {
+  .touchTip {
+    display: block;
+  }
+}
+
+/* Week buttons: one tap to any week (Sol r9). */
+.weeks {
+  display: grid;
+  gap: 4px;
+}
+.weeksLabel {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+/* Week ranges: quiet buttons, never filled like a chosen day. */
+.dateWeek {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 2px;
+  min-height: 56px;
+  min-width: 0;
+  padding: 6px 2px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+.dateWeek span {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.dateWeek b {
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.1;
+  font-variant-numeric: lining-nums tabular-nums;
+  white-space: nowrap;
+}
+.dateWeek[aria-pressed="true"] {
+  border: 2px solid var(--ink);
+  background: #fff;
+}
+.dateWeek:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.dateWeek[data-label] {
+  display: block;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: center;
+  cursor: default;
+}
+
+
+.later {
+  font-size: 12px;
+  color: var(--muted);
+}
+.zone {
+  font-size: 12px;
+  color: #d9d4c8;
+}
+/* Narrow phones: chips wrap by their own width (Sol r16). */
+@media (max-width: 359px) {
+  .chip {
+    padding: 0 14px 0 20px;
+  }
+}
+
+/* The wide ticket: test and mock teaching side by side (Opus r10). */
+@media (min-width: 640px) {
+  .legs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 24px;
+  }
+  .legs .zone {
+    grid-column: 1 / -1;
+  }
+}
+
+
+.fromAnswers {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+
+
+/* The second list on a page names its weeks without repeating the "Week of" label. */
+.weeks[data-quiet] .weeksLabel {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.keysHint {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.week:has([data-cell]:focus-visible) .keysHint {
+  position: static;
+  width: auto;
+  height: auto;
+  clip: auto;
+  white-space: normal;
+  font-size: 13px;
+  color: var(--muted);
+}
+/* Plan: one grid, names in one column and details in the other (Opus r13). */
+.plan {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+}
+.plan li {
+  display: contents;
+}
+.plan li + li::before {
+  content: none;
+}
+.plan b {
+  white-space: nowrap;
+}
+/* Wide ticket: test and mock share rows (Opus r13). */
+@media (min-width: 640px) {
+  .legs > div {
+    display: grid;
+    grid-row: span 5;
+    grid-template-rows: subgrid;
+  }
+}
+@media (max-width: 359px) {
+  .steps {
+    gap: 10px;
+  }
+}
+
+.chosenDay {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 14px;
+}
+.dateLabel {
+  font-weight: 650;
+}
+
+@media (max-width: 359px) {
+  .dateWeek {
+    padding: 6px 6px;
+  }
+  .dateWeek b {
+    font-size: 13px;
+  }
+  .hour,
+  .hourEnd {
+    font-size: 9px;
+    padding-right: 1px;
+  }
+}
+
+.ruleMet {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--ok);
+}
+/* The visit ticket has no date stub: one column of rows. */
+.ticketRows {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Radio dots are always shown on single-choice chips. */
+.chip[data-one] svg {
+  visibility: visible;
+}
+/* The selected week as an inset ring: it takes no content width (Opus r18). */
+.dateWeek[aria-pressed="true"] {
+  border: 1px solid var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+@media (max-width: 359px) {
+  .dateWeek {
+    padding: 6px 4px;
+  }
+}
+
+@media (max-width: 359px) {
+  .dateWeek b {
+    font-size: 12px;
+    letter-spacing: -0.01em;
+  }
+  .dateWeek span {
+    font-size: 10px;
+  }
+}
+
+.cell[data-from15] {
+  border-top: 2px solid #b0391a;
+}
+/* Single-choice chips: the radio dot sits in line, with even padding on both sides (Sol r20). */
+.chip[data-one] {
+  padding: 0 16px 0 12px;
+  gap: 8px;
+}
+.chip[data-one] svg {
+  position: static;
+  width: 14px;
+  height: 14px;
+}
+
+/* One glyph slot on every chip: a muted tick or dot until chosen, 8 px to the label, even padding (Opus r20). */
+.chip,
+.chip[data-one] {
+  padding: 0 16px 0 12px;
+  gap: 8px;
+}
+.chip svg,
+.chip[data-one] svg {
+  position: static;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  visibility: visible;
+  color: #a99f88;
+}
+.chip:has(input:checked) svg {
+  color: currentColor;
+}
+@media (max-width: 359px) {
+  .chip,
+  .chip[data-one] {
+    padding: 0 12px 0 10px;
+  }
+}
+/* The ticket's own two columns (date stub + body) load later than .ticketRows: span both so the legs use the
+   full width (Opus r20: the right half was empty). */
+.legs {
+  grid-column: 1 / -1;
+}
+/* The time inside the date line keeps the date's size, not the small label style of .legs span (Opus r20). */
+.legs b span {
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+  color: inherit;
+}
+
+/* The address under "I can attend at this address." (Sol r22). */
+.place {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.chip:not(:has(input:checked)) svg {
+  color: #8f8571;
+}
+
+/* Label and input inside one field: the field's own 8 px gap only (Sol r23). */
+span.qTitle {
+  margin-bottom: 0;
+}
+
+/* Short equal choices (weekly hours) in equal columns (Opus r22). */
+.chips[data-even] {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (min-width: 640px) {
+  .chips[data-even] {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+/* Below 360 px the tag ("all that apply") gets its own line, so it never joins the title (Opus r22). */
+@media (max-width: 359px) {
+  .qTitle small {
+    display: block;
+    margin-left: 0;
+  }
+}
+/* No one-word last lines in notes (Opus r22). */
+.plan,
+.qTitle,
+.hint {
+  text-wrap: pretty;
+}
+
+/* Day names stay in view while a phone scrolls through the evening hours (Sol r24). */
+.dayHead,
+.grid > span:first-child {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-top: 6px;
+  background: var(--card);
+}
+/* Wide screens: the three quick fills in equal columns, the hours under each name (Sol r24). */
+@media (min-width: 640px) {
+  .presets {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .preset {
+    display: grid;
+    grid-template-columns: auto auto;
+    justify-content: center;
+    align-content: center;
+    column-gap: 6px;
+    padding: 6px 10px;
+    border-radius: 16px;
+    white-space: nowrap;
+  }
+  .preset small {
+    grid-column: 1 / -1;
+    margin-left: 0;
+    text-align: center;
+  }
+}
+
+/* The first hour label sits above its row, under the pinned day names: keep it on top (Sol r25). */
+.row[data-hour="8"] .hour {
+  position: relative;
+  z-index: 2;
+}
+/* Plan rows: a name beside the first line of its detail; on a phone the address takes the full width (Sol r25). */
+.plan {
+  align-items: baseline;
+}
+@media (max-width: 400px) {
+  .plan li[data-where] b,
+  .plan li[data-where] span {
+    grid-column: 1 / -1;
+  }
+}
+.sectionHead {
+  text-wrap: balance;
+}
+/* 320 px: a two-month week label ("NOV–DEC") fits its chip (harness r26). */
+@media (max-width: 359px) {
+  .dateWeek {
+    padding-inline: 1px;
+  }
+  .dateWeek span {
+    font-size: 9px;
+    letter-spacing: 0;
+  }
+}
+
+/* The chosen week: a light navy fill, so it reads as chosen and not as a focus ring (Sol r26); focus stays the coral outline. */
+.dateWeek[aria-pressed="true"] {
+  background: #e6eaf3;
+}
+
+/* Month names in normal case: "Nov–Dec" fits its chip with room at the sides (Sol r27). */
+.dateWeek span {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* A chosen hour carries a tick as well as the fill, like the chips and times (Sol r28). */
+.cell[aria-pressed="true"] {
+  background: var(--ink) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fbf7ee' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / 14px no-repeat;
+}
+
+/* Under-grid rules: two fixed rows, wrapped without orphans (Opus r26). */
+.rules {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-wrap: pretty;
+}
+/* The pinned day names end in a line, so an hour label under them reads as passing beneath (Opus r26). */
+.dayHead,
+.grid > span:first-child {
+  box-shadow: 0 1px 0 var(--line);
+}
+/* Week chips: the month range never wraps (Opus r26, Safari); 10 px at 320 with room at the sides. */
+.dateWeek span {
+  white-space: nowrap;
+}
+@media (max-width: 359px) {
+  .dateWeek {
+    padding-inline: 2px;
+  }
+  .dateWeek span {
+    font-size: 10px;
+  }
+}
+
+/* A cell reached by the keyboard scrolls clear of the pinned day names (code review r29). */
+.cell {
+  scroll-margin-top: 44px;
+}

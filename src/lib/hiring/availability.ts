@@ -253,7 +253,7 @@ export async function availableSlots(
 ): Promise<Slot[]> {
   if (!subjects.length || (kind === "mock" && subjects.length !== 1)) return [];
   // A weekend day gives test times only when the test office hours in Hiring settings hold that day.
-  const dates = businessDates(now, config.holidays, 5, kind === "paper");
+  const dates = businessDates(now, config.holidays, undefined, kind === "paper");
   const calendar = await readCalendar(db);
   const { bookings, observations } = calendar;
   const duration = kind === "mock" ? 60 : subjects.length * 120;
@@ -541,8 +541,24 @@ async function readLive(db: Database, headKeys: string[], dates: string[], deadl
   return { checkedAt: new Date().toISOString(), snapshotId: index.snapshotId, heads };
 }
 
+// The list reads Wise live only for the first five dates. When the confirm step refuses a later time, the head's live busy
+// times for that day are kept for one sync (30 minutes), so the list stops offering that time and another free head can take it.
+// shortcut: kept per server instance; a reload on another instance can show the time once more and the confirm refuses it again.
+const REFUSAL_MS = 30 * 60_000;
+type Refusal = { at: number; busy: Range[] };
+const refusals = ((globalThis as { __bgscheduler_hiringRefusals?: Map<string, Refusal> })
+  .__bgscheduler_hiringRefusals ??= new Map<string, Refusal>());
+export const forgetLiveRefusals = () => refusals.clear();
+const refusedBusy = (key: string, range: Range) => {
+  const hit = refusals.get(`${key}|${localDate(range.start)}`);
+  if (hit && Date.now() - hit.at > REFUSAL_MS) refusals.delete(`${key}|${localDate(range.start)}`);
+  else if (hit) return hit.busy.some((b) => overlap(range, b));
+  return false;
+};
+
 /** With a live read, a head is free only when that read shows no class and no leave in the range. */
 const liveFree = (live: LiveBusy | undefined, key: string, range: Range) => {
+  if (refusedBusy(key, range)) return false;
   if (!live) return true;
   const head = live.heads.get(key);
   return !!head && !("error" in head) && ![...head.classes, ...head.leaves].some((b) => overlap(range, b));
@@ -558,6 +574,8 @@ export async function verifyLiveSlot(db: Database, slot: Slot) {
   const head = live.heads.get(slot.interviewerKey)!;
   if ("error" in head) throw new HiringError(409, head.error);
   const range = { start: new Date(slot.start), end: new Date(slot.end) };
+  if ([...head.classes, ...head.leaves].some((b) => overlap(range, b)))
+    refusals.set(`${slot.interviewerKey}|${slot.date}`, { at: Date.now(), busy: [...head.classes, ...head.leaves] });
   if (head.classes.some((b) => overlap(range, b)))
     throw new HiringError(409, "The interviewer now has a class. Choose another time.");
   if (head.leaves.some((b) => overlap(range, b)))

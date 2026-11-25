@@ -1,5 +1,7 @@
 /* Candidate booking page. Its own look on purpose (owner request, 11 Nov 2026): it does not follow the app theme. */
 .page {
+  /* A focused field scrolls clear of the sticky bar at the bottom (Sol r26). */
+  scroll-padding-block: 16px 140px;
   --paper: #f6f1e7;
   --card: #fffdf8;
   --ink: #14213d;
@@ -15,6 +17,8 @@
   --serif: var(--font-cormorant), "Cormorant Garamond", Georgia, serif;
   --mono: var(--font-jetbrains-mono), ui-monospace, monospace;
   height: 100%;
+  /* One background however short the content is (Opus r5). */
+  min-height: 100dvh;
   overflow-y: auto;
   background: var(--paper);
   color: var(--ink);
@@ -67,6 +71,8 @@
 }
 .title {
   margin-top: 18px;
+  /* Lining figures, so "R1" never reads as "Rı" in Cormorant (Opus r10). */
+  font-variant-numeric: lining-nums;
   font-family: var(--serif);
   font-size: clamp(38px, 9vw, 56px);
   font-weight: 500;
@@ -136,6 +142,7 @@
 }
 /* Inside the head's Hiring screen (embed=1) there is no hero: the sheet starts at the top and uses the pane's width. */
 .page[data-bare] {
+  min-height: 0;
   background: transparent;
 }
 .page[data-bare] .sheet {
@@ -395,16 +402,14 @@
     box-shadow: 0 0 0 8px rgb(31 122 77 / 0);
   }
 }
+/* Four weeks of dates wrap into rows, so no date is hidden off-screen. */
 .days {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
   gap: 8px;
-  margin: 0 -18px;
-  padding: 2px 18px 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
+  padding: 2px 0 6px;
 }
 .day {
-  flex: 1 0 56px;
   display: grid;
   justify-items: center;
   gap: 0;
@@ -607,7 +612,8 @@ input[type="file"].input {
   width: 22px;
   height: 22px;
   margin-top: 1px;
-  border: 1.5px solid #b8ae98;
+  /* 3:1 against white (WCAG 1.4.11, Opus r13). */
+  border: 1.5px solid #8f8571;
   border-radius: 7px;
   background: #fff;
   color: transparent;
@@ -656,17 +662,13 @@ input[type="file"].input {
   margin: 0 -18px;
   padding: 14px 18px;
   border-block: 1px solid var(--line);
-  background: rgb(255 253 248 / 0.92);
-  backdrop-filter: blur(8px);
+  /* Solid: WebKit showed the content through a translucent bar (Opus r6). */
+  background: var(--card);
 }
 @media (min-width: 640px) {
   .confirm {
     margin: 0 -32px;
     padding: 18px 32px;
-  }
-  .days {
-    margin: 0;
-    padding: 2px 0 6px;
   }
 }
 .summary {
@@ -779,6 +781,12 @@ input[type="file"].input {
   color: var(--muted);
   text-align: center;
 }
+/* The LINE link is a full 44 px target, also when it stands alone on its line (Sol r29). */
+.help a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
 
 /* Booked visit: a ticket. */
 .ticket {
@@ -801,6 +809,7 @@ input[type="file"].input {
   background: rgb(255 255 255 / 0.06);
 }
 .ticketDate b {
+  font-variant-numeric: lining-nums tabular-nums;
   font-family: var(--serif);
   font-size: 46px;
   font-weight: 600;
@@ -922,4 +931,34 @@ input[type="file"].input {
 }
 .page:not([data-brief]) :is(input, select, textarea, button):focus-visible {
   scroll-margin-bottom: 200px;
+}
+
+/* The candidate pages with a side rail (candidate.module.css .layout) use more of a wide screen. */
+@media (min-width: 1024px) {
+  .page:has([data-wide-layout]) .heroInner,
+  .page:has([data-wide-layout]) .sheet {
+    max-width: 1040px;
+  }
+  .page:has([data-wide-layout]) .card {
+    padding: 40px 44px;
+  }
+}
+@media (max-width: 359px) {
+  .title {
+    font-size: 34px;
+  }
+}
+
+/* A bar that ends the card fills to the card's bottom edge: no rule over an empty strip (Opus r10). */
+@media (max-width: 1023px) {
+  .card > [data-wide-layout]:last-child [data-confirm]:last-child {
+    margin-bottom: -22px;
+    border-bottom: 0;
+    border-radius: 0 0 24px 24px;
+  }
+}
+@media (min-width: 640px) and (max-width: 1023px) {
+  .card > [data-wide-layout]:last-child [data-confirm]:last-child {
+    margin-bottom: -32px;
+  }
 }
