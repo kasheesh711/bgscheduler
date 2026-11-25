@@ -24,13 +24,21 @@ const BRIEF_STATES = [
 ];
 
 const ENTRY = `
+// ?persist=1 keeps the whole sample query for the tab, as a signed-in head keeps their session across links.
+try {
+  if (location.search.includes("persist=1")) sessionStorage.setItem("fixture:query", location.search.slice(1));
+  else if (!location.search.includes("roles=") && !location.pathname.startsWith("/hiring/brief/") && !location.pathname.startsWith("/hiring/paper-check/") && sessionStorage.getItem("fixture:query"))
+    history.replaceState(null, "", "?" + sessionStorage.getItem("fixture:query"));
+} catch {}
 import { Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { baseConfigSchema, localDate } from "@/lib/hiring/model";
 import { HiringDashboard } from "@/components/hiring/dashboard";
 import { HiringStaffPreview } from "@/components/hiring/staff-preview";
 import { BookingShell } from "@/components/hiring/booking";
-import { InterviewerBrief } from "@/components/hiring/brief";
+import { BriefShell, InterviewerBrief, ScheduleLink } from "@/components/hiring/brief";
+import { PaperCheck } from "@/components/hiring/paper-check";
+import { OFFER_LETTERS } from "@/lib/hiring/offer-letters";
 
 const assessment = (summary: string) => ({
   summary, briefSummary: summary, subjects: [{ subject: "Mathematics", relevant: true, evidence: "Taught IGCSE", reason: "Named in the resume" }],
@@ -87,7 +95,7 @@ payload.inviteOutbox = payload.outbox;
 const markQuestions = (level: string, marks: number[]) => marks.map((value, i) => ({ id: level[0] + (i + 1), level, marks: value, max: 10, reason: "Correct method", attempted: true, readable: true }));
 const visitFor = (candidateId: string, visitId: string, startIso: string, head: string, subject: string) => [
   { id: visitId + "e", candidateId, kind: "paper", status: "confirmed", startTime: startIso, endTime: startIso, visitId, interviewerKey: null, subjects: [subject] },
-  { id: visitId + "m", candidateId, kind: "mock", status: "confirmed", startTime: new Date(new Date(startIso).getTime() + 7200000).toISOString(), endTime: startIso, visitId, interviewerKey: head, subjects: [subject] },
+  { id: visitId + "m", candidateId, kind: "mock", status: "confirmed", startTime: new Date(new Date(startIso).getTime() + 7200000).toISOString(), endTime: new Date(new Date(startIso).getTime() + 10800000).toISOString(), visitId, interviewerKey: head, subjects: [subject] },
 ];
 payload.bookings = [...visitFor("r1", "v1", "2026-11-01T03:00:00Z", "Peat", "Mathematics"), ...visitFor("r2", "v2", new Date(Date.now() + 86400000).toISOString(), "Ek", "Physics")] as never[];
 // The role screens (HR, Admin, Heads). Only with ?roles=1, so the checks of the other tabs read the same payload as before.
@@ -134,6 +142,22 @@ if (/roles=1|pipeline=1/.test(location.search)) {
     }
   }
 }
+// ?me=Ek: the signed-in head, as /api/hiring names them. A near-miss paper waits for Ek's marks.
+// ?persist=1 keeps ?me= for the tab, as a sign-in would: the brief's "My hiring list" link carries no query.
+const me = (() => {
+  const params = new URLSearchParams(location.search);
+  try {
+    if (params.get("persist") === "1" && params.get("me")) sessionStorage.setItem("fixture:me", params.get("me")!);
+    return params.get("me") ?? sessionStorage.getItem("fixture:me");
+  } catch {
+    return params.get("me");
+  }
+})();
+if (me) payload.viewerHead = me;
+if (location.search.includes("roles=1")) {
+  candidates.push(person("near-miss", "Sample Joy", { seekApplicationId: null, stage: "onsite_booked" }));
+  (payload.paperChecks as unknown[]).push({ resultId: "pc1", candidateId: "near-miss", subject: "Physics", percent: 67.5, head: "Ek", done: false, path: "/hiring/paper-check/sample-token" });
+}
 if (location.search.includes("pipeline=1")) {
   candidates.push(person("offer", "Sample Offer", { stage: "hired" }));
   payload.decisions.push({ id: "approved", candidateId: "offer", decision: "hire", status: "sent", outboxKey: "offer:result:approved" });
@@ -151,6 +175,35 @@ if (location.search.includes("scroll=1")) {
 }
 payload.tutors = [{ canonicalKey: "Peat", name: "Kru Peat", email: "p@example.test", lineReady: true }, { canonicalKey: "Ek", name: "Kru Ek", email: "e@example.test", lineReady: true }] as never[];
 payload.config.interviewers = [{ canonicalKey: "Peat", email: "p@example.test", subjects: ["Mathematics"] }, { canonicalKey: "Ek", email: "e@example.test", subjects: ["Physics"] }] as never[];
+// ?me=Gift&gift=1: Gift is a head (English Literature) and gives the final sign-off. One packet is ready for her.
+if (me === "Gift") {
+  const at = (days: number, hour: number) => { const d = new Date(Date.now() + days * 86400000); d.setUTCHours(hour - 7, 0, 0, 0); return d.toISOString(); };
+  (payload.tutors as unknown[]).push({ canonicalKey: "Gift", name: "Wanwisa (Gift) Montrikittiphant", email: "g@example.test", lineReady: true });
+  (payload.config.interviewers as unknown[]).push({ canonicalKey: "Gift", email: "g@example.test", subjects: ["English Literature"] });
+  Object.assign(payload, { finalReviewer: "Gift", reviewPackets: ["r1"] });
+  candidates.push(person("gift-mock", "Sample Vin", { seekApplicationId: null, stage: "mock_booked" }), person("gift-later", "Sample Htoo", { seekApplicationId: null, stage: "onsite_booked" }));
+  (payload.bookings as unknown[]).push(
+    { id: "gift-mock", candidateId: "gift-mock", kind: "mock", status: "confirmed", startTime: at(2, 13), endTime: at(2, 14), visitId: null, interviewerKey: "Gift", subjects: ["English Literature"] },
+    { id: "gift-later", candidateId: "gift-later", kind: "mock", status: "confirmed", startTime: at(6, 13), endTime: at(6, 14), visitId: null, interviewerKey: "Gift", subjects: ["English Literature"] },
+  );
+  Object.assign(payload.briefPaths, { "gift-mock": "/hiring/brief/sample-token", "gift-later": "/hiring/brief/sample-token" });
+}
+// ?mockNow=1: Ek's mock (Reply Low) started ten minutes ago.
+if (location.search.includes("mockNow=1")) {
+  const live = (payload.bookings as { id: string; startTime: string; endTime: string }[]).find(({ id }) => id === "v2m");
+  if (live) Object.assign(live, { startTime: new Date(Date.now() - 600000).toISOString(), endTime: new Date(Date.now() + 3000000).toISOString() });
+}
+// Each row's brief shows that row's candidate: the fixture link carries the name, subject and mock time.
+if (/roles=1/.test(location.search)) {
+  const bookings = payload.bookings as { id: string; candidateId: string; startTime: string; endTime: string; subjects: string[] }[];
+  for (const [id, path] of Object.entries(payload.briefPaths as Record<string, string>)) {
+    const booking = bookings.find((b) => b.id === id);
+    const name = candidates.find((c) => c.id === booking?.candidateId)?.name;
+    if (!booking || !name) continue;
+    const when = new Date(booking.startTime).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
+    (payload.briefPaths as Record<string, string>)[id] = path + "?" + new URLSearchParams({ name, subject: booking.subjects[0] ?? "Mathematics", mock: when });
+  }
+}
 payload.config.paperPassRules = [{ subject: "Mathematics", level: "Key Stage 3", percent: 50 }, { subject: "Mathematics", level: "AS / A-Level", percent: 50 }, { subject: "Mathematics", level: "IB SL / HL", percent: 60 }];
 payload.papers = [{ id: "p1", candidateId: "r1", bookingId: "v1e", subject: "Mathematics", source: "ai", status: "done", fileId: "f1", updatedAt: "2026-11-02T00:00:00.000Z", markSchemeUsed: false, history: null, error: null, changedBy: null, marks: { missingPages: null, comment: "Strong algebra. Weak on IB vectors.", questions: [...markQuestions("Key Stage 3", [9, 9]), ...markQuestions("AS / A-Level", [6, 5]), ...markQuestions("IB SL / HL", [3, 4])] } }];
 payload.mocks = [{ id: "m1", candidateId: "r1", bookingId: "v1m", subject: "Mathematics", source: "ai", status: "done", fileId: "f2", updatedAt: "2026-11-02T00:00:00.000Z", history: null, error: null, changedBy: null, rubric: { comments: "Clear explanations.", items: { accuracy: 10, concepts: 10, clarity: 7, presentation: 7, interaction: 10, pace: 7, organization: 10, materials: 7, formative: 7, feedback: 9 } } }];
@@ -181,13 +234,26 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   // The Capacity tab reads its own payload, which this fixture does not hold.
   if (String(input).includes("capacity=1")) return new Response(JSON.stringify({ error: "Not in this fixture." }), { status: 503 });
   const url = new URL(String(input), location.origin);
-  if (url.pathname.startsWith("/api/hiring/brief/sample-token/")) {
+  // The brief's files (résumé, paper, pdf.js runtime) come from the server; only the brief's sends are answered here.
+  if (url.pathname.startsWith("/api/hiring/brief/sample-token/") && init?.method === "POST") {
     if (url.pathname.endsWith("/rubric") && location.search.includes("sendFailed=1"))
       return new Response(JSON.stringify({ error: "The scores were not saved. Try again." }), { status: 503 });
     const body = JSON.parse(String(init?.body ?? "{}"));
     (window as unknown as { posted: unknown[] }).posted.push(body);
-    if (url.pathname.endsWith("/rubric")) return new Response(JSON.stringify({ total: Object.values(body.items as Record<string, number>).reduce((a, b) => a + b, 0) }));
+    if (url.pathname.endsWith("/rubric")) {
+      // Sent scores come back with the brief next time, as the server stores them.
+      try { localStorage.setItem("fixture:rubric", JSON.stringify({ items: body.items, comments: body.comments, stressTest: body.stressTest, checksDone: body.checksDone })); } catch {}
+      return new Response(JSON.stringify({ total: Object.values(body.items as Record<string, number>).reduce((a, b) => a + b, 0) }));
+    }
     return new Response(JSON.stringify({ ok: true }));
+  }
+  // The head's re-marked paper: pass at the fixture's 70% mark (four questions of 10).
+  if (url.pathname === "/api/hiring/paper-check/sample-token" && init?.method === "POST") {
+    const body = JSON.parse(String(init.body));
+    (window as unknown as { posted: unknown[] }).posted.push(body);
+    const total = Object.values(body.marks as Record<string, number>).reduce((a, b) => a + b, 0);
+    try { localStorage.setItem("fixture:paper-sent", "1"); } catch {}
+    return new Response(JSON.stringify({ outcome: total >= 28 ? "passed" : "rejected" }));
   }
   if (url.pathname === "/api/hiring/review/offer") {
     return new Response(JSON.stringify({ access: { hr: true, gift: false }, stage: "hired",
@@ -202,7 +268,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       return new Response(JSON.stringify({ ok: true }));
     }
     return new Response(JSON.stringify({ access: GIFT ? payload.reviewAccess : { hr: true, gift: false }, stage: GIFT ? "review" : "mock_booked",
-      callNotes: "Gave a specific example of adapting a lesson.", packet: GIFT ? { id: "packet", behavioral: "Gave a specific example of adapting a lesson.", offer: "Hourly rate 600 THB, 10 hours a week." } : reviewPacket,
+      callNotes: "Gave a specific example of adapting a lesson.", packet: GIFT ? { id: "packet", behavioral: "Gave a specific example of adapting a lesson.", offer: OFFER_LETTERS.part_time.text("Reply Passed", "Mathematics"), offerType: "part_time" } : reviewPacket,
       packetValid: new URLSearchParams(location.search).get("stale") === "unknown" ? null : !location.search.includes("stale=1"), appointment: null }));
   }
   if (url.pathname === "/api/hiring/marking") {
@@ -266,16 +332,39 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return new Response(JSON.stringify({ id: url.searchParams.get("candidateId"), profileText: "Extracted resume text for the fixture." }));
   if (url.pathname === "/api/hiring" && url.searchParams.get("head"))
     return new Response(JSON.stringify({ name: "Kru Peat", subjects: ["Mathematics"], days: [0, 1, 2, 3, 4].map((i) => ({ date: "2026-11-0" + (2 + i), office: { start: "09:00", end: "18:00" }, blocks: [] })), visits: [], mocks: 0, limit: 2, stale: false, staleReason: null, weekStart: "2026-11-02", head: "Peat" }));
-  if (url.pathname === "/api/hiring") return new Response(JSON.stringify(payload));
+  if (url.pathname === "/api/hiring") {
+    // ?failFirst=1: the first two list loads fail (the page retries once on its own), so the Try again button can be checked.
+    const once = window as unknown as { failed?: number };
+    if (location.search.includes("failFirst=1") && (once.failed ?? 0) < 2) {
+      once.failed = (once.failed ?? 0) + 1;
+      return new Response(JSON.stringify({ error: "Service unavailable" }), { status: 503 });
+    }
+    // A paper sent in the open page (another frame) is done: the list drops it, as /api/hiring would.
+    let sent = false;
+    try { sent = localStorage.getItem("fixture:paper-sent") === "1"; } catch {}
+    if (sent) (payload.paperChecks as { done: unknown }[]).forEach((check) => { check.done = { passed: true }; });
+    return new Response(JSON.stringify(payload));
+  }
   return realFetch(input, init);
 }) as typeof fetch;
 // ?brief=open|wait|closed|checking|admin: the interviewer's public page from the LINE link, with synthetic data.
-const briefState = new URLSearchParams(location.search).get("brief");
+// The Heads screen opens the brief and the paper check in a frame, at their real paths.
+const briefState = new URLSearchParams(location.search).get("brief") ?? (location.pathname.startsWith("/hiring/brief/") ? "open" : null);
+const paperCheck = location.pathname.startsWith("/hiring/paper-check/");
+const embed = location.search.includes("embed=1");
+// A new page load of the list starts the fixture fresh.
+if (!embed) { try { localStorage.removeItem("fixture:paper-sent"); localStorage.removeItem("fixture:rubric"); } catch {} }
+const PAPER_VIEW = { id: "pc1", name: "Sample Joy", subject: "Physics", head: "Kru Ek", aiPercent: 67.5, passMark: 70, mock: null, updatedAt: "2026-11-24T03:00:00.000Z", done: null, open: true,
+  comment: "Good mechanics. Lost marks on units.", questions: [1, 2, 3, 4].map((n) => ({ id: String(n), level: "IGCSE / GCSE", max: 10, marks: n === 4 ? 6 : 7, reason: n === 4 ? "Wrong units in the final answer." : "Method and answer correct." })) };
 const recommendationBlock = briefState === "checking" || briefState === "admin" ? briefState : null;
-const BRIEF = { decision: null, name: "Sample Dao", subject: "Mathematics", gradedPaper: true, exam: "Sat 28 Nov, 10:00–11:30", mock: "Sat 28 Nov, 12:00–12:45",
+const briefFor = new URLSearchParams(location.search);
+const ATS = { score: 78, penalty: 0, parts: [["Degree", 10, 10], ["Subject", 10, 10], ["Curriculum", 7.5, 15], ["Teaching", 20, 20], ["English", 20, 20], ["University", 10.5, 15], ["High school", 0, 10]].map(([name, earned, max]) => ({ name, earned, max })) };
+const BRIEF = { ats: ATS, decision: null, name: briefFor.get("name") ?? "Sample Dao", subject: briefFor.get("subject") ?? "Mathematics", gradedPaper: true, exam: briefFor.get("mock") ? null : "Sat 28 Nov, 10:00–11:30", mock: briefFor.get("mock") ?? "Sat 28 Nov, 12:00–12:45",
   interviewer: "Kru Peat", location: "BeGifted, 2nd floor, Siam Square One", answers, resume: "pdf" as const,
-  rubric: null, form: recommendationBlock ? "closed" : briefState ?? "open", recommendationReady: briefState === "closed", recommendationBlock };
-createRoot(document.getElementById("root")!).render(<Suspense fallback="Loading">{briefState ? <BookingShell kind="brief"><InterviewerBrief brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BookingShell> : location.search.includes("preview=1") ? <div className="flex min-h-0 flex-1 flex-col overflow-auto"><HiringStaffPreview role="hr" /></div> : <HiringDashboard />}</Suspense>);
+  rubric: (() => { try { return JSON.parse(localStorage.getItem("fixture:rubric") ?? "null"); } catch { return null; } })(), form: recommendationBlock ? "closed" : briefState ?? "open", recommendationReady: briefState === "closed", recommendationBlock,
+  // A blocked or closed brief is after the mock, as on the server.
+  mockEnded: ["checking", "admin", "closed"].includes(briefState ?? "") };
+createRoot(document.getElementById("root")!).render(<Suspense fallback="Loading">{paperCheck ? <BookingShell kind="paper-check" bare={embed}>{!embed && <ScheduleLink />}<PaperCheck view={PAPER_VIEW as never} token="sample-token" /></BookingShell> : briefState ? location.pathname.startsWith("/hiring/brief/") ? <BriefShell bare={embed}>{!embed && <ScheduleLink />}<InterviewerBrief compact={embed} brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BriefShell> : <BookingShell kind="brief"><InterviewerBrief brief={BRIEF as never} resumeUrl="/api/hiring/brief/sample-token/resume" rubricUrl="/api/hiring/brief/sample-token/rubric" decisionUrl="/api/hiring/brief/sample-token/decision" /></BookingShell> : location.search.includes("preview=1") ? <div className="flex min-h-0 flex-1 flex-col overflow-auto"><HiringStaffPreview role="hr" /></div> : <HiringDashboard />}</Suspense>);
 `;
 
 // Only the framework parts that need a Next.js server are replaced. The components stay real.
@@ -286,14 +375,20 @@ const push = window.history.pushState.bind(window.history);
 window.history.pushState = (...args) => { push(...args); window.dispatchEvent(new Event(change)); };
 const subscribe = (fn) => { window.addEventListener(change, fn); window.addEventListener("popstate", fn); return () => { window.removeEventListener(change, fn); window.removeEventListener("popstate", fn); }; };
 export const useSearchParams = () => new URLSearchParams(useSyncExternalStore(subscribe, () => location.search));
+// The synthetic page has no server to fetch again; refresh keeps the page as it is, after a short wait like a real fetch,
+// so a check can see the pending state.
+export const useRouter = () => ({ refresh() { return new Promise((resolve) => setTimeout(resolve, 300)); }, push() {}, replace() {} });
 `;
 // The real review packet HTML (src/lib/hiring/review-document.ts) for a synthetic packet, so Gift's in-page packet is the real layout.
 const packetModule = await build({ entryPoints: [path.join(ROOT, "src/lib/hiring/review-document.ts")], bundle: true, write: false, platform: "node", format: "esm", tsconfig: path.join(ROOT, "tsconfig.json"), logLevel: "error" });
 const { reviewDocument } = await import(`data:text/javascript;base64,${Buffer.from(packetModule.outputFiles[0].text).toString("base64")}`);
+// The packet's offer is the production part-time letter, as HR's choice makes it (critic review, round 12).
+const lettersModule = await build({ entryPoints: [path.join(ROOT, "src/lib/hiring/offer-letters.ts")], bundle: true, write: false, platform: "node", format: "esm", tsconfig: path.join(ROOT, "tsconfig.json"), logLevel: "error" });
+const { OFFER_LETTERS } = await import(`data:text/javascript;base64,${Buffer.from(lettersModule.outputFiles[0].text).toString("base64")}`);
 const rubricItems = { accuracy: 10, concepts: 10, clarity: 7, presentation: 7, interaction: 10, pace: 7, organization: 10, materials: 7, formative: 7, feedback: 9 };
 // PACKET_HTML=<file> shows a packet rendered elsewhere (for a local preview); it is never fetched from a server here.
 const realPacket = process.env.PACKET_HTML ? readFileSync(process.env.PACKET_HTML, "utf8") : await (async () => { const cwd = process.cwd(); process.chdir(ROOT); try { return await reviewDocument({
-  at: "2026-11-19T03:00:00Z", author: "hr@example.test", behavioral: "Gave a specific example of adapting a lesson for a student who struggled with fractions.", offer: "Hourly rate 600 THB. About 10 hours a week, weekend mornings. Start date 1 December 2026.",
+  at: "2026-11-19T03:00:00Z", author: "hr@example.test", behavioral: "Gave a specific example of adapting a lesson for a student who struggled with fractions.", offer: OFFER_LETTERS.part_time.text("Reply Passed", "Mathematics"),
   evidence: { name: "Reply Passed", subject: "Mathematics", call: "2026-11-03T02:00:00Z", recommendation: { head: "Kru Peat", reason: "Clear and warm lesson." },
     ats: { score: 86, weights: { degree: 10, subject: 10, curriculum: 20, teaching: 20, english: 20, prestige: 20 }, prestige: 0.5, penalty: 4,
       criteria: ["degree", "subject", "curriculum", "teaching", "english"].map((id) => ({ id, result: "met", evidence: "Taught IGCSE for 2 years" })) },
@@ -332,9 +427,45 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
 const AXE = readFileSync(path.join(ROOT, "node_modules/axe-core/axe.min.js"), "utf8");
 const PDF = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF";
 
+// An A4 PDF with a line of text on each page, so the real PDF viewer has something to draw. The paper has five pages,
+// so the shots show whether a long paper scrolls inside its own box (critic review, round 10).
+const samplePdf = (text, pages = 1) => {
+  const objects = ["<</Type/Catalog/Pages 2 0 R>>", `<</Type/Pages/Count ${pages}/Kids[${Array.from({ length: pages }, (_, i) => `${4 + i * 2} 0 R`).join(" ")}]>>`,
+    "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>"];
+  for (let page = 1; page <= pages; page += 1) {
+    const stream = `BT /F1 28 Tf 60 760 Td (${text}${pages > 1 ? ` - page ${page}` : ""}) Tj ET BT /F1 14 Tf 60 720 Td (Experience, education and subjects would be here.) Tj ET`;
+    objects.push(`<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents ${5 + (page - 1) * 2} 0 R/Resources<</Font<</F1 3 0 R>>>>>>`,
+      `<</Length ${stream.length}>>stream\n${stream}\nendstream`);
+  }
+  let body = "%PDF-1.4\n";
+  const offsets = objects.map((object, i) => { const at = body.length; body += `${i + 1} 0 obj${object}endobj\n`; return at; });
+  const xref = body.length;
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("")}`;
+  return `${body}trailer<</Size ${objects.length + 1}/Root 1 0 R>>\nstartxref\n${xref}\n%%EOF`;
+};
 const resumeRequests = [];
 const server = createServer((request, response) => {
   const url = new URL(request.url, "http://localhost");
+  // The brief's résumé and the marked paper: a one-page made-up PDF, drawn by the real pdf.js runtime files.
+  const runtime = /\/(?:pdf-runtime|runtime)\/([A-Za-z0-9_.-]+)$/.exec(url.pathname)?.[1];
+  if (runtime && url.pathname.startsWith("/api/hiring/")) {
+    const relative = runtime === "worker.mjs" ? "build/pdf.worker.min.mjs" : runtime === "worker-legacy.mjs" ? "legacy/build/pdf.worker.min.mjs"
+      : runtime.endsWith(".bcmap") ? `cmaps/${runtime}` : /\.(pfb|ttf)$/.test(runtime) ? `standard_fonts/${runtime}` : `wasm/${runtime}`;
+    try {
+      const bytes = readFileSync(path.join(ROOT, "node_modules/pdfjs-dist", relative));
+      response.writeHead(200, { "Content-Type": runtime.endsWith(".mjs") || runtime.endsWith(".js") ? "text/javascript" : runtime.endsWith(".wasm") ? "application/wasm" : "application/octet-stream" });
+      response.end(bytes);
+    } catch {
+      response.writeHead(404);
+      response.end();
+    }
+    return;
+  }
+  if (/^\/api\/hiring\/(?:brief|paper-check)\/[^/]+\/(?:resume|paper)$/.test(url.pathname)) {
+    response.writeHead(200, { "Content-Type": "application/pdf" });
+    response.end(url.pathname.endsWith("paper") ? samplePdf("Marked paper - made-up data", 5) : samplePdf("Sample resume - made-up data"));
+    return;
+  }
   if (url.pathname.startsWith("/api/hiring/resume/")) {
     resumeRequests.push(url.pathname.split("/").pop());
     response.writeHead(200, { "Content-Type": "application/pdf" });
@@ -344,8 +475,13 @@ const server = createServer((request, response) => {
   response.writeHead(200, { "Content-Type": "text/html" });
   response.end(html);
 });
-await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+await new Promise((resolve) => server.listen(Number(process.env.SERVE) || 0, "127.0.0.1", resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
+// SERVE=<port>: keep the synthetic screens up for a person or a browser agent to click through. No checks run.
+if (process.env.SERVE) {
+  process.stdout.write(`Serving the synthetic hiring screens at ${origin}\n`);
+  await new Promise(() => {});
+}
 
 let browser;
 const textDumps = new Set();
@@ -887,18 +1023,34 @@ try {
     assert.ok(await page.getByText("Head: Kru Ek").isVisible());
     await shot(page, "role-admin");
   });
-  await check("the Heads screen shows the chosen head's candidates and remembers the screen", async () => {
-    await page.goto(`${origin}/?view=heads&roles=1`);
-    await page.getByRole("button", { name: "Kru Ek" }).click();
-    await page.getByRole("heading", { name: "Next mock" }).waitFor();
-    assert.equal(await page.getByRole("link", { name: "Open interview brief" }).getAttribute("href"), "/hiring/brief/sample-token");
-    await page.getByRole("button", { name: "Show the résumé of Reply Low" }).click();
+  await check("the Heads screen opens the signed-in head's list with the most urgent page open", async () => {
+    // /hiring alone opens a head's own screen. There is no name to choose.
+    await page.goto(`${origin}/?roles=1&me=Ek`);
+    await page.evaluate(() => localStorage.clear());
+    await page.goto(`${origin}/?roles=1&me=Ek`);
+    await page.getByRole("navigation", { name: "Kru Ek's hiring list" }).waitFor();
+    assert.equal(await page.getByRole("combobox", { name: "Head" }).count(), 0);
+    assert.equal(await page.getByRole("heading", { level: 1 }).locator("xpath=following-sibling::p").first().textContent(), "Kru Ek");
+    // The paper to re-mark comes first and is already open beside the list.
+    await page.frameLocator("iframe").getByText("Sample Joy").first().waitFor();
+    assert.equal(await page.locator("iframe").getAttribute("src"), "/hiring/paper-check/sample-token?embed=1");
+    assert.equal(await page.getByRole("link", { name: /^Re-mark paper: .*Sample Joy/ }).getAttribute("aria-current"), "true");
     await shot(page, "role-heads");
-    // The browser remembers the role screen and the head.
-    await page.goto(`${origin}/?roles=1`);
-    await page.getByRole("heading", { name: "Next mock" }).waitFor();
+    // One click on the next mock opens its brief in the same place.
+    await page.getByRole("link", { name: /^Interview brief: .*Reply Low/ }).click();
+    await page.frameLocator("iframe").getByRole("heading", { name: "Reply Low" }).waitFor();
+    assert.match(await page.locator("iframe").getAttribute("src"), /^\/hiring\/brief\/sample-token\?name=Reply\+Low&.*&embed=1$/);
+    assert.equal(await page.frameLocator("iframe").getByRole("link", { name: "← My hiring list" }).count(), 0);
+    await shot(page, "role-heads-brief");
+    // On a phone the list is the page: a tap opens the paper check or the brief itself, which links back.
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${origin}/?view=heads&roles=1&me=Ek`);
+    await page.getByRole("link", { name: /^Re-mark paper: .*Sample Joy/ }).waitFor();
+    assert.equal(await page.locator("iframe").count(), 0);
+    assert.equal(await page.getByRole("link", { name: /^Re-mark paper: .*Sample Joy/ }).getAttribute("href"), "/hiring/paper-check/sample-token");
     await shot(page, "role-heads-phone");
+    await page.goto(`${origin}/hiring/brief/sample-token`);
+    assert.equal(await page.getByRole("link", { name: "← My hiring list" }).getAttribute("href"), "/hiring?view=heads");
     await page.goto(`${origin}/?view=hr&roles=1`);
     await page.getByRole("heading", { name: /To call/ }).waitFor();
     await shot(page, "role-hr-phone");
@@ -935,7 +1087,7 @@ try {
     await shot(page, "hiring-paper-phone");
     await menu.click();
     await workflow.getByRole("button", { name: "Mock teaching" }).click();
-    await page.getByRole("group", { name: "Choose your name" }).waitFor();
+    await page.getByRole("combobox", { name: "Head" }).waitFor();
     await shot(page, "hiring-mock-phone");
     await menu.click();
     await workflow.getByRole("button", { name: "Final review" }).click();
@@ -959,6 +1111,289 @@ try {
     await shot(page, "hiring-offer-dark");
     await page.evaluate(() => document.documentElement.classList.remove("dark"));
   });
+  await check("workspace shots for the UX review", async () => {
+    const at = async (width, height, query, name, ready) => {
+      await page.setViewportSize({ width, height });
+      await page.goto(`${origin}/?${query}`);
+      await ready();
+      await page.waitForTimeout(250);
+      await shot(page, name);
+    };
+    const frameReady = (text) => () => page.frameLocator("iframe").getByText(text).first().waitFor();
+    for (const [width, height, size] of [[1440, 900, "desktop"], [1280, 800, "laptop"]]) {
+      await at(width, height, "roles=1&me=Ek", `heads-ws-ek-${size}`, frameReady("Sample Joy"));
+      // The packet opens by itself beside Gift's decision.
+      await at(width, height, "roles=1&me=Gift&gift=1&live=1", `heads-ws-gift-${size}`, () => page.locator("iframe[title^='Review packet']").waitFor());
+    }
+    await at(1440, 900, "roles=1&me=Ek", "heads-ws-ek-brief-desktop", async () => {
+      await page.getByRole("link", { name: /^Interview brief: .*Reply Low/ }).click();
+      await page.frameLocator("iframe").getByRole("heading", { name: "Reply Low" }).waitFor();
+    });
+    await at(1440, 900, "view=heads&roles=1", "heads-ws-staff-desktop", async () => {
+      await page.getByRole("combobox", { name: "Head" }).selectOption({ label: "Kru Peat" });
+      await page.getByRole("link", { name: /Record recommendation/ }).first().waitFor();
+    });
+    await at(1440, 900, "roles=1&me=Gift&gift=1&live=1&headNext=1", "heads-ws-gift-mock-desktop", async () => {
+      await page.getByRole("link", { name: /^Interview brief: .*Sample Vin/ }).click();
+      await page.frameLocator("iframe").getByRole("heading", { name: "Sample Vin" }).waitFor();
+    });
+    await at(1024, 768, "roles=1&me=Ek", "heads-ws-ek-1024", frameReady("Sample Joy"));
+    for (const [width, height, size] of [[390, 844, "phone"], [320, 700, "320"]]) {
+      await at(width, height, "roles=1&me=Ek", `heads-ws-ek-${size}`, () => page.getByRole("link", { name: /^Re-mark paper: .*Sample Joy/ }).waitFor());
+      await at(width, height, "roles=1&me=Gift&gift=1&live=1", `heads-ws-gift-${size}`, () => page.getByRole("button", { name: /^Final review: .*Reply Passed/ }).waitFor());
+    }
+    await at(390, 844, "roles=1&me=Gift&gift=1&live=1", "heads-ws-gift-review-phone", async () => {
+      await page.getByRole("button", { name: /^Final review: .*Reply Passed/ }).click();
+      await page.getByRole("button", { name: /Read review packet/ }).first().waitFor();
+    });
+    await at(390, 844, "roles=1&me=Ek", "heads-ws-paper-check-phone", async () => {
+      await page.goto(`${origin}/hiring/paper-check/sample-token`);
+      await page.getByRole("link", { name: "← My hiring list" }).waitFor();
+    });
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+  await check("the Heads screen states on phone and desktop", async () => {
+    const assertLeftEdge = async (...locators) => {
+      const edges = await Promise.all(locators.map((locator) => locator.evaluate((node) => node.getBoundingClientRect().x)));
+      assert.ok(Math.max(...edges) - Math.min(...edges) <= 1, `Uneven left edges: ${edges.join(", ")}`);
+    };
+    const title = page.getByRole("heading", { level: 1 });
+    const headsEdge = () => assertLeftEdge(title, page.getByRole("heading", { name: /^Next mock/ }));
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const head = page.getByRole("combobox", { name: "Head" });
+    await page.goto(`${origin}/?view=heads&roles=1&me=Ek`);
+    await page.getByRole("heading", { name: /^Next mock/ }).waitFor();
+    await headsEdge();
+    await shot(page, "heads-desktop");
+    assert.deepEqual(await axeProblems(page), [], "axe on heads");
+    // Reload at phone size: a resize alone can leave a stale paint in the screenshot.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${origin}/?view=heads&roles=1&me=Ek`);
+    await page.getByRole("heading", { name: /^Next mock/ }).waitFor();
+    await headsEdge();
+    await shot(page, "heads-phone");
+    await page.goto(`${origin}/?view=heads&roles=1&headNext=1&me=Ek`);
+    await page.getByRole("status").filter({ hasText: /Kru Ek · next mock .*11:00/ }).waitFor();
+    const next = page.getByRole("navigation", { name: /hiring list/ }).locator("section").filter({ has: page.getByRole("heading", { name: /^Next mock/ }) });
+    assert.match(await next.innerText(), /Reply Low/);
+    assert.doesNotMatch(await next.innerText(), /Paper test/);
+    // A paper test needs nothing from the head: it sits in a closed group of its own.
+    const papers = page.locator("details").filter({ hasText: "Paper tests, no action" });
+    await papers.locator("summary").click();
+    assert.match(await papers.getByRole("listitem").filter({ hasText: "Sample Paper" }).innerText(), /Physics\s· Paper test/);
+    assert.equal(await page.getByRole("link", { name: "Tutor onboarding and Experts access" }).count(), 0);
+    await shot(page, "heads-next-phone");
+    // Kru Peat's ended mocks: each line names its next step. Staff choose the head from the menu.
+    for (const [width, height, size] of [[1440, 900, "desktop"], [390, 844, "phone"]]) {
+      await page.setViewportSize({ width, height });
+      await page.goto(`${origin}/?view=heads&roles=1`);
+      await head.selectOption({ label: "Kru Peat" });
+      await page.getByRole("link", { name: /Record recommendation/ }).first().waitFor();
+      const decided = page.getByRole("listitem").filter({ hasText: "Recommendation: Yes" });
+      assert.equal(await decided.getByText("Scores sent", { exact: true }).count(), 0);
+      await shot(page, `heads-peat-${size}`, size === "phone");
+    }
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto(`${origin}/?view=heads&roles=1`);
+    assert.equal(await head.inputValue(), "Peat", "the browser remembers the head staff chose");
+    const group = (title) => page.getByRole("navigation", { name: /hiring list/ }).locator("section").filter({ has: page.getByRole("heading", { name: new RegExp(`^${title}`) }) });
+    for (const [title, name, note] of [
+      ["Waiting", "Sample Lek", "Admin checking scores"],
+      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => ["To do", name, /^Ask admin: /]),
+    ]) {
+      const line = group(title).getByRole("listitem").filter({ hasText: name });
+      await line.getByText(note, typeof note === "string" ? { exact: true } : undefined).waitFor();
+      const link = line.getByRole("link", { name: new RegExp(`^Interview brief: .*${name}`) });
+      assert.match(await link.getAttribute("href"), /^\/hiring\/brief\/sample-token\?name=/);
+      const target = await link.boundingBox();
+      assert.ok(target.width >= 44 && target.height >= 44, `brief link is too small for ${name}`);
+    }
+    const dashboardFits = () => page.evaluate(() => [document.documentElement, document.querySelector("#root > div")].every((box) => box.scrollWidth <= box.clientWidth));
+    assert.ok(await dashboardFits(), "Heads scrolls sideways at 320px");
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+  await check("the Heads workspace never scrolls the whole page", async () => {
+    // Hidden row text once escaped the list and made the page taller than the window; opening a row then moved the page.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/?roles=1&me=Peat`);
+    await page.getByRole("navigation", { name: /hiring list/ }).waitFor();
+    const fits = () => page.evaluate(() => [document.documentElement.scrollHeight <= innerHeight, scrollY, document.querySelector("#root")?.scrollTop ?? 0]);
+    assert.deepEqual(await fits(), [true, 0, 0]);
+    await page.getByRole("navigation", { name: /hiring list/ }).getByRole("link", { name: /Sample Noi/ }).click();
+    await page.frameLocator("iframe").first().getByRole("heading", { name: "Mock scores" }).waitFor();
+    assert.deepEqual(await fits(), [true, 0, 0]);
+    // Every group open, tags included: the list never scrolls sideways (critic review, round 15).
+    for (const group of await page.locator("nav details").all()) await group.evaluate((element) => { element.open = true; });
+    assert.ok(await page.getByRole("navigation", { name: /hiring list/ }).evaluate((nav) => nav.scrollWidth <= nav.clientWidth), "the list scrolls sideways");
+  });
+  await check("the brief's Next unscored button lands on the first unscored slider, clear of the send bar", async () => {
+    // Inside the Heads workspace at 1280, where the form is narrowest on a laptop (critic review, round 17).
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/?roles=1&me=Ek`);
+    await page.getByRole("navigation", { name: /hiring list/ }).getByRole("link", { name: /Reply Low/ }).click();
+    const frame = page.frameLocator("#open-item iframe");
+    await frame.getByRole("heading", { name: "Mock scores" }).waitFor();
+    for (const i of [0, 1, 2]) await frame.getByRole("slider").nth(i).fill("7");
+    await frame.getByRole("button", { name: "Next unscored" }).click();
+    const brief = page.frames().find((candidate) => candidate.url().includes("/hiring/brief/"));
+    const landed = await brief.evaluate(() => {
+      const active = document.activeElement;
+      const ranges = [...document.querySelectorAll('input[type="range"]')];
+      const bar = document.querySelector("[data-sticky]").getBoundingClientRect();
+      return { index: ranges.indexOf(active), value: active?.value, clear: active.getBoundingClientRect().bottom <= bar.top };
+    });
+    assert.deepEqual(landed, { index: 3, value: "0", clear: true });
+  });
+  await check("the brief keeps Next unscored at the end of the form and keeps an edit made after a send", async () => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/?roles=1&me=Ek`);
+    const list = page.getByRole("navigation", { name: /hiring list/ });
+    await list.getByRole("link", { name: /Reply Low/ }).click();
+    const frame = page.frameLocator("#open-item iframe");
+    await frame.getByRole("heading", { name: "Mock scores" }).waitFor();
+    const sliders = frame.getByRole("slider");
+    const count = await sliders.count();
+    // A score skipped above the view: the cue stays at the end of the form (critic review, round 18).
+    for (let i = 0; i < count; i += 1) if (i !== 2) await sliders.nth(i).fill("7");
+    await sliders.nth(count - 1).scrollIntoViewIfNeeded();
+    await frame.getByRole("button", { name: "Next unscored" }).waitFor();
+    await sliders.nth(2).fill("7");
+    await frame.getByText("Yes", { exact: true }).click();
+    await frame.getByRole("button", { name: "Send scores" }).click();
+    await frame.getByRole("button", { name: "Edit scores" }).click();
+    await sliders.nth(0).fill("9");
+    // Another row and back: the changed score is still there (sessionStorage for this tab).
+    await list.getByRole("link", { name: /Sample Joy/ }).click();
+    await page.frameLocator("#open-item iframe").getByRole("heading", { name: "Your marks", exact: false }).first().waitFor();
+    await list.getByRole("link", { name: /Reply Low/ }).click();
+    await frame.getByRole("heading", { name: "Mock scores" }).waitFor();
+    assert.equal(await frame.getByRole("slider").nth(0).inputValue(), "9");
+    // Discard puts the sent scores back (critic review, round 19).
+    await frame.getByRole("button", { name: "Discard changes" }).click();
+    await frame.getByRole("button", { name: "Edit scores" }).click();
+    assert.equal(await frame.getByRole("slider").nth(0).inputValue(), "7");
+  });
+  await check("Check recommendation keeps focus while it checks and says when it is not open yet", async () => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/hiring/brief/sample-token?brief=open&embed=1`);
+    const button = page.getByRole("button", { name: "Check recommendation" });
+    await button.focus();
+    await page.keyboard.press("Enter");
+    await page.getByText("Checking…", { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Check recommendation");
+    await page.getByText("Not open yet. Recommend after the mock ends.").waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Check recommendation");
+  });
+  await check("Discard changes shows on a phone with a full touch target", async () => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${origin}/hiring/brief/sample-token?brief=open`);
+    const sliders = page.getByRole("slider");
+    await sliders.first().waitFor();
+    for (let i = 0, n = await sliders.count(); i < n; i += 1) await sliders.nth(i).fill("7");
+    await page.getByText("Yes", { exact: true }).click();
+    await page.getByRole("button", { name: "Send scores" }).click();
+    await page.getByRole("button", { name: "Edit scores" }).click();
+    await sliders.nth(0).fill("9");
+    const discard = page.getByRole("button", { name: "Discard changes" });
+    await discard.waitFor();
+    assert.ok((await discard.boundingBox()).height >= 44, "Discard changes is smaller than 44 px");
+  });
+  await check("a head's failed list load retries in place and lands focus on a visible area", async () => {
+    // Tito's empty list hides the list column on a laptop, so focus goes to the open area (critic review, round 21).
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/?roles=1&me=Tito&head=Tito&failFirst=1`);
+    const retry = page.getByRole("button", { name: "Try again" });
+    await retry.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.activeElement?.id === "open-item");
+  });
+  await check("a mock that starts takes an untouched pane, work in the pane keeps it, and the list never says nothing to do under it", async () => {
+    // The fixture's next mock for Ek starts 26 hours after the page opens; the clock jumps past it (critic review, round 22).
+    for (const touch of [false, true]) {
+      await page.clock.install();
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto(`${origin}/?roles=1&me=Ek`);
+      const list = page.getByRole("navigation", { name: /hiring list/ });
+      await list.getByRole("link", { name: /Sample Joy/ }).waitFor();
+      if (touch) await page.frameLocator("#open-item iframe").locator("textarea").click();
+      await page.clock.fastForward("26:05:00");
+      await list.getByRole("heading", { name: /^Mock now/ }).waitFor();
+      const current = await list.locator('[aria-current="true"]').innerText();
+      assert.match(current, touch ? /Sample Joy/ : /Reply Low/);
+      assert.equal(await list.getByText(/^Nothing to (do|score)/).count(), 0, "an empty To do shows under Mock now");
+    }
+  });
+  await check("during a live mock an empty To do does not say there is nothing to do", async () => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/?roles=1&me=Ek&mockNow=1`);
+    const list = page.getByRole("navigation", { name: /hiring list/ });
+    await list.getByRole("link", { name: /Sample Joy/ }).click();
+    await page.frameLocator("#open-item iframe").getByRole("button", { name: "Submit my marks" }).click();
+    await list.getByRole("link", { name: /Sample Joy/ }).waitFor({ state: "detached" });
+    await list.getByRole("heading", { name: /^Mock now/ }).waitFor();
+    // Back to the mock: the saved receipt goes, and the empty To do must not take its place.
+    await list.getByRole("link", { name: /Reply Low/ }).click();
+    await page.frameLocator("#open-item iframe").getByRole("heading", { name: /Mock scores/ }).waitFor();
+    assert.equal(await list.getByText(/^Nothing to (do|score)/).count(), 0);
+  });
+  await check("the list announces a save once and returns to the schedule when another row opens", async () => {
+    await page.clock.install();
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/?roles=1&me=Ek`);
+    // Log what the status line says from here on: the save must be announced once, with no schedule text in between.
+    await page.getByRole("navigation", { name: /hiring list/ }).getByRole("link", { name: /Sample Joy/ }).waitFor();
+    await page.evaluate(() => {
+      const line = document.querySelector('p.sr-only[role="status"]');
+      const log = window.statusLog = [];
+      new MutationObserver(() => log.push(line.textContent ?? "")).observe(line, { childList: true, characterData: true, subtree: true });
+    });
+    await page.frameLocator("#open-item iframe").getByRole("button", { name: "Submit my marks" }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll('p.sr-only[role="status"]')].some((p) => p.textContent === "Marks saved for Sample Joy"));
+    const said = (await page.evaluate(() => window.statusLog)).filter(Boolean);
+    assert.deepEqual(said, ["Marks saved for Sample Joy"]);
+    await page.getByRole("navigation", { name: /hiring list/ }).getByRole("link", { name: /Reply Low/ }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll('p.sr-only[role="status"]')].some((p) => /next mock/.test(p.textContent ?? "")));
+    // The mock starts: the line says so (critic review, round 23).
+    await page.clock.fastForward("26:05:00");
+    await page.waitForFunction(() => [...document.querySelectorAll('p.sr-only[role="status"]')].some((p) => /mock now/.test(p.textContent ?? "")));
+  });
+  await check("a mock that starts while the just-saved row stays open is still announced", async () => {
+    await page.clock.install();
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/?roles=1&me=Ek`);
+    await page.frameLocator("#open-item iframe").getByRole("button", { name: "Submit my marks" }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll('p.sr-only[role="status"]')].some((p) => p.textContent === "Marks saved for Sample Joy"));
+    await page.clock.fastForward("26:05:00");
+    await page.waitForFunction(() => [...document.querySelectorAll('p.sr-only[role="status"]')].some((p) => /mock now/.test(p.textContent ?? "")));
+  });
+  await check("the paper check's comment jump puts focus in the comment field", async () => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/?roles=1&me=Ek`);
+    const frame = page.frameLocator("#open-item iframe");
+    await frame.getByRole("button", { name: "Go to the comment ↓" }).click();
+    const paper = page.frames().find((candidate) => candidate.url().includes("/hiring/paper-check/"));
+    assert.equal(await paper.evaluate(() => document.activeElement?.tagName), "TEXTAREA");
+  });
+  await check("Gift signs from her list on a phone and focus stays on the receipt", async () => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${origin}/?roles=1&me=Gift&gift=1&live=1`);
+    await page.getByRole("button", { name: /^Final review: .*Reply Passed/ }).click();
+    // The packet opens with the row, full screen; Back closes it and keeps the list.
+    const close = page.getByRole("button", { name: "Close packet" });
+    await close.waitFor();
+    // Reading means the packet drew; Approve unlocks once the open packet is checked as current.
+    await page.frameLocator("iframe[title^='Review packet']").getByText("Assessment summary").waitFor();
+    await page.goBack();
+    await close.waitFor({ state: "hidden" });
+    await page.locator("button:not([disabled])", { hasText: "Approve and send offer" }).waitFor();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Approve and send offer" }).click();
+    const receipt = "Offer approved. The offer email is queued.";
+    await page.getByText(receipt).waitFor();
+    await page.waitForFunction((text) => document.activeElement?.textContent === text, receipt);
+    const finished = page.getByRole("navigation", { name: /hiring list/ }).locator("section").filter({ has: page.getByRole("heading", { name: /^Just finished/ }) });
+    assert.equal(await finished.getByRole("button", { name: /Reply Passed/ }).count(), 1);
+  });
   await check("the head and Gift screens render on phone and desktop", async () => {
     const onOneLine = (locator) => locator.evaluate((node) => {
       const text = document.createRange();
@@ -970,8 +1405,7 @@ try {
       assert.ok(Math.max(...edges) - Math.min(...edges) <= 1, `Uneven left edges: ${edges.join(", ")}`);
     };
     const title = page.getByRole("heading", { level: 1 });
-    const headsEdge = () => assertLeftEdge(title,
-      page.getByRole("group", { name: "Choose your name" }), page.getByRole("heading", { name: "Next mock" }), page.locator("#next-mock > :last-child"));
+    const headsEdge = () => assertLeftEdge(title, page.getByRole("heading", { name: /^Next mock/ }));
     // The brief page scrolls as a whole page, not inside the dashboard frame.
     // full: let the document grow for a full-page shot. Otherwise the page scrolls inside .page, as in production.
     const briefPage = async (state, width, height, full = true) => {
@@ -985,7 +1419,7 @@ try {
       assert.equal(await page.getByText(message, { exact: true }).count(), 1);
       assert.equal(await page.getByRole("button", { name: "Yes, send to HR" }).count(), state === "closed" ? 1 : 0);
       assert.equal(await page.getByRole("button", { name: "Check again" }).count(), button === "Check again" ? 1 : 0);
-      const resume = page.getByRole("link", { name: "Open the résumé (PDF)" });
+      const resume = page.getByRole("link", { name: "Open résumé (PDF), opens in a new tab" });
       assert.equal(await resume.evaluate((el) => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
       await shot(page, `brief-${state}-phone`, true);
       if (button) {
@@ -1001,11 +1435,11 @@ try {
     assert.deepEqual(await axeProblems(page), [], "axe on brief");
     await briefPage("open", 390, 844, false);
     await shot(page, "brief-open-phone-fold");
-    // 14 score tiles, then the required Yes/No checks answer; Send scores stays disabled until both are done.
-    const tiles = page.locator("form label:has(input[type=radio][value='8'])");
+    // 14 score sliders, then the required Yes/No checks answer; Send scores stays disabled until both are done.
+    const tiles = page.getByRole("slider");
     assert.equal(await tiles.count(), 14);
     assert.equal(await page.locator("#scores select").count(), 0);
-    await page.getByRole("status").filter({ hasText: /^0 of 14 scored$/ }).waitFor();
+    await page.getByRole("status").filter({ hasText: /^0\/14 scored$/ }).waitFor();
     assert.equal(await page.getByText(/^Suggested score/).count(), 0);
     const tick = page.getByRole("checkbox").first();
     await tick.check();
@@ -1014,7 +1448,7 @@ try {
     await page.emulateMedia({ forcedColors: "active" });
     assert.equal(await tick.evaluate((el) => getComputedStyle(el).appearance), "auto");
     await page.emulateMedia({ forcedColors: "none" });
-    for (let i = 0, n = await tiles.count(); i < n; i++) await tiles.nth(i).click();
+    for (let i = 0, n = await tiles.count(); i < n; i++) await tiles.nth(i).fill("8");
     await page.getByRole("status").filter({ hasText: "Answer the required checks to send." }).waitFor();
     assert.equal(await page.getByRole("button", { name: "Send scores" }).isDisabled(), true);
     await page.locator("form label", { hasText: /^Yes$/ }).click();
@@ -1088,55 +1522,7 @@ try {
     await briefPage("open", 1440, 900);
     await shot(page, "brief-open-desktop", true);
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto(`${origin}/?view=heads&roles=1`);
-    await page.getByRole("button", { name: "Kru Ek" }).click();
-    await page.getByRole("heading", { name: "Next mock" }).waitFor();
-    await headsEdge();
-    await shot(page, "heads-desktop");
-    assert.deepEqual(await axeProblems(page), [], "axe on heads");
-    // Reload at phone size: a resize alone can leave a stale paint in the screenshot.
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(`${origin}/?view=heads&roles=1`);
-    await page.getByRole("heading", { name: "Next mock" }).waitFor();
-    await headsEdge();
-    await shot(page, "heads-phone");
-    await page.goto(`${origin}/?view=heads&roles=1&headNext=1`);
-    await page.getByRole("status").filter({ hasText: /Kru Ek · next mock .*11:00/ }).waitFor();
-    assert.match(await page.locator("#next-mock").innerText(), /Reply Low/);
-    assert.doesNotMatch(await page.locator("#next-mock").innerText(), /Paper only/);
-    await page.getByRole("heading", { name: /Coming to you/ }).waitFor();
-    const paperCard = page.locator("section").filter({ has: page.getByRole("heading", { name: /Paper visits/ }) }).getByRole("article").filter({ hasText: "Sample Paper" });
-    assert.ok(await paperCard.getByText("Physics", { exact: true }).isVisible());
-    assert.equal(await page.getByRole("link", { name: "Tutor onboarding and Experts access" }).count(), 0);
-    await shot(page, "heads-next-phone");
-    // Kru Peat's ended mocks: each card names its next step.
-    for (const [width, height, size] of [[1440, 900, "desktop"], [390, 844, "phone"]]) {
-      await page.setViewportSize({ width, height });
-      await page.goto(`${origin}/?view=heads&roles=1`);
-      await page.getByRole("button", { name: "Kru Peat" }).click();
-      await page.getByRole("link", { name: /Record recommendation/ }).first().waitFor();
-      const decidedCard = page.getByRole("article").filter({ hasText: "Recommendation: Yes" });
-      assert.equal(await decidedCard.getByText("Scores sent", { exact: true }).count(), 0);
-      await shot(page, `heads-peat-${size}`, size === "phone");
-    }
-    await page.setViewportSize({ width: 320, height: 700 });
-    await page.goto(`${origin}/?view=heads&roles=1`);
-    const actionMocks = page.locator("section").filter({ has: page.getByRole("heading", { name: /Mocks that need action/ }) });
-    for (const [name, note] of [
-      ["Sample Lek", "Scores are being checked. Come back later."],
-      ...["Sample Fah", "Sample Nan", "Sample Wan"].map((name) => [name, "Ask admin to check scores."]),
-    ]) {
-      const card = actionMocks.getByRole("article").filter({ hasText: name });
-      await card.getByText(note, { exact: true }).waitFor();
-      assert.equal(await card.getByText("Due", { exact: true }).count(), 0);
-      const link = card.getByRole("link", { name: `Open interview brief for ${name}` });
-      assert.equal(await link.getAttribute("href"), "/hiring/brief/sample-token");
-      assert.equal(await link.getAttribute("data-tone"), null);
-      const target = await link.boundingBox();
-      assert.ok(target.width >= 44 && target.height >= 44, `brief link is too small for ${name}`);
-    }
     const dashboardFits = () => page.evaluate(() => [document.documentElement, document.querySelector("#root > div")].every((box) => box.scrollWidth <= box.clientWidth));
-    assert.ok(await dashboardFits(), "Heads scrolls sideways at 320px");
     for (const [width, height, size] of [[1440, 900, "desktop"], [390, 844, "phone"]]) {
       await page.setViewportSize({ width, height });
       await page.goto(`${origin}/?view=review&roles=1&gift=1`);
@@ -1200,7 +1586,8 @@ try {
     const reject = page.getByRole("button", { name: "Reject and inform candidate" }).first();
     await page.getByRole("status").filter({ hasText: "Evidence changed. Ask HR for a new packet." }).waitFor();
     const rejectionNote = page.getByRole("textbox", { name: "Rejection note (5+ characters)" }).first();
-    await rejectionNote.fill("Reviewed the evidence.");
+    // The note stays locked until the packet is read.
+    assert.equal(await rejectionNote.isDisabled(), true);
     assert.equal(await approve.isDisabled(), true);
     assert.equal(await reject.isDisabled(), true);
     assert.equal(await read.isDisabled(), true);
@@ -1378,26 +1765,23 @@ try {
           await snap();
           await axe();
         } else if (id === "H2") {
-          await open("view=heads&roles=1");
-          const ek = tab.getByRole("button", { name: "Kru Ek" });
-          await ek.waitFor();
-          await first(ek, "Kru Ek");
+          // A head opens /hiring: their own list, no name to choose. On a phone one tap opens the paper to re-mark.
+          await open("roles=1&me=Ek");
+          const check = tab.getByRole("link", { name: /^Re-mark paper: .*Sample Joy/ });
+          await check.waitFor();
+          await first(check, "Re-mark paper: Sample Joy");
           await snap();
           await axe();
-          await tap(ek, "Kru Ek");
-          await tab.getByRole("heading", { name: "Next mock" }).waitFor();
-          await snap();
-          // Return visit: the browser remembers the head, so the next mock card should already be there.
-          await drain();
-          const firstVisit = m.scrollPx;
-          await tab.reload();
+          await tap(check, "Re-mark paper: Sample Joy");
+          const back = tab.getByRole("link", { name: "← My hiring list" });
+          await back.waitFor();
           await tab.addStyleTag({ content: "#root{padding:0!important}" });
-          const card = tab.locator("#next-mock article").first();
-          await card.waitFor();
-          await first(card, (await card.innerText()).replace(/\s+/g, " ").slice(0, 60), "return");
           await snap();
           await axe();
-          m.returnVisit = { taps: 0, firstAction: m.returnfirstAction, scrollBeforeFirstActionPx: m.returnscrollBeforeFirstActionPx, wordsAboveFirstAction: m.returnwordsAboveFirstAction, firstVisitScrollPx: firstVisit };
+          // One tap back. The fixture serves the same page for /hiring, so the list comes back from the head's own link.
+          await tap(back, "← My hiring list");
+          await tab.waitForURL(/\/hiring\?view=heads$/);
+          m.returnVisit = { taps: 0, firstAction: m.firstAction, scrollBeforeFirstActionPx: m.scrollBeforeFirstActionPx, wordsAboveFirstAction: m.wordsAboveFirstAction };
         } else {
           await open("view=review&roles=1&gift=1&live=1");
           const read = tab.getByRole("button", { name: /Read review packet/ }).first();
@@ -1446,7 +1830,8 @@ try {
       metrics[name] = {};
       for (const [width, height] of [[390, 844], [320, 700]]) {
         metrics[name][`${width}x${height}`] = {};
-        for (const id of ["H1", "H2", "G1"]) {
+        // WALK=H2,G1 runs some tasks only (H1 still describes the brief before PR 365).
+        for (const id of (process.env.WALK ?? "H1,H2,G1").split(",")) {
           process.stderr.write(`walkthrough ${name} ${width}x${height} ${id}\n`);
           metrics[name][`${width}x${height}`][id] = await task(engine, width, height, id);
         }
@@ -1455,7 +1840,7 @@ try {
     await wk.close?.();
     await page.setViewportSize({ width: 390, height: 844 });
     const briefStates = {};
-    for (const [state, message, button] of BRIEF_STATES) {
+    for (const [state, message, button] of (process.env.WALK ?? "H1").includes("H1") ? BRIEF_STATES : []) {
       await page.goto(`${origin}/?brief=${state}`);
       await page.addStyleTag({ content: "#root{padding:0!important}" });
       const nextAction = button ? page.getByRole("button", { name: button }) : page.getByText(message, { exact: true });
