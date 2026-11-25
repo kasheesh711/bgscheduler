@@ -246,6 +246,8 @@ export const baseConfigSchema = z
     enabled: z.boolean().default(false),
     deliveryEnabled: z.boolean().default(false),
     recruitmentLineGroupId: z.string().regex(/^C[0-9a-f]{32}$/).nullable().default(null),
+    /** The person Thea tags in the 08:30 print message; saved by "@Thea print setup" in the recruitment group. */
+    printLineUserId: z.string().regex(/^U[0-9a-f]{32}$/).nullable().default(null),
     /** Only this candidate may test visit booking while Automation is paused. Messages stay gated. */
     bookingTestCandidateId: z.uuid().nullable().default(null),
     rubricApproved: z.boolean().default(true),

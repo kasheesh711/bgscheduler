@@ -59,6 +59,9 @@ function isPublicRoute(pathname: string) {
     // The head's check of a near-miss paper, from a LINE link: the token in the path is the access check (paperCheckView).
     /^\/hiring\/paper-check\/[^/]+$/.test(pathname) ||
     /^\/api\/hiring\/paper-check\/[^/]+(?:\/paper|\/runtime\/[^/]+)?$/.test(pathname) ||
+    // Aya's print page from the 08:30 LINE message: the token in the path is the access check (readPrintToken).
+    /^\/hiring\/print\/[^/]+$/.test(pathname) ||
+    /^\/api\/hiring\/print\/[^/]+\/(?:covers|paper\/[^/]+)$/.test(pathname) ||
     /^\/room\/[^/]+$/.test(pathname) ||
     pathname === "/api/room/availability" ||
     pathname === "/api/room/reservations" ||
@@ -150,7 +153,7 @@ export default edgeAuth(async (req) => {
 
   if (isPublicRoute(pathname)) {
     const response = NextResponse.next();
-    if (isPublicHiringOnboarding(pathname) || pathname.startsWith("/room/") || pathname.startsWith("/api/room/") || pathname.startsWith("/hiring/book/") || pathname.startsWith("/api/hiring/book/") || pathname.startsWith("/hiring/brief/") || pathname.startsWith("/api/hiring/brief/") || pathname.startsWith("/hiring/paper-check/") || pathname.startsWith("/api/hiring/paper-check/")) {
+    if (isPublicHiringOnboarding(pathname) || pathname.startsWith("/room/") || pathname.startsWith("/api/room/") || pathname.startsWith("/hiring/book/") || pathname.startsWith("/api/hiring/book/") || pathname.startsWith("/hiring/brief/") || pathname.startsWith("/api/hiring/brief/") || pathname.startsWith("/hiring/paper-check/") || pathname.startsWith("/api/hiring/paper-check/") || pathname.startsWith("/hiring/print/") || pathname.startsWith("/api/hiring/print/")) {
       response.headers.set("Cache-Control", "private, no-store");
       response.headers.set("Referrer-Policy", "no-referrer");
       response.headers.set("X-Robots-Tag", "noindex, nofollow");
