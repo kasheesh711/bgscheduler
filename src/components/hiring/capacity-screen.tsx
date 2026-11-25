@@ -519,7 +519,7 @@ export function CapacityView({
 }
 
 /** Loads the report once, when the tab opens or the page is idle after mount. It does not wait for the main Hiring load. */
-export function CapacityScreen({ active }: { active: boolean }) {
+export function CapacityScreen({ active, onReport }: { active: boolean; onReport?: (report: CapacityReport) => void }) {
   const [report, setReport] = useState<CapacityReport | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -532,6 +532,7 @@ export function CapacityScreen({ active }: { active: boolean }) {
       const value = await response.json();
       if (!response.ok) throw new Error(value.error);
       setReport(value);
+      onReport?.(value);
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : "Could not load capacity.");
     } finally {

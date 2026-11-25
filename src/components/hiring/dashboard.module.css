@@ -232,7 +232,7 @@
 /* Its own line, so it never squeezes the chips beside it. */
 .dateRange { display: flex; flex-basis: 100%; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
 .panel > .tabs { flex: 0 0 auto; align-items: flex-start; }
-@media (max-width: 719px) { .tabs { flex-wrap: wrap; } }
+@media (max-width: 719px) { .tabs { flex-wrap: wrap; } .tableTools .tabs { flex-wrap: nowrap; } }
 .surface .tabs button { flex-shrink: 0; padding: 4px 0 6px; border-bottom: 2px solid transparent; color: var(--muted); white-space: nowrap; transition: color 150ms; }
 .surface .tabs button:hover { color: var(--ink); }
 .surface .tabs button[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); font-weight: 500; }

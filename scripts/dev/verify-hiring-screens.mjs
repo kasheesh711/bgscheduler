@@ -33,6 +33,7 @@ try {
 import { Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { baseConfigSchema, localDate } from "@/lib/hiring/model";
+import { profileScore as scoreOf } from "@/lib/hiring/scoring";
 import { HiringDashboard } from "@/components/hiring/dashboard";
 import { HiringStaffPreview } from "@/components/hiring/staff-preview";
 import { BookingShell } from "@/components/hiring/booking";
@@ -165,6 +166,68 @@ if (location.search.includes("pipeline=1")) {
     key: "offer:result:approved", status: "sent", sentAt: "2026-11-19T02:00:00Z",
   });
 }
+// ?analytics=1: ~600 made-up candidates spread over the stages, sends, reminders and queue holds, so the Overview
+// analytics read like a real 12-week campaign. Seeded, so every run draws the same people.
+let capacityFixture: unknown = null;
+if (location.search.includes("analytics=1")) {
+  let seed = 7;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const pick = <T,>(xs: T[]) => xs[Math.floor(rand() * xs.length)];
+  const SUBJECTS = ["Mathematics", "English Language", "Physics", "Chemistry", "Biology", "Economics", "English Literature", "Computer Science", "Business Studies", "Psychology", "EFL/ESL", "History"];
+  const FIRST = ["Anan", "Bea", "Chai", "Dara", "Ellie", "Fah", "Gus", "Hana", "Ivan", "Jin", "Kanya", "Leo", "Mali", "Nok", "Omar", "Ploy", "Quinn", "Rin", "Sam", "Tara", "Umi", "Vee", "Win", "Yui", "Zak"];
+  const LAST = ["Sample", "Example", "Testa", "Mockley", "Demo", "Fixture", "Placeholder", "Specimen"];
+  const day = 86400000;
+  const ago = (d: number) => new Date(Date.now() - d * day).toISOString();
+  const STAGES: [string, number][] = [["new", 0.36], ["review", 0.2], ["pre_screen", 0.1], ["onsite_invited", 0.02], ["onsite_booked", 0.02], ["no_reply", 0.02], ["no_booking", 0.01], ["stopped", 0.25], ["rejected", 0.01], ["hired", 0.01]];
+  const stageOf = () => { let r = rand(); for (const [s, w] of STAGES) { if ((r -= w) < 0) return s; } return "new"; };
+  const result = () => { const r = rand(); return r < 0.55 ? "met" : r < 0.8 ? "partial" : "not_met"; };
+  const outbox = payload.outbox as Record<string, unknown>[];
+  const holds = payload.holds as Record<string, unknown>;
+  const events = (payload as unknown as { funnelEvents: unknown[] }).funnelEvents;
+  let queue = 0;
+  for (let i = 0; i < 600; i++) {
+    const id = "an" + i;
+    const stage = stageOf();
+    const subject = pick(SUBJECTS);
+    const created = Math.floor(rand() * 80);
+    const uni = rand() < 0.25 ? 0.9 + rand() * 0.1 : rand() < 0.5 ? 0.5 + rand() * 0.3 : rand() * 0.4;
+    const rights = rand() < 0.08 ? "I require a visa" : "I have permanent work rights with no restrictions";
+    const crit = ["degree", "subject", "curriculum", "teaching", "english"].map((cid) => ({ id: cid, result: result(), evidence: "Seen", reason: "Seen", brief: "Seen" }));
+    // The score the gate itself computes, so the table, the gems and the gate agree.
+    const score = Math.round(scoreOf({ criteria: crit } as never, payload.config.profileWeights, uni));
+    candidates.push(person(id, pick(FIRST) + " " + pick(LAST) + " " + i, {
+      stage, subjects: [subject], visitSubject: ["onsite_invited", "onsite_booked", "hired"].includes(stage) ? subject : null,
+      createdAt: ago(created), updatedAt: ago(Math.floor(rand() * created)), profileScore: score, workRightsAnswer: rights, workRightsAccepted: rights !== "I require a visa",
+      universityAssessment: { name: "Sample University", country: "Thailand", fraction: Math.round(uni * 100) / 100, reason: "Fixture", sources: [] },
+      profileAssessment: { ...assessment("Fixture."), subjects: [{ subject, relevant: true, evidence: "Fixture", reason: "Fixture" }], criteria: crit },
+      preScreenRepliedAt: ["onsite_invited", "onsite_booked", "hired", "rejected"].includes(stage) ? ago(Math.max(0, created - 3)) : null,
+      preScreen: ["onsite_invited", "onsite_booked", "hired", "rejected"].includes(stage) ? answers : null,
+      previouslyContacted: stage === "stopped" && rand() < 0.3,
+    }));
+    if (["pre_screen", "onsite_invited", "onsite_booked", "hired", "rejected", "no_reply"].includes(stage))
+      outbox.push({ id: id + "p", key: id + ":pre-screen", candidateId: id, kind: "email", status: "sent", error: null, sentAt: stage === "pre_screen" ? ago(rand() * 4) : ago(Math.max(1, created - 1)), workflowStage: "pre_screen" });
+    if (stage === "onsite_invited")
+      outbox.push({ id: id + "v", key: id + ":visit-invite:1", candidateId: id, kind: "email", status: "sent", error: null, sentAt: ago(rand() * 5), workflowStage: "onsite_invited" });
+    if (["onsite_booked", "hired", "rejected"].includes(stage)) {
+      const visit = stage === "onsite_booked" && rand() < 0.6 ? -Math.ceil(rand() * 6) : Math.ceil(rand() * 10);
+      (payload.bookings as unknown[]).push({ id: id + "b", candidateId: id, kind: "paper", status: "confirmed", startTime: ago(visit), endTime: ago(visit), visitId: id + "v", interviewerKey: null, subjects: [subject], createdAt: ago(visit + 2) });
+      events.push({ candidateId: id, action: "invite_onsite", at: ago(visit + 3) });
+    }
+    if (stage === "hired") payload.decisions.push({ id: id + "d", candidateId: id, decision: "hire", status: "sent", outboxKey: id + ":result:x", sentAt: ago(1) });
+    if (stage === "new" && score >= 75 && rights !== "I require a visa" && queue < 22) {
+      holds[id] = queue < 4 ? { funnel: "pre_screen", state: "next", position: 0, limit: null, subject } : { funnel: "pre_screen", state: "held", position: queue, limit: queue < 12 ? "perDay" : queue < 18 ? "perWeek" : "perSubject", subject };
+      (payload.preScreenOrder as string[]).push(id);
+      queue++;
+    }
+  }
+  payload.inviteOutbox = outbox;
+  payload.config.profileThreshold = 75;
+  for (const c of candidates) if (c.id === "a" || c.id === "b") Object.assign(c, { workRightsAnswer: "I have permanent work rights with no restrictions" });
+  for (const c of candidates) if (c.stage === "onsite_invited") Object.assign(c, { inviteExpiresAt: new Date(Date.now() + 20 * day).toISOString() });
+  const isoDay = (d: number) => ago(d).slice(0, 10);
+  capacityFixture = { from: isoDay(28), to: isoDay(0), weeks: 4, syncedAt: ago(0), stale: false, totals: { given: 400, booked: 300, tutors: 30 }, demand: null, subjects: [], tutors: [], needsReview: [], unidentified: 0,
+    needs: SUBJECTS.slice(0, 8).map((subject, i) => { const hire = [3, 1, 2, 2, 0, 1, 1, 2][i]; return { subject, hire, wiseSubjects: [subject], hiring: true, rank: i + 1, tutors: 3, tutorKeys: [], idle: [], review: 0, blocks: [], status: hire ? "hire" : "enough", tightest: null, demand: null, score: 0 }; }) };
+}
 if (location.search.includes("scroll=1")) {
   const start = new Date(localDate(new Date()) + "T10:00:00+07:00");
   Object.assign(payload, { calls: candidates.map((candidate, index) => ({
@@ -232,7 +295,7 @@ const realFetch = window.fetch;
 (window as unknown as { uploaded: unknown[] }).uploaded = [];
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   // The Capacity tab reads its own payload, which this fixture does not hold.
-  if (String(input).includes("capacity=1")) return new Response(JSON.stringify({ error: "Not in this fixture." }), { status: 503 });
+  if (String(input).includes("capacity=1")) return capacityFixture ? new Response(JSON.stringify(capacityFixture)) : new Response(JSON.stringify({ error: "Not in this fixture." }), { status: 503 });
   const url = new URL(String(input), location.origin);
   // The brief's files (résumé, paper, pdf.js runtime) come from the server; only the brief's sends are answered here.
   if (url.pathname.startsWith("/api/hiring/brief/sample-token/") && init?.method === "POST") {

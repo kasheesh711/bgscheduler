@@ -16,18 +16,18 @@ import { candidateExtras, holdNote } from "@/lib/hiring/status";
 import { campaignNames } from "@/lib/hiring/seek-view";
 import type { dashboard } from "@/lib/hiring/service";
 import { CandidateInspector } from "./candidate-inspector";
-import { CandidateTable, matchesFilter } from "./candidate-table";
-import { AveragePentagon, EvidenceChart, KpiStrip, LimitMeters, ScoreChart, StageChart, SubjectChart } from "./pipeline-charts";
+import { CandidateTable } from "./candidate-table";
+import { EvidenceChart, ScoreChart, SubjectChart } from "./pipeline-charts";
 import { AssessmentScreen } from "./assessment-screen";
-import { OperationsRail, WorkerBanner } from "./operations-rail";
+import { WorkerBanner } from "./operations-rail";
 import { AdminScreen, HeadsScreen, HrScreen, HiringReviewScreen, TodayCalls } from "./role-screens";
 import { PreScreenScreen } from "./prescreen-screen";
 import { CallsScreen } from "./calls-screen";
 import { CapacityScreen } from "./capacity-screen";
-import { FunnelPanel } from "./funnel-panel";
+import { OverviewAnalytics } from "./overview-analytics";
+import type { CapacityReport } from "@/lib/hiring/capacity";
 import { DemoBar, useDemoState, type DemoView } from "./demo-bar";
 import { demoFetchInstalled, installDemoFetch } from "@/lib/hiring/demo";
-import { PipelineBoardPanel } from "./pipeline-board";
 import { RunSheetScreen } from "./run-sheet-screen";
 import { SeekScreen } from "./seek-screen";
 import { SetupPanel } from "./setup-panel";
@@ -60,6 +60,8 @@ export type CandidateFilter = {
   subject: Subject | null;
   /** Only these candidates, such as the stuck ones from the pipeline board. */
   ids?: string[];
+  /** What `ids` are, for the filter line ("Stuck" when absent). */
+  label?: string;
 };
 export type Command = (body: unknown) => Promise<boolean>;
 export const NO_FILTER: CandidateFilter = { stage: "all", prescreen: "all", bucket: null, subject: null };
@@ -181,6 +183,8 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
   // The candidate whose résumé viewer is open. It loads the file only on request.
   const [resumeFor, setResumeFor] = useState<string | null>(null);
   const [filter, setFilter] = useState<CandidateFilter>(NO_FILTER);
+  // Read once by the Capacity tab; the Overview forecast compares with its hire-now numbers.
+  const [capacity, setCapacity] = useState<CapacityReport | null>(null);
   // Head ticks not saved yet. They live here, not in the setup panel, so a tab switch does not drop them.
   const [dayDrafts, setDayDrafts] = useState<Record<string, boolean[]>>({});
 
@@ -306,10 +310,6 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
           )
         : new Map(),
     [data, ready],
-  );
-  const shown = useMemo(
-    () => data?.candidates.filter((c) => matchesFilter(c, filter, ready, extras)) ?? [],
-    [data, filter, ready, extras],
   );
   const clashes = useMemo(() => new Set(data?.visitClashes.candidateIds ?? []), [data]);
   const holds = useMemo(
@@ -459,7 +459,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
       )}
       {/* Outside the main load: this tab reads its own endpoint, so it opens at once and survives a failed load. */}
       <div hidden={view !== "capacity"} className={css.viewPane}>
-        <CapacityScreen active={view === "capacity"} />
+        <CapacityScreen active={view === "capacity"} onReport={setCapacity} />
       </div>
       {!data || !config || !insights ? (
         error ? (
@@ -546,18 +546,16 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
         </div>
         <div className={css.layout} hidden={view !== "overview"}>
           <div className={css.main}>
-            <KpiStrip
-              insights={insights}
-              threshold={data.config.profileThreshold}
-              onShowReady={() => setFilter({ ...NO_FILTER, stage: "ready" })}
-            />
-            <PipelineBoardPanel data={data} onOpenRecord={openRecord} />
-            <FunnelPanel
+            <OverviewAnalytics
               data={data}
-              campaigns={data.config.seekJobs}
-              onShowStuck={(stage, ids) => setFilter({ ...NO_FILTER, stage, ids })}
+              capacity={capacity}
+              onOpen={setSelected}
+              onShow={(ids, label, stage) => {
+                // An empty list shows nobody, so a zero count never opens the whole table.
+                setFilter({ ...NO_FILTER, stage: stage ?? "all", ids, label });
+                document.getElementById("candidate-table")?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}
             />
-            <LimitMeters usage={data.usage} headMocks={data.headMocks} config={data.config} tutors={data.tutors} />
             {/* The table is the main work surface, so it sits right under the meters. The charts follow and read the same filter. */}
             <CandidateTable
               candidates={data.candidates}
@@ -579,7 +577,6 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
               }}
             />
             <div className={css.charts}>
-              <StageChart insights={insights} filter={filter} setFilter={setFilter} />
               <ScoreChart
                 insights={insights}
                 threshold={data.config.profileThreshold}
@@ -588,7 +585,6 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
               />
               <EvidenceChart insights={insights} />
               <SubjectChart insights={insights} filter={filter} setFilter={setFilter} />
-              <AveragePentagon candidates={shown} />
             </div>
           </div>
           {candidate ? (
@@ -612,15 +608,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
               onResumeToggle={(open) => setResumeFor(open ? candidate.id : null)}
               retentionMonths={data.config.resumeRetentionMonths}
             />
-          ) : (
-            <OperationsRail
-              data={data}
-              insights={insights}
-              busy={busy}
-              connect={connect}
-              onSelect={setSelected}
-            />
-          )}
+          ) : null}
         </div>
         </>
       )}
