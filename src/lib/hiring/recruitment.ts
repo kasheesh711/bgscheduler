@@ -6,6 +6,7 @@ import { progressUsesTutorBot } from "@/lib/line/progress-reminders";
 import { fetchLineGroupSummary, pushLineTextMessage, replyLineMessage, LinePushError } from "@/lib/line/client";
 import { isScheduleBotAdmin } from "@/lib/line/schedule-bot";
 import { mentionedTheaText } from "@/lib/line/thea-query";
+import { visitClashes } from "./head-schedule";
 import { localDate, runtimeWritesAllowed, shiftDate, ZONE } from "./model";
 import { storedResume } from "./resume-files";
 import { audit, callResumeLink, settings } from "./service";
@@ -215,6 +216,44 @@ export async function queueRecruitmentDailyCalls(db: Database, now = new Date())
   });
 }
 
+/**
+ * Once a day in the morning tick, warns the recruitment group about booked mocks that now overlap the head's Wise
+ * class, leave or sit-in (the dashboard's clash rule), or that could not be checked. Nothing is queued on a clean day.
+ */
+export async function queueRecruitmentMockClashes(db: Database, now = new Date()) {
+  if (!runtimeWritesAllowed()) return false;
+  const date = localDate(now);
+  const minute = (now.getTime() - new Date(`${date}T00:00:00+07:00`).getTime()) / 60000;
+  if (minute < 8 * 60 + 59 || minute >= 9 * 60 + 50) return false;
+  const { config } = await settings(db);
+  if (!config.enabled || !config.deliveryEnabled || !config.recruitmentLineGroupId) return false;
+  const key = `mock-clashes:${date}`;
+  const [done] = await db.select({ id: deliveries.id }).from(deliveries).where(eq(deliveries.key, `${key}:0000`));
+  if (done) return false;
+  const mocks = await db.select({ name: candidates.name, booking: bookings }).from(bookings)
+    .innerJoin(candidates, eq(bookings.candidateId, candidates.id))
+    .where(and(eq(bookings.kind, "mock"), eq(bookings.status, "confirmed"), sql`${bookings.endTime} > ${now.toISOString()}::timestamptz`))
+    .orderBy(asc(bookings.startTime), asc(candidates.name));
+  // The Wise read runs outside the transaction: it can build the search index, which must not hold the lock.
+  const check = await visitClashes(db, mocks.map((m) => ({ ...m.booking, kind: "mock" as const })), now);
+  const ids = new Set(check.bookingIds);
+  const lines = mocks.filter((m) => ids.has(m.booking.id)).map(({ name, booking: b }) =>
+    `• ${lineSlot(b.startTime, b.endTime)} · ${lineWho(name, b.subjects.join(", "))} · Head: ${b.interviewerKey}`);
+  if (!lines.length && !check.stale) return false;
+  const url = new URL("/hiring?view=heads", process.env.APP_BASE_URL || "https://bgscheduler.vercel.app");
+  const text = [
+    lines.length ? `⚠️ Mock teaching clashes with Wise (${lines.length})\n${lines.join("\n")}\n\nMove the mock or the Wise class.` : "",
+    check.stale ? "⚠️ Some mocks could not be checked against Wise today (old Wise data or a head not found). Check the head calendar." : "",
+  ].filter(Boolean).join("\n\n");
+  return withDatabaseTransaction(db, async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-recruitment-mock-clashes'))`);
+    const [exists] = await tx.select({ id: deliveries.id }).from(deliveries).where(eq(deliveries.key, `${key}:0000`));
+    if (exists) return false;
+    await enqueueRecruitmentLine(tx, key, config.recruitmentLineGroupId!, `${text}\n\nOpen: ${url}`, null, "mock-clashes");
+    return true;
+  });
+}
+
 export async function deliverRecruitment(db: Database, now = new Date()) {
   if (!runtimeWritesAllowed()) return 0;
   const { config } = await settings(db);
@@ -237,7 +276,7 @@ export async function deliverRecruitment(db: Database, now = new Date()) {
         break;
       }
       const [booking] = row.bookingId ? await db.select().from(bookings).where(eq(bookings.id, row.bookingId)) : [];
-      const expiredDigest = (row.notice === "daily-calls" || row.notice === "print-pack") && !row.key.startsWith(`${row.notice}:${localDate(now)}:`);
+      const expiredDigest = (row.notice === "daily-calls" || row.notice === "print-pack" || row.notice === "mock-clashes") && !row.key.startsWith(`${row.notice}:${localDate(now)}:`);
       // A paper check goes to the head's own tutor group, so only a group switched off makes it obsolete.
       const [headGroup] = row.notice === "paper_check"
         ? await db.select().from(progressLineGroups).where(and(eq(progressLineGroups.groupId, row.groupId), eq(progressLineGroups.enabled, true)))
@@ -247,7 +286,7 @@ export async function deliverRecruitment(db: Database, now = new Date()) {
         (row.notice !== "cancelled" && (booking.status !== "confirmed" || booking.endTime <= now))));
       if (obsolete || (row.firstAttemptAt && now.getTime() - row.firstAttemptAt.getTime() >= 23 * 3600000)) {
         await db.update(deliveries).set({ status: obsolete && !(expiredDigest && row.firstAttemptAt) ? "cancelled" : "uncertain", leaseUntil: null,
-          error: expiredDigest ? `The date of the ${row.notice === "print-pack" ? "print message" : "call digest"} passed.` : obsolete ? "The booking or recruitment group changed." : "Retry window expired. Check delivery before resending." }).where(eq(deliveries.id, row.id));
+          error: expiredDigest ? `The date of the ${row.notice === "print-pack" ? "print message" : row.notice === "mock-clashes" ? "clash warning" : "call digest"} passed.` : obsolete ? "The booking or recruitment group changed." : "Retry window expired. Check delivery before resending." }).where(eq(deliveries.id, row.id));
         continue;
       }
       // The print message tags the saved person. Without one, or when LINE refuses the tag (the person left the

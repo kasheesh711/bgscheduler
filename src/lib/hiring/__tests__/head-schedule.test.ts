@@ -394,15 +394,17 @@ describe("visit clashes for the candidate table", () => {
         group("Ek", { sessionBlocks: [block(TUE, 0, 60)] }),
       ],
     } as never);
-    const result = await visitClashes(dbWith() as never, bookings() as never, NOW);
-    expect(result).toEqual({ candidateIds: [CANDIDATE], stale: false });
+    const ids = bookings().map((b, i) => ({ ...b, id: `booking-${i}` }));
+    const result = await visitClashes(dbWith() as never, ids as never, NOW);
+    // Only the clashing mock's own booking is named, not the paper booking or the other head's mock.
+    expect(result).toEqual({ candidateIds: [CANDIDATE], bookingIds: ["booking-1"], stale: false });
     expect(ensureIndex).toHaveBeenCalledTimes(1);
   });
 
   it("skips the index when no future mock is booked, and ignores past and cancelled mocks", async () => {
     const past = new Date("2026-11-10T00:00:00Z");
-    expect(await visitClashes(dbWith() as never, bookings() as never, past)).toEqual({ candidateIds: [], stale: false });
-    expect(await visitClashes(dbWith() as never, visit({ status: "cancelled" }) as never, NOW)).toEqual({ candidateIds: [], stale: false });
+    expect(await visitClashes(dbWith() as never, bookings() as never, past)).toEqual({ candidateIds: [], bookingIds: [], stale: false });
+    expect(await visitClashes(dbWith() as never, visit({ status: "cancelled" }) as never, NOW)).toEqual({ candidateIds: [], bookingIds: [], stale: false });
     expect(ensureIndex).not.toHaveBeenCalled();
   });
 
@@ -413,12 +415,12 @@ describe("visit clashes for the candidate table", () => {
       tutorGroups: [group("Peat"), group("Ek")],
     } as never);
     const db = { select: () => ({ from: () => ({ where: () => Promise.reject(new Error("relation does not exist")) }) }) };
-    expect(await visitClashes(db as never, bookings() as never, NOW)).toEqual({ candidateIds: [], stale: true });
+    expect(await visitClashes(db as never, bookings() as never, NOW)).toEqual({ candidateIds: [], bookingIds: [], stale: true });
   });
 
   it("reports stale instead of failing when the index cannot be read", async () => {
     vi.mocked(ensureIndex).mockRejectedValue(new Error("no snapshot"));
-    expect(await visitClashes(dbWith() as never, bookings() as never, NOW)).toEqual({ candidateIds: [], stale: true });
+    expect(await visitClashes(dbWith() as never, bookings() as never, NOW)).toEqual({ candidateIds: [], bookingIds: [], stale: true });
   });
 });
 
@@ -450,7 +452,7 @@ describe("dashboard with a failing clash check", () => {
     const db = { select: () => ({ from: (table: unknown) => chain(table) }) };
     const { dashboard } = await import("../service");
     const data = await dashboard(db as never);
-    expect(data.visitClashes).toEqual({ candidateIds: [], stale: true });
+    expect(data.visitClashes).toEqual({ candidateIds: [], bookingIds: [], stale: true });
     expect(data.bookings).toHaveLength(1);
     // The first import of the service graph can take more than the 5 s default on a loaded machine.
   }, 60_000);

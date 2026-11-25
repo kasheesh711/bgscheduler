@@ -8,7 +8,7 @@ import { getDb } from "@/lib/db";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 
 vi.mock("@/lib/db", () => ({ getDb: vi.fn().mockReturnValue({}) }));
-vi.mock("../recruitment", () => ({ deliverRecruitment: vi.fn().mockResolvedValue(0), queueRecruitmentDailyCalls: vi.fn().mockResolvedValue(false) }));
+vi.mock("../recruitment", () => ({ deliverRecruitment: vi.fn().mockResolvedValue(0), queueRecruitmentDailyCalls: vi.fn().mockResolvedValue(false), queueRecruitmentMockClashes: vi.fn().mockResolvedValue(false) }));
 vi.mock("../worker", () => ({ deliverOutbox: vi.fn() }));
 vi.mock("../service", () => ({
   settings: vi

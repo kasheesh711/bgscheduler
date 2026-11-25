@@ -9,7 +9,7 @@ import {
   deliveryRequestSchema,
   verifyDeliveryAuthorization,
 } from "@/lib/hiring/dispatch";
-import { deliverRecruitment, queueRecruitmentDailyCalls } from "@/lib/hiring/recruitment";
+import { deliverRecruitment, queueRecruitmentDailyCalls, queueRecruitmentMockClashes } from "@/lib/hiring/recruitment";
 import { queuePrintPack } from "@/lib/hiring/print-pack";
 import { deliverOutbox } from "@/lib/hiring/worker";
 import { audit, settings, type Candidate } from "@/lib/hiring/service";
@@ -20,7 +20,7 @@ import type { hiringBookings } from "@/lib/db/schema";
 
 export const maxDuration = 120;
 /**
- * Queues the morning HR call digest and retries booking and final review messages. Invitations still wait for the Mac worker’s SEEK check.
+ * Queues the morning HR call digest and mock clash warning, and retries booking and final review messages. Invitations still wait for the Mac worker’s SEEK check.
  */
 export async function GET(request: NextRequest) {
   const rejected = rejectInvalidCronSecret(request);
@@ -40,6 +40,9 @@ export async function GET(request: NextRequest) {
         let callsQueued: boolean;
         try {
           callsQueued = await queueRecruitmentDailyCalls(db);
+          // A failed clash check must not stop the print-message recovery or delivery below.
+          await queueRecruitmentMockClashes(db).catch((error) =>
+            console.error("Mock clash warning failed", error instanceof Error ? error.name : "UnknownError"));
           // Recovery for the 08:29 print message: the 08:35 to 09:48 ticks queue it if that run missed it.
           await queuePrintPack(db);
         } finally {
