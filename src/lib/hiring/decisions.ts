@@ -3,12 +3,13 @@ import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
 import { hireBlockers } from "./assessment-view";
-import { HiringError, runtimeWritesAllowed, type HiringConfig } from "./model";
+import { contractTestAllowed, HiringError, runtimeWritesAllowed, type HiringConfig } from "./model";
+import { OFFER_LETTERS, type OfferType } from "./offer-letters";
 import { hiringEmailHtmlFromText } from "./email";
 import { bookingToken } from "./tokens";
 import { hiringOrigin, onboardingEnabled } from "./onboarding-config";
 import { queueRecruitmentHeadDecision } from "./recruitment";
-import { audit, briefMock, candidateById, completedBriefResult, endVisit, enqueue, settings } from "./service";
+import { audit, briefMock, callCalendarState, candidateById, completedBriefResult, endVisit, enqueue, settings } from "./service";
 
 export type Decision = "hire" | "reject";
 const d = s.hiringDecisions;
@@ -151,11 +152,30 @@ export async function queueFinalResult(tx: Database, candidate: Awaited<ReturnTy
   return outboxKey;
 }
 
-export async function saveBriefDecision(token: string, input: { decision: Decision; reason: string }, db: Database, now = new Date()) {
+/**
+ * Gift owns the school, so on her own mock a Hire needs no recommendation and no review packet: it sends the offer
+ * letter and the contract-signing link at once (Kevin, 25 Nov 2026). The route gives her head key (`key`, null when the
+ * lookup fails) and, with `offer`, her checked sign-in.
+ */
+export type GiftOffer = { key: string | null; offer?: { actor: string; offerType: OfferType } };
+
+export async function saveBriefDecision(token: string, input: { decision: Decision; reason: string }, db: Database, now = new Date(), gift: GiftOffer = { key: null }) {
+  const owner = gift.offer;
   if (!runtimeWritesAllowed()) throw new HiringError(503, "A recommendation can be saved only on the live site.");
   const booking = await briefMock(token, db, now);
   const reason = input.reason.trim();
   if (input.decision === "reject" && reason.length < 5) throw new HiringError(400, "Write a reason of at least 5 characters.");
+  let calendar: string | null = null;
+  if (owner) {
+    if (input.decision !== "hire") throw new HiringError(400, "An offer goes only with Hire.");
+    if (!gift.key || gift.key !== booking.interviewerKey) throw new HiringError(403, "Only Gift’s own mock goes straight to an offer.");
+    const { config } = await settings(db);
+    if (await callCalendarState(db, config, now) !== "readable")
+      throw new HiringError(409, "Connect the signing calendar before sending an offer.");
+    calendar = config.connectedEmail;
+  } else if (input.decision === "hire" && gift.key && gift.key === booking.interviewerKey)
+    // A tab from before 25 Nov 2026 would send her own Hire into the packet loop she no longer needs.
+    throw new HiringError(409, "This is your own mock. Reload the page, choose the offer letter, then use Hire, send offer.");
   return withDatabaseTransaction(db, async (tx) => {
     await tx.execute(sql`select id from hiring_candidates where id=${booking.candidateId} for update`);
     const mock = await briefMock(token, tx, now);
@@ -172,11 +192,19 @@ export async function saveBriefDecision(token: string, input: { decision: Decisi
     const head = mock.interviewerKey ?? "Interviewer";
     const actor = `interviewer:${head}`;
     const [row] = await tx.insert(s.hiringAudit).values({ actor, action: HEAD_DECISION, candidateId: candidate.id,
-      detail: { decision: input.decision, reason, head, bookingId: mock.id, mockResultId: result.id },
+      detail: { decision: input.decision, reason, head, bookingId: mock.id, mockResultId: result.id, ...(owner ? { offer: owner.offerType } : {}) },
     }).returning({ id: s.hiringAudit.id });
-    const queued = input.decision === "reject" ? await queueFinalResult(tx, candidate, "reject", reason, actor, null, now) : null;
+    let queued: string | null = null;
+    if (owner) {
+      const { config } = await settings(tx);
+      if (config.connectedEmail !== calendar) throw new HiringError(409, "The signing calendar changed. Reload and try again.");
+      const refusal = contractTestAllowed(config, candidate.id) ? null : sendRefusal(config);
+      if (refusal) throw new HiringError(409, refusal);
+      const offer = OFFER_LETTERS[owner.offerType].text(candidate.name, candidate.visitSubject ?? candidate.subjects[0]);
+      queued = await queueFinalResult(tx, candidate, "hire", reason, owner.actor, offer, now);
+    } else if (input.decision === "reject") queued = await queueFinalResult(tx, candidate, "reject", reason, actor, null, now);
     await queueRecruitmentHeadDecision(tx, candidate, { decision: input.decision, reason, head,
-      subject: mock.subjects[0] ?? null, key: row.id });
+      subject: mock.subjects[0] ?? null, key: row.id, offerSent: !!owner });
     return { queued };
   });
 }

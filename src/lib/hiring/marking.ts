@@ -278,7 +278,6 @@ const rubricAnswer = z
     items: z.object(Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, z.number().nullable()]))).strict(),
     comments: z.string().max(4000),
     stressTest: z.object({ listens: z.boolean(), explains: z.boolean(), plan: z.boolean() }).strict(),
-    checksDone: z.boolean().nullable(),
     oldForm: z.boolean(),
   })
   .strict();
@@ -289,7 +288,6 @@ Copy what the head wrote. Do not judge the lesson. Each item is scored from 1 to
 ${RUBRIC.flatMap(({ part, items }) => items.map(([id, label]) => `- ${id}: ${label} (${part})`)).join("\n")}
 Give null for an item with no score you can read. Do not guess it, and do not work it out from a total on the form.
 stressTest: the Stress Test sub-rubric ticks. listens = "A. Listens & acknowledges", explains = "B. Explains without blaming", plan = "C. Concrete plan & follow-up". true only for a clear tick; false for no tick or no sub-rubric on the form.
-checksDone: "School's required checks completed". true for Yes, false for No, null if neither is clearly marked or the line is not on the form.
 oldForm: true only if the form has no "Professional Conduct" part at all (the older 10-item form). Give null for those 4 items then.
 comments: the head's other comments, word for word, translated to English if they are in another language. Use an empty string if there are none.
 Do not add up a total. The system does that.`;
@@ -311,8 +309,8 @@ export const readMockRubric = (id: string, actor: string, db: Database, callMode
       instructions: MOCK_INSTRUCTIONS,
       normalize: ({ oldForm, ...rubric }: MockRubric & { oldForm?: boolean }) => {
         // A scan of the older 10-item form is stored in that shape, so nobody invents 4 scores. Both signs are needed, so
-        // a new form the AI misreads still needs a check and cannot skip the required-checks rule.
-        if (oldForm && rubric.checksDone === null && CONDUCT_ITEMS.every((item) => rubric.items[item] === null)) {
+        // a new form the AI misreads still needs a check.
+        if (oldForm && CONDUCT_ITEMS.every((item) => rubric.items[item] === null)) {
           const items = Object.fromEntries(LEGACY_RUBRIC_ITEMS.map((item) => [item, rubric.items[item]]));
           return normalizeScores({ items: items as MockRubric["items"], comments: rubric.comments });
         }
@@ -380,20 +378,18 @@ export async function submitPaperCheck(token: string, input: { updatedAt: string
 /** A person's change to a rubric. Same rule as marks: the AI's first read stays, and the total is calculated. */
 export async function changeRubric(
   id: string,
-  input: { updatedAt: string; items: Partial<MockRubric["items"]>; comments: string; stressTest?: StressTicks; checksDone?: boolean },
+  input: { updatedAt: string; items: Partial<MockRubric["items"]>; comments: string; stressTest?: StressTicks },
   actor: string,
   db: Database,
   now = new Date(),
 ) {
   const [row] = await db.select().from(m).where(eq(m.id, id));
   if (!row?.rubric || !["done", "needs_check"].includes(row.status)) throw new HiringError(409, "This rubric has no scores to change yet.");
-  // HR sets the required checks to Yes here when they finish after the visit.
   const rubric: MockRubric = {
     ...row.rubric,
     items: { ...row.rubric.items, ...input.items },
     comments: input.comments,
     ...(input.stressTest ? { stressTest: input.stressTest } : {}),
-    ...(input.checksDone !== undefined ? { checksDone: input.checksDone } : {}),
   };
   const problems = checkRubric(rubric);
   if (problems.length) throw new HiringError(400, problems.join(" "));
@@ -407,9 +403,7 @@ export async function changeRubric(
     subject: row.subject,
     before: row.rubric.items,
     after: rubric.items,
-    ...(input.checksDone !== undefined || input.stressTest
-      ? { checksBefore: row.rubric.checksDone ?? null, checksAfter: rubric.checksDone ?? null, stressBefore: row.rubric.stressTest ?? null, stressAfter: rubric.stressTest ?? null }
-      : {}),
+    ...(input.stressTest ? { stressBefore: row.rubric.stressTest ?? null, stressAfter: rubric.stressTest ?? null } : {}),
   });
 }
 

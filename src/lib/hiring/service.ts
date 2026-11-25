@@ -1466,6 +1466,8 @@ export async function briefView(token: string, db: Database = getDb(), now = new
   const checking = result?.bookingId === mock.id && (result.status === "uploaded" || result.status === "marking");
   return {
     // The last head decision for this candidate, so the page shows what was sent.
+    // Gift's Hire on her own mock that sent the offer, not an earlier recommendation of hers.
+    offerSent: !!decided?.detail.offer,
     decision: (!decided?.detail.bookingId || decided.detail.bookingId === mock.id) && decided?.detail.decision === "hire" ? ("hire" as const) : decided?.detail.decision === "reject" ? ("reject" as const) : null,
     name: candidate.name,
     subject: mock.subjects.join(", "),
@@ -1540,9 +1542,9 @@ export async function saveBriefRubric(token: string, rubric: MockRubric, db: Dat
     const { form, replaced: before } = await briefRubric(mock, tx, now);
     if (form === "closed" || !subject) throw new HiringError(409, BRIEF_CLOSED);
     const problems = checkRubric(rubric);
-    // The head's form is always the current one, so a send without an item or the checks answer is refused.
-    if (problems.length || rubricNeedsCheck(rubric) || RUBRIC_ITEMS.some((id) => !(id in rubric.items)) || typeof rubric.checksDone !== "boolean")
-      throw new HiringError(400, "Give every item a whole score from 1 to 10, and answer the required checks.");
+    // The head's form is always the current one, so a send without an item is refused.
+    if (problems.length || rubricNeedsCheck(rubric) || RUBRIC_ITEMS.some((id) => !(id in rubric.items)))
+      throw new HiringError(400, "Give every item a whole score from 1 to 10.");
     const m = s.hiringMockResults;
     const fresh = {
       bookingId: mock.id,

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { ITEM_MAX, RUBRIC, RUBRIC_ITEMS, stressSuggestion, type MockRubric, type RubricItem, type StressTicks } from "@/lib/hiring/marking-sheet";
 import { BAND_LABELS, RUBRIC_GUIDE, STRESS_ELEMENTS } from "@/lib/hiring/rubric-guide";
 import type { BriefPending } from "./brief";
@@ -9,7 +9,7 @@ const SCORES = Array.from({ length: ITEM_MAX }, (_, index) => index + 1);
 // The printed levels are 1, 4, 7 and 10. A score between two levels takes the colour of the nearer one.
 const band = (score: number) => (score >= 9 ? 3 : score >= 6 ? 2 : score >= 3 ? 1 : 0);
 const LEVELS = BAND_LABELS.map((label, index) => ({ label, index })).reverse();
-type Draft = { items: Partial<Record<RubricItem, number>>; comments: string; ticks: StressTicks; checksDone: boolean | null };
+type Draft = { items: Partial<Record<RubricItem, number>>; comments: string; ticks: StressTicks };
 
 /** The interviewer's score form for one mock. The server checks the scores again and calculates the total. */
 export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSent, pending, setPending, onEdit, onSent, onDiscard }: {
@@ -25,12 +25,10 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   onSent: (total: number) => void;
   onDiscard: () => void;
 }) {
-  const rubricId = useId();
   const [items, setItems] = useState<Partial<Record<RubricItem, number>>>(() => Object.fromEntries(RUBRIC_ITEMS.flatMap((id) => (saved?.items[id] ? [[id, saved.items[id]]] : []))));
   const [comments, setComments] = useState(saved?.comments ?? "");
   const [ticks, setTicks] = useState<StressTicks>(() => saved?.stressTest ?? { listens: false, explains: false, plan: false });
   const [ticksUsed, setTicksUsed] = useState(() => !!saved?.stressTest && Object.values(saved.stressTest).some(Boolean));
-  const [checksDone, setChecksDone] = useState<boolean | null>(saved?.checksDone ?? null);
   const [state, setState] = useState<"idle" | "sent">("idle");
   const [editing, setEditing] = useState(!lastSent);
   const [error, setError] = useState("");
@@ -48,12 +46,11 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
     const kept = { listens: !!draft.ticks?.listens, explains: !!draft.ticks?.explains, plan: !!draft.ticks?.plan };
     setTicks(kept);
     setTicksUsed(Object.values(kept).some(Boolean));
-    setChecksDone(typeof draft.checksDone === "boolean" ? draft.checksDone : null);
   };
   // Sent scores compared by value, whether they came from the server or from this form's own send.
-  const baseOf = (sent: Partial<Draft> | null) => sent && JSON.stringify({ items: RUBRIC_ITEMS.map((id) => Number(sent.items?.[id]) || 0), comments: sent.comments ?? "", checksDone: sent.checksDone ?? null });
+  const baseOf = (sent: Partial<Draft> | null) => sent && JSON.stringify({ items: RUBRIC_ITEMS.map((id) => Number(sent.items?.[id]) || 0), comments: sent.comments ?? "" });
   // The scores last sent, so "Discard changes" can put them back.
-  const sentCopy = useRef<Partial<Draft> | null>(saved ? { items: saved.items as Draft["items"], comments: saved.comments, ticks: saved.stressTest, checksDone: saved.checksDone ?? null } : null);
+  const sentCopy = useRef<Partial<Draft> | null>(saved ? { items: saved.items as Draft["items"], comments: saved.comments, ticks: saved.stressTest } : null);
   useEffect(() => {
     const read = (store: Storage) => {
       const draft = JSON.parse(store.getItem(draftKey) ?? "null") as (Partial<Draft> & { base?: string | null }) | null;
@@ -78,14 +75,14 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
           if (draft) apply(draft);
         }
       } else if (state !== "sent") {
-        if (editedAfterSend) sessionStorage.setItem(draftKey, JSON.stringify({ items, comments, ticks, checksDone, base: baseOf(sentCopy.current) }));
-        else if (!lastSent) localStorage.setItem(draftKey, JSON.stringify({ items, comments, ticks, checksDone } satisfies Draft));
+        if (editedAfterSend) sessionStorage.setItem(draftKey, JSON.stringify({ items, comments, ticks, base: baseOf(sentCopy.current) }));
+        else if (!lastSent) localStorage.setItem(draftKey, JSON.stringify({ items, comments, ticks } satisfies Draft));
       }
     } catch {
       // Private mode or a full store: the form still works, without the copy.
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onEdit is a new function each render; it runs once, on restore
-  }, [draftKey, saved, state, items, comments, ticks, checksDone, editedAfterSend, lastSent]);
+  }, [draftKey, saved, state, items, comments, ticks, editedAfterSend, lastSent]);
   const feedback = useRef<HTMLParagraphElement>(null);
   const summary = useRef<HTMLDivElement>(null);
   const firstScore = useRef<HTMLInputElement>(null);
@@ -122,8 +119,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   }, [state, error, editing, sentTotal]);
   if (!decisionSent && form === "closed") return <p className={c.note}>Scores are recorded. Ask admin to edit scores.</p>;
   const scored = RUBRIC_ITEMS.filter((id) => items[id]).length;
-  const checksMissing = scored === RUBRIC_ITEMS.length && checksDone === null;
-  const complete = scored === RUBRIC_ITEMS.length && checksDone !== null;
+  const complete = scored === RUBRIC_ITEMS.length;
   const disabled = !complete || !!pending || sentTotal !== null;
   // An old 10-item send is out of 100.
   const percent = (sent: { total: number; max: number }) => Math.round((sent.total / sent.max) * 100);
@@ -143,11 +139,11 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
     setPending("scores");
     setError("");
     try {
-      const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items, comments, stressTest: ticks, checksDone }) });
+      const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items, comments, stressTest: ticks }) });
       const body = (await response.json().catch(() => ({}))) as { total?: number; error?: string };
       if (!response.ok || typeof body.total !== "number") setError(body.error ?? "The scores were not saved. Try again.");
       else {
-        sentCopy.current = { items, comments, ticks, checksDone };
+        sentCopy.current = { items, comments, ticks };
         try {
           localStorage.removeItem(draftKey);
           sessionStorage.removeItem(draftKey);
@@ -312,25 +308,6 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
       {state === "sent" && <p ref={feedback} role="status" className={c.success} tabIndex={-1}>{sentMessage}</p>}
       {saveError}
       <div ref={sendBar} className={`${c.field} ${b.sendBar}`} data-sticky="">
-        {/* The one answer besides the scores sits beside Send scores, so the head sees both (Sol review, 24 Nov 2026). It stays after Edit scores, so a wrong answer can be changed alone. */}
-        <fieldset className={b.choices} disabled={!!pending}>
-          <legend>School&apos;s required checks completed <span className={c.note}>(must be Yes to hire)</span></legend>
-          {([[true, "Yes"], [false, "No"]] as const).map(([value, text]) => (
-            <label key={text} className={b.choice}>
-              <input
-                type="radio"
-                name={`${rubricId}-checks`}
-                className={b.choiceInput}
-                checked={checksDone === value}
-                onChange={() => {
-                  setChecksDone(value);
-                  changed();
-                }}
-              />
-              {text}
-            </label>
-          ))}
-        </fieldset>
         {sentTotal !== null ? (
           <>
             <button type="button" className={c.ghost} onClick={() => {
@@ -349,9 +326,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
           <>
             <div className={c.field}>
               <div className={b.countRow}>
-                <p role="status" className={checksMissing || lastSent ? undefined : c.note}>{checksMissing
-                  ? "Answer the required checks to send."
-                  : lastSent ? "Score changes not sent."
+                <p role="status" className={lastSent ? undefined : c.note}>{lastSent ? "Score changes not sent."
                     : `${scored}/${RUBRIC_ITEMS.length} scored`}</p>
                 {scored < RUBRIC_ITEMS.length && <button type="button" className={b.moreBelow} onClick={() => {
                   const next = unscored()[0];

@@ -1,5 +1,9 @@
 import { Suspense } from "react";
 import { BriefGone, BriefLoading, BriefShell, InterviewerBrief, ScheduleLink } from "@/components/hiring/brief";
+import { auth } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { finalReviewerKey } from "@/lib/hiring/access";
+import { finalReviewAccess } from "@/lib/hiring/final-review";
 import { HiringError } from "@/lib/hiring/model";
 import { briefView } from "@/lib/hiring/service";
 
@@ -22,9 +26,14 @@ async function Body({ params, searchParams }: Props) {
     if (!(error instanceof HiringError)) throw error;
     return <>{embed !== "1" && <ScheduleLink />}<BriefGone /></>;
   }
+  // Gift's own mock ends in her hiring decision and an offer, not a recommendation (Kevin, 25 Nov 2026).
+  const owner = !!brief.interviewer && brief.interviewer === await finalReviewerKey(getDb());
+  // The offer also needs her sign-in. From the LINE link she may have none, so the page links to sign-in first.
+  const email = owner ? (await auth())?.user?.email?.trim().toLowerCase() : undefined;
+  const signIn = owner && !(email && finalReviewAccess(email).gift) ? `/login?callbackUrl=${encodeURIComponent(`/hiring/brief/${token}`)}` : undefined;
   // The page is a client component: send only the answers it shows, not the sheet row or submit time.
   const answers = brief.answers && { ...brief.answers, sourceRow: 0, submittedAt: "" };
-  return <>{embed !== "1" && <ScheduleLink />}<InterviewerBrief compact={embed === "1"} brief={{ ...brief, answers }} resumeUrl={`/api/hiring/brief/${token}/resume`} rubricUrl={`/api/hiring/brief/${token}/rubric`} decisionUrl={`/api/hiring/brief/${token}/decision`} /></>;
+  return <>{embed !== "1" && <ScheduleLink />}<InterviewerBrief compact={embed === "1"} owner={owner} signIn={signIn} brief={{ ...brief, answers }} resumeUrl={`/api/hiring/brief/${token}/resume`} rubricUrl={`/api/hiring/brief/${token}/rubric`} decisionUrl={`/api/hiring/brief/${token}/decision`} /></>;
 }
 
 // The head's Hiring screen opens this page inside itself with embed=1, with no gutter or second background.

@@ -107,7 +107,7 @@ export const RUBRIC_GUIDE: Record<RubricItem, { hint?: string; bands: readonly [
     ],
   },
   safeguarding: {
-    hint: "Use a safeguarding scenario from the question bank (Q1, Q2 or Q10) and complete the school's required checks.",
+    hint: "Use a safeguarding scenario from the question bank (Q1, Q2 or Q10).",
     bands: [
       "Recognises the welfare concern immediately. Responds calmly, keeps the student safe, does not promise secrecy, records the facts and escalates to the right person following school procedure. Keeps clear professional boundaries.",
       "Recognises the concern and would report it, but is unsure of the exact procedure or misses one key step (e.g., recording the facts).",

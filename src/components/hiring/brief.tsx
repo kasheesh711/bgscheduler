@@ -57,8 +57,10 @@ const points = (value: number) => String(Math.round(value * 10) / 10);
  * The interviewer's page: the score sheet for the mock, with the candidate's résumé and graded paper beside it and the
  * résumé score in parts. No contact details outside the résumé itself.
  */
-export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdfRuntime, compact = false }: { brief: Brief; resumeUrl: string; rubricUrl: string; decisionUrl: string; /** The demo gives the staff copy of the pdf.js files: its link has no real token. */ pdfRuntime?: string;
-  /** Inside the head's Hiring screen: a short header, so the scores and the résumé lead (Kevin, 24 Nov 2026). */ compact?: boolean }) {
+export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdfRuntime, compact = false, owner = false, signIn }: { brief: Brief; resumeUrl: string; rubricUrl: string; decisionUrl: string; /** The demo gives the staff copy of the pdf.js files: its link has no real token. */ pdfRuntime?: string;
+  /** Inside the head's Hiring screen: a short header, so the scores and the résumé lead (Kevin, 24 Nov 2026). */ compact?: boolean;
+  /** Gift's own mock: she decides and the offer goes, with no recommendation (Kevin, 25 Nov 2026). */ owner?: boolean;
+  /** Where Gift signs in first when the page has no session of hers. */ signIn?: string }) {
   const [pending, setPending] = useState<BriefPending>(null);
   const [editCount, setEditCount] = useState(0);
   const [lastSent, setLastSent] = useState(() => brief.rubric ? { total: rubricTotals(brief.rubric).total, max: rubricTotals(brief.rubric).max, editCount: 0 } : null);
@@ -132,8 +134,11 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   ];
   const recommendation = (
     <section id="recommendation" className={b.panel} tabIndex={-1}>
-      <h2 className={decision ? "sr-only" : b.panelTitle}>Your recommendation</h2>
+      <h2 className={decision ? "sr-only" : b.panelTitle}>{owner ? "Your decision" : "Your recommendation"}</h2>
       <BriefDecision
+        owner={owner}
+        offerSent={brief.offerSent}
+        signIn={signIn}
         sent={decision}
         onSent={(sent) => {
           setDecision(sent);
@@ -232,8 +237,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
           {brief.mockEnded && !blocked && !earlyRecommendation && recommendation}
           {wait && (
             <div className={`${b.panel} ${c.field}`}>
-              <p role="status">{checking ? "Checking…" : checked ? "Not open yet. Recommend after the mock ends." : "Recommend after the mock ends."}</p>
-              <button type="button" className={c.button} data-check="" aria-disabled={checking || !!pending || undefined} onClick={() => { if (!checking && !pending) refresh("recommendation"); }}>Check recommendation</button>
+              <p role="status">{checking ? "Checking…" : `${checked ? "Not open yet. " : ""}${owner ? "Decide" : "Recommend"} after the mock ends.`}</p>
+              <button type="button" className={c.button} data-check="" aria-disabled={checking || !!pending || undefined} onClick={() => { if (!checking && !pending) refresh("recommendation"); }}>{owner ? "Check decision" : "Check recommendation"}</button>
             </div>
           )}
         </div>

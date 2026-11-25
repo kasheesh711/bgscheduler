@@ -81,7 +81,6 @@ export const demoRubric = (): MockRubric => ({
   items: Object.fromEntries(RUBRIC_ITEMS.map((id, index) => [id, index % 3 ? 10 : 7])) as MockRubric["items"],
   comments: "Clear explanations. Checked understanding often.",
   stressTest: { listens: true, explains: true, plan: true },
-  checksDone: true,
 });
 
 const HOUR = 3_600_000;
@@ -294,7 +293,7 @@ export function demoBrief(now = new Date()) {
     mock: `${day}, ${clock(mockStart)}–${clock(new Date(mockStart.getTime() + HOUR))}`,
     interviewer: HEAD, location: "BeGifted Education", answers: { ...answers, sourceRow: 0, submittedAt: "" }, resume: "pdf" as const,
     ats: { score: 82.5, parts: [["Degree", 15, 15], ["Subject", 15, 15], ["Curriculum", 15, 15], ["Teaching", 7.5, 15], ["English", 15, 15], ["University", 10, 15], ["High school", 5, 10]].map(([name, earned, max]) => ({ name: String(name), earned: Number(earned), max: Number(max) })), penalty: 0 },
-    rubric: state.rubric, form: "open" as const, recommendationReady: !!state.rubric, mockStarted: true, mockEnded: true, recommendationBlock: null,
+    rubric: state.rubric, form: "open" as const, recommendationReady: !!state.rubric, mockStarted: true, mockEnded: true, recommendationBlock: null, offerSent: false,
   };
 }
 
@@ -378,7 +377,7 @@ export function demoFetch(input: string, init?: { method?: string; body?: unknow
     return new Response(demoFile(path), { headers: { "Content-Type": "application/pdf" } });
   if (path === "/api/hiring/brief/demo/rubric" && post) {
     const items = (body.items ?? {}) as MockRubric["items"];
-    set({ rubric: { items, comments: String(body.comments ?? ""), stressTest: body.stressTest as MockRubric["stressTest"], checksDone: body.checksDone as boolean } });
+    set({ rubric: { items, comments: String(body.comments ?? ""), stressTest: body.stressTest as MockRubric["stressTest"] } });
     return json({ total: Object.values(items).reduce<number>((sum, value) => sum + (value ?? 0), 0) });
   }
   if (path === "/api/hiring/brief/demo/decision" && post) {
