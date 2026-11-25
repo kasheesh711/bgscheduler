@@ -46,7 +46,7 @@ type PaperCheck = HiringData["paperChecks"][number];
 /** The check of this result: open, or done with the head's answer. */
 export const checkOf = (paper: Pick<Paper, "id">, checks: HiringData["paperChecks"]) => checks.find((check) => check.resultId === paper.id);
 const checkWords = (check: PaperCheck) => check.done
-  ? `${check.done.head}'s check: ${check.done.percent}%, ${check.done.passed ? "pass" : "not passed"}`
+  ? `${check.done.head}'s check: ${check.done.percent}%, ${check.done.passed ? (check.done.override ? `pass by head override (${check.done.override})` : "pass") : "not passed"}`
   : `with ${check.headLabel ?? "a head"} for a check`;
 
 export function mockCell(mock: Mock) {
