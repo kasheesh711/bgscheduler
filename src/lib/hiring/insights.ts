@@ -257,6 +257,7 @@ export function buildInsights(input: InsightInput, now = new Date()) {
   const status = (name: string) => input.outbox.filter((j) => j.status === name).length;
 
   return {
+    observedAt: now.toISOString(),
     total: candidates.length,
     active: active.length,
     parked: PARKED.reduce((n, stage) => n + byStage[stage], 0),
@@ -276,9 +277,9 @@ export function buildInsights(input: InsightInput, now = new Date()) {
     stages,
     histogram,
     evidence,
-    weakest: scores.length
-      ? evidence.reduce((low, row) => (row.metShare < low.metShare ? row : low))
-      : null,
+    weakest: evidence.reduce<(typeof evidence)[number] | null>(
+      (low, row) => row.total && (!low || row.metShare < low.metShare) ? row : low, null,
+    ),
     subjects,
     uncoveredSubjects: subjects.filter((s) => !s.interviewers.length).length,
     appointmentsThisWeek: appointments.size,

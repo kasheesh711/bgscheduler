@@ -2,7 +2,7 @@
 
 import { type buildInsights, RESULTS, type CriterionResult } from "@/lib/hiring/insights";
 import { onsiteMeters, preScreenMeters, type LimitUsage, type Meter } from "@/lib/hiring/limits";
-import type { HiringConfig } from "@/lib/hiring/model";
+import { localDate, type HiringConfig } from "@/lib/hiring/model";
 import type { PreScreenState } from "@/lib/hiring/status";
 import type { CandidateFilter } from "./dashboard";
 import css from "./dashboard.module.css";
@@ -125,8 +125,8 @@ export function ScoreChart({
         {i.aboveThreshold} of {i.scored} reach {threshold} · {i.unscored} unscored
       </p>
       <div className={css.histogram}>
-        <div className={css.thresholdLine} style={{ left: `${threshold}%` }}>
-          <span>{threshold}</span>
+        <div className={css.thresholdLine} data-start={threshold < 50 ? "" : undefined} style={{ left: `${threshold}%` }}>
+          <span>Pass {threshold}</span>
         </div>
         {i.histogram.map((bucket) => {
           const label = `${bucket.min}–${bucket.min === 90 ? 100 : bucket.min + 9}`;
@@ -155,6 +155,10 @@ export function ScoreChart({
           <span key={tick}>{tick}</span>
         ))}
       </div>
+      <details className={css.scoreRanges}>
+        <summary>Score ranges and candidate counts</summary>
+        <ul>{i.histogram.map(bucket => <li key={bucket.min}>Score {bucket.min}–{bucket.min === 90 ? 100 : bucket.min + 9} · {bucket.count} {bucket.count === 1 ? "candidate" : "candidates"}</li>)}</ul>
+      </details>
     </section>
   );
 }
@@ -165,16 +169,17 @@ export function EvidenceChart({ insights: i }: { insights: Insights }) {
       <h2 className={css.panelTitle}>Evidence in profiles</h2>
       <p className={css.panelLede}>
         {i.weakest
-          ? `${CRITERION_LABELS[i.weakest.id]} is weakest: ${percent(i.weakest.counts.met, i.weakest.total)}% met`
-          : "No scored profiles yet"}
+          ? `${CRITERION_LABELS[i.weakest.id]} has the lowest share met (${i.weakest.counts.met} of ${i.weakest.total}).`
+          : "No recorded criterion results yet"}
       </p>
+      <p className={css.panelLede}>Loaded profiles on {localDate(new Date(i.observedAt))}, Bangkok. Each share divides “Met” results by all recorded results for that criterion.</p>
       <div className={css.evidenceRows}>
         {i.evidence.map((row) => (
           <div
             key={row.id}
             className={css.evidenceRow}
             role="img"
-            aria-label={`${CRITERION_LABELS[row.id]}: ${RESULTS.map((r) => `${RESULT_LABELS[r]} ${row.counts[r]}`).join(", ")}`}
+            aria-label={`${CRITERION_LABELS[row.id]}: ${row.counts.met} of ${row.total} met. ${RESULTS.map((r) => `${RESULT_LABELS[r]} ${row.counts[r]}`).join(", ")}`}
           >
             <span className={css.stageLabel}>{CRITERION_LABELS[row.id]}</span>
             <span className={css.stack}>
@@ -187,15 +192,13 @@ export function EvidenceChart({ insights: i }: { insights: Insights }) {
                 />
               ))}
             </span>
-            <span className={css.num}>{percent(row.counts.met, row.total)}%</span>
+            <span className={css.num}>{row.total ? `${row.counts.met}/${row.total} · ${percent(row.counts.met, row.total)}%` : "No results"}</span>
+            {row.total > 0 && <span className={css.evidenceCounts}>
+              {RESULTS.map((result) => <span key={result}><i className={RESULT_CLASS[result]} aria-hidden />{RESULT_LABELS[result]} {row.counts[result]}</span>)}
+            </span>}
           </div>
         ))}
       </div>
-      <p className={css.legend}>
-        {RESULTS.map((r) => (
-          <span key={r}><i className={RESULT_CLASS[r]} />{RESULT_LABELS[r]}</span>
-        ))}
-      </p>
     </section>
   );
 }
@@ -211,13 +214,14 @@ export function SubjectChart({
 }) {
   const max = Math.max(1, ...i.subjects.map((s) => s.candidates));
   return (
-    <section className={css.panel}>
+    <section className={`${css.panel} ${css.subjectPanel}`}>
       <h2 className={css.panelTitle}>Subject supply</h2>
       <p className={css.panelLede}>
         {i.uncoveredSubjects
           ? `${i.uncoveredSubjects} subject${i.uncoveredSubjects === 1 ? " has" : "s have"} no interviewer`
           : "Every subject has an interviewer"}
       </p>
+      <p className={css.panelLede}>Supply counts candidates who list the subject in every stage except Stopped, Hired and Rejected. It includes No reply, No booking and Soft rejected. Paper passed counts candidates in those same stages with a recorded pass in the subject. Select a subject to see all matching records under the current table filters.</p>
       <div className={css.subjectRows}>
         {i.subjects.map((row) => (
           <button
@@ -225,20 +229,16 @@ export function SubjectChart({
             type="button"
             className={css.subjectRow}
             aria-pressed={filter.subject === row.subject}
-            title={`${row.candidates} active, ${row.passed} paper passed. Interviewers: ${row.interviewers.join(", ") || "none"}`}
             onClick={() => setFilter({ ...filter, subject: filter.subject === row.subject ? null : row.subject })}
           >
             <span className={css.subjectLabel}>
               <span className={css.subjectName}>{row.subject}</span>
-              {/* Text, not only colour, so it shows for colour-blind users. */}
-              {!row.interviewers.length && (
-                <span className={css.subjectTag} title="No interviewer for this subject">No head</span>
-              )}
+              {!row.interviewers.length && <span className={css.subjectTag}>No head</span>}
             </span>
             <span className={css.subjectTrack}>
-              <span style={{ width: `${(row.candidates / max) * 100}%` }} />
+              {row.candidates > 0 && <span style={{ width: `${(row.candidates / max) * 100}%` }} />}
             </span>
-            <span className={css.num}>{row.candidates}</span>
+            <span className={css.subjectFacts}>Supply {row.candidates} · Paper passed {row.passed} · {row.interviewers.length === 1 ? "Interviewer" : "Interviewers"} {row.interviewers.join(", ") || "none"}</span>
           </button>
         ))}
       </div>

@@ -48,6 +48,14 @@ export const matchesFilter = (
   (!filter.subject || c.subjects.includes(filter.subject)) &&
   (!filter.ids || filter.ids.includes(c.id));
 
+export function focusCandidateResults() {
+  window.requestAnimationFrame(() => {
+    const summary = document.getElementById("hiring-candidate-results");
+    summary?.focus({ preventScroll: true });
+    summary?.scrollIntoView({ block: "center", inline: "nearest" });
+  });
+}
+
 export function CandidateTable({
   candidates,
   insights,
@@ -59,6 +67,7 @@ export function CandidateTable({
   threshold,
   filter,
   setFilter,
+  onReturnFromFinding,
   selected,
   onSelect,
   onOpenResume = onSelect,
@@ -76,6 +85,7 @@ export function CandidateTable({
   threshold: number;
   filter: CandidateFilter;
   setFilter: (filter: CandidateFilter) => void;
+  onReturnFromFinding?: () => void;
   selected: string | null;
   onSelect: (id: string) => void;
   /** Opens the panel with the résumé viewer open. */
@@ -85,9 +95,27 @@ export function CandidateTable({
 }) {
   // "now" moves with each load of the data, as on the funnel board.
   const pipeline = useMemo(() => (funnelData ? buildFunnel(funnelData, new Date()).byCandidate : {}), [funnelData]);
-  const [query, setQuery] = useState("");
-  const deferred = useDeferredValue(query);
-  const [sort, setSort] = useState<{ key: SortKey; descending: boolean }>({ key: "score", descending: true });
+  const [tableTools, setTableTools] = useState({
+    query: "",
+    sort: { key: "score" as SortKey, descending: true },
+  });
+  const [findingTools, setFindingTools] = useState<{ ids: string[]; tools: typeof tableTools } | null>(null);
+  const findingIds = onReturnFromFinding ? filter.ids : undefined;
+  const tools = findingIds
+    ? findingTools?.ids === findingIds ? findingTools.tools : { query: "", sort: tableTools.sort }
+    : tableTools;
+  const { query, sort } = tools;
+  const deferredQuery = useDeferredValue(query);
+  const deferred = query ? deferredQuery : "";
+
+  function updateTools(next: typeof tableTools) {
+    if (findingIds) setFindingTools({ ids: findingIds, tools: next });
+    else setTableTools(next);
+  }
+  function updateSort(next: typeof sort) {
+    updateTools({ ...tools, sort: next });
+  }
+
   const rows = useMemo(() => {
     const needle = deferred.trim().toLowerCase();
     const shown = candidates.filter(
@@ -104,7 +132,7 @@ export function CandidateTable({
           : sort.key === "score"
             ? c.profileScore
             : sort.key === "days"
-              ? (pipeline[c.id]?.daysInStage ?? null)
+              ? (pipeline[c.id]?.importDateOnly ? null : pipeline[c.id]?.daysInStage ?? null)
               : new Date(String(c.updatedAt)).getTime();
     return shown.sort((a, b) => {
       const [x, y] = [value(a), value(b)];
@@ -126,6 +154,7 @@ export function CandidateTable({
   );
   const isActive = (c: HiringCandidate) => ACTIVE_STAGES.includes(c.stage);
   const activeTotal = candidates.filter(isActive).length;
+  const subjectSupply = filter.subject ? insights.subjects.find(row => row.subject === filter.subject) : undefined;
   const isFiltered = filter.bucket !== null || !!filter.subject || filter.prescreen !== "all" || !!filter.ids || !!query;
 
   return (
@@ -149,7 +178,7 @@ export function CandidateTable({
           placeholder="Search name, email or stage"
           aria-label="Search candidates"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => updateTools({ ...tools, query: e.target.value })}
         />
       </div>
       <div className={css.tableTools}>
@@ -166,23 +195,24 @@ export function CandidateTable({
           ))}
         </div>
       </div>
-      <p className={css.activeFilters}>
-        {rows.length} shown · {rows.filter(isActive).length} of {activeTotal} active
+      <p id="hiring-candidate-results" tabIndex={-1} className={css.activeFilters}>
+        {rows.length} shown · {rows.filter(isActive).length} of {activeTotal} active candidates
         {isFiltered && (
           <>
             {filter.bucket !== null && ` · Score ${filter.bucket}–${filter.bucket === 90 ? 100 : filter.bucket + 9}`}
             {filter.subject && ` · ${filter.subject}`}
+            {subjectSupply && <span>{subjectSupply.candidates} in subject supply before table filters. Supply excludes Stopped, Hired and Rejected. The active subtotal also excludes No reply, No booking and Soft rejected.</span>}
             {filter.ids && ` · ${filter.label ?? "Stuck"} (${filter.ids.length})`}
             {filter.prescreen !== "all" && ` · ${filter.prescreen === "Visit booked" ? "Visit booked" : `Pre-screen ${filter.prescreen.toLowerCase()}`}`}
             <button
               type="button"
               className={css.inlineLink}
-              onClick={() => {
+              onClick={onReturnFromFinding ?? (() => {
                 setFilter({ ...NO_FILTER, stage: filter.stage });
-                setQuery("");
-              }}
+                updateTools({ ...tools, query: "" });
+              })}
             >
-              Clear filters
+              {onReturnFromFinding ? "Back to previous results" : "Clear filters"}
             </button>
           </>
         )}
@@ -199,7 +229,7 @@ export function CandidateTable({
                   <button
                     type="button"
                     onClick={() =>
-                      setSort({
+                      updateSort({
                         key,
                         descending: sort.key === key ? !sort.descending : key === "score",
                       })
@@ -211,7 +241,7 @@ export function CandidateTable({
                 </th>
               ))}
               <th className={css.wideOnly} aria-sort={sort.key === "days" ? (sort.descending ? "descending" : "ascending") : "none"}>
-                <button type="button" onClick={() => setSort({ key: "days", descending: sort.key === "days" ? !sort.descending : true })}>
+                <button type="button" onClick={() => updateSort({ key: "days", descending: sort.key === "days" ? !sort.descending : true })}>
                   Days in stage
                   <span aria-hidden="true">{sort.key === "days" ? (sort.descending ? " ↓" : " ↑") : ""}</span>
                 </button>
@@ -234,7 +264,7 @@ export function CandidateTable({
               <th className={`${css.wideOnly} ${css.xwide}`} aria-sort={sort.key === "updated" ? (sort.descending ? "descending" : "ascending") : "none"}>
                 <button
                   type="button"
-                  onClick={() => setSort({ key: "updated", descending: sort.key === "updated" ? !sort.descending : true })}
+                  onClick={() => updateSort({ key: "updated", descending: sort.key === "updated" ? !sort.descending : true })}
                 >
                   Updated
                   <span aria-hidden="true">{sort.key === "updated" ? (sort.descending ? " ↓" : " ↑") : ""}</span>
@@ -266,6 +296,7 @@ export function CandidateTable({
                       {c.name}
                     </button>
                     <span className={css.email}>{c.email || "Email needs review"}</span>
+                    {filter.timingEvidence?.[c.id] && <small className={css.timingEvidence}>{filter.timingEvidence[c.id]}</small>}
                     <button
                       type="button"
                       className={css.inlineLink}
@@ -279,7 +310,7 @@ export function CandidateTable({
                   <td className={c.stage === "stopped" ? css.mutedCell : undefined}>
                     {STAGE_LABELS[c.stage]}
                     {ready.has(c.id) && <span className={css.readyWord}>Ready</span>}
-                    {step?.stuck && (
+                    {step?.stuck && !step.importDateOnly && (
                       <span className={css.clashWord} title={`Over the ${rule?.days}-day rule for ${rule?.label}. ${rule?.why ?? ""}`}>
                         Stuck
                       </span>
@@ -313,7 +344,7 @@ export function CandidateTable({
                     )}
                   </td>
                   <td className={`${css.wideOnly} ${css.num}`}>
-                    {step ? `${Math.round(step.daysInStage * 10) / 10} d` : <span className={css.mutedCell}>–</span>}
+                    {step && !step.importDateOnly ? `${Math.round(step.daysInStage * 10) / 10} d` : <span className={css.mutedCell}>Unknown</span>}
                   </td>
                   <td className={css.widestOnly} title={rule?.next}>{rule?.next ?? <span className={css.mutedCell}>–</span>}</td>
                   <td className={css.widestOnly} title={rule?.owner}>{rule?.owner ?? <span className={css.mutedCell}>–</span>}</td>
