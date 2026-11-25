@@ -89,7 +89,7 @@ import { attendanceAccessForEmail } from "@/lib/tutor-attendance/access";
 import { attendanceConfig } from "@/lib/tutor-attendance/data";
 import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
 import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
-import { paperChecks } from "./paper-check";
+import { headOverride, paperChecks } from "./paper-check";
 import { checkRubric, computeSheet, passRulesFor, RUBRIC_ITEMS, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
 import { HIRING_LINE_URL, hiringEmail, mockPrep, TWO_DAY_STEPS, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
@@ -1043,7 +1043,7 @@ async function assertPassingPaper(db: Database, candidateId: string, subject: Su
     eq(s.hiringPaperResults.candidateId, candidateId), eq(s.hiringPaperResults.subject, subject),
   ));
   if (result?.status !== "done" || !result.fileId || !result.marks ||
-    computeSheet(result.marks, passRulesFor(config, subject)).result !== "passed")
+    (computeSheet(result.marks, passRulesFor(config, subject)).result !== "passed" && !(await headOverride(db, result))))
     throw new HiringError(409, "Finish grading and confirm a passing paper before booking mock teaching.");
 }
 
@@ -1924,7 +1924,8 @@ export async function countedFail(tx: Database, candidateId: string, subject: Su
   // A sheet with no question tried is more likely the wrong scan than a fail, so a person decides that one.
   if (result?.status !== "done" || !result.marks?.questions.some((q) => q.attempted)) return null;
   const sheet = computeSheet(result.marks, passRulesFor(config, subject));
-  return sheet.result === "not_passed" ? { result, sheet, config } : null;
+  // A head's override passes a near miss, so it is not a fail.
+  return sheet.result === "not_passed" && !(await headOverride(tx, result)) ? { result, sheet, config } : null;
 }
 
 /** The caller holds `lockCandidate` and has read a counted fail. Returns the mock cancelled and the paper booking it followed. */

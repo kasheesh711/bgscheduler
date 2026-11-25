@@ -194,3 +194,22 @@ export async function finishFile(id: string, actor: string, db: Database) {
     return { ...ready, resultId: await resultIdOf(tx, ready) };
   });
 }
+
+/** A ready file from storage as an inline PDF response. Used by the admin file route and the print link. */
+export async function assessmentFileResponse(file: typeof s.hiringAssessmentFiles.$inferSelect | undefined) {
+  if (!file || file.status !== "ready") throw new HiringError(404, "File not found.");
+  if (file.path !== assessmentPath(file.id)) throw new HiringError(409, "The stored file record is not valid, so the file was not opened.");
+  const blob = await get(file.path, { access: "private", useCache: false });
+  if (!blob || blob.statusCode !== 200) throw new HiringError(404, "The file is gone from storage.");
+  const name = encodeURIComponent(file.name).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  return new Response(blob.stream, {
+    headers: {
+      "Content-Type": "application/pdf",
+      "Content-Length": String(blob.blob.size),
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "default-src 'none'; frame-ancestors 'self'; sandbox",
+      "Content-Disposition": `inline; filename*=UTF-8''${name}`,
+    },
+  });
+}

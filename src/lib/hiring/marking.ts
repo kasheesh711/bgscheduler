@@ -5,10 +5,10 @@ import * as s from "@/lib/db/schema";
 import { callOpenRouter, isCreditExhausted, type OpenRouterCallResult } from "@/lib/feedback-autowriter/openrouter";
 import { readAssessmentBytes } from "./assessment-files";
 import { callClaude } from "./claude";
-import { checkPaperMarks, checkRubric, LEGACY_RUBRIC_ITEMS, paperNeedsCheck, RUBRIC, RUBRIC_ITEMS, rubricNeedsCheck, type MockRubric, type PaperMarks, type StressTicks } from "./marking-sheet";
-import { HiringError, PAPER_LEVELS, runtimeWritesAllowed, type Subject } from "./model";
-import { afterPaperCounted, afterPaperCountedQuietly, paperCheckView } from "./paper-check";
-import { audit, MARKING_STUCK_AFTER_MS } from "./service";
+import { checkPaperMarks, checkRubric, computeSheet, passRulesFor, LEGACY_RUBRIC_ITEMS, paperNeedsCheck, RUBRIC, RUBRIC_ITEMS, rubricNeedsCheck, type MockRubric, type PaperMarks, type StressTicks } from "./marking-sheet";
+import { HiringError, OVERRIDE_REASON_MIN, PAPER_LEVELS, runtimeWritesAllowed, type Subject } from "./model";
+import { afterPaperCounted, afterPaperCountedQuietly, overrideRefusal, paperCheckView } from "./paper-check";
+import { audit, MARKING_STUCK_AFTER_MS, settings } from "./service";
 
 export const MARKING_PROMPT_VERSION = "hiring-marking-2026-11-20.1";
 // One deadline for the whole run, below the route's 300 seconds, so a slow run can still save its result.
@@ -330,17 +330,21 @@ export const readMockRubric = (id: string, actor: string, db: Database, callMode
     now,
   );
 
+/** A person's marks over the saved ones. The override check and the save read the same result. */
+const withPersonMarks = (marks: PaperMarks, input: Record<string, number | null>) =>
+  marks.questions.map((q) => {
+    // The AI names the ids, so "constructor" must not read a value from the object's prototype.
+    if (!Object.hasOwn(input, q.id) || input[q.id] === q.marks) return q;
+    const value = input[q.id];
+    // The AI's points no longer add up to a mark that a person set, so they go. The AI's first answer keeps them.
+    return value === null ? { ...q, marks: null, readable: false, points: [] } : { ...q, marks: value, readable: true, attempted: true, points: [] };
+  });
+
 /** A person's change. The AI's first answer stays. The server recalculates the sheet from these marks. */
 export async function changePaperMarks(id: string, input: { updatedAt: string; marks: Record<string, number | null>; comment: string }, actor: string, db: Database, now = new Date(), followUp = true) {
   const [row] = await db.select().from(p).where(eq(p.id, id));
   if (!row?.marks || !["done", "needs_check"].includes(row.status)) throw new HiringError(409, "This paper has no marks to change yet.");
-  const questions = row.marks.questions.map((q) => {
-    // The AI names the ids, so "constructor" must not read a value from the object's prototype.
-    if (!Object.hasOwn(input.marks, q.id) || input.marks[q.id] === q.marks) return q;
-    const value = input.marks[q.id];
-    // The AI's points no longer add up to a mark that a person set, so they go. The AI's first answer keeps them.
-    return value === null ? { ...q, marks: null, readable: false, points: [] } : { ...q, marks: value, readable: true, attempted: true, points: [] };
-  });
+  const questions = withPersonMarks(row.marks, input.marks);
   const marks: PaperMarks = { ...row.marks, questions, comment: input.comment };
   const problems = checkPaperMarks(marks);
   if (problems.length) throw new HiringError(400, problems.join(" "));
@@ -360,19 +364,29 @@ export async function changePaperMarks(id: string, input: { updatedAt: string; m
  * The head's check of a near-miss paper, from the LINE link. Every question needs a mark. The head's marks replace the
  * AI's (the AI's first answer stays), then `afterPaperCounted` sends the candidate on to the mock or rejects.
  */
-export async function submitPaperCheck(token: string, input: { updatedAt: string; marks: Record<string, number>; comment: string }, db: Database, now = new Date()) {
+export async function submitPaperCheck(token: string, input: { updatedAt: string; marks: Record<string, number>; comment: string; override?: string }, db: Database, now = new Date()) {
   if (!runtimeWritesAllowed()) throw new HiringError(503, "A check can be saved only on the live site.");
   const view = await paperCheckView(token, db, now);
   if (view.done) throw new HiringError(409, "Your check is already recorded.");
   if (!view.open) throw new HiringError(409, "This paper no longer needs a check.");
   const missing = view.questions.filter((q) => !Object.hasOwn(input.marks, q.id));
   if (missing.length) throw new HiringError(400, `Give a mark for question ${missing.map((q) => q.id).join(", ")}.`);
+  const override = input.override?.trim() || undefined;
+  if (override) {
+    if (override.length < OVERRIDE_REASON_MIN) throw new HiringError(400, `Write why in at least ${OVERRIDE_REASON_MIN} characters.`);
+    // Checked before the marks save, so a refused override changes nothing.
+    const [row] = await db.select().from(s.hiringPaperResults).where(eq(s.hiringPaperResults.id, view.id));
+    const { config } = await settings(db);
+    const marks = { ...row.marks!, questions: withPersonMarks(row.marks!, input.marks) };
+    const refused = overrideRefusal(computeSheet(marks, passRulesFor(config, row.subject)));
+    if (refused) throw new HiringError(400, refused);
+  }
   const head = view.head ?? "admin";
   const actor = `head:${head}`;
   const row = await changePaperMarks(view.id, input, actor, db, now, false);
   // A noted missing page sets the row back to "needs check". The head has read the paper, so the head's marks count.
   await db.update(p).set({ status: "done", checkedBy: actor, checkedAt: now }).where(and(eq(p.id, view.id), eq(p.status, "needs_check")));
-  return afterPaperCounted(db, row.candidateId, row.subject, actor, now, head);
+  return afterPaperCounted(db, row.candidateId, row.subject, actor, now, head, override);
 }
 
 /** A person's change to a rubric. Same rule as marks: the AI's first read stays, and the total is calculated. */

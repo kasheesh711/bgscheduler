@@ -24,6 +24,9 @@ export const lineWho = (name: string, subjects: string) => `${name} · ${subject
 export const contactLine = (candidate: { email: string | null; phone: string | null }) =>
   [candidate.email, candidate.phone].filter(Boolean).join(" · ") || "No email or phone recorded";
 
+/** LINE textV2 reads `{name}` as a placeholder: double every other brace (for example in a name), keep `{person}`. */
+export const taggedText = (message: string) => message.replace(/[{}]/g, (c) => c + c).replaceAll("{{person}}", "{person}");
+
 /** LINE limits each text message to 5,000 UTF-16 units. Leave space for the part number. */
 export function recruitmentParts(text: string): string[] {
   const parts: string[] = [];
@@ -36,8 +39,35 @@ export function recruitmentParts(text: string): string[] {
   return parts.map((value, index) => parts.length > 1 ? `(${index + 1}/${parts.length})\n${value}` : value);
 }
 
+/**
+ * "@Thea print setup": the sender becomes the person Thea tags in the 08:30 print message. Only in the connected
+ * recruitment group, which holds staff only, so any member may take it over.
+ */
+async function receivePrintSetup(db: Database, raw: unknown) {
+  const event = raw as { source?: { type?: string; groupId?: string; userId?: string }; replyToken?: string };
+  const userId = event.source?.userId ?? "";
+  if (event.source?.type !== "group" || !/^U[0-9a-f]{32}$/.test(userId) || !runtimeWritesAllowed()) return;
+  const saved = await withDatabaseTransaction(db, async tx => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-settings'))`);
+    const current = await settings(tx);
+    if (!current.row || !current.config.recruitmentLineGroupId || current.config.recruitmentLineGroupId !== event.source!.groupId) return false;
+    if (current.config.printLineUserId === userId) return true;
+    await tx.update(hiringSettings).set({
+      config: { ...current.config, printLineUserId: userId },
+      revision: current.row.revision + 1, updatedBy: `line:${userId}`, updatedAt: new Date(),
+    }).where(eq(hiringSettings.id, "default"));
+    await audit(tx, `line:${userId}`, "recruitment-print-person", null, { userId });
+    return true;
+  });
+  if (event.replyToken) await replyLineMessage({ tutorBot: true, replyToken: event.replyToken,
+    text: saved ? "Done. At 08:30 on each day with paper tests, Thea will tag you here with one link to print all the papers."
+      : `Use this command in ${GROUP_NAME} after it is connected.` });
+}
+
 export async function receiveRecruitmentSetup(db: Database, raw: unknown): Promise<boolean> {
-  if (mentionedTheaText(raw)?.toLowerCase() !== "recruitment setup") return false;
+  const command = mentionedTheaText(raw)?.toLowerCase();
+  if (command === "print setup") { await receivePrintSetup(db, raw); return true; }
+  if (command !== "recruitment setup") return false;
   const event = raw as { source?: { type?: string; groupId?: string; userId?: string }; replyToken?: string };
   if (event.source?.type !== "group" || !/^C[0-9a-f]{32}$/.test(event.source.groupId ?? "")
     || !isScheduleBotAdmin(event.source.userId ?? "") || !runtimeWritesAllowed()) return true;
@@ -207,7 +237,7 @@ export async function deliverRecruitment(db: Database, now = new Date()) {
         break;
       }
       const [booking] = row.bookingId ? await db.select().from(bookings).where(eq(bookings.id, row.bookingId)) : [];
-      const expiredDigest = row.notice === "daily-calls" && !row.key.startsWith(`daily-calls:${localDate(now)}:`);
+      const expiredDigest = (row.notice === "daily-calls" || row.notice === "print-pack") && !row.key.startsWith(`${row.notice}:${localDate(now)}:`);
       // A paper check goes to the head's own tutor group, so only a group switched off makes it obsolete.
       const [headGroup] = row.notice === "paper_check"
         ? await db.select().from(progressLineGroups).where(and(eq(progressLineGroups.groupId, row.groupId), eq(progressLineGroups.enabled, true)))
@@ -217,10 +247,19 @@ export async function deliverRecruitment(db: Database, now = new Date()) {
         (row.notice !== "cancelled" && (booking.status !== "confirmed" || booking.endTime <= now))));
       if (obsolete || (row.firstAttemptAt && now.getTime() - row.firstAttemptAt.getTime() >= 23 * 3600000)) {
         await db.update(deliveries).set({ status: obsolete && !(expiredDigest && row.firstAttemptAt) ? "cancelled" : "uncertain", leaseUntil: null,
-          error: expiredDigest ? "The date of the call digest passed." : obsolete ? "The booking or recruitment group changed." : "Retry window expired. Check delivery before resending." }).where(eq(deliveries.id, row.id));
+          error: expiredDigest ? `The date of the ${row.notice === "print-pack" ? "print message" : "call digest"} passed.` : obsolete ? "The booking or recruitment group changed." : "Retry window expired. Check delivery before resending." }).where(eq(deliveries.id, row.id));
         continue;
       }
-      const receipt = await pushLineTextMessage({ to: row.groupId, text: row.message, retryKey: row.id, tutorBot: headGroup ? progressUsesTutorBot(headGroup.canonicalKey, headGroup.tutorBot) : true, signal: AbortSignal.timeout(20000) });
+      // The print message tags the saved person. Without one, or when LINE refuses the tag (the person left the
+      // group), it names Aya in plain text. textV2 reads other braces as placeholders, so they are doubled.
+      const tag = row.notice === "print-pack" ? latest.printLineUserId : null;
+      const plain = row.notice === "print-pack" ? row.message.replaceAll("{person}", "@Aya") : row.message;
+      const tagged = taggedText(row.message);
+      const tutorBot = headGroup ? progressUsesTutorBot(headGroup.canonicalKey, headGroup.tutorBot) : true;
+      const push = (text: string, mentionUserId?: string) => pushLineTextMessage({ to: row.groupId, text, mentionUserId, retryKey: row.id, tutorBot, signal: AbortSignal.timeout(20000) });
+      const receipt = tag
+        ? await push(tagged, tag).catch((error) => { if (error instanceof LinePushError && error.status === 400) return push(plain); throw error; })
+        : await push(plain);
       await db.update(deliveries).set({ status: "sent", receipt: { ...receipt }, sentAt: new Date(), leaseUntil: null, error: null }).where(eq(deliveries.id, row.id));
       sent++;
     } catch (error) {

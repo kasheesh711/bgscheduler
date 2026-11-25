@@ -120,8 +120,13 @@ export async function pushLineTextMessage(input: {
   retryKey?: string;
   signal?: AbortSignal;
   tutorBot?: boolean;
+  /** Sends a textV2 message whose `{person}` placeholder becomes a tag of this LINE user. */
+  mentionUserId?: string;
 }): Promise<LinePushResult> {
   const retryKey = input.retryKey ?? randomUUID();
+  const message = input.mentionUserId
+    ? { type: "textV2", text: input.text, substitution: { person: { type: "mention", mentionee: { type: "user", userId: input.mentionUserId } } } }
+    : { type: "text", text: input.text };
   const response = await fetch(`${LINE_API_BASE}/v2/bot/message/push`, {
     signal: input.signal,
     method: "POST",
@@ -132,7 +137,7 @@ export async function pushLineTextMessage(input: {
     },
     body: JSON.stringify({
       to: input.to,
-      messages: [{ type: "text", text: input.text }],
+      messages: [message],
     }),
   });
 

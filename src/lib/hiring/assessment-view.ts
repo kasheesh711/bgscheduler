@@ -105,7 +105,7 @@ export function hireBlockers(papers: Result[], mocks: Result[]) {
 export type Verdict = "pass" | "fail" | "checking" | "needs_check" | "marking" | "failed" | "missing_mark" | "recorded";
 export type PaperScore = { verdict: Verdict; percent: number | null; passMark: number | null; level: string | null; scored: number; max: number; head: string | null; note: string | null };
 type PaperLike = { id: string; subject: string; status: string; marks?: Pick<PaperMarks, "questions"> | null; history?: { outcome?: string | null } | null; updatedAt?: Date | string };
-type CheckLike = { resultId: string; percent: number; head?: string | null; headLabel?: string | null; done: { passed: boolean; percent: number; head: string; at?: string } | null };
+type CheckLike = { resultId: string; percent: number; head?: string | null; headLabel?: string | null; done: { passed: boolean; percent: number; head: string; override?: string | null; at?: string } | null };
 
 // The level a pass names: the highest one passed, as "Can teach up to" reads it.
 const PASS_ORDER = ["AS / A-Level", "IB SL / HL", "AP", "IGCSE / GCSE", "Key Stage 3", "Other"];
@@ -125,7 +125,7 @@ export function paperScore(paper: PaperLike, config: Pick<HiringConfig, "paperPa
   // A head's answer stands until a person changes the marks after it; then the current marks decide.
   const stale = !!(check?.done?.at && paper.updatedAt && new Date(paper.updatedAt) > new Date(check.done.at));
   // A pass keeps the passed level's own percent, so the number and the level agree.
-  if (check?.done && !stale) return { ...base, verdict: check.done.passed ? "pass" : "fail", percent: check.done.passed ? base.percent : check.done.percent, head: check.done.head };
+  if (check?.done && !stale) return { ...base, verdict: check.done.passed ? "pass" : "fail", percent: check.done.passed ? base.percent : check.done.percent, head: check.done.head, note: check.done.override ? `Head override: ${check.done.override}` : null };
   if (check?.done) return { ...base, verdict: sheet.result === "passed" ? "pass" : sheet.result === "pass_mark_missing" ? "missing_mark" : "fail" };
   if (check) return { ...base, verdict: "checking", head: check.headLabel ?? check.head ?? null };
   return { ...base, verdict: sheet.result === "passed" ? "pass" : sheet.result === "pass_mark_missing" ? "missing_mark" : "fail" };

@@ -46,7 +46,7 @@ type PaperCheck = HiringData["paperChecks"][number];
 /** The check of this result: open, or done with the head's answer. */
 export const checkOf = (paper: Pick<Paper, "id">, checks: HiringData["paperChecks"]) => checks.find((check) => check.resultId === paper.id);
 const checkWords = (check: PaperCheck) => check.done
-  ? `${check.done.head}'s check: ${check.done.percent}%, ${check.done.passed ? "pass" : "not passed"}`
+  ? `${check.done.head}'s check: ${check.done.percent}%, ${check.done.passed ? (check.done.override ? `pass by head override (${check.done.override})` : "pass") : "not passed"}`
   : `with ${check.headLabel ?? "a head"} for a check`;
 
 export function mockCell(mock: Mock) {
@@ -61,12 +61,11 @@ const isNewForm = (rubric: MockRubric) => rubricItems(rubric).length === LABELS.
 type Reload = () => Promise<void>;
 
 /** The file picker for a candidate's scan. It stays on the row or the panel while the upload and the marking run. */
-/** The blank question paper from the paper library, for the person who prepares the visit. It opens as a PDF to print. */
-export function PrintPaper({ library, subject, name }: { library: HiringData["library"]; subject: string; name?: string }) {
-  const file = library.find((item) => item.subject === subject && item.kind === "question_paper");
-  if (!file) return <span className={css.warnWord}>No paper to print. Add it in Rules and setup. </span>;
+/** The blank question paper with its cover page (name, exam time, subject), for the person who prepares the visit. */
+export function PrintPaper({ library, subject, name, candidateId, date }: { library: HiringData["library"]; subject: string; name?: string; candidateId: string; date: string }) {
+  if (!library.some((item) => item.subject === subject && item.kind === "question_paper")) return <span className={css.warnWord}>No paper to print. Add it in Rules and setup. </span>;
   return (
-    <a className={css.sourceLink} href={`/api/hiring/file/${encodeURIComponent(file.id)}`} target="_blank" rel="noopener noreferrer" aria-label={name ? `Print the ${subject} paper for ${name}` : undefined} onClick={(e) => e.stopPropagation()}>
+    <a className={css.sourceLink} href={`/api/hiring/print-pack?date=${date}&candidate=${encodeURIComponent(candidateId)}`} target="_blank" rel="noopener noreferrer" aria-label={name ? `Print the ${subject} paper for ${name}` : undefined} onClick={(e) => e.stopPropagation()}>
       Print paper
     </a>
   );
@@ -800,7 +799,8 @@ function AssessmentPanel({
         ))}
         {candidate.stage === "onsite_booked" && papers.some((paper) =>
           paper.subject === row.subject && paper.status === "done" && paper.fileId && paper.marks &&
-          computeSheet(paper.marks, passRulesFor(data.config, paper.subject)).result === "passed"
+          // A head's override passes a near miss too (Kevin, 25 Nov 2026).
+          paperScore(paper, data.config, checkOf(paper, data.paperChecks)).verdict === "pass"
         ) && !data.bookings.some((booking) => booking.candidateId === candidate.id && booking.kind === "mock" && booking.status === "confirmed") && (
           <button type="button" className={css.primary} disabled={busy} onClick={() => {
             if (window.confirm("Confirm the paper pass and invite this candidate to mock teaching?"))
@@ -1059,6 +1059,10 @@ export function AssessmentScreen({
                   <p className={a.legend} aria-hidden><span className={a.key}><i data-kind="paper" /> P = paper test</span><span className={a.key}><i data-kind="mock" /> M = mock</span><span className={a.legendNote}>Counts include earlier visits.</span></p>
     </div>
   );
+  // The day's print file holds every paper test that has not started (covers, then papers), as Thea's 08:30 link does.
+  // Counted over the whole day, not the head's filtered view, because the file holds the whole day.
+  const allComing = arrivals(data.bookings, now).filter((b) => b.status !== "no_show");
+  const printable = (items: typeof coming) => items.length ? allComing.filter((b) => b.kind === "paper" && b.at > now && day(b.at) === day(items[0].at)).length : 0;
   const slot = (b: (typeof coming)[number]) => {
     // The same key assessmentRows gives the row, so an old-flow booking opens its own row.
     const key = b.visitId ?? `${b.kind}:${b.candidateId}:${b.at.getTime()}`;
@@ -1071,7 +1075,7 @@ export function AssessmentScreen({
           <span className={a.sub} title={h ?? undefined}><b className={a.kind}>{b.kind === "paper" ? "Paper test" : "Mock"}</b> · {b.subject} · {h ? (b.kind === "paper" ? `mock head ${nick(h)}` : `head ${nick(h)}`) : "No mock booked"}</span>
           {b.kind === "mock" && paperNote.get(b.candidateId)}
         </span>
-        <span className={a.action}>{b.kind === "paper" && b.at > now && <PrintPaper library={data.library} subject={b.subject} name={names.get(b.candidateId)?.name} />}{b.kind === "mock" && checkLink(b.candidateId)}{b.kind === "mock" && !paperNote.has(b.candidateId) && (needsScan.has(b.candidateId)
+        <span className={a.action}>{b.kind === "paper" && b.at > now && <PrintPaper library={data.library} subject={b.subject} name={names.get(b.candidateId)?.name} candidateId={b.candidateId} date={day(b.at)} />}{b.kind === "mock" && checkLink(b.candidateId)}{b.kind === "mock" && !paperNote.has(b.candidateId) && (needsScan.has(b.candidateId)
           ? <ResultUpload kind="paper" candidateId={b.candidateId} subject={b.subject as Subject} reload={reload} label="Upload paper scan" />
           : <span className={a.quiet}>No action due</span>)}</span>
       </li>
@@ -1155,7 +1159,7 @@ export function AssessmentScreen({
                     const later = items.filter((b) => !earlier.includes(b));
                     return (
                       <div key={day(d)} id={`day-${day(d)}`} className={a.lane}>
-                        <h3 className={a.laneTitle} data-today={today ? "" : undefined}>{today ? "Today · " : ""}{formatInTimeZone(d, ZONE, "EEE d MMM")}{today && !later.length ? <span className={a.laneHint}>No visits left today</span> : <span className={a.count}>{today ? `${later.length} left` : items.length}</span>}</h3>
+                        <h3 className={a.laneTitle} data-today={today ? "" : undefined}>{today ? "Today · " : ""}{formatInTimeZone(d, ZONE, "EEE d MMM")}{today && !later.length ? <span className={a.laneHint}>No visits left today</span> : <span className={a.count}>{today ? `${later.length} left` : items.length}</span>}{printable(later) > 0 && <a className={`${css.sourceLink} ${a.printAll}`} href={`/api/hiring/print-pack?date=${day(d)}`} target="_blank" rel="noopener noreferrer">Print all papers ({printable(later)})</a>}</h3>
                         {!!later.length && <ul className={a.list}>{later.map(slot)}</ul>}
                         {!!earlier.length && (
                           <details className={a.earlier}>

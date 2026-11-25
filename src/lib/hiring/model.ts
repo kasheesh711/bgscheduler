@@ -245,6 +245,8 @@ export const baseConfigSchema = z
     enabled: z.boolean().default(false),
     deliveryEnabled: z.boolean().default(false),
     recruitmentLineGroupId: z.string().regex(/^C[0-9a-f]{32}$/).nullable().default(null),
+    /** The person Thea tags in the 08:30 print message; saved by "@Thea print setup" in the recruitment group. */
+    printLineUserId: z.string().regex(/^U[0-9a-f]{32}$/).nullable().default(null),
     /** Only this candidate may test visit booking while Automation is paused. Messages stay gated. */
     bookingTestCandidateId: z.uuid().nullable().default(null),
     rubricApproved: z.boolean().default(true),
@@ -401,6 +403,8 @@ export const baseConfigSchema = z
 export type HiringConfig = z.infer<typeof baseConfigSchema>;
 /** Kevin, 24 Nov 2026: a failed paper at or above this best-level percent goes to the subject's head for a check first. */
 export const PAPER_CHECK_FROM_PERCENT = 70;
+/** The shortest reason a head may give for passing a near miss (Kevin, 25 Nov 2026). */
+export const OVERRIDE_REASON_MIN = 20;
 /** Kevin, 24 Nov 2026: Tito checks the English papers. Other subjects go to their mock interviewer. */
 export const DEFAULT_PAPER_CHECKERS: NonNullable<HiringConfig["paperCheckers"]> = (["EFL/ESL", "English Language", "English Literature", "IELTS"] as const)
   .map((subject) => ({ subject, canonicalKey: "Tito" }));

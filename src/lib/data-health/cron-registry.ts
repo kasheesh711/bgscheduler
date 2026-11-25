@@ -41,6 +41,7 @@ export type CronJobKey =
   | "feedback_atom"
   | "hiring_recruitment"
   | "hiring_delivery"
+  | "hiring_print_pack"
   | "hiring_resume_retention";
 
 export interface CronJobDefinition {
@@ -84,6 +85,11 @@ export const CRON_JOBS = [
     path: "/api/internal/hiring-delivery", schedule: "19,35,48,59 * * * *", cadenceLabel: "About every 15 min",
     cadenceMinutes: 15, lateAfterMinutes: 45, maxDurationSeconds: 120, manualOnly: false,
     dangerous: true, confirmationLabel: "Retries booking emails, Calendar events and LINE notices. It can send the morning HR call digest from 08:59 to 09:49 Bangkok. Sends nothing while Hiring messages are off.", routeMethod: "GET" },
+  { key: "hiring_print_pack", label: "Hiring Print Message", feature: "Hiring",
+    path: "/api/internal/hiring-print-pack", schedule: "29 1 * * *", cadenceLabel: "Daily 08:29 Bangkok",
+    cadenceMinutes: 1440, expectedBangkokMinute: 8 * 60 + 29, lateAfterMinutes: 90, maxDurationSeconds: 120, manualOnly: false,
+    dangerous: true, manualRunDisabledReason: "The print message is sent once a day at 08:30 Bangkok. Use Hiring Booking Messages to retry queued delivery.",
+    confirmationLabel: "Tags the print person in the recruitment group with a link to print the day's paper tests when Hiring messages are on.", routeMethod: "GET" },
   { key: "hiring_resume_retention", label: "Hiring Résumé Retention", feature: "Hiring",
     path: "/api/internal/hiring-resume-retention", schedule: "28 20 * * *", cadenceLabel: "Daily 03:28 Bangkok",
     cadenceMinutes: 1440, expectedBangkokMinute: 3 * 60 + 28, lateAfterMinutes: 90, maxDurationSeconds: 60, manualOnly: false,

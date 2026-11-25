@@ -1034,7 +1034,7 @@ describe("hiring workflow persistence", () => {
       expect((await mockOf(near.row.id)).status).toBe("confirmed");
       expect((await read(near.row.id)).stage).toBe("onsite_booked");
       expect(await rejection(near.row.id)).toBeUndefined();
-      expect((await paperCheckView(token, db)).done).toEqual({ passed: true, percent: 80, head: "Peat" });
+      expect((await paperCheckView(token, db)).done).toEqual({ passed: true, percent: 80, head: "Peat", override: null });
       await expect(submitPaperCheck(token, { updatedAt: view.updatedAt, marks: { "1": 8 }, comment: "" }, db)).rejects.toThrow(/already recorded/);
       await free(near.row.id);
       const confirmed = await graded(7.2);
@@ -1052,6 +1052,22 @@ describe("hiring workflow persistence", () => {
       expect(String(email!.payload.text)).toContain("checked it a second time");
       expect(String(email!.payload.html)).toContain("Your test result");
       await free(confirmed.row.id);
+      // 70%: the head passes it anyway with a reason (Kevin, 25 Nov 2026). The mock stays; a later run does not reject.
+      const kept = await graded(7.5);
+      gap();
+      await afterPaperCounted(db, kept.row.id, "Mathematics", "ai");
+      const token3 = (await notices(kept.result.id))[0].message.match(/\/hiring\/paper-check\/([\w.-]+)/)![1];
+      const view3 = await paperCheckView(token3, db);
+      await expect(submitPaperCheck(token3, { updatedAt: view3.updatedAt, marks: { "1": 7 }, comment: "", override: "Great." }, db)).rejects.toThrow(/at least 20/);
+      await expect(submitPaperCheck(token3, { updatedAt: view3.updatedAt, marks: { "1": 6.5 }, comment: "", override: "Clean algorithms and pseudocode." }, db)).rejects.toThrow(/only from 70%/);
+      await expect(submitPaperCheck(token3, { updatedAt: view3.updatedAt, marks: { "1": 8 }, comment: "", override: "Clean algorithms and pseudocode." }, db)).rejects.toThrow(/only from 70%/);
+      expect((await submitPaperCheck(token3, { updatedAt: view3.updatedAt, marks: { "1": 7 }, comment: "", override: "Clean algorithms and pseudocode." }, db)).outcome).toBe("passed");
+      expect((await paperCheckView(token3, db)).done).toEqual({ passed: true, percent: 70, head: "Peat", override: "Clean algorithms and pseudocode." });
+      expect((await mockOf(kept.row.id)).status).toBe("confirmed");
+      expect((await afterPaperCounted(db, kept.row.id, "Mathematics", "ai")).outcome).toBe("none");
+      expect((await read(kept.row.id)).stage).toBe("onsite_booked");
+      expect(await rejection(kept.row.id)).toBeUndefined();
+      await free(kept.row.id);
       const low = await graded(5);
       gap();
       // 50%: no check. Rejected at once.
