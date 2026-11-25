@@ -459,7 +459,16 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
           </>
         )}
       </header>
-      {view !== "hr" && view !== "heads" && view !== "offer" && view !== "prescreen" && !giftReview && PURPOSE[view] && <p className={css.purpose}>{PURPOSE[view]}</p>}
+      {view !== "hr" && view !== "heads" && view !== "offer" && view !== "prescreen" && !giftReview && PURPOSE[view] && (
+        <p className={view === "overview" ? `${css.purpose} ${css.overviewPurpose}` : css.purpose}>
+          {PURPOSE[view]}
+          {view === "overview" && data && <button type="button" className={css.findCandidate} onClick={() => {
+            const input = document.getElementById("hiring-candidate-search");
+            input?.focus({ preventScroll: true });
+            input?.scrollIntoView({ block: "center", inline: "nearest" });
+          }}>Find candidate</button>}
+        </p>
+      )}
       {/* A head's failed first load has its own message and retry below. */}
       {error && view !== "setup" && !prescreen && !offerLoadFailed && !(view === "heads" && !data) && (
         <p role="alert" className={css.alert}>

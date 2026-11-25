@@ -175,6 +175,7 @@ export function CandidateTable({
         <input
           className={css.search}
           type="search"
+          id="hiring-candidate-search"
           placeholder="Search name, email or stage"
           aria-label="Search candidates"
           value={query}

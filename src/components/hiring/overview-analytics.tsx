@@ -9,7 +9,6 @@ import { currentStageRows, OverviewPriorities } from "./overview-priorities";
 import type { CapacityReport } from "@/lib/hiring/capacity";
 import { ZONE } from "@/lib/hiring/model";
 import { groupOptions, pickGroup } from "./funnel-panel";
-import { focusCandidateResults } from "./candidate-table";
 import type { HiringData } from "./dashboard";
 import css from "./overview-analytics.module.css";
 
@@ -192,9 +191,6 @@ function Pulse({ data, report, stages, now, onShow }: { data: HiringData; report
           </span>
         </button>
       ))}
-      <button type="button" className={css.jump} onClick={focusCandidateResults}>
-        Candidates ↓
-      </button>
       <div className={css.status}>
         {state(data.config.enabled, "Automation")}
         {state(data.config.deliveryEnabled, "Email")}

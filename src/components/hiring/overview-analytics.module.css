@@ -183,7 +183,6 @@ i.g_school { background: var(--c-school); }
 i.g_blocker { background: var(--c-blocker); }
 i.g_idle { background: var(--c-idle); }
 .gemHeadRow { display: flex; align-items: baseline; gap: 10px; }
-.board .jump { color: var(--accent-text); font-size: 12px; }
 .gemLists { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .board .gemHead { display: flex; align-items: center; gap: 6px; text-align: left; }
 .board .gemHead:hover:not(:disabled) b { text-decoration: underline; }

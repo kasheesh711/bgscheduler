@@ -76,6 +76,9 @@
 @media (max-width: 719px) { .topbar:not([data-compact]) .subtitle { min-height: 2.9em; } }
 @media (max-width: 374px) { .topbar:not([data-compact]) .subtitle { min-height: 4.35em; } }
 .purpose { margin: 0; padding: 8px 24px 0; color: var(--support); }
+.overviewPurpose { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+.surface .findCandidate { min-height: 38px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 6px; color: var(--accent-text); font-weight: 600; }
+.surface .findCandidate:hover { background: var(--tint); }
 .notice { margin-left: auto; color: var(--good); }
 .viewSwitch { display: flex; flex-wrap: wrap; max-width: 100%; gap: 2px; padding: 2px; border-radius: 18px; background: var(--tint); }
 .surface .viewSwitch button { min-height: 44px; padding: 5px 14px; white-space: nowrap; border-radius: 999px; font-weight: 500; color: var(--support); transition: color 150ms, background-color 150ms; }
