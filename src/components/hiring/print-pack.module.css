@@ -1,0 +1,33 @@
+.pack {
+  display: grid;
+  gap: 20px;
+}
+.lead {
+  margin: 0;
+  font-size: 15px;
+}
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rows li {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 15px;
+}
+.rows b {
+  font-variant-numeric: tabular-nums;
+}
+.rows small {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+}
+.actions {
+  display: grid;
+  gap: 10px;
+}

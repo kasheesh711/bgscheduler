@@ -104,7 +104,7 @@ The dated list has one row per visit, soonest first, then past visits, newest fi
 
 ### Paper marking
 
-Before the visit, a row with no paper result shows **Print paper**. The link opens the subject's question paper from the [paper library](#rules-and-setup) as a PDF, ready to print. It never opens the mark scheme. With no question paper in the library, the row says so.
+Before the visit, a row with no paper result shows **Print paper**. The link opens a print file: a cover page (candidate name, subject, date, exam time and mock) in the BeGifted Porcelain look, then the subject's question paper from the [paper library](#rules-and-setup). It never opens the mark scheme. With no question paper in the library, the row says so. Each day header in **Coming up** has **Print all papers (N)**: one file with the cover and paper of every paper test that day that has not started. The browser joins the files, because one day's papers are larger than a Vercel response can be. The print page (`/hiring/print/<token>`) needs no login; its link ends at midnight Bangkok time.
 
 If a scan is stored under the wrong subject, open the candidate's panel and use **Wrong subject?** on that paper result. Select the correct subject. With no result in that subject, the result moves there, its marks are removed, and the AI marks the scan again with that subject's paper and mark scheme. If that subject already has a result, the wrong result is removed and that one stays. The audit log keeps the old subject and marks. A result from the tracker, a result with no scan, and a scan that the AI is reading cannot change subject. The mock stays under the booking's subject.
 
@@ -795,6 +795,8 @@ These are explicit operating limits, not completed acceptance checks.
 All candidate hiring emails copy `people@begiftededucation.com`. Mock calendar events invite that inbox and `admin@begiftededucation.com`, in addition to the candidate and head. Existing event updates preserve attendees and responses.
 
 In **BeGifted Recruitment**, a LINE schedule-bot admin can send `@Thea recruitment setup`. The signed tutor-channel webhook verifies the group name and saves its ID in Hiring settings. This does not change Thea's other group bindings. No candidate data goes to an unregistered group.
+
+At 08:29 Bangkok on each day with paper tests, the `hiring-print-pack` cron posts the day's paper tests and one print link to BeGifted Recruitment, and tags the print person. That person sends `@Thea print setup` once in the group to be tagged; until then the message names "@Aya" as plain text. No paper tests that day means no message. Hiring messages must be on.
 
 Thea posts when a mock is booked, moved or cancelled, and when a candidate books or moves an HR pre-screen call. A call notice links the stored résumé file (`/api/hiring/brief/<token>/resume`); the link opens only while that call is confirmed and the candidate is not stopped or decided, and ends 7 days after the call. A call that HR ends (good call, Stop, hand invite or No answer) gets no notice. On Mondays at 09:00 Bangkok, starting 16 November 2026, Thea lists initial pre-screen emails recorded as sent in the previous Monday–Sunday and confirmed mocks in the current Monday–Sunday. Reminders and failed or uncertain sends are excluded. Empty sections say “None”. Long reports have numbered parts.
 
