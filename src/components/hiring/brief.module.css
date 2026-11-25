@@ -12,7 +12,8 @@
   position: sticky;
   top: 0;
   z-index: 5;
-  justify-self: start;
+  /* Full width, so the sliders scrolling under it do not show beside the link. */
+  justify-self: stretch;
   padding-inline: 4px;
   background: var(--paper);
   display: inline-flex;
@@ -61,6 +62,7 @@
 .facts dd {
   margin: 0;
   font-weight: 600;
+  text-wrap: balance;
 }
 
 /* ATS score: one small bar for each part. */
@@ -127,6 +129,12 @@
 }
 .panel:focus {
   outline: none;
+}
+/* A link to #scores or #recommendation focuses the panel; a keyboard user sees where it landed (Sol review, round 13). */
+.panel:focus-visible {
+  /* Soft, because Chrome also shows it when a click opens the brief at this panel. */
+  outline: 2px solid color-mix(in oklch, var(--ink) 35%, transparent);
+  outline-offset: 2px;
 }
 .panelTitle {
   margin: 0 0 8px;
@@ -523,3 +531,142 @@
     padding-inline: 12px;
   }
 }
+
+/* The score slider (Kevin, 24 Nov 2026): the far left stop is "not scored", then 1–10. The fill takes the band colour. */
+.slider {
+  --fill-colour: var(--ink-2);
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+.slider[data-band="0"] { --fill-colour: var(--err); }
+.slider[data-band="1"] { --fill-colour: #c9861a; }
+.slider[data-band="2"] { --fill-colour: #3a62ad; }
+.slider[data-band="3"] { --fill-colour: var(--ok); }
+.slider input {
+  width: 100%;
+  height: 44px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.slider input::-webkit-slider-runnable-track {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(to right, var(--fill-colour) var(--fill), var(--line) var(--fill));
+  box-shadow: inset 0 0 0 1px #948a73;
+}
+.slider input::-moz-range-track {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(to right, var(--fill-colour) var(--fill), var(--line) var(--fill));
+  box-shadow: inset 0 0 0 1px #948a73;
+}
+.slider input::-webkit-slider-thumb {
+  width: 28px;
+  height: 28px;
+  margin-top: -9px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: var(--fill-colour);
+  box-shadow: 0 0 0 1px var(--ink);
+  -webkit-appearance: none;
+  appearance: none;
+}
+.slider input::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: var(--fill-colour);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+/* Not scored yet: a hollow thumb on the "–" stop. */
+.slider:not([data-band]) input::-webkit-slider-thumb { background: #fff; box-shadow: 0 0 0 2px #948a73; }
+.slider:not([data-band]) input::-moz-range-thumb { background: #fff; box-shadow: 0 0 0 2px #948a73; }
+.slider input:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+/* The numbers sit under the thumb's stops: 11 columns, each as wide as one step, centred on the stops. */
+.sliderNumbers {
+  display: grid;
+  grid-template-columns: repeat(11, minmax(0, 1fr));
+  margin-inline: calc(14px - (100% - 28px) / 20);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-align: center;
+}
+/* The band names on one wrapping line: each carries its score, so they need no column grid. Hidden on a phone, as before. */
+@media (min-width: 700px) {
+  .scale {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 2px 16px;
+  }
+  .scale > span {
+    white-space: nowrap;
+  }
+}
+.scale { align-items: end; }
+.top[data-compact] .name { overflow-wrap: anywhere; }
+[data-bare] .tabs { flex-wrap: wrap; }
+/* Below a 1000px pane the short header stacks, and the files panel never grows past its column. */
+.top[data-compact] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.docs {
+  grid-template-columns: minmax(0, 1fr);
+}
+.tabs {
+  flex-wrap: wrap;
+}
+@media (min-width: 1000px) {
+  .top[data-compact] {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+}
+/* A wide pane puts the item name beside its slider, so more items fit on the first screen. */
+@media (min-width: 900px) {
+  [data-bare] .row {
+    grid-template-columns: minmax(140px, 180px) minmax(0, 1fr);
+  }
+}
+.sliderNumbers { cursor: pointer; }
+.sliderNumbers [data-on] { color: var(--ink); font-weight: 700; }
+@media (min-width: 700px) {
+  [data-bare] .scale { display: grid; grid-template-columns: repeat(2, max-content); grid-template-rows: repeat(2, auto); grid-auto-flow: column; justify-content: space-between; }
+}
+/* The required checks take their own line in the send bar; on a phone the two answers share it, so nothing covers the score count. */
+.sendBar > .choices { grid-column: 1 / -1; flex-wrap: wrap; }
+.sendBar > .choices legend { float: none; flex-basis: 100%; margin: 0 0 4px; }
+@media (max-width: 699px) {
+  .sendBar > .choices .choice { flex: 1; }
+  .sendBar > div:first-of-type { grid-column: 1 / -1; }
+  .sendBar > .sendEnd { grid-column: 1 / -1; justify-content: space-between; }
+  .sendBar button[type="submit"] { white-space: nowrap; }
+}
+/* The radio covers its whole box, so a tap or click anywhere on Yes or No picks it (blind test, round 12). */
+.choiceInput { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+/* "More scores below" sits beside the count on a laptop; a phone head scrolls the one column anyway. */
+.countRow { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.countRow > p { margin: 0; }
+/* Beside the count on one line; where the bar is too narrow for that, the cue hides so the bar never grows (critic review, round 16). */
+.moreBelow { min-height: 24px; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; text-decoration: underline; white-space: nowrap; cursor: pointer; }
+.sendBar { container-type: inline-size; }
+@container (max-width: 399px) { .moreBelow { display: none; } }
+@media (max-width: 699px) { .moreBelow { display: none; } }
+/* The way back from changed sent scores shows at every width, with a full touch target on a phone (Sol review, round 20). */
+.discard { min-height: 24px; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; text-decoration: underline; cursor: pointer; }
+@media (max-width: 699px) { .discard { min-height: 44px; } }
+/* The scoring hint names the pointer the head has: a phone is tapped, not clicked (critic review, round 15). */
+.coarsePointer { display: none; }
+@media (pointer: coarse) { .finePointer { display: none; } .coarsePointer { display: inline; } }
+.prep { text-wrap: pretty; }

@@ -294,7 +294,7 @@ export function demoBrief(now = new Date()) {
     mock: `${day}, ${clock(mockStart)}–${clock(new Date(mockStart.getTime() + HOUR))}`,
     interviewer: HEAD, location: "BeGifted Education", answers: { ...answers, sourceRow: 0, submittedAt: "" }, resume: "pdf" as const,
     ats: { score: 82.5, parts: [["Degree", 15, 15], ["Subject", 15, 15], ["Curriculum", 15, 15], ["Teaching", 7.5, 15], ["English", 15, 15], ["University", 10, 15], ["High school", 5, 10]].map(([name, earned, max]) => ({ name: String(name), earned: Number(earned), max: Number(max) })), penalty: 0 },
-    rubric: state.rubric, form: "open" as const, recommendationReady: !!state.rubric, mockEnded: true, recommendationBlock: null,
+    rubric: state.rubric, form: "open" as const, recommendationReady: !!state.rubric, mockStarted: true, mockEnded: true, recommendationBlock: null,
   };
 }
 

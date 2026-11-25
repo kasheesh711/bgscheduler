@@ -3,6 +3,7 @@ import { z } from "zod";
 import { weekSchema } from "@/lib/tutor-attendance/model";
 import { UNIVERSITY_CATALOG, THAI_UNIVERSITIES } from "./university-catalog";
 import { BANGKOK_INTERNATIONAL_SCHOOLS, TOP_THAI_SCHOOLS } from "./high-school-catalog";
+import { weekHoursSchema, weekHoursText } from "./week-hours";
 
 export const ZONE = "Asia/Bangkok";
 export const GOOGLE_SCOPES = [
@@ -515,7 +516,8 @@ export const answersSchema = z
     experience: z.enum(ANSWER_CHOICES.experience),
     // An optional link. The file upload is checked on the server (`answerPreScreen`).
     portfolio: z.string().trim().max(500),
-    availability: ticks(ANSWER_CHOICES.availability, "Choose at least one time."),
+    // The week grid (Kevin, 24 Nov 2026). Stored as text, so every later check reads one format.
+    availability: weekHoursSchema,
     weeklyHours: z.enum(ANSWER_CHOICES.weeklyHours),
     motivation: written("Why do you want to tutor with BeGifted?"),
     teachingApproach: written("How would you approach it?"),
@@ -535,7 +537,7 @@ export const answersToPreScreen = (answers: Answers, now: Date, portfolioFile = 
   subjects: answers.subjects.join(", "),
   curricula: answers.curricula.join(", "),
   yearGroups: answers.yearGroups.join(", "),
-  availability: answers.availability.join(", "),
+  availability: weekHoursText(answers.availability),
 });
 /** The form answers in reading order, for the admin panel and the interviewer's page. */
 export const ANSWER_LABELS: [Exclude<keyof PreScreen, "sourceRow" | "submittedAt">, string][] = [
@@ -607,16 +609,19 @@ export function normalizeSubjects(value: string): Subject[] {
   ];
 }
 
+// Kevin, 24 Nov 2026: candidates said no times were free, so booking opens four weeks (20 business days), not five days.
+export const BOOKING_BUSINESS_DAYS = 20;
+
 export function businessDates(
   now: Date,
   holidays: string[] = [],
-  count = 5,
+  count = BOOKING_BUSINESS_DAYS,
   // The test (Kevin, 24 Nov 2026): a candidate with a full-time job can sit it on a Saturday or Sunday. The weekend
   // days between the business dates are added; they do not use up the count.
   weekends = false,
 ): string[] {
   const dates: string[] = [];
-  // Today is excluded. Every candidate receives five complete future business dates.
+  // Today is excluded. Every candidate receives `count` complete future business dates.
   const cursor = new Date(`${localDate(now)}T12:00:00Z`);
   for (let i = 0, business = 0; business < count && i < 400; i++) {
     cursor.setUTCDate(cursor.getUTCDate() + 1);

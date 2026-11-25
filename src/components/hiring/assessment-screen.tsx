@@ -25,6 +25,9 @@ type Paper = HiringData["papers"][number];
 type Mock = HiringData["mocks"][number];
 const when = (value: Date) => formatInTimeZone(value, ZONE, "EEE d MMM, HH:mm");
 const clock = (value: Date) => formatInTimeZone(value, ZONE, "HH:mm");
+const day = (value: Date) => formatInTimeZone(value, ZONE, "yyyy-MM-dd");
+/** A two-day visit puts the mock on a later day than the test, so the mock shows its date unless it is the test day. */
+export const mockWhen = (at: Date | null, mockAt: Date) => (at && day(at) === day(mockAt) ? clock(mockAt) : when(mockAt));
 const round = (n: number) => Math.round(n * 10) / 10;
 
 const STATUS: Record<Paper["status"], { label: string; tone: string }> = {
@@ -942,7 +945,7 @@ export function AssessmentScreen({
                       <tr key={row.key} data-selected={selectedVisit === row.key ? "" : undefined} onClick={() => onSelectVisit(row.key)}>
                         <td>
                           {row.at ? when(row.at) : row.dateText || "–"}
-                          {row.mockAt && <span className={css.pillNote}>Mock {clock(row.mockAt)}</span>}
+                          {row.mockAt && <span className={css.pillNote}>Mock {mockWhen(row.at, row.mockAt)}</span>}
                           {row.status === "no_show" && <span className={css.clashWord}>No-show</span>}
                           {row.status === "cancelled" && <span className={css.clashWord}>Visit cancelled</span>}
                         </td>

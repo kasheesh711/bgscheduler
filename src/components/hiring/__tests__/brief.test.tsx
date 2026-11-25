@@ -1,5 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The brief fetches itself again with the router; a server render here has no router to give it.
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }));
 import { ITEM_MAX, RUBRIC, RUBRIC_ITEMS, type MockRubric } from "@/lib/hiring/marking-sheet";
 import { ANSWER_LABELS } from "@/lib/hiring/model";
 import { BriefGone, InterviewerBrief } from "../brief";
@@ -39,7 +42,7 @@ describe("InterviewerBrief", () => {
     expect(page).toContain("Line one\nLine two");
     expect(page).toContain("No answer");
     expect(page).toContain('href="/api/hiring/brief/t/resume" target="_blank" rel="noreferrer"');
-    expect(page).toContain("Open the résumé (PDF)");
+    expect(page).toContain("Open résumé (PDF), opens in a new tab");
   });
 
   it("says so when there is no file, no exam row or no reply, and names a Word file as a download", () => {
@@ -54,13 +57,15 @@ describe("InterviewerBrief", () => {
   it("shows the score form before and during the mock, and the recommendation only after it, with score choices for each item", () => {
     const wait = html({ form: "wait", mockEnded: false });
     expect(wait).toContain('type="radio"');
-    expect(wait).toContain("Your recommendation opens when the mock ends.");
+    expect(wait).toContain("Send scores during the mock.");
+    expect(wait).toContain("Recommend after the mock ends.");
     expect(wait).not.toContain("Yes, send for final review");
-    expect(wait.indexOf("Check again")).toBeLessThan(wait.indexOf("Candidate files"));
+    expect(wait.indexOf("Check recommendation")).toBeLessThan(wait.indexOf("Candidate files"));
     // Closed early by admin: no "ask admin" alarm, the same wait for the recommendation.
     const closedEarly = html({ form: "closed", mockEnded: false, recommendationBlock: null });
     expect(closedEarly).not.toContain("Ask BeGifted admin");
-    expect(closedEarly).toContain("Your recommendation opens when the mock ends.");
+    expect(closedEarly).toContain("Recommend after the mock ends.");
+    expect(closedEarly).not.toContain("Send scores during the mock");
     expect(closedEarly).not.toContain("Yes, send for final review");
     const closed = html({ form: "closed", recommendationReady: true });
     expect(closed).toContain("Scores are recorded. Ask admin to edit scores.");
@@ -72,15 +77,16 @@ describe("InterviewerBrief", () => {
     for (const { part, items } of RUBRIC) {
       expect(page).toContain(part);
       for (const [, label] of items) {
-        expect(page).toContain(`role="radiogroup" aria-label="${label}"`);
+        expect(page).toContain(`type="range" min="0" max="${ITEM_MAX}" step="1" aria-label="${label}" aria-valuetext="Not scored"`);
         expect(page).toContain(`aria-label="${label}: what each level means"`);
       }
     }
-    expect(page.match(/type="radio"/g)).toHaveLength(ITEM_MAX * RUBRIC_ITEMS.length + 2);
+    expect(page.match(/type="range"/g)).toHaveLength(RUBRIC_ITEMS.length);
+    expect(page.match(/type="radio"/g)).toHaveLength(2);
     expect(page.match(/type="checkbox"/g)).toHaveLength(3);
     expect(page).not.toContain("Suggested score");
     expect(page).toContain("School&#x27;s required checks completed");
-    expect(page).toContain("0 of 14 scored");
+    expect(page).toContain("0/14 scored");
     // The level names show once, above the bars, and no level text shows until the head opens an item.
     expect(page.split("Needs improvement (4)")).toHaveLength(2);
     expect(page).not.toContain("All information provided is accurate");

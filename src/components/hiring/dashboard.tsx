@@ -128,6 +128,7 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
   const [config, setConfig] = useState<HiringConfig | null>(null);
   const [configRevision, setConfigRevision] = useState(0);
   const [error, setError] = useState("");
+  const [retrying, setRetrying] = useState(false);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const search = useSearchParams();
@@ -197,7 +198,9 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
   }
   // In demo mode a new step is a new payload.
   useEffect(() => {
-    load(true).catch((e) => setError(e.message));
+    // One quiet retry before an error: a short outage then never shows (critic review, round 22).
+    // After a short wait, so a waking database or a cold start is covered too (critic review, round 23).
+    load(true).catch(() => new Promise((resolve) => setTimeout(resolve, 1500)).then(() => load(true))).catch((e) => setError(e.message));
   }, [demoStep]);
   const command: Command = async (body) => {
     setBusy(true);
@@ -330,7 +333,7 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
         {TOOLS.map((name) => (
           <button key={name} type="button" aria-pressed={view === name} onClick={() => setView(name)}>
             {/* A head finds the way back to their own list by its name (blind test, 24 Nov 2026). */}
-            {name === "heads" && data?.viewerHead ? "My list" : VIEWS[name]}
+            {name === "heads" && (data?.viewerHead ?? head) ? "My list" : VIEWS[name]}
           </button>
         ))}
         {/* A full page load, so the demo starts clean and the real data is gone from the screen. */}
@@ -369,7 +372,7 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
           {/* Always one line, so the tabs below do not move down when the data arrives. */}
           {!giftReview && <p className={role ? css.subtitle : `${css.subtitle} ${css.statusSubtitle}`}>
             {role ? (
-              view === "heads" && data?.viewerHead ? nickname(headName(data.viewerHead, data.tutors)) : VIEWS[view]
+              view === "heads" && data?.viewerHead ? nickname(headName(data.viewerHead, data.tutors)) : view === "heads" && head ? "My list" : VIEWS[view]
             ) : data ? (
               <>
                 SEEK {campaignNames(data.config.seekJobs)} · Threshold {data.config.profileThreshold}/100 ·
@@ -388,7 +391,8 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
           {view === "setup" ? "" : notice}
         </div>
         {role ? (
-          <div className={css.viewSwitch}>
+          // Heads see only their own list (Kevin, 24 Nov 2026). Staff keep the way to the full dashboard.
+          view === "heads" && (data?.viewerHead ?? head) ? null : <div className={css.viewSwitch}>
             <button type="button" onClick={() => setView("overview")}>
               Full dashboard
             </button>
@@ -424,7 +428,8 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
         )}
       </header>
       {view !== "hr" && view !== "heads" && !giftReview && <p className={css.purpose}>{PURPOSE[view]}</p>}
-      {error && view !== "setup" && (
+      {/* A head's failed first load has its own message and retry below. */}
+      {error && view !== "setup" && !(view === "heads" && !data) && (
         <p role="alert" className={css.alert}>
           {error}
         </p>
@@ -454,9 +459,30 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
       </div>
       {!data || !config || !insights ? (
         error ? (
-          <p role="status" className={css.loading} hidden={view === "capacity"}>
-            Check the hiring setup and reload this page.
-          </p>
+          view === "heads" ? (
+            // A head cannot check the setup, so the list offers a retry and names who to ask (Sol review, round 18).
+            // The button stays while it retries, so focus is not lost; on success focus moves to the list (Sol review, round 20).
+            <div className={css.loading}>
+              <p role="alert">Could not load your hiring list.</p>
+              <button type="button" className={`${css.primary} ${css.retry}`} aria-disabled={retrying || undefined} onClick={() => {
+                if (retrying) return;
+                setRetrying(true);
+                load(true).then(() => {
+                  setError("");
+                  // The list, or the open area when an empty list hides it on a laptop (Sol review, round 21).
+                  window.requestAnimationFrame(() => {
+                    const list = document.getElementById("hiring-list");
+                    (list && list.offsetParent !== null ? list : document.getElementById("open-item"))?.focus();
+                  });
+                }).catch((e) => setError(e.message)).finally(() => setRetrying(false));
+              }}>Try again</button>
+              <p role="status">{retrying ? "Loading your hiring list…" : "If it fails again, ask BeGifted admin."}</p>
+            </div>
+          ) : (
+            <p role="status" className={css.loading} hidden={view === "capacity"}>
+              Check the hiring setup and reload this page.
+            </p>
+          )
         ) : (
           <TabSkeleton label={view === "heads" ? "Loading your hiring list…" : `Loading hiring: ${VIEWS[view]}…`} hidden={view === "capacity"} />
         )
