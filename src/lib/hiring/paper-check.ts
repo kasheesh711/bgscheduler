@@ -7,7 +7,7 @@ import { paperResultEmail } from "./email";
 import { computeSheet, passRulesFor, type PaperSheet } from "./marking-sheet";
 import { HiringError, PAPER_CHECK_FROM_PERCENT, paperCheckerFor, ZONE, type Subject } from "./model";
 import { hiringOrigin } from "./onboarding-config";
-import { enqueueRecruitmentLine } from "./recruitment";
+import { enqueueRecruitmentLine, lineWhen, lineWho } from "./recruitment";
 import { audit, cancelFailedMock, candidateById, countedFail, lockCandidate, settings } from "./service";
 import { bookingToken, readBookingToken } from "./tokens";
 import { deliverOutbox } from "./worker";
@@ -66,8 +66,7 @@ async function requestCheck(tx: Database, fail: NonNullable<Awaited<ReturnType<t
   await audit(tx, actor, PAPER_CHECK_REQUESTED, result.candidateId, { resultId: result.id, subject, head, percent, line: !!group });
   if (group)
     await enqueueRecruitmentLine(tx, `paper-check:${result.id}`, group.groupId,
-      `Paper check needed\nCandidate: ${candidate.name} — ${subject}\nAI score: ${percent}%${pass === null ? "" : ` (pass mark ${pass}%)`}\n${
-        mock ? `Mock teaching: ${when(mock.startTime)} (Bangkok)` : "Mock teaching: not booked yet"}\n\nCheck the marked paper and give your marks:\n${new URL(paperCheckPath(result.id, now), hiringOrigin())}\n\nAt the pass mark or more, the candidate goes on to mock teaching. Below it, the candidate gets the rejection email.`,
+      `📝 Paper check needed\n${lineWho(candidate.name, subject)}\nAI score ${percent}%${pass === null ? "" : ` · pass mark ${pass}%`}\nMock: ${mock ? lineWhen(mock.startTime) : "not booked yet"}\n\nMark the paper here:\n${new URL(paperCheckPath(result.id, now), hiringOrigin())}\n\nPass → mock teaching. Fail → rejection email.`,
       null, "paper_check");
 }
 
@@ -75,11 +74,11 @@ async function requestCheck(tx: Database, fail: NonNullable<Awaited<ReturnType<t
 async function noticeCheckDone(tx: Database, input: { name: string; subject: Subject; head: string; percent: number; outcome: string; held: string | null; mockAt: Date | null; resultId: string; config: { recruitmentLineGroupId: string | null } }) {
   if (!input.config.recruitmentLineGroupId) return;
   const next = input.outcome === "passed"
-    ? (input.mockAt ? `Mock teaching stays booked: ${when(input.mockAt)} (Bangkok)` : "No mock teaching is booked yet. Invite the candidate to a mock.")
-    : input.outcome === "rejected" ? "The mock is cancelled and the rejection email is sent."
-      : `No email was sent. Admin: open the Hiring page and send the result.${input.held ? ` (${input.held})` : ""}`;
+    ? (input.mockAt ? `Done: the mock stays booked, ${lineWhen(input.mockAt)}.` : "Next: invite the candidate to a mock.")
+    : input.outcome === "rejected" ? "Done: the mock is cancelled and the rejection email is sent."
+      : `Next: Admin, open the Hiring page and send the result. No email was sent.${input.held ? ` (${input.held})` : ""}`;
   await enqueueRecruitmentLine(tx, `paper-check-done:${input.resultId}`, input.config.recruitmentLineGroupId,
-    `Paper check: ${input.outcome === "passed" ? "PASS" : "NOT PASSED"}\nCandidate: ${input.name} — ${input.subject}\nChecked by: ${input.head}\nScore: ${input.percent}%\n${next}`, null, "paper_check_done");
+    `${input.outcome === "passed" ? "✅ Paper PASS" : "❌ Paper NOT PASSED"} · ${input.percent}% · checked by ${input.head}\n${lineWho(input.name, input.subject)}\n${next}`, null, "paper_check_done");
 }
 
 /**
