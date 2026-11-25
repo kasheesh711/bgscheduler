@@ -9,14 +9,14 @@ const library = [
 ] as never;
 
 describe("PrintPaper", () => {
-  it("links to the question paper of the subject, never the mark scheme", () => {
-    const html = renderToStaticMarkup(<PrintPaper library={library} subject="Economics" />);
-    expect(html).toContain('href="/api/hiring/file/11111111-1111-4111-8111-111111111111"');
+  const candidateId = "44444444-4444-4444-8444-444444444444";
+  it("opens the candidate's print file (cover, then paper) for the day", () => {
+    const html = renderToStaticMarkup(<PrintPaper library={library} subject="Economics" candidateId={candidateId} date="2026-11-26" />);
+    expect(html).toContain(`href="/api/hiring/print-pack?date=2026-11-26&amp;candidate=${candidateId}"`);
     expect(html).toContain("Print paper");
-    expect(html).not.toContain("22222222");
   });
   it("says so when the library has no question paper for the subject", () => {
-    const html = renderToStaticMarkup(<PrintPaper library={library} subject="Physics" />);
+    const html = renderToStaticMarkup(<PrintPaper library={library} subject="Physics" candidateId="x" date="2026-11-26" />);
     expect(html).toContain("No paper to print");
     expect(html).not.toContain("href");
   });

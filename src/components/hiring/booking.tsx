@@ -1066,7 +1066,7 @@ export function BookingShell({
   bare = false,
   booked = false,
 }: {
-  kind?: "visit" | "mock" | "paper" | "brief" | "call" | "contract" | "onboarding" | "paper-check";
+  kind?: "visit" | "mock" | "paper" | "brief" | "call" | "contract" | "onboarding" | "paper-check" | "print";
   children: ReactNode;
   bare?: boolean;
   /** Booked: the title says "Your …", not "Book your …". */
@@ -1079,8 +1079,8 @@ export function BookingShell({
         <div className={c.heroInner}>
           <p className={c.brand}>BeGifted Education</p>
           <h1 className={c.title}>
-            {kind === "onboarding" ? "Tutor " : kind === "brief" ? "Interview " : kind === "paper-check" ? "Re-mark " : kind && !booked ? "Book your " : "Your "}
-            <em>{kind === "onboarding" ? "onboarding" : kind === "brief" ? "brief" : kind === "paper-check" ? "paper" : kind === "contract" ? "contract signing" : kind === "call" ? "R1: HR Interview" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "booking"}</em>
+            {kind === "onboarding" ? "Tutor " : kind === "brief" ? "Interview " : kind === "paper-check" ? "Re-mark " : kind === "print" ? "Print " : kind && !booked ? "Book your " : "Your "}
+            <em>{kind === "print" ? "papers" : kind === "onboarding" ? "onboarding" : kind === "brief" ? "brief" : kind === "paper-check" ? "paper" : kind === "contract" ? "contract signing" : kind === "call" ? "R1: HR Interview" : kind === "visit" ? "onsite visit" : kind === "mock" ? "mock teaching session" : kind === "paper" ? "paper assessment" : "booking"}</em>
           </h1>
         </div>
       </header>}
