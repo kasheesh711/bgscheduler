@@ -4,6 +4,7 @@ import { PRESTIGE_RULES } from "./prestige";
 import { createHash, randomUUID } from "node:crypto";
 import { fromZonedTime } from "date-fns-tz";
 import { and, asc, desc, eq, getTableColumns, gte, inArray, isNotNull, like, ne, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
@@ -95,6 +96,8 @@ import { formatInTimeZone } from "date-fns-tz";
 import { HIRING_LINE_URL, hiringEmail, mockPrep, TWO_DAY_STEPS, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
 import { profileDegree, type KnownDegree } from "./profile-degree";
 import { parseWeekHours } from "./week-hours";
+import { OFFER_TYPES, type OfferType } from "./offer-letters";
+import type { OfferRow } from "./offer-rows";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -739,6 +742,92 @@ function briefPaths(bookings: { id: string; kind: string; status: string; endTim
     throw error;
   }
 }
+
+async function approvedOffers(db: Database): Promise<OfferRow[] | null> {
+  const d = s.hiringDecisions;
+  const c = s.hiringCandidates;
+  const o = s.hiringOutbox;
+  const b = s.hiringBookings;
+  const a = s.hiringAudit;
+  const form = s.hiringOnboarding;
+  const packet = alias(a, "offer_packet");
+  const read = async <T>(source: string, query: PromiseLike<T>) => {
+    try {
+      return await query;
+    } catch (error) {
+      console.error(`Hiring dashboard could not read ${source}`, error instanceof Error ? error.name : "UnknownError");
+      return null;
+    }
+  };
+  const decisions = await read("approved offers", db.select({
+    decisionId: d.id, candidateId: c.id, name: c.name, visitSubject: c.visitSubject, subjects: c.subjects, key: d.outboxKey,
+  }).from(d).innerJoin(c, eq(c.id, d.candidateId))
+    .where(and(eq(d.status, "sent"), eq(d.decision, "hire"), eq(c.stage, "hired"))).orderBy(desc(d.createdAt)));
+  if (!decisions?.length) return decisions && [];
+
+  const keys = decisions.flatMap(({ key }) => key ? [key] : []);
+  const candidates = [...new Set(decisions.map(({ candidateId }) => candidateId))];
+  const decisionIds = decisions.map(({ decisionId }) => decisionId);
+  const [emails, bookings, forms, types, directTypes, pdfs] = await Promise.all([
+    read("offer emails", db.select({ key: o.key, status: o.status, sentAt: o.sentAt }).from(o)
+      .where(and(eq(o.kind, "email"), inArray(o.key, keys)))),
+    read("contract bookings", db.select({ candidateId: b.candidateId, startTime: b.startTime, endTime: b.endTime })
+      .from(b).where(confirmedContractBooking(inArray(b.candidateId, candidates))).orderBy(asc(b.startTime))),
+    read("onboarding dates", db.select({ candidateId: form.candidateId, decisionId: form.decisionId, submittedAt: form.submittedAt })
+      .from(form).where(inArray(form.decisionId, decisionIds))),
+    read("approved offer types", db.select({
+      key: sql<string>`${a.detail}->>'key'`, type: sql<OfferType | null>`${packet.detail}->>'offerType'`,
+    }).from(a).innerJoin(packet, and(eq(packet.candidateId, a.candidateId), eq(packet.action, "final-review-packet"),
+      sql`${packet.id}::text = ${a.detail}->>'packetId'`))
+      .where(and(eq(a.action, "final-review-signed"), inArray(sql`${a.detail}->>'key'`, keys)))),
+    // Older direct hires share the same database transaction timestamp with their audit row.
+    read("direct hire offer types", db.select({
+      decisionId: d.id, type: sql<OfferType | null>`min(${a.detail}->>'offer')`,
+    }).from(d).innerJoin(a, and(eq(a.candidateId, d.candidateId),
+      sql`case when ${a.detail} ? 'decisionId' then ${a.detail}->>'decisionId' = ${d.id}::text else ${a.createdAt} = ${d.createdAt} end`,
+      eq(a.action, "head-decision"), sql`${a.detail}->>'decision' = 'hire'`, sql`${a.detail} ? 'offer'`))
+      .where(inArray(d.id, decisionIds)).groupBy(d.id).having(sql`count(*) = 1`)),
+    read("signed contracts", (async () => {
+      const [{ list }, { signedContractPath }] = await Promise.all([import("@vercel/blob"), import("./contract-templates")]);
+      const paths = new Map(candidates.map((id) => [signedContractPath(id), id]));
+      const samplePath = signedContractPath("");
+      const prefix = samplePath.slice(0, samplePath.lastIndexOf("/") + 1);
+      const dates = new Map<string, string>();
+      const abortSignal = AbortSignal.timeout(2_000);
+      let cursor: string | undefined;
+      do {
+        const page = await list({ prefix, cursor, abortSignal });
+        for (const blob of page.blobs) {
+          const id = paths.get(blob.pathname);
+          if (id) dates.set(id, blob.uploadedAt.toISOString());
+        }
+        cursor = page.cursor;
+      } while (cursor && dates.size < paths.size);
+      return dates;
+    })()),
+  ]);
+  const emailByKey = new Map(emails?.map((email) => [email.key, email]));
+  const bookingByCandidate = new Map(bookings?.map((booking) => [booking.candidateId, booking]));
+  const formByDecision = new Map(forms?.map((entry) => [entry.decisionId, entry]));
+  const typeByKey = new Map(types?.map((entry) => [entry.key, entry.type]));
+  const typeByDecision = new Map(directTypes?.map((entry) => [entry.decisionId, entry.type]));
+  return decisions.map(({ candidateId, decisionId, name, visitSubject, subjects, key }) => {
+    const email = key ? emailByKey.get(key) : undefined;
+    const type = key && typeByKey.has(key) ? typeByKey.get(key) : typeByDecision.get(decisionId);
+    const offerType = type && OFFER_TYPES.includes(type) ? type : null;
+    const booking = bookingByCandidate.get(candidateId);
+    const form = formByDecision.get(decisionId);
+    return {
+      candidateId, decisionId, outboxKey: key, name, subject: visitSubject ?? subjects[0] ?? null,
+      emailStatus: email?.status ?? null, sentAt: email?.sentAt?.toISOString() ?? null, offerType,
+      booking: booking ? { start: booking.startTime.toISOString(), end: booking.endTime.toISOString() } : null,
+      uploadedAt: pdfs?.get(candidateId) ?? null,
+      submittedAt: form?.candidateId === candidateId ? form.submittedAt.toISOString() : null,
+      unknown: { email: emails === null, offerType: !offerType, booking: !bookings, pdf: !pdfs, form: !forms },
+    };
+  });
+}
+
 export async function dashboard(db: Database = getDb()) {
   const now = new Date();
   // Every read here is independent, so they go in one wave. Only visitClashes and the onsite entries wait for this one.
@@ -762,6 +851,7 @@ export async function dashboard(db: Database = getDb()) {
     headDecisionRows,
     paperCheckRows,
     packetRows,
+    offers,
   ] = await Promise.all([
     settings(db),
     db
@@ -840,6 +930,7 @@ export async function dashboard(db: Database = getDb()) {
     paperChecks(db, now),
     // Who has a final review packet, so Gift's list holds the reviews she can sign now. Never the packet itself.
     db.select({ candidateId: s.hiringAudit.candidateId }).from(s.hiringAudit).where(eq(s.hiringAudit.action, "final-review-packet")),
+    approvedOffers(db),
   ]);
   // The visit screens never see an HR call. The Calls tab reads `calls`.
   const bookings = allBookings.filter(isVisitBooking);
@@ -907,6 +998,7 @@ export async function dashboard(db: Database = getDb()) {
   }
   return {
     config,
+    offers,
     ...assessment,
     // False until the first save: the interviewers shown then are suggestions, not stored heads.
     configSaved: !!row,
@@ -2752,9 +2844,11 @@ async function openContract(db: Database, decisionId: string) {
   return row.candidate;
 }
 
+const confirmedContractBooking = (candidate: ReturnType<typeof eq>) =>
+  and(candidate, eq(s.hiringBookings.kind, "contract"), eq(s.hiringBookings.status, "confirmed"));
+
 const contractBooking = async (db: Database, id: string) =>
-  (await db.select().from(s.hiringBookings).where(and(eq(s.hiringBookings.candidateId, id),
-    eq(s.hiringBookings.kind, "contract"), eq(s.hiringBookings.status, "confirmed"))))[0];
+  (await db.select().from(s.hiringBookings).where(confirmedContractBooking(eq(s.hiringBookings.candidateId, id))))[0];
 
 async function contractSlots(db: Database, id: string, calendar: Awaited<ReturnType<typeof hrBusy>>, now: Date, exp: number) {
   return callSlots(calendar.dates, [...calendar.busy, ...await otherCalls(db, id, now)], now, CONTRACT_MINUTES)
