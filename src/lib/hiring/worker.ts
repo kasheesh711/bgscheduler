@@ -766,7 +766,7 @@ export async function deliverOutbox(
 }
 
 /**
- * The head who must hear about a visit's test (Kevin, 23 Nov 2026: only the relevant head, never every head). A paired
+ * The head named on a visit's events (Kevin, 23 Nov 2026: only the relevant head; 25 Nov: a guest on the mock only). A paired
  * visit names its mock's head. A test-only visit has no head yet, so it goes to the roster heads of its subject. A mock
  * names its own head (already its guest), for the title and the color.
  */
