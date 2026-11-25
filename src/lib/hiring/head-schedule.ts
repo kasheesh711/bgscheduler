@@ -267,22 +267,23 @@ export async function headWeek(
  */
 export async function visitClashes(
   db: Database,
-  bookings: Pick<BookingRow, "candidateId" | "kind" | "status" | "interviewerKey" | "startTime" | "endTime">[],
+  bookings: (Pick<BookingRow, "candidateId" | "kind" | "status" | "interviewerKey" | "startTime" | "endTime"> & { id?: string })[],
   now = new Date(),
-): Promise<{ candidateIds: string[]; stale: boolean }> {
+): Promise<{ candidateIds: string[]; bookingIds: string[]; stale: boolean }> {
   try {
     const upcoming = bookings.filter(
       (b) => b.status === "confirmed" && b.kind === "mock" && !!b.interviewerKey && b.endTime > now,
     );
-    if (!upcoming.length) return { candidateIds: [], stale: false };
+    if (!upcoming.length) return { candidateIds: [], bookingIds: [], stale: false };
     const index = await readIndex(db);
-    if (!index) return { candidateIds: [], stale: true };
+    if (!index) return { candidateIds: [], bookingIds: [], stale: true };
     const observations = await db
       .select()
       .from(s.tutorSitInObservations)
       .where(eq(s.tutorSitInObservations.current, true));
     let stale = indexIsStale(index, now);
     const ids = new Set<string>();
+    const bookingIds: string[] = [];
     for (const b of upcoming) {
       const group = index.tutorGroups.find((g) => g.canonicalKey === b.interviewerKey);
       if (!group) stale = true;
@@ -292,12 +293,14 @@ export async function visitClashes(
           observations.filter((o) => o.observerCanonicalKey === b.interviewerKey),
           { start: b.startTime, end: b.endTime },
         )
-      )
+      ) {
         ids.add(b.candidateId);
+        if (b.id) bookingIds.push(b.id);
+      }
     }
-    return { candidateIds: [...ids], stale };
+    return { candidateIds: [...ids], bookingIds, stale };
   } catch (error) {
     console.error("Visit clash check failed", error instanceof Error ? error.name : "UnknownError");
-    return { candidateIds: [], stale: true };
+    return { candidateIds: [], bookingIds: [], stale: true };
   }
 }
