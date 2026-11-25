@@ -97,7 +97,7 @@ const PURPOSE: Record<Exclude<HiringView, "hr" | "heads">, string> = {
   calls: "HR speaks to the candidate and records the call outcome and notes.",
   prescreen: "Review the candidate’s form and invite them to sit the paper test.",
   visitday: "See arrival times, papers to print and the tutors assigned to mock teaching.",
-  assessment: "Admin uploads the scanned paper for grading. The candidate waits until you confirm a pass and send the mock invitation.",
+  assessment: "",
   mock: "The tutor gets the graded paper and résumé before the mock. After the rubric, Yes goes to the final review and No queues a rejection email.",
   review: "Kevin adds the behavioral assessment and sends the packet to Gift for approval or rejection.",
   offer: "After approval, the candidate receives an offer letter and can book a 30-minute signing on site.",
@@ -431,7 +431,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
           </>
         )}
       </header>
-      {view !== "hr" && view !== "heads" && !giftReview && <p className={css.purpose}>{PURPOSE[view]}</p>}
+      {view !== "hr" && view !== "heads" && !giftReview && PURPOSE[view] && <p className={css.purpose}>{PURPOSE[view]}</p>}
       {/* A head's failed first load has its own message and retry below. */}
       {error && view !== "setup" && !(view === "heads" && !data) && (
         <p role="alert" className={css.alert}>
