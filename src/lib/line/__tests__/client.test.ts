@@ -8,6 +8,18 @@ describe("LINE client", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sends a textV2 message that tags the given user in place of {person}", async () => {
+    vi.stubEnv("LINE_TUTOR_CHANNEL_ACCESS_TOKEN", "tutor-token");
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ sentMessages: [{ id: "sent" }] })));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = `U${"a".repeat(32)}`;
+    await pushLineTextMessage({ to: "group", text: "{person} papers", tutorBot: true, mentionUserId: user });
+    await pushLineTextMessage({ to: "group", text: "plain", tutorBot: true });
+    const bodies = fetchMock.mock.calls.map((call) => JSON.parse(String((call as unknown as [string, RequestInit])[1].body)).messages[0]);
+    expect(bodies[0]).toEqual({ type: "textV2", text: "{person} papers", substitution: { person: { type: "mention", mentionee: { type: "user", userId: user } } } });
+    expect(bodies[1]).toEqual({ type: "text", text: "plain" });
+  });
+
   it("keeps tutor credentials separate and never falls back to the parent token", async () => {
     vi.stubEnv("ENABLE_LINE_SCHEDULER", "true");
     vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "parent-token");

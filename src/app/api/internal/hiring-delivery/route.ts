@@ -10,6 +10,7 @@ import {
   verifyDeliveryAuthorization,
 } from "@/lib/hiring/dispatch";
 import { deliverRecruitment, queueRecruitmentDailyCalls } from "@/lib/hiring/recruitment";
+import { queuePrintPack } from "@/lib/hiring/print-pack";
 import { deliverOutbox } from "@/lib/hiring/worker";
 import { audit, settings, type Candidate } from "@/lib/hiring/service";
 import { deliverCalendar } from "@/lib/hiring/google";
@@ -39,6 +40,8 @@ export async function GET(request: NextRequest) {
         let callsQueued: boolean;
         try {
           callsQueued = await queueRecruitmentDailyCalls(db);
+          // Recovery for the 08:29 print message: the 08:35 to 09:48 ticks queue it if that run missed it.
+          await queuePrintPack(db);
         } finally {
           recruitmentSent = await deliverRecruitment(db);
         }

@@ -18,6 +18,7 @@ summary.laneTitle::-webkit-details-marker { display: none; }
 summary.laneTitle::before { content: "▸"; color: var(--muted); }
 details[open] > summary.laneTitle::before { content: "▾"; }
 .laneTitle[data-today] { color: var(--accent-text); }
+.printAll { margin-left: auto; font-size: 13px; font-weight: 600; }
 .earlier summary { display: flex; align-items: center; gap: 8px; min-height: 44px; color: var(--muted); font-size: 13px; cursor: pointer; }
 .count { min-width: 22px; padding: 0 7px; border-radius: 999px; background: var(--tint); color: var(--support); font-size: 12px; font-variant-numeric: tabular-nums; text-align: center; }
 .list { margin: 0; padding: 0; list-style: none; }
