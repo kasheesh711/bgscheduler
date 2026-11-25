@@ -111,6 +111,10 @@ describe("form timestamps", () => {
   it("starts the note with a capital when there is no send time", () => {
     expect(preScreenNote({ status: "Replied", sentAt: null, remindedAt: null, repliedAt: "31/10/2026, 18:30:05" })).toBe("Replied 1 Nov");
   });
+  it("shows the booking page's ISO reply time in Bangkok time", () => {
+    expect(preScreenNote({ status: "Replied", sentAt: sent, remindedAt: null, repliedAt: "2026-10-31T18:30:05.000Z" }, true))
+      .toBe("Sent 29 Oct, 10:00 · replied 1 Nov, 01:30");
+  });
   it("returns null for text it cannot read", () => {
     expect(parseFormTimestamp("last week")).toBeNull();
     expect(preScreenNote({ status: "Replied", sentAt: null, remindedAt: null, repliedAt: "last week" })).toBe("Replied");
@@ -217,11 +221,14 @@ describe("holdNote", () => {
   it("shows the queue position and the limit that holds a candidate", () => {
     const note = holdNote(asEntry(), { funnel: "pre_screen", state: "held", position: 3, limit: "perDay", subject: "Physics" }, open)!;
     expect(note.short).toBe("Queue 3 · daily limit 5");
-    expect(note.long.join(" ")).toContain("Held by the daily limit (5)");
+    expect(note.long).toContain("Raise the daily limit in Rules and setup.");
     const subject = holdNote(asEntry(), { funnel: "pre_screen", state: "held", position: 1, limit: "perSubject", subject: "Physics" }, open)!;
     expect(subject.short).toBe("Queue 1 · Physics limit 3");
     const onsite = holdNote(asEntry({ stage: "pre_screen" }), { funnel: "onsite", state: "held", position: 2, limit: "unbooked", subject: "Physics" }, open)!;
     expect(onsite.short).toBe("Onsite queue 2 · not-booked limit 2");
+    const missing = holdNote(asEntry(), { funnel: "onsite", state: "held", position: 4, limit: "perDay", subject: "Physics" }, open)!;
+    expect(missing.short).toBe("Onsite queue 4 · daily limit");
+    expect(missing.long).toContain("Raise the daily limit in Rules and setup.");
   });
 
   it("says a released row is next to send", () => {

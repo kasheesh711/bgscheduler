@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from "react";
 import { AnswerText } from "./answer-text";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { criterionValues, STAGE_LABELS } from "@/lib/hiring/insights";
@@ -321,6 +321,7 @@ export function ResumeBody({
   type,
   months,
   check,
+  onPreviewUnavailable,
 }: {
   id: string;
   name: string;
@@ -328,39 +329,52 @@ export function ResumeBody({
   type: string | null;
   months: number;
   check: ResumeCheck;
+  onPreviewUnavailable?: () => void;
 }) {
   if (state === "deleted")
     return (
       <p className={css.inspectorMeta}>
-        Original résumé deleted after {months} month{months === 1 ? "" : "s"} with no activity. The extracted text stays below.
+        Original résumé deleted after {months} month{months === 1 ? "" : "s"} with no activity.
       </p>
     );
-  if (state !== "available") return <p className={css.inspectorMeta}>No original file is stored yet. The extracted text stays below.</p>;
+  if (state !== "available") return <p className={css.inspectorMeta}>Original résumé unavailable.</p>;
   if (check.status === "checking") return <p role="status" className={css.inspectorMeta}>Opening the file…</p>;
   if (check.status === "failed") return <p role="alert" className={css.errorText}>{check.message}</p>;
   const src = `/api/hiring/resume/${encodeURIComponent(id)}`;
   return (
     <>
-      {type === RESUME_TYPES.pdf && <PdfPages key={src} src={src} title={`Original résumé of ${name}`} />}
+      {type === RESUME_TYPES.pdf && <PdfPages key={src} src={src} title={`Original résumé of ${name}`} hasDownload onUnavailable={onPreviewUnavailable} />}
       <a className={css.sourceLink} href={src} download>
-        Download
+        {type === RESUME_TYPES.pdf ? "Download PDF" : "Download"}
       </a>
     </>
   );
 }
 
 export function ResumePeek({ candidate, months }: { candidate: HiringCandidate; months: number }) {
+  const [textRequested, setTextRequested] = useState(false);
+  const [unavailableId, setUnavailableId] = useState<string | null>(null);
+  const previewUnavailable = useCallback(() => setUnavailableId(candidate.id), [candidate.id]);
   const pdf = candidate.resumeState === "available" && candidate.resumeType === RESUME_TYPES.pdf;
   const check = useResumeCheck(candidate.id, true, candidate.resumeState === "available");
-  const showText = !pdf || check.status === "failed";
-  const source = useSourceText(candidate.id, showText);
+  const showText = !pdf || check.status === "failed" || unavailableId === candidate.id;
+  const source = useSourceText(candidate.id, showText || textRequested);
   return (
     <>
-      <ResumeBody id={candidate.id} name={candidate.name} state={candidate.resumeState} type={candidate.resumeType} months={months} check={check} />
+      <ResumeBody id={candidate.id} name={candidate.name} state={candidate.resumeState} type={candidate.resumeType} months={months}
+        check={check} onPreviewUnavailable={candidate.hasSourceText ? previewUnavailable : undefined} />
       {showText && (
         <div className={css.sourceText}>
           <SourceTextBody id={candidate.id} {...source} />
         </div>
+      )}
+      {!showText && check.status === "ready" && candidate.hasSourceText && (
+        <details className={css.sourceText} onToggle={(event) => {
+          if (event.currentTarget.open) setTextRequested(true);
+        }}>
+          <summary>Extracted résumé text</summary>
+          {textRequested && <SourceTextBody id={candidate.id} {...source} />}
+        </details>
       )}
     </>
   );

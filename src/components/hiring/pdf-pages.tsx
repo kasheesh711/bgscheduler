@@ -9,19 +9,20 @@ const RUNTIME = "/api/hiring/pdf-runtime";
 // scroll when a longer file must show in full. Download always gives the whole file.
 const MAX_PAGES = 15;
 
-const FAILED = "This PDF could not be drawn here. Use the link to open it.";
-
 /**
  * The pages of a PDF, drawn on the page itself. The browser's own PDF viewer is not used: Safari, phones and a
  * sandboxed response each show it blank, and a frame takes the drag that moves a card.
  */
 /** `runtime` is the folder of the pdf.js files. A page with no staff session gives its own (the interviewer brief, the paper check). */
-export function PdfPages({ src, title, runtime = RUNTIME, maxPages = MAX_PAGES }: { src: string; title: string; runtime?: string; maxPages?: number }) {
+export function PdfPages({ src, title, runtime = RUNTIME, maxPages = MAX_PAGES, hasDownload, onUnavailable }: {
+  src: string; title: string; runtime?: string; maxPages?: number; hasDownload?: boolean; onUnavailable?: () => void;
+}) {
   const box = useRef<HTMLDivElement>(null);
   const sheets = useRef<(HTMLCanvasElement | null)[]>([]);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
-  const [error, setError] = useState("");
+  const [failed, setFailed] = useState(false);
   const [width, setWidth] = useState(0);
+  const [rendered, setRendered] = useState(false);
 
   useEffect(() => {
     const observer = new ResizeObserver((entries) => setWidth(Math.floor(entries[0].contentRect.width)));
@@ -47,7 +48,10 @@ export function PdfPages({ src, title, runtime = RUNTIME, maxPages = MAX_PAGES }
       const opened = await task.promise;
       if (!stopped) setPdf(opened);
     })().catch(() => {
-      if (!stopped) setError(FAILED);
+      if (!stopped) {
+        setFailed(true);
+        onUnavailable?.();
+      }
     });
     return () => {
       stopped = true;
@@ -56,7 +60,7 @@ export function PdfPages({ src, title, runtime = RUNTIME, maxPages = MAX_PAGES }
       // Safari on a phone frees a canvas late and has a total limit, so each one gives its memory back now.
       for (const canvas of holder?.querySelectorAll("canvas") ?? []) canvas.width = canvas.height = 0;
     };
-  }, [src, runtime]);
+  }, [src, runtime, onUnavailable]);
 
   const count = pdf ? Math.min(pdf.numPages, maxPages) : 0;
   useEffect(() => {
@@ -66,6 +70,9 @@ export function PdfPages({ src, title, runtime = RUNTIME, maxPages = MAX_PAGES }
     void (async () => {
       // Twice the screen's points at least, so small print stays sharp when a phone zooms in.
       const ratio = Math.min(Math.max(window.devicePixelRatio || 1, 2), 3);
+      const sample = onUnavailable ? document.createElement("canvas").getContext("2d") : null;
+      if (sample) sample.canvas.width = sample.canvas.height = 64;
+      let hasContent = !sample;
       for (let number = 1; number <= count; number++) {
         const page = await pdf.getPage(number);
         const canvas = sheets.current[number - 1];
@@ -76,19 +83,33 @@ export function PdfPages({ src, title, runtime = RUNTIME, maxPages = MAX_PAGES }
         // annotationMode 0: no link in the file can be clicked from the card.
         render = page.render({ canvas, viewport, transform: [ratio, 0, 0, ratio, 0, 0], annotationMode: 0 });
         await render.promise;
+        if (stopped) return;
+        if (sample && !hasContent) {
+          // PDF.js can complete successfully and still draw an empty page.
+          sample.drawImage(canvas, 0, 0, 64, 64);
+          hasContent = sample.getImageData(0, 0, 64, 64).data.some((value, i, pixels) =>
+            i % 4 !== 3 && value < 250 && pixels[i - i % 4 + 3] > 0);
+        }
       }
+      if (!hasContent) throw new Error("Empty PDF preview");
+      setRendered(true);
     })().catch(() => {
-      if (!stopped) setError(FAILED);
+      if (!stopped) {
+        setFailed(true);
+        onUnavailable?.();
+      }
     });
     return () => {
       stopped = true;
       render?.cancel();
     };
-  }, [pdf, width, count]);
+  }, [pdf, width, count, onUnavailable]);
 
-  if (error) return <p role="alert" className={css.errorText}>{error}</p>;
+  if (failed) return <p role="alert" className={css.errorText}>
+    {hasDownload ? "Preview unavailable." : "This PDF could not be drawn here. Use the link to open it."}
+  </p>;
   return (
-    <div ref={box} className={css.pdfPages} role="region" aria-label={title} tabIndex={0}>
+    <div ref={box} className={css.pdfPages} role="region" aria-label={title} aria-busy={!rendered} tabIndex={0}>
       {!pdf && <p role="status" className={css.inspectorMeta}>Opening the file…</p>}
       {Array.from({ length: count }, (_, i) => (
         <canvas key={i} ref={(el) => void (sheets.current[i] = el)} role="img" aria-label={`${title}, page ${i + 1} of ${pdf?.numPages}`} />

@@ -40,7 +40,7 @@
   outline-offset: 2px;
 }
 .surface i { display: inline-block; font-style: normal; }
-.surface:is([data-heads-review], [data-offer]) {
+.surface:is([data-heads-review], [data-offer], [data-prescreen]) {
   --serif: var(--font-cormorant, "Cormorant Garamond"), Georgia, serif;
 }
 .surface[data-heads-review] :is(.topbar, .purpose) {
@@ -49,10 +49,10 @@
 }
 /* The head's list and the open page use the full width, so the header does too. */
 .surface[data-heads-review] .topbar[data-heads] { padding: 6px 16px; }
-.topbar[data-heads] .title, .surface[data-offer] .title { font-size: 24px; }
-.surface[data-offer] .topbar { padding: 6px 16px; font-size: 14px; }
-.surface[data-offer] .topbar button { min-width: 44px; min-height: 44px; }
-.surface[data-offer] .notice:empty { display: none; }
+.topbar[data-heads] .title, .surface:is([data-offer], [data-prescreen]) .title { font-size: 24px; }
+.surface:is([data-offer], [data-prescreen]) .topbar { padding: 6px 16px; font-size: 14px; }
+.surface:is([data-offer], [data-prescreen]) .topbar button { min-width: 44px; min-height: 44px; }
+.surface:is([data-offer], [data-prescreen]) .notice:empty { display: none; }
 
 /* Header */
 .topbar {
@@ -862,5 +862,5 @@
 /* A head's list retry: a full touch target in the workspace navy, dimmed while it retries (critic review, round 21). */
 .primary.retry { min-height: 44px; padding-inline: 18px; background: #14213d; color: #fff; font-size: 15px; }
 .primary.retry[aria-disabled="true"] { opacity: 0.55; cursor: progress; }
-.surface[data-offer] .loading { font-size: 14px; }
-@media (max-width: 719px) { .retry.offerRetry, .offerLoadAlert, .surface[data-offer] .loading { font-size: 16px; } }
+.surface:is([data-offer], [data-prescreen]) .loading { font-size: 14px; }
+@media (max-width: 719px) { .retry.offerRetry, .offerLoadAlert, .surface:is([data-offer], [data-prescreen]) .loading { font-size: 16px; } }
