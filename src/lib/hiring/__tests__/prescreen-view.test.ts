@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchesPreScreenList, preScreenFinalScore, sentBetween, visitEmail, wasSentForm } from "../prescreen-view";
+import { matchesPreScreenList, preScreenFinalScore, preScreenQueue, sentBetween, visitEmail, wasSentForm } from "../prescreen-view";
 
 const person = (patch = {}) => ({
   id: "a",
@@ -65,6 +65,12 @@ describe("visitEmail", () => {
 });
 
 describe("list filters", () => {
+  it("retains a stopped candidate after cancelling their only form email", () => {
+    const candidate = { ...person({ preScreen: null }), stage: "stopped" as const };
+    const queue = preScreenQueue([{ candidate, outbox: [row("cancelled", "a:pre-screen")], booked: false }], new Date(), 50, {});
+    expect(queue.all).toMatchObject([{ group: "closed", fact: "Stopped" }]);
+    expect(queue.waiting).toHaveLength(0);
+  });
   const email = { label: "", tone: "none" as const, sent: false, sentDays: [] as string[] };
   it("uses a person's score in place of the AI's", () => {
     const changed = person({ preScreenScore: 40, preScreenOverride: { score: 70 } });
@@ -101,6 +107,6 @@ describe("sentBetween", () => {
     expect(sentBetween(sent, "", "2026-11-19")).toBe(false);
     expect(sentBetween({ sentDays: [] }, "2026-11-01", "")).toBe(false);
     expect(sentBetween({ sentDays: ["2026-11-20", "2026-11-05"] }, "2026-11-01", "2026-11-10")).toBe(true);
-    expect(sentBetween(sent, "2026-11-25", "2026-11-15")).toBe(true);
+    expect(sentBetween(sent, "2026-11-25", "2026-11-15")).toBe(false);
   });
 });

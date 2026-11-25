@@ -1,6 +1,7 @@
 import { formatInTimeZone } from "date-fns-tz";
 import { STAGE_LABELS } from "./insights";
 import { isDecided, ZONE, type Stage } from "./model";
+import { parseFormTimestamp } from "./status";
 
 type OutboxRow = { key: string; status: string; sentAt: Date | string | null; error?: string | null };
 type Person = {
@@ -63,6 +64,82 @@ export function visitEmail(c: Person, outbox: OutboxRow[], threshold: number | n
   return says(hold ?? "Not sent", "wait");
 }
 
+type QueueEntry = {
+  candidate: Person & { preScreenRepliedAt?: Date | string | null };
+  outbox: OutboxRow[];
+  booked: boolean;
+};
+type QueueGroup = "decision" | "waiting" | "invited" | "aside" | "held" | "closed";
+const BOOKED_STAGES: Stage[] = ["onsite_booked", "paper_booked", "paper_passed", "mock_booked"];
+const PENDING_EMAIL = ["pending", "processing", "failed", "uncertain"];
+const daysSince = (now: Date, at: number) => Math.max(0, Math.floor((now.getTime() - at) / 86_400_000));
+
+export function preScreenQueue<T extends QueueEntry>(
+  pool: T[],
+  now: Date,
+  threshold: number | null,
+  holds: Readonly<Record<string, { state: "next" | "held" }>>,
+) {
+  const rows = pool.flatMap((entry) => {
+    const { candidate, outbox } = entry;
+    const { id, stage } = candidate;
+    const form = outbox.find((row) => row.key === `${id}:pre-screen`);
+    const visitRows = outbox.filter((row) => isVisitInvite(id, row.key));
+    const replied = !!(candidate.preScreen || candidate.preScreenRepliedAt);
+    const booked = entry.booked || BOOKED_STAGES.includes(stage);
+    if (!replied && !booked && !wasSentForm(candidate, outbox) && !visitRows.some((row) => row.status !== "cancelled")
+      && !(stage === "stopped" && (form || visitRows.length))) return [];
+
+    const sentAt = form?.status === "sent" && form.sentAt ? new Date(form.sentAt).getTime() : NaN;
+    const days = Number.isFinite(sentAt) ? daysSince(now, sentAt) : null;
+    const received = candidate.preScreenRepliedAt ? new Date(candidate.preScreenRepliedAt).getTime() : NaN;
+    const submittedAt = parseFormTimestamp(candidate.preScreen?.submittedAt ?? "")?.getTime() ?? NaN;
+    const replyAt = Number.isFinite(received) ? received : Number.isFinite(submittedAt) ? submittedAt : Infinity;
+    const replyDays = Number.isFinite(replyAt) ? daysSince(now, replyAt) : null;
+    const pendingVisitEmail = visitRows.some((row) => PENDING_EMAIL.includes(row.status));
+    const email = visitEmail(candidate, outbox, threshold);
+    const failed = [visitRows.find((row) => row.status !== "cancelled"), form]
+      .find((row) => row?.status === "failed" || row?.status === "uncertain");
+    const score = preScreenFinalScore(candidate);
+    const below = threshold !== null && score !== null && score < threshold;
+    let group: QueueGroup | null = null;
+    let fact = "Form queued";
+    if (stage === "stopped" || isDecided(stage)) {
+      group = "closed";
+      fact = STAGE_LABELS[stage];
+    } else if (stage === "soft_rejected") {
+      group = "aside";
+      fact = "Below pass score";
+    } else if (booked || pendingVisitEmail || email.sent || stage === "onsite_invited" || stage === "paper_invited" || stage === "no_booking") {
+      group = "invited";
+      fact = stage === "no_booking" ? "No booking" : booked ? "Visit booked" : email.label === "Queued" ? "Invite queued" : "Invited";
+    } else if (holds[id]?.state === "held") {
+      group = "held";
+      fact = "Capacity hold";
+    } else if (replied) {
+      group = "decision";
+      fact = below ? "Below pass score"
+        : replyDays === null ? "Reply received"
+          : replyDays === 0 ? "Replied today" : `Replied ${replyDays} ${replyDays === 1 ? "day" : "days"} ago`;
+    } else if (form?.status === "sent") {
+      group = "waiting";
+      fact = days === null ? "Waiting for reply" : `Awaiting reply · ${days} ${days === 1 ? "day" : "days"}`;
+    }
+    if (failed && group !== "closed") fact = failed.status === "uncertain" ? "Check email delivery" : "Email failed";
+    return [{ ...entry, form, group, fact, score, below, overdue: days !== null && days >= 3,
+      days, replyAt, replyDays, email, emailLogKey: failed?.key, pendingVisitEmail,
+      canInviteAfterStop: visitRows.every((row) => row.status === "cancelled") }];
+  });
+  const decision = rows.filter((row) => row.group === "decision")
+    .sort((a, b) => (a.replyAt === b.replyAt ? 0 : a.replyAt - b.replyAt) || a.candidate.id.localeCompare(b.candidate.id));
+  const waiting = rows.filter((row) => row.group === "waiting").sort((a, b) => (b.days ?? -1) - (a.days ?? -1));
+  const aside = rows.filter((row) => row.group === "aside");
+  const invited = rows.filter((row) => row.group === "invited");
+  const held = rows.filter((row) => row.group === "held");
+  const closed = rows.filter((row) => row.group === "closed");
+  return { decision, waiting, aside, invited, held, closed, all: [...decision, ...waiting, ...aside, ...invited, ...held, ...closed, ...rows.filter((row) => !row.group)] };
+}
+
 export const PRE_SCREEN_FILTERS = ["All", "Replied", "No reply", "Passed", "Below pass score", "Visit email sent"] as const;
 export type PreScreenListFilter = (typeof PRE_SCREEN_FILTERS)[number];
 
@@ -84,9 +161,8 @@ export function matchesPreScreenList(c: Person, filter: PreScreenListFilter, thr
   }
 }
 
-/** The "Visit email sent" date range: any sent invitation in it counts. Empty ends are open; the ends may come in either order. */
+/** Any invitation sent in the date range counts. Empty ends are open. */
 export function sentBetween(email: Pick<VisitEmail, "sentDays">, from: string, to: string) {
   if (!from && !to) return true;
-  const [lo, hi] = from && to && from > to ? [to, from] : [from, to];
-  return email.sentDays.some((day) => (!lo || day >= lo) && (!hi || day <= hi));
+  return email.sentDays.some((day) => (!from || day >= from) && (!to || day <= to));
 }
