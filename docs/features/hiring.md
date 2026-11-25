@@ -4,7 +4,7 @@ Status: visit automation is live with sending off (2 Nov 2026). The three-stage 
 
 The Hiring page has seven tabs. Each opens by address (`/hiring?view=seek`).
 
-- **Overview** (`view=overview`): summary figures, limit meters, the candidate table, charts, and worker, delivery and activity status.
+- **Overview** (`view=overview`): the analytics board (see *Overview analytics*), the candidate table and the score, evidence and subject charts. The send-limit meters and the worker, delivery and activity panel are on Rules and setup.
 - **Capacity** (`view=capacity`): which subject to hire for first and why, from new students in the last 90 days and tutor hours in the next 4 weeks. See [Capacity](#capacity).
 - **SEEK intake** (`view=seek`): see [Seek intake](#seek-intake).
 - **HR calls** (`view=calls`): see [HR calls](#hr-calls).
@@ -558,11 +558,22 @@ A stored setting that breaks a rule stops the worker with a message. The page st
 - **Open decision: links inside a PDF.** A crafted link in an applicant's PDF can replace the whole browser tab with another site after one click. Script does not run. The panel shows a warning line for now. The other options are to open a PDF in a new tab, or to render PDFs with pdf.js (a new dependency). Kevin has not decided. He must decide before go-live.
 - The files hold phone numbers, birth dates and photos. Access control, `no-store` and retention are the controls.
 
+## Overview analytics
+
+Kevin asked on 25 November 2026 for an Overview with dense charts and little text. `src/components/hiring/overview-analytics.tsx`:
+
+- **Where they are now.** One bar per current stage, split into within limit and stuck (stuck limits from `STUCK_RULES` in `funnel.ts`). Onsite booked splits into `Visit ahead` and `Decision due` at the visit time.
+- **Offer outlook by subject.** `src/lib/hiring/forecast.ts`: each open candidate first seen in the funnel window counts as the chance to reach Offer from their step, at the same-people step rates (`atLeast`). Range = 10th–90th percentile of the exact count; chance = at least the Capacity tab's hire-now need. Offers, not signed hires; few offers make it rough.
+- **Next emails.** `src/lib/hiring/next-emails.ts`: queue rows from `holds` (worker order), written outbox rows (sending, retrying, needs a look), and reminders on the `runFollowUps` clock. Time = last worker run + 15 minutes (the worker's sleep).
+- **Funnel.** Per step, 100% = people at the step before: moved on, still waiting, left. Never above 100%.
+- **Hidden gems.** `src/lib/hiring/gems.ts`: strong school (≥ 75%) under the pass score; one gate rule blocks a passing score; passing score idle 14+ days. Busy people (visit, call or send ahead) are left out; stopped ones count apart.
+- Every count opens the matching candidates in the table. Synthetic check: `SERVE=<port> node scripts/dev/verify-hiring-screens.mjs`, then `/?view=overview&analytics=1`.
+
 ## Demo mode and the pipeline board
 
 Kevin asked for both on 23 November 2026, to present the process to the heads, Gift and admin.
 
-- **Pipeline board.** The Overview shows `Pipeline from the HR call` above the funnel: one column for each step from the HR call (HR call booked, Form and visit link, Visit booked, Marking and mock scores, Final review, Offer and signing), one card for each candidate, the days in the step and a `Stuck` mark. The column with the most stuck candidates has the `Bottleneck` mark. Rules: `src/lib/hiring/pipeline-board.ts`; days and stuck limits come from `funnel.ts`. The offer column lists every hired candidate with a sent offer, because the payload has no contract booking.
+- **Pipeline board.** Removed on 25 November 2026; the Overview analytics board replaced it (see *Overview analytics*).
 - **Demo mode.** `/hiring?demo=1` (the `Demo` button in the tools row) shows one made-up candidate, `Demo – Nicha Suwan`, and made-up `Sample` candidates. The bar at the top gives eight steps, what to say and what to select. Back, Next and the step buttons move the candidate; Good call, the head's Yes and Gift's Approve move it too. `Exit demo` reloads the real page.
 - **Nothing is saved or sent.** `installDemoFetch` (`src/lib/hiring/demo.ts`) answers every `/api/hiring` request in the browser. Two read-only requests go to the server: the Capacity tab and the PDF viewer's script files. The upload button marks the demo paper and opens no file dialog. A file link opens a demo PDF. The head's candidate page opens over the screen with the real score form.
 - **Not in the demo.** The candidate's own pages (call booking, the form, visit booking, signing booking), emails, LINE notices, Rules and setup saves, and head schedules.
