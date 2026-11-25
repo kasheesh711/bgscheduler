@@ -59,7 +59,7 @@ it("queues each mock notice once and suppresses a cancelled booking's old notice
   await queueRecruitmentMock(db, b, "booked"); await queueRecruitmentMock(db, b, "booked");
   expect(await deliverRecruitment(db)).toBe(1);
   expect(await deliverRecruitment(db)).toBe(0);
-  expect(pushLineTextMessage).toHaveBeenCalledWith(expect.objectContaining({ to: groupId, tutorBot: true, text: expect.stringContaining("Candidate: Candidate\nEmail: candidate@example.com\nPhone: not recorded\nSubject") }));
+  expect(pushLineTextMessage).toHaveBeenCalledWith(expect.objectContaining({ to: groupId, tutorBot: true, text: "🧑‍🏫 Mock teaching booked\nCandidate · Mathematics\nTue 17 Nov, 10:00–11:00 · Head: Peat\ncandidate@example.com" }));
   await queueRecruitmentMock(db, b, "moved", new Date("2026-11-16T10:00:00+07:00"));
   await endVisit(db, [b], "cancelled", now);
   expect(await deliverRecruitment(db)).toBe(1);
@@ -94,7 +94,7 @@ it("reports only initial sent invitations in the prior week and confirmed mocks 
   await mock();
   expect(await queueRecruitmentWeekly(db, now)).toBe(true); expect(await queueRecruitmentWeekly(db, now)).toBe(false);
   const [row] = await db.select().from(s.hiringRecruitmentDeliveries);
-  expect(row.message).toContain("Included — Mathematics"); expect(row.message).toContain("Mocks this week (1)");
+  expect(row.message).toContain("• Included · Mathematics"); expect(row.message).toContain("Mocks this week (1)");
   for (const excluded of ["Reminder", "Failed", "Uncertain", "Too late"]) expect(row.message).not.toContain(excluded);
 });
 it("queues one Bangkok morning digest with only confirmed calls that day", async () => {
@@ -152,8 +152,8 @@ it("announces an invitation only after Gmail accepts it, once across delivery re
   await deliverOutbox(db, config);
   const notices = await db.select().from(s.hiringRecruitmentDeliveries);
   expect(notices).toHaveLength(1);
-  expect(notices[0]).toMatchObject({ notice: "invite_sent", message: expect.stringContaining("Paper assessment invite sent") });
-  expect(notices[0].message).toContain("Email: candidate@example.com");
+  expect(notices[0]).toMatchObject({ notice: "invite_sent", message: expect.stringContaining("✉️ Paper test invite sent") });
+  expect(notices[0].message).toContain("\ncandidate@example.com");
   expect((await db.select().from(s.hiringOutbox))[0].status).toBe("sent");
   expect(send).toHaveBeenCalledTimes(2);
 });
@@ -162,8 +162,8 @@ it("puts the email and the phone in the form notice, or says that none is record
   await queueRecruitmentForm(db, { ...withPhone, phone: "+66812345678" }, now);
   await queueRecruitmentForm(db, await candidate("Without", null), now);
   const messages = (await db.select().from(s.hiringRecruitmentDeliveries)).map(row => row.message);
-  expect(messages).toContainEqual(expect.stringContaining("Form completed\nWith — Mathematics\nEmail: with@example.com\nPhone: +66812345678\n"));
-  expect(messages).toContainEqual(expect.stringContaining("Without — Mathematics\nEmail: not recorded\nPhone: not recorded\n"));
+  expect(messages).toContainEqual(expect.stringMatching(/^📝 Form completed · .+\nWith · Mathematics\nwith@example\.com · \+66812345678$/));
+  expect(messages).toContainEqual(expect.stringContaining("Without · Mathematics\nNo email or phone recorded"));
 });
 it("recognizes old mock invitations but excludes reminders and booking confirmations", async () => {
   const c = await candidate();
