@@ -12,8 +12,8 @@ import {
 import { NextResponse } from "next/server";
 
 function isPublicHiringOnboarding(pathname: string) {
-  return /^\/hiring\/onboarding\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(pathname)
-    || /^\/api\/hiring\/onboarding\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\/line)?$/.test(pathname)
+  return /^\/hiring\/onboarding\/[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?$/.test(pathname)
+    || /^\/api\/hiring\/onboarding\/[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?(?:\/line)?$/.test(pathname)
     || pathname === "/api/hiring/onboarding/line-callback";
 }
 

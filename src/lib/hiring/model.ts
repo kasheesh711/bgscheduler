@@ -100,6 +100,7 @@ export type InterviewKind = "paper" | "mock";
 // `call` is the candidate's link to book the HR pre-screen call.
 // `two-day` (Kevin, 24 Nov 2026) books the test (Monday to Sunday) and the final-round mock teaching on the same day or a later day
 // (Monday to Friday) together. `visit` (both on one day) and `paper-visit` (test only) are links sent before that.
+// Append only: a short link stores the index of its kind (src/lib/hiring/tokens.ts).
 export const tokenKindSchema = z.enum(["paper", "mock", "visit", "paper-visit", "two-day", "brief", "call", "contract", "onboarding", "paper-check"]);
 /** A booking of the visit flows. A row of kind `call` belongs to the HR call list only. */
 export const isVisitBooking = <T extends { kind: string }>(row: T): row is T & { kind: InterviewKind } =>
