@@ -34,7 +34,7 @@ describe("ResumeBody", () => {
   });
   it("says there is no file yet", () => {
     const html = body({ state: "none" });
-    expect(html).toContain("No original file");
+    expect(html).toContain("Original résumé unavailable.");
     expect(html).not.toContain("<iframe");
     expect(html).not.toContain("href=");
   });

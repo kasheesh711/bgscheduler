@@ -63,7 +63,7 @@ export type CandidateFilter = {
   /** What `ids` are, for the filter line ("Stuck" when absent). */
   label?: string;
 };
-export type Command = (body: unknown) => Promise<boolean>;
+export type Command = (body: unknown, onReload?: (data: HiringData | null) => void, onError?: (message: string, status?: number) => void) => Promise<boolean>;
 export const NO_FILTER: CandidateFilter = { stage: "all", prescreen: "all", bucket: null, subject: null };
 
 const VIEWS = {
@@ -90,12 +90,11 @@ export type HiringView = keyof typeof VIEWS;
 const STEPS = ["prescreen", "assessment", "mock", "review", "offer"] as const;
 const TOOLS = ["overview", "capacity", "visitday", "setup", "admin", "heads"] as const;
 /** One line under the tabs, so a new user can name what each tab is for. */
-const PURPOSE: Record<Exclude<HiringView, "hr" | "heads" | "offer">, string> = {
+const PURPOSE: Record<Exclude<HiringView, "hr" | "heads" | "offer" | "prescreen">, string> = {
   overview: "Where every candidate stands, and who is ready for the next step.",
   capacity: "Which subjects need new tutors first, from busy-hours use and new students.",
   seek: "Check applications from SEEK and their ATS scores.",
   calls: "HR speaks to the candidate and records the call outcome and notes.",
-  prescreen: "Review the candidate’s form and invite them to sit the paper test.",
   visitday: "See arrival times, papers to print and the tutors assigned to mock teaching.",
   assessment: "",
   mock: "The tutor gets the graded paper and résumé before the mock. After the rubric, Yes goes to the final review and No queues a rejection email.",
@@ -157,6 +156,8 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
   const view: HiringView = giftOnly && linkedReview ? ((data?.viewerHead ?? head) ? "heads" : "review") : param && Object.hasOwn(VIEWS, param) ? (param as HiringView) : (data?.viewerHead ?? head ?? headParam) ? "heads" : "overview";
   const giftReview = view === "review" && giftOnly;
   const offer = view === "offer";
+  const prescreen = view === "prescreen";
+  const compactQueue = offer || prescreen;
   const offerLoadFailed = offer && (data ? data.offers == null : !!error);
   const loaded = !!data;
   const [messageKey, setMessageKey] = useState<string | null>();
@@ -192,7 +193,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
   const [dayDrafts, setDayDrafts] = useState<Record<string, boolean[]>>({});
 
   const configLoaded = useRef(false);
-  async function load(keepConfig = false) {
+  async function load(keepConfig = false): Promise<HiringData> {
     const response = await fetch("/api/hiring", { cache: "no-store" });
     const value = await response.json();
     if (!response.ok) throw new Error(value.error);
@@ -205,14 +206,16 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
       // A save must carry the revision these edits started from, so a stale save gets a 409.
       setConfigRevision(value.revision);
     }
+    return value;
   }
+  const reload = async () => { await load(true); };
   // In demo mode a new step is a new payload.
   useEffect(() => {
     // One quiet retry before an error: a short outage then never shows (critic review, round 22).
     // After a short wait, so a waking database or a cold start is covered too (critic review, round 23).
     load(true).catch(() => new Promise((resolve) => setTimeout(resolve, 1500)).then(() => load(true))).catch((e) => setError(e.message));
   }, [demoStep]);
-  const command: Command = async (body) => {
+  const command: Command = async (body, onReload, onError) => {
     setBusy(true);
     setError("");
     setNotice("");
@@ -222,6 +225,11 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      if (!response.ok && onError) {
+        const value = await response.json().catch(() => null);
+        onError(typeof value?.error === "string" ? value.error : "", response.status);
+        return false;
+      }
       const value = await response.json();
       if (!response.ok) throw new Error(value.error);
       const action = (body as { action: string }).action;
@@ -249,12 +257,18 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
           );
         saved = headDaysNotice(value.affectedVisits === undefined ? 0 : value.affectedVisits);
       }
+      if (onReload) {
+        onReload(await load(true).catch(() => null));
+        return true;
+      }
       setNotice(saved);
       // The save is done. If only the reload fails, say so, and do not call the save a failure.
       await load(action !== "settings").catch(() => setError("Saved, but the page could not refresh. Reload this page."));
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save.");
+      const message = e instanceof Error ? e.message : "Could not save.";
+      if (onError) onError("");
+      else setError(message);
       return false;
     } finally {
       setBusy(false);
@@ -332,6 +346,10 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
       setSelected(id);
       setView("overview");
     });
+  const openEmailLog = (key: string | null) => {
+    setMessageKey(key);
+    setView("setup");
+  };
   const step = STEPS.findIndex((name) => name === view) + 1;
   const navigation = (
     <>
@@ -368,15 +386,15 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
   if ((param === "hr" && hash === null) || (reviewLink && !loaded && !error)) return <TabSkeleton label="Loading hiring…" />;
 
   return (
-    <div className={`${css.surface} ${serif.variable}`} data-heads-review={view === "heads" || view === "review" ? "" : undefined} data-offer={offer ? "" : undefined}>
+    <div className={`${css.surface} ${serif.variable}`} data-heads-review={view === "heads" || view === "review" ? "" : undefined} data-offer={offer ? "" : undefined} data-prescreen={prescreen ? "" : undefined}>
       {demo && <DemoBar onStep={(name: DemoView) => setView(name, true)} briefOpen={briefOpen} setBriefOpen={setBriefOpen} />}
-      <header className={css.topbar} data-compact={view === "hr" || view === "heads" || giftReview || offer ? "" : undefined} data-heads={view === "heads" ? "" : undefined}>
+      <header className={css.topbar} data-compact={view === "hr" || view === "heads" || giftReview || compactQueue ? "" : undefined} data-heads={view === "heads" ? "" : undefined}>
         <div>
           <h1 className={css.title}>
             {giftReview ? VIEWS[view] : <>Tutor <em>hiring</em></>}
           </h1>
           {/* Always one line, so the tabs below do not move down when the data arrives. */}
-          {!giftReview && !offer && <p className={role ? css.subtitle : `${css.subtitle} ${css.statusSubtitle}`}>
+          {!giftReview && !compactQueue && <p className={role ? css.subtitle : `${css.subtitle} ${css.statusSubtitle}`}>
             {role ? (
               view === "heads" && data?.viewerHead ? nickname(headName(data.viewerHead, data.tutors)) : view === "heads" && head ? "My list" : VIEWS[view]
             ) : data ? (
@@ -389,12 +407,12 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
               "\u00a0"
             )}
           </p>}
-          {!role && !giftReview && paused && <p className={offer ? css.subtitle : css.mobileStatus}>{paused}</p>}
-          {view !== "heads" && !offer && data?.reviewAccess?.hr && <Link className="mt-2 inline-block text-sm underline underline-offset-4" href="/hiring/onboarding">Tutor onboarding and Experts access</Link>}
+          {!role && !giftReview && paused && <p className={compactQueue ? css.subtitle : css.mobileStatus}>{paused}</p>}
+          {view !== "heads" && !compactQueue && data?.reviewAccess?.hr && <Link className="mt-2 inline-block text-sm underline underline-offset-4" href="/hiring/onboarding">Tutor onboarding and Experts access</Link>}
         </div>
         <div role="status" className={css.notice}>
           {/* Rules and setup shows these beside its Save button, where they are in view. */}
-          {view === "setup" ? "" : notice}
+          {view === "setup" || prescreen ? "" : notice}
         </div>
         {role ? (
           // Heads see only their own list (Kevin, 24 Nov 2026). Staff, and a head with no page limit (Kevin, 25 Nov 2026),
@@ -434,9 +452,9 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
           </>
         )}
       </header>
-      {view !== "hr" && view !== "heads" && view !== "offer" && !giftReview && PURPOSE[view] && <p className={css.purpose}>{PURPOSE[view]}</p>}
+      {view !== "hr" && view !== "heads" && view !== "offer" && view !== "prescreen" && !giftReview && PURPOSE[view] && <p className={css.purpose}>{PURPOSE[view]}</p>}
       {/* A head's failed first load has its own message and retry below. */}
-      {error && view !== "setup" && !offerLoadFailed && !(view === "heads" && !data) && (
+      {error && view !== "setup" && !prescreen && !offerLoadFailed && !(view === "heads" && !data) && (
         <p role="alert" className={css.alert}>
           {error}
         </p>
@@ -464,23 +482,23 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
       <div hidden={view !== "capacity"} className={css.viewPane}>
         <CapacityScreen active={view === "capacity"} onReport={setCapacity} />
       </div>
-      {offerLoadFailed ? (
+      {offerLoadFailed || (prescreen && !data && error) ? (
         <div className={css.loading}>
-          <p role="alert" className={css.offerLoadAlert}>Could not load offers.</p>
+          <p role="alert" className={css.offerLoadAlert}>{prescreen ? "Could not load pre-screen." : "Could not load offers."}</p>
           <button type="button" className={`${css.primary} ${css.retry} ${css.offerRetry}`} aria-disabled={retrying || undefined} onClick={async () => {
             if (retrying) return;
             setRetrying(true);
             try {
               await load(true);
               setError("");
-              window.requestAnimationFrame(() => document.getElementById("approved-offers")?.focus());
+              window.requestAnimationFrame(() => document.getElementById(prescreen ? "prescreen-queue" : "approved-offers")?.focus());
             } catch (error) {
-              setError(error instanceof Error ? error.message : "Could not load offers.");
+              setError(error instanceof Error ? error.message : "Could not load the list.");
             } finally {
               setRetrying(false);
             }
           }}>Try again</button>
-          <p role="status">{retrying ? "Loading offers…" : ""}</p>
+          <p role="status">{retrying ? (prescreen ? "Loading pre-screen…" : "Loading offers…") : ""}</p>
         </div>
       ) : !data || !config || !insights ? (
         error ? (
@@ -553,21 +571,17 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
           {view === "calls" && <TodayCalls data={data} command={command} busy={busy} />}
           <CallsScreen data={data} extras={extras} holds={holds} onOpenRecord={openRecord} command={command} busy={busy} />
         </div>
-        <div hidden={view !== "prescreen"} className={css.viewPane}>
-          <PreScreenScreen data={data} extras={extras} holds={holds} command={command} busy={busy} error={error} notice={notice} />
-        </div>
+        {prescreen && <PreScreenScreen data={data} extras={extras} command={command} busy={busy}
+          reload={() => load(true)} onOpenEmailLog={openEmailLog} onOpenOverview={() => setView("overview")} />}
         {view === "hr" && <HrScreen data={data} command={command} busy={busy} linkedReview={linkedReview} onOpenResults={() => setView("assessment", true)} />}
-        {view === "admin" && <AdminScreen data={data} reload={() => load(true)} onOpenResults={(id) => {
+        {view === "admin" && <AdminScreen data={data} reload={reload} onOpenResults={(id) => {
           setAssessmentVisit(id);
           setView("assessment", true);
         }} />}
-        {(view === "heads" || view === "mock") && <HeadsScreen data={data} head={view === "heads" ? data.viewerHead : undefined} open={linkedReview} reload={() => load(true)} />}
+        {(view === "heads" || view === "mock") && <HeadsScreen data={data} head={view === "heads" ? data.viewerHead : undefined} open={linkedReview} reload={reload} />}
         {(view === "review" || view === "offer") && (
-          <HiringReviewScreen key={view} data={data} offers={view === "offer"} linkedReview={linkedReview} reload={() => load(true)}
-            onOpenEmailLog={(key) => {
-              setMessageKey(key);
-              setView("setup");
-            }}
+          <HiringReviewScreen key={view} data={data} offers={view === "offer"} linkedReview={linkedReview} reload={reload}
+            onOpenEmailLog={openEmailLog}
             onFinalReview={() => setView("review")} onOpenResults={(id) => {
               const rows = assessmentRows(data.bookings, data.papers, data.mocks).filter((row) => row.candidateId === id);
               setAssessmentVisit((rows.find((row) => row.mockAt) ?? rows[0])?.key ?? null);
@@ -578,7 +592,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
           <RunSheetScreen data={data} />
         </div>
         <div hidden={view !== "assessment"} className={css.viewPane}>
-          <AssessmentScreen data={data} selectedVisit={assessmentVisit} onSelectVisit={setAssessmentVisit} onOpenRecord={openRecord} command={command} reload={() => load(true)} busy={busy} />
+          <AssessmentScreen data={data} selectedVisit={assessmentVisit} onSelectVisit={setAssessmentVisit} onOpenRecord={openRecord} command={command} reload={reload} busy={busy} />
         </div>
         <div className={css.layout} hidden={view !== "overview"}>
           <div className={css.main}>

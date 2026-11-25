@@ -140,7 +140,7 @@ describe("availableSlots (legacy mock)", () => {
   });
   it("offers hourly mock slots to a head with saved hours and no Wise working hours", async () => {
     const slots = await run({ fallbackWeek: week });
-    expect(slots).toHaveLength(20 * 6); // 20 dates (four weeks), 10:00 to 15:00 starts
+    expect(slots).toHaveLength(20 * 5); // 20 dates (four weeks), 10:00 to 15:00 starts, less the 12:00 lunch hour
     expect(slots.every((x) => x.interviewerKey === "Peat")).toBe(true);
   });
   it("uses onsite Wise working hours for a head set to hours from Wise", async () => {
@@ -154,25 +154,25 @@ describe("availableSlots (legacy mock)", () => {
     expect(slots.filter((x) => x.date === "2026-11-03").map((x) => x.start)).toEqual([840, 900].map((m) => instant("2026-11-03", m).toISOString()));
   });
   it("after a confirm refusal, stops offering that head's busy hour even without a live read", async () => {
-    // The refused class is 11:40–12:40 on 2 Nov: the 11:00 and 12:00 mocks overlap it.
+    // The refused class is 11:40–12:40 on 2 Nov: it overlaps the 11:00 mock (12:00 is lunch).
     vi.mocked(fetchWiseSessionsForBangkokDates).mockResolvedValueOnce([session()] as never);
     await expect(verifyLiveSlot(fakeDb(new Map([[s.tutorWiseAccounts, [account]]])), slot)).rejects.toThrow(/has a class/);
     const slots = await run({ fallbackWeek: week });
-    expect(slots).toHaveLength(20 * 6 - 2);
+    expect(slots).toHaveLength(20 * 5 - 1);
     expect(slots.some((x) => x.start === slot.start)).toBe(false);
     forgetLiveRefusals();
-    expect(await run({ fallbackWeek: week })).toHaveLength(20 * 6);
+    expect(await run({ fallbackWeek: week })).toHaveLength(20 * 5);
   });
   it("offers none to a head with no saved hours", async () => {
     expect(await run({})).toEqual([]);
   });
   it("with a live read, drops only the hour of a new class and offers no head the read could not check", async () => {
-    const hour = { start: instant(DATE, 720), end: instant(DATE, 780) };
+    const hour = { start: instant(DATE, 780), end: instant(DATE, 840) };
     const read = (head: object) => ({ checkedAt: "", snapshotId: "snap", heads: new Map([["Peat", head]]) }) as never;
     const slots = await run({ fallbackWeek: week }, read({ classes: [hour], leaves: [] }));
-    expect(slots).toHaveLength(20 * 6 - 1);
+    expect(slots).toHaveLength(20 * 5 - 1);
     expect(slots.some((x) => x.start === hour.start.toISOString())).toBe(false);
-    expect(await run({ fallbackWeek: week }, read({ classes: [], leaves: [hour] }))).toHaveLength(20 * 6 - 1);
+    expect(await run({ fallbackWeek: week }, read({ classes: [], leaves: [hour] }))).toHaveLength(20 * 5 - 1);
     expect(await run({ fallbackWeek: week }, read({ error: "Interviewer accounts need review." }))).toEqual([]);
     expect(await run({ fallbackWeek: week }, { checkedAt: "", snapshotId: "snap", heads: new Map() })).toEqual([]);
   });

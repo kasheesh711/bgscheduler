@@ -17,6 +17,7 @@ import { ResultUpload } from "./assessment-screen";
 import { callCommand, callState, callSubjects, triesText } from "./calls-screen";
 import { PhoneLink, ResumePeek, SeekApplicationReview } from "./candidate-inspector";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
+import { useMinute } from "./use-minute";
 import r from "./role-screens.module.css";
 
 // ─── The simple screens: one job each, big targets, no tables. They read the same payload as the full dashboard. ───
@@ -520,20 +521,6 @@ export function HrScreen({ data, command, busy, onOpenResults, readOnly = false,
 }
 
 // ─── Shared visit data ───
-
-function useMinute() {
-  const [minute, setMinute] = useState(() => Math.floor(Date.now() / 60000));
-  useEffect(() => {
-    // On the minute boundary, then every minute, so "Mock now" shows when the mock starts.
-    const tick = () => setMinute(Math.floor(Date.now() / 60000));
-    let timer = window.setTimeout(function next() {
-      tick();
-      timer = window.setTimeout(next, 60000 - (Date.now() % 60000));
-    }, 60000 - (Date.now() % 60000));
-    return () => window.clearTimeout(timer);
-  }, []);
-  return minute;
-}
 
 function useVisits(data: HiringData, minute = 0) {
   return useMemo(() => {
