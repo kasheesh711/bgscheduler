@@ -56,6 +56,7 @@ import {
   workRightsPenalty,
   supportedVisitSubjects,
   topHiringSubject,
+  meetsTimeRule,
   visitSubject,
   workRightsAccepted,
 } from "./scoring";
@@ -91,6 +92,8 @@ import { paperChecks } from "./paper-check";
 import { checkRubric, computeSheet, passRulesFor, RUBRIC_ITEMS, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
 import { HIRING_LINE_URL, hiringEmail, mockPrep, TWO_DAY_STEPS, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
+import { profileDegree, type KnownDegree } from "./profile-degree";
+import { parseWeekHours } from "./week-hours";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -1023,7 +1026,9 @@ async function liveForList(db: Database, config: HiringConfig, subjects: Subject
     return await readLiveBusy(
       db,
       config.interviewers.filter((h) => subjects.every((v) => h.subjects.includes(v))).map((h) => h.canonicalKey),
-      businessDates(now, config.holidays),
+      // The page's live read stays on the first five business dates so the Wise load does not grow. Later dates use the
+      // 30-minute Wise copy, and the confirm step always reads the chosen date live.
+      businessDates(now, config.holidays, 5),
       { cacheMs: 60_000, deadlineMs: 12_000 },
     );
   } catch (error) {
@@ -1476,6 +1481,7 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     form: own.form,
     recommendationReady,
     // The head scores while they watch; only the recommendation waits for the lesson to end.
+    mockStarted: now >= mock.startTime,
     mockEnded: now >= mock.endTime,
     recommendationBlock: own.form !== "closed" || recommendationReady || now < mock.endTime ? null : checking ? ("checking" as const) : ("admin" as const),
   };
@@ -1761,7 +1767,8 @@ const offeredSlots = async (db: Database, config: HiringConfig, subject: Subject
 export async function visitView(token: string, db: Database = getDb(), now = new Date()) {
   const cap = visitToken(token, now);
   const { config } = await settings(db);
-  if (answersFirst(await candidateById(db, cap.id), cap))
+  const candidate = await candidateById(db, cap.id);
+  if (answersFirst(candidate, cap))
     return {
       kind: "visit" as const,
       paired: true,
@@ -1778,6 +1785,14 @@ export async function visitView(token: string, db: Database = getDb(), now = new
       waiting: "answers" as "answers" | null,
       // Where the page uploads an Art & Design portfolio while the questions are open.
       portfolioPath: portfolioPath(cap.id) as string | null,
+      // The link holder's own résumé degree, for a one-tap confirm in place of the two degree questions (Kevin, 24 Nov 2026).
+      knownDegree: profileDegree(candidate.profileAssessment) as KnownDegree | null,
+      // Subjects a visit can be in now (hiring, with a head), highest priority first: the page lists them first.
+      testSubjects: config.subjectPriority
+        .filter((p) => p.hiring && config.interviewers.some((i) => i.subjects.includes(p.subject)))
+        .map((p) => p.subject) as Subject[],
+      timeRuleMet: false,
+      liveDates: [] as string[],
     };
   const { subject, rows } = await openVisit(db, cap, config, now);
   const enabled = bookable(config, cap.id);
@@ -1837,6 +1852,13 @@ export async function visitView(token: string, db: Database = getDb(), now = new
     checkedAt: live?.checkedAt ?? null,
     waiting: null as "answers" | null,
     portfolioPath: null as string | null,
+    knownDegree: null as KnownDegree | null,
+    testSubjects: [] as Subject[],
+    // The saved answers already give a weekend hour and a weekday hour from 15:00: the page ticks that box for the candidate.
+    // Only an exact grid answer ticks the box for the candidate; old sheet or form text still asks (code review r23).
+    timeRuleMet: !!candidate.preScreen && !!parseWeekHours(candidate.preScreen.availability) && meetsTimeRule(candidate.preScreen.availability),
+    // The dates the live Wise read covered (liveForList): the page says "checked live" on these only (code review r4).
+    liveDates: live ? businessDates(now, config.holidays, 5) : ([] as string[]),
   };
 }
 

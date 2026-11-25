@@ -139,7 +139,7 @@ beforeEach(() => vi.mocked(ensureIndex).mockReset());
 describe("visit slots", () => {
   it("offers Ek Mon–Thu and never Friday", async () => {
     const slots = await run({ interviewers: [head("Ek")] }, ek);
-    expect([...new Set(slots.map((x) => x.date))]).toEqual([
+    expect([...new Set(slots.filter((x) => x.date < "2026-11-09").map((x) => x.date))]).toEqual([
       "2026-11-02",
       "2026-11-03",
       "2026-11-04",
@@ -177,7 +177,7 @@ describe("visit slots", () => {
     const gift = head("Gift", { hoursFromWise: true, fallbackWeek: week([1, 2, 3, 4, 5]) });
     const windows = [wise(1, 720, 960), wise(2, 600, 960, "online")];
     const slots = await run({ interviewers: [gift] }, { groups: [group("Gift", { availabilityWindows: windows })] });
-    expect(slots.map((x) => x.examStart)).toEqual([600, 660, 720].map((m) => instant("2026-11-02", m).toISOString()));
+    expect(slots.filter((x) => x.date === "2026-11-02").map((x) => x.examStart)).toEqual([600, 660, 720].map((m) => instant("2026-11-02", m).toISOString()));
     // No Wise windows: no hours, so nothing is offered.
     expect(await run({ interviewers: [gift] }, { groups: [group("Gift")] })).toEqual([]);
   });
@@ -290,7 +290,10 @@ describe("visit slots", () => {
       booking("2026-11-03", "mock", 900, 960),
       booking("2026-11-06", "mock", 900, 960),
     ];
-    expect(await run(cfg, fixture(two))).toEqual([]);
+    const full = await run(cfg, fixture(two));
+    expect(full.filter((x) => x.date < "2026-11-09")).toEqual([]);
+    // The limit is per week: the next week still has times.
+    expect(full.some((x) => x.date === "2026-11-09")).toBe(true);
     // Cancelled and no-show mocks free the place.
     const freed = [
       booking("2026-11-03", "mock", 900, 960),
@@ -315,7 +318,7 @@ describe("visit slots", () => {
       },
     );
     expect(both.length).toBeGreaterThan(0);
-    expect(both.every((x) => x.interviewerKey === "Ek")).toBe(true);
+    expect(both.filter((x) => x.date < "2026-11-09").every((x) => x.interviewerKey === "Ek")).toBe(true);
   });
 
   it("shows each time once and assigns the head with fewer mocks", async () => {
@@ -353,10 +356,11 @@ describe("visit slots", () => {
       holidays: ["2026-11-03"],
     };
     const dates = [...new Set((await run(cfg, f)).map((x) => x.date))];
-    expect(dates).toEqual(["2026-11-02", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-09"]);
+    expect(dates).toHaveLength(20);
+    expect(dates.slice(0, 5)).toEqual(["2026-11-02", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-09"]);
     // Thursday evening: the next dates skip the weekend.
     const later = await run(cfg, f, "Mathematics", new Date("2026-11-05T12:00:00Z"));
-    expect([...new Set(later.map((x) => x.date))]).toEqual([
+    expect([...new Set(later.map((x) => x.date))].slice(0, 5)).toEqual([
       "2026-11-06",
       "2026-11-09",
       "2026-11-10",

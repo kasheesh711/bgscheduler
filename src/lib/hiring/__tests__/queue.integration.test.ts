@@ -954,7 +954,8 @@ describe("the questions on the booking page (Kevin, 24 Nov 2026)", () => {
     englishEvidence: "",
     experience: "5+ years",
     portfolio: "",
-    availability: ["Weekday Evening (17:00-21:00)", "Weekend Morning (before 12:00)"],
+    // The booking page grid: Monday 17:00-21:00 and Saturday 09:00-12:00.
+    availability: [[17, 18, 19, 20], [], [], [], [], [9, 10, 11], []],
     weeklyHours: "11-20",
     motivation: "I want to help students see why each step of a proof works, not only the answer.",
     teachingApproach: "Check understanding first, then set one small goal for each lesson and praise it.",

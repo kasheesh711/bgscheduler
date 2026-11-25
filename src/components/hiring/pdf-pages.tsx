@@ -9,7 +9,7 @@ const RUNTIME = "/api/hiring/pdf-runtime";
 // scroll when a longer file must show in full. Download always gives the whole file.
 const MAX_PAGES = 15;
 
-const FAILED = "This PDF could not be drawn here. Use Download to open it.";
+const FAILED = "This PDF could not be drawn here. Use the link to open it.";
 
 /**
  * The pages of a PDF, drawn on the page itself. The browser's own PDF viewer is not used: Safari, phones and a
@@ -88,7 +88,7 @@ export function PdfPages({ src, title, runtime = RUNTIME, maxPages = MAX_PAGES }
 
   if (error) return <p role="alert" className={css.errorText}>{error}</p>;
   return (
-    <div ref={box} className={css.pdfPages} aria-label={title}>
+    <div ref={box} className={css.pdfPages} role="region" aria-label={title} tabIndex={0}>
       {!pdf && <p role="status" className={css.inspectorMeta}>Opening the file…</p>}
       {Array.from({ length: count }, (_, i) => (
         <canvas key={i} ref={(el) => void (sheets.current[i] = el)} role="img" aria-label={`${title}, page ${i + 1} of ${pdf?.numPages}`} />

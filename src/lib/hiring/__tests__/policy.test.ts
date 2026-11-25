@@ -321,8 +321,11 @@ describe("hiring decision boundaries", () => {
     const dates = businessDates(new Date("2026-10-30T23:00:00Z"), ["2026-11-03"], 5, true);
     expect(dates).toEqual(["2026-11-01", "2026-11-02", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08", "2026-11-09"]);
   });
-  it("returns the next five whole Bangkok business days and respects closures", () => {
-    expect(businessDates(new Date("2026-10-30T23:00:00Z"))).toEqual([
+  it("returns the next whole Bangkok business days (four weeks by default) and respects closures", () => {
+    const all = businessDates(new Date("2026-10-30T23:00:00Z"));
+    expect(all).toHaveLength(20);
+    expect(all.at(-1)).toBe("2026-11-27");
+    expect(businessDates(new Date("2026-10-30T23:00:00Z"), [], 5)).toEqual([
       "2026-11-02",
       "2026-11-03",
       "2026-11-04",
@@ -330,7 +333,7 @@ describe("hiring decision boundaries", () => {
       "2026-11-06",
     ]);
     expect(
-      businessDates(new Date("2026-10-30T23:00:00Z"), ["2026-11-03"]),
+      businessDates(new Date("2026-10-30T23:00:00Z"), ["2026-11-03"], 5),
     ).toEqual([
       "2026-11-02",
       "2026-11-04",

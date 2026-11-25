@@ -41,7 +41,7 @@ async function Shell(props: Props) {
 
 export default function Page(props: Props) {
   return (
-    <Suspense fallback={<BriefLoading />}>
+    <Suspense fallback={<BriefShell><BriefLoading /></BriefShell>}>
       <Shell {...props} />
     </Suspense>
   );

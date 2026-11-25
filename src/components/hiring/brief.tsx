@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { ITEM_MAX, RUBRIC_ITEMS, rubricTotals } from "@/lib/hiring/marking-sheet";
 import { ANSWER_LABELS } from "@/lib/hiring/model";
 import { QUESTION_BANK, STRESS_ELEMENTS, STRESS_SCENARIO, STRESS_STEPS } from "@/lib/hiring/rubric-guide";
@@ -29,8 +30,9 @@ export const ScheduleLink = () => (
 );
 
 /** Inside the head's Hiring screen (a frame), a save tells the list beside it to reload. Same origin only. */
-export function tellHiringList() {
-  if (window.parent !== window) window.parent.postMessage({ type: "hiring-saved" }, window.location.origin);
+/** Tells the head's list what was saved, so it reloads and names the save (Sol review, round 22). */
+export function tellHiringList(kind: "scores" | "recommendation" | "marks") {
+  if (window.parent !== window) window.parent.postMessage({ type: "hiring-saved", kind }, window.location.origin);
 }
 
 export const BriefLoading = () => (
@@ -47,7 +49,8 @@ export const BriefGone = () => (
 );
 
 type Doc = "resume" | "paper" | "answers" | "guide";
-const DOCS: [Doc, string][] = [["resume", "Résumé"], ["paper", "Paper"], ["answers", "Answers"], ["guide", "Guide"]];
+// "Application", not "Answers": a head read it as the paper's answers (Sol review, round 19).
+const DOCS: [Doc, string][] = [["resume", "Résumé"], ["paper", "Paper"], ["answers", "Application"], ["guide", "Guide"]];
 const points = (value: number) => String(Math.round(value * 10) / 10);
 
 /**
@@ -60,9 +63,60 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   const [editCount, setEditCount] = useState(0);
   const [lastSent, setLastSent] = useState(() => brief.rubric ? { total: rubricTotals(brief.rubric).total, max: rubricTotals(brief.rubric).max, editCount: 0 } : null);
   const [decision, setDecision] = useState(brief.decision);
+  // An in-place refresh can bring scores or a recommendation sent from another device (the phone). They replace what
+  // this page showed, so it never asks for scores again over sent ones (code review, round 20).
+  const serverRubric = brief.rubric ? JSON.stringify(brief.rubric) : null;
+  const [seenRubric, setSeenRubric] = useState(serverRubric);
+  if (serverRubric !== seenRubric) {
+    setSeenRubric(serverRubric);
+    if (brief.rubric) {
+      // The receipt follows the server's sent scores; unsent edits on this page stay marked as unsent (critic, round 21).
+      const sent = rubricTotals(brief.rubric);
+      setLastSent({ total: sent.total, max: sent.max, editCount: lastSent && lastSent.editCount !== editCount ? lastSent.editCount : editCount });
+    }
+  }
+  if (brief.decision && !decision) setDecision(brief.decision);
   const [doc, setDoc] = useState<Doc>("resume");
   const [paperOpened, setPaperOpened] = useState(false);
   const unsent = lastSent !== null && lastSent.editCount !== editCount;
+  // A check for the recommendation fetches the brief again in place: the open file tab and unsent score edits stay
+  // (Sol review, round 17). The head's list asks the same when its row now names another part.
+  // The refresh runs as a transition, so "Checking…" shows until the new brief is on screen; then the part asked for
+  // opens, or the check says the recommendation is not open yet (Sol review, round 18).
+  const router = useRouter();
+  const [checking, startCheck] = useTransition();
+  // The list's mock-start refresh is quiet: it shows no "Checking…" (code review, round 25).
+  const [, startQuiet] = useTransition();
+  const [checked, setChecked] = useState(false);
+  const asked = useRef<string | null>(null);
+  const refresh = (part: string) => {
+    asked.current = part;
+    setChecked(true);
+    startCheck(() => router.refresh());
+  };
+  useEffect(() => {
+    if (checking || asked.current === null) return;
+    const target = (asked.current ? document.getElementById(asked.current) : null)
+      ?? (asked.current === "recommendation" && !document.activeElement?.closest("[data-check]") ? document.getElementById("recommendation-state") : null);
+    asked.current = null;
+    target?.scrollIntoView({ block: "start" });
+    target?.focus({ preventScroll: true });
+  }, [checking]);
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.source !== window.parent || event.data?.type !== "hiring-refresh") return;
+      // While a send is in flight, a fetch could return the scores from before it (code review, round 25).
+      if (pending) return;
+      const part = typeof event.data.part === "string" ? event.data.part : "";
+      // A refresh at mock start is not a question about the recommendation, so it says nothing (critic review, round 19).
+      if (!part) return startQuiet(() => router.refresh());
+      asked.current = part;
+      if (part === "recommendation") setChecked(true);
+      startCheck(() => router.refresh());
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [router, pending]);
   const blocked = brief.form === "closed" && brief.mockEnded && !brief.recommendationReady && !decision;
   const earlyRecommendation = brief.form === "closed" && brief.recommendationReady;
   const paperUrl = resumeUrl.replace(/resume$/, "paper");
@@ -70,7 +124,9 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   // The head is the interviewer and the place does not change, so the short header keeps the subject and the time.
   const facts: [string, string][] = [
     ["Subject", brief.subject],
-    ["Mock teaching", compact ? brief.mock : `${brief.mock} (Bangkok)`],
+    // The label says whether the mock is still to come or under way (Sol review, round 17). Each instruction sits where it
+    // is used: before the mock under the facts, sending with the scores, recommending by its check (Sol review, round 18).
+    [brief.mockEnded || brief.decision ? "Mock teaching" : brief.mockStarted ? "Mock now" : "Upcoming mock", compact ? brief.mock : `${brief.mock} (Bangkok)`],
     ...(brief.exam && !compact ? ([["Exam", brief.exam]] as [string, string][]) : []),
     ...(compact ? [] : ([["Place", brief.location], ["Interviewer", brief.interviewer ?? "To be confirmed"]] as [string, string][])),
   ];
@@ -81,7 +137,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
         sent={decision}
         onSent={(sent) => {
           setDecision(sent);
-          tellHiringList();
+          tellHiringList("recommendation");
         }}
         url={decisionUrl}
         hasScores={lastSent !== null || brief.form === "closed"}
@@ -97,7 +153,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
     <>
       <header className={b.top} data-compact={compact ? "" : undefined}>
         <div>
-          {!compact && <p className={b.eyebrow}>Interview brief</p>}
+          {/* Also in the head's pane, so the open page names itself (Sol review, round 22). */}
+          <p className={b.eyebrow}>Interview brief</p>
           <h1 className={b.name}>{brief.name}</h1>
           <dl className={b.facts}>
             {facts.map(([label, value]) => (
@@ -107,6 +164,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
               </div>
             ))}
           </dl>
+          {!brief.mockStarted && !brief.mockEnded && !decision && <p className={`${c.note} ${b.prep}`}>Review the résumé and guide before the mock.</p>}
         </div>
         {brief.ats && (
           <section className={b.ats} aria-label="ATS score">
@@ -136,19 +194,23 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
       <div className={b.cols}>
         <div className={b.sheet}>
           {blocked && (
-            <div className={`${b.panel} ${c.field}`}>
-              <p role="status">{brief.recommendationBlock === "checking" ? "Scores are being checked."
+            // A check that ends here, with no recommendation to open, puts focus on this panel (critic review, round 20).
+            <div id="recommendation-state" tabIndex={-1} className={`${b.panel} ${c.field}`}>
+              <p role="status">{checking ? "Checking scores…" : brief.recommendationBlock === "checking" ? "Scores are being checked."
                 : "Ask BeGifted admin to check the scores."}</p>
+              {/* Stays focusable while it checks; when the recommendation opens, focus moves to it (Sol review, round 19). */}
               {brief.recommendationBlock === "checking" && (
-                <button type="button" className={c.button} onClick={() => window.location.reload()}>Check again</button>
+                <button type="button" className={c.button} data-check="" aria-disabled={checking || !!pending || undefined} onClick={() => { if (!checking && !pending) refresh("recommendation"); }}>Check again</button>
               )}
             </div>
           )}
           {earlyRecommendation && recommendation}
           {!blocked && (
             <section id="scores" className={b.panel} tabIndex={-1}>
-              <h2 className="sr-only">Mock lesson scores</h2>
+              <h2 className={b.panelTitle}>Mock scores <span className={c.note}>· {RUBRIC_ITEMS.length} items</span></h2>
+              {!brief.mockEnded && brief.form !== "closed" && !decision && !lastSent && <p className={c.note}>Send scores during the mock.</p>}
               <BriefRubric
+                key={serverRubric ?? "new"}
                 saved={brief.rubric}
                 form={brief.form}
                 url={rubricUrl}
@@ -158,9 +220,11 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
                 pending={pending}
                 setPending={setPending}
                 onEdit={() => setEditCount((count) => count + 1)}
+                // Discard is not a send: the bar shows the sent scores again, and the list is not told anything (critic, round 20).
+                onDiscard={() => setLastSent((sent) => sent && { ...sent, editCount })}
                 onSent={(total) => {
                   setLastSent({ total, max: RUBRIC_ITEMS.length * ITEM_MAX, editCount });
-                  tellHiringList();
+                  tellHiringList("scores");
                 }}
               />
             </section>
@@ -168,8 +232,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
           {brief.mockEnded && !blocked && !earlyRecommendation && recommendation}
           {wait && (
             <div className={`${b.panel} ${c.field}`}>
-              <p role="status">Your recommendation opens when the mock ends.</p>
-              <button type="button" className={c.button} onClick={() => window.location.reload()}>Check again</button>
+              <p role="status">{checking ? "Checking…" : checked ? "Not open yet. Recommend after the mock ends." : "Recommend after the mock ends."}</p>
+              <button type="button" className={c.button} data-check="" aria-disabled={checking || !!pending || undefined} onClick={() => { if (!checking && !pending) refresh("recommendation"); }}>Check recommendation</button>
             </div>
           )}
         </div>
@@ -182,8 +246,9 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
               }}>{label}</button>
             ))}
             {fileUrl && (
-              <a className={b.open} href={fileUrl} target="_blank" rel="noreferrer" aria-label={doc === "paper" ? "Open the graded paper" : brief.resume === "pdf" ? "Open the résumé (PDF)" : undefined}>
-                {doc === "resume" && brief.resume !== "pdf" ? "Download résumé (Word)" : "Open"}
+              <a className={b.open} href={fileUrl} target="_blank" rel="noreferrer" aria-label={doc === "paper" ? "Open paper (graded PDF), opens in a new tab" : brief.resume === "pdf" ? "Open résumé (PDF), opens in a new tab" : undefined}>
+                {/* Names the file, so it does not read as a second "open" for the brief (Sol review, round 16). */}
+                {doc === "resume" && brief.resume !== "pdf" ? "Download résumé (Word)" : <>{doc === "paper" ? "Open paper" : "Open résumé"} <span aria-hidden="true">↗</span></>}
               </a>
             )}
           </div>
