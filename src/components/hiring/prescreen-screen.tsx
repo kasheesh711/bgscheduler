@@ -10,31 +10,33 @@ import { holdNote, preScreenNote, type CandidateExtras } from "@/lib/hiring/stat
 import { AnswerText } from "./answer-text";
 import { AssessmentBlock, ONSITE_STAGES, ProfileScoreBreakdown, ResumePeek } from "./candidate-inspector";
 import type { Command, HiringData } from "./dashboard";
+import { useMinute } from "./use-minute";
 import css from "./dashboard.module.css";
 import p from "./prescreen-screen.module.css";
 
 const round = (n: number) => Math.round(n * 10) / 10;
 const FILTERS = [
-  ["decision", "Needs decision"], ["overdue", "Waiting 3+ days"], ["aside", "Set aside"],
-  ["invited", "Invited/booked"], ["all", "All"],
+  ["decision", "Needs decision"], ["waiting", "Waiting"], ["overdue", "Waiting 3+ days"],
+  ["invited", "Invited/booked"], ["aside", "Set aside"], ["held", "Held"], ["stopped", "Stopped"], ["all", "All"],
 ] as const;
-type Filter = (typeof FILTERS)[number][0] | "waiting";
+type Filter = (typeof FILTERS)[number][0];
 const EMPTY: Record<Filter, string> = {
   decision: "No replies need a decision.",
   overdue: "No replies overdue.",
   waiting: "No replies pending.",
   aside: "No candidates set aside.",
   invited: "No invitations or bookings.",
+  held: "No candidates held.",
+  stopped: "No candidates stopped.",
   all: "No forms sent.",
 };
 const RESULTS = {
   invite_onsite: "Visit invite queued",
   send_new_link: "New link queued",
-  bring_back: "Brought back",
   stop: "Stopped",
   pre_screen_score: "Score changed",
 };
-type Action = keyof typeof RESULTS;
+type Action = "bring_back" | keyof typeof RESULTS;
 type ActionStatus = { message: string; resetEdit?: boolean };
 const REVISION_CONFLICT = "This candidate changed. Refresh the page.";
 
@@ -88,14 +90,12 @@ function PreScreenPanel({
     remindedAt: waiting ? null : extra.pre.remindedAt,
   }, true);
   let visitLabel = "Visit email";
-  let visitValue = email.label;
-  if (waiting) visitValue = "Not sent yet";
-  else if (bookedWithoutReply && email.label === "Waiting for reply") {
+  let visitValue = row.hasVisitEmail ? email.label : "Not sent";
+  if (bookedWithoutReply && !row.hasVisitEmail) {
     const visit = extra?.visit ?? data.bookings.find((booking) => booking.candidateId === candidate.id && booking.status === "confirmed");
     visitLabel = "Visit";
     visitValue = visit ? `Booked ${formatInTimeZone(new Date(visit.startTime), ZONE, "d MMM, HH:mm")}` : "Booked";
-  } else if ((formFailed && email.label === "Waiting for reply")
-    || (row.fact === "Below pass score" && email.label === "Not sent: below pass score")) visitValue = "Not sent";
+  }
   let currentStatus = row.fact;
   if (row.group === "invited" && (email.tone === "bad" || row.fact === "Invite queued")) {
     currentStatus = candidate.stage === "no_booking" ? "No booking" : row.booked ? "Visit booked" : "Invited";
@@ -112,13 +112,13 @@ function PreScreenPanel({
   const buttons: { action: Action; label: string; allowed: boolean }[] = [
     { action: "bring_back", label: "Bring back", allowed: row.group === "aside" },
     { action: "invite_onsite", label: row.below ? "Invite anyway" : "Invite to visit",
-      allowed: !!candidate.preScreen && !!candidate.preScreenAssessment && row.group !== "invited" && ONSITE_STAGES.includes(candidate.stage)
+      allowed: !!candidate.preScreen && !!candidate.preScreenAssessment && row.group !== "invited" && row.group !== "held" && ONSITE_STAGES.includes(candidate.stage)
         && (candidate.stage !== "stopped" || (row.canInviteAfterStop && !!candidate.email && !activeVisit)) },
     { action: "send_new_link", label: "Resend link", allowed: candidate.stage === "no_booking" || (candidate.stage === "onsite_invited" && config.deliveryEnabled) },
-    { action: "pre_screen_score", label: "Change score", allowed: !!candidate.preScreen && !!candidate.preScreenAssessment && row.group !== "aside" },
-    { action: "stop", label: "Stop", allowed: !activeVisit && !isDecided(candidate.stage) && candidate.stage !== "stopped" && row.group !== "aside" },
+    { action: "pre_screen_score", label: "Change score", allowed: !!candidate.preScreen && !!candidate.preScreenAssessment },
+    { action: "stop", label: "Stop", allowed: !activeVisit && !isDecided(candidate.stage) && candidate.stage !== "stopped" },
   ];
-  const actions = hold ? [] : buttons.filter((button) => button.allowed);
+  const actions = buttons.filter((button) => button.allowed);
   const canScore = actions.some(({ action }) => action === "pre_screen_score");
   useEffect(() => {
     if (!status) return;
@@ -202,6 +202,8 @@ function PreScreenPanel({
               : <>{candidate.preScreenOverride.by} changed the AI score of {candidate.preScreenScore}. </>}
             {candidate.preScreenOverride.reason}
           </p>}
+          {candidate.preScreen && candidate.preScreenHash && !candidate.preScreenAssessment &&
+            <p className={p.note}>AI could not score this reply.</p>}
           <dl className={css.facts}>
             <div><dt>Current status</dt><dd>{currentStatus}</dd></div>
             <div><dt>Email</dt><dd>{candidate.email ?? "Email missing"}</dd></div>
@@ -304,14 +306,20 @@ export function PreScreenScreen({ data, extras, command, busy, reload, onOpenEma
   const [sentTo, setSentTo] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [status, setStatus] = useState<ActionStatus | null>(null);
-  const [saved, setSaved] = useState<{ id: string; action: Action; message: string } | null>(null);
+  const [saved, setSaved] = useState<{ id: string; action: Action; message: string; fromDecision: boolean } | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [actionError, setActionError] = useState("");
   const [conflicts, setConflicts] = useState(new Map<string, number>());
+  const currentFilter = useRef<Filter>(filter);
   const section = useRef<HTMLElement>(null);
   const search = useRef<HTMLInputElement>(null);
+  const refreshListButton = useRef<HTMLButtonElement>(null);
   const focusAfterClose = useRef<string | null>(null);
-  const queue = useMemo(() => queueFor(data, new Date()), [data]);
+  const minute = useMinute();
+  const queue = useMemo(() => {
+    void minute;
+    return queueFor(data, new Date());
+  }, [data, minute]);
   const overdue = queue.waiting.filter((row) => row.overdue);
   const groups = { ...queue, overdue };
   const needle = query.trim().toLowerCase();
@@ -324,20 +332,29 @@ export function PreScreenScreen({ data, extras, command, busy, reload, onOpenEma
   const conflict = open && conflictRevision !== undefined && open.candidate.revision <= conflictRevision;
 
   useLayoutEffect(() => {
-    if (selected || focusAfterClose.current === null) return;
+    if (selected) return;
+    if (saved) {
+      if (!retrying) refreshListButton.current?.focus();
+      return;
+    }
+    if (focusAfterClose.current === null) return;
     const id = focusAfterClose.current;
     focusAfterClose.current = null;
     const sectionNode = section.current;
     (sectionNode?.querySelector<HTMLButtonElement>(`[data-review-id="${CSS.escape(id)}"]`)
       ?? sectionNode?.querySelector<HTMLElement>("[data-queue-empty]")
       ?? sectionNode)?.focus();
-  }, [selected]);
+  }, [selected, saved, retrying]);
 
-  function handoff(latest: HiringData, result: NonNullable<typeof saved>) {
-    const current = queue.decision.findIndex(({ candidate }) => candidate.id === result.id);
-    const remaining = queueFor(latest, new Date()).decision;
+  function finishAction(latest: HiringData, result: NonNullable<typeof saved>) {
     setSaved(null);
     setActionError("");
+    if (!result.fromDecision || currentFilter.current !== "decision") {
+      setStatus({ message: result.message, resetEdit: true });
+      return;
+    }
+    const current = queue.decision.findIndex(({ candidate }) => candidate.id === result.id);
+    const remaining = queueFor(latest, new Date()).decision;
     if (result.action === "pre_screen_score" && remaining.some(({ candidate }) => candidate.id === result.id)) {
       setStatus({ message: result.message + " Decision still needed.", resetEdit: true });
       return;
@@ -346,7 +363,6 @@ export function PreScreenScreen({ data, extras, command, busy, reload, onOpenEma
     const next = remaining.find(({ candidate }) => candidate.id !== result.id && later.has(candidate.id))
       ?? remaining.find(({ candidate }) => candidate.id !== result.id)
       ?? remaining[0];
-    setFilter("decision");
     setQuery("");
     setSentFrom("");
     setSentTo("");
@@ -365,14 +381,15 @@ export function PreScreenScreen({ data, extras, command, busy, reload, onOpenEma
   return (
     <section id="prescreen-queue" className={p.screen} ref={section} tabIndex={-1} aria-label="Pre-screen responses">
       <div className={p.filters} role="group" aria-label="Filter pre-screen responses">
-        {FILTERS.map(([key, name]) => <button key={key} type="button" className={p.control}
-          aria-pressed={key === filter}
-          onClick={() => {
-            if (key === filter) return;
-            setFilter(key);
-            setStatus(null);
-          }}>{name}{key === "decision" && ` (${queue.decision.length})`}</button>)}
-        {filter === "waiting" && <span className={p.note}>Waiting</span>}
+        {FILTERS.filter(([key]) => key === filter || (key !== "held" && key !== "stopped") || groups[key].length > 0)
+          .map(([key, name]) => <button key={key} type="button" className={p.control}
+            aria-pressed={key === filter}
+            onClick={() => {
+              if (key === filter) return;
+              currentFilter.current = key;
+              setFilter(key);
+              setStatus(null);
+            }}>{name}{key === "decision" && ` (${queue.decision.length})`}</button>)}
       </div>
       <div className={p.tools}>
         <input ref={search} type="search" aria-label="Search pre-screen responses" placeholder="Search name or email" value={query}
@@ -400,7 +417,7 @@ export function PreScreenScreen({ data, extras, command, busy, reload, onOpenEma
       <p role="status" aria-live={open ? "off" : "polite"} className={p.status}>{!open && status?.message}</p>
       {!open && saved && <div className={p.tools}>
         <p role="alert" className={p.failure}>Saved. Could not refresh the list.</p>
-        <button type="button" className={p.control} data-primary disabled={retrying}
+        <button ref={refreshListButton} type="button" className={p.control} data-primary disabled={retrying}
           onClick={() => void refresh()}>Refresh list</button>
       </div>}
       {rows.length ? <table className={p.table} role="table" aria-label="Pre-screen candidates">
@@ -421,7 +438,9 @@ export function PreScreenScreen({ data, extras, command, busy, reload, onOpenEma
               {fact !== "Below pass score" ? fact
                 : group === "aside" ? "Set aside"
                   : filter === "all" ? "Below pass score · in review"
-                    : replyDays === null ? fact : `Below pass · replied ${replyDays}d ago`}
+                    : replyDays === null ? fact
+                      : replyDays === 0 ? "Below pass · replied today"
+                        : `Below pass · replied ${replyDays} ${replyDays === 1 ? "day" : "days"} ago`}
             </td>
             <td role="cell" className={p.review}><button className={p.control} data-primary type="button"
               data-review-id={candidate.id} aria-label={`Review ${candidate.name}`} disabled={!!saved}
@@ -440,12 +459,7 @@ export function PreScreenScreen({ data, extras, command, busy, reload, onOpenEma
           if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
           event.preventDefault();
           onOpenOverview();
-        }}>Open overview</Link> : filter === "decision" && queue.waiting.length > 0 && <a href="#prescreen-queue" className={p.control} onClick={(event) => {
-          event.preventDefault();
-          setFilter("waiting");
-          setStatus(null);
-          section.current?.focus();
-        }}>Waiting</a>}
+        }}>Open overview</Link> : null}
       </div>}
       {open && <PreScreenPanel key={open.candidate.id} row={open} extra={extras.get(open.candidate.id)}
         data={data} busy={busy || retrying} status={status}
@@ -458,12 +472,18 @@ export function PreScreenScreen({ data, extras, command, busy, reload, onOpenEma
           const body = { action, id, revision, reason };
           setActionError("");
           await command(action === "pre_screen_score" ? { ...body, score } : { ...body, subjects }, (latest) => {
-            const result = { id, action, message: `${RESULTS[action]} for ${name}.` };
-            if (latest) handoff(latest, result);
+            const message = action === "bring_back" ? `${name} is back in review. Decision needed.` : `${RESULTS[action]} for ${name}.`;
+            const result = { id, action, message,
+              fromDecision: open.group === "decision" && filter === "decision" };
+            if (latest) finishAction(latest, result);
             else setSaved(result);
-          }, (message) => {
-            if (message === REVISION_CONFLICT) setConflicts((current) => new Map(current).set(id, revision));
-            else setActionError(`Could not ${label.toLowerCase()}. Try again.`);
+          }, (message, httpStatus) => {
+            if (httpStatus === 409 && message === REVISION_CONFLICT) setConflicts((current) => new Map(current).set(id, revision));
+            else {
+              const detail = message || `Could not ${label.toLowerCase()}.`;
+              const transient = httpStatus === undefined || httpStatus === 429 || httpStatus >= 500;
+              setActionError(transient && !/try again/i.test(detail) ? `${detail} Try again.` : detail);
+            }
           });
         }} />}
     </section>
@@ -474,7 +494,7 @@ export function PreScreenScreen({ data, extras, command, busy, reload, onOpenEma
     setRetrying(true);
     try {
       const latest = await reload();
-      if (saved) handoff(latest, saved);
+      if (saved) finishAction(latest, saved);
       else if (conflict) return latest.candidates.some(({ id, revision }) => id === open.candidate.id && revision > conflictRevision);
       else setActionError("");
       return true;

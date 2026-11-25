@@ -343,7 +343,7 @@ export function ResumeBody({
   const src = `/api/hiring/resume/${encodeURIComponent(id)}`;
   return (
     <>
-      {type === RESUME_TYPES.pdf && <PdfPages key={src} src={src} title={`Original résumé of ${name}`} onUnavailable={onPreviewUnavailable} />}
+      {type === RESUME_TYPES.pdf && <PdfPages key={src} src={src} title={`Original résumé of ${name}`} hasDownload onUnavailable={onPreviewUnavailable} />}
       <a className={css.sourceLink} href={src} download>
         {type === RESUME_TYPES.pdf ? "Download PDF" : "Download"}
       </a>

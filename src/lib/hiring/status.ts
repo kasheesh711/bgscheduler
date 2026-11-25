@@ -1,5 +1,5 @@
 import { parseISO } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { profileGate } from "./insights";
 import type { LimitName, QueueHold } from "./limits";
 import { ZONE, type HiringConfig, type PreScreen, type Stage } from "./model";
@@ -65,7 +65,8 @@ export function preScreenStatus(
 export function parseFormTimestamp(value: string) {
   const timestamp = value.trim();
   if (/^\d{4}-\d{2}-\d{2}T/.test(timestamp)) {
-    const date = parseISO(timestamp);
+    const date = /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(timestamp)
+      ? parseISO(timestamp) : fromZonedTime(timestamp, "UTC");
     return Number.isFinite(date.getTime()) ? date : null;
   }
   if (/^\d+(?:\.\d+)?$/.test(timestamp)) {

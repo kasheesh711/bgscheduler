@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchesPreScreenList, preScreenFinalScore, preScreenQueue, sentBetween, visitEmail, wasSentForm } from "../prescreen-view";
+import { preScreenFinalScore, preScreenQueue, sentBetween, visitEmail, wasSentForm } from "../prescreen-view";
 
 const person = (patch = {}) => ({
   id: "a",
@@ -59,7 +59,6 @@ describe("visitEmail", () => {
     expect(visitEmail(person({ preScreenScore: 40 }), [], 50).label).toBe("Not sent: below pass score");
     expect(visitEmail(person({ stage: "stopped" }), [], 50).label).toBe("Not sent: stopped");
     expect(visitEmail(person({ stage: "paper_booked" }), [], 50).label).toBe("Old flow: Paper booked");
-    expect(visitEmail(person(), [], 50, "Onsite queue 2 · weekly limit 3").label).toBe("Onsite queue 2 · weekly limit 3");
     expect(visitEmail(person({ preScreenOverride: { score: 90 } }), [], 50).label).toBe("A person decides");
   });
 });
@@ -68,26 +67,26 @@ describe("list filters", () => {
   it("retains a stopped candidate after cancelling their only form email", () => {
     const candidate = { ...person({ preScreen: null }), stage: "stopped" as const };
     const queue = preScreenQueue([{ candidate, outbox: [row("cancelled", "a:pre-screen")], booked: false }], new Date(), 50, {});
-    expect(queue.all).toMatchObject([{ group: "closed", fact: "Stopped" }]);
+    expect(queue.stopped).toMatchObject([{ group: "closed", fact: "Stopped" }]);
+    expect(queue.all).toEqual(queue.stopped);
     expect(queue.waiting).toHaveLength(0);
   });
-  const email = { label: "", tone: "none" as const, sent: false, sentDays: [] as string[] };
   it("uses a person's score in place of the AI's", () => {
     const changed = person({ preScreenScore: 40, preScreenOverride: { score: 70 } });
     expect(preScreenFinalScore(changed)).toBe(70);
-    expect(matchesPreScreenList(changed, "Passed", 50, email)).toBe(true);
-    expect(matchesPreScreenList(changed, "Below pass score", 50, email)).toBe(false);
   });
-  it("keeps unscored people and a missing pass score out of Passed and Below", () => {
-    expect(matchesPreScreenList(person({ preScreenScore: null }), "Passed", 50, email)).toBe(false);
-    expect(matchesPreScreenList(person({ preScreenScore: null }), "Below pass score", 50, email)).toBe(false);
-    expect(matchesPreScreenList(person(), "Passed", null, email)).toBe(false);
-  });
-  it("filters replies and sent email", () => {
-    expect(matchesPreScreenList(person(), "Replied", 50, email)).toBe(true);
-    expect(matchesPreScreenList(person({ preScreen: null }), "No reply", 50, email)).toBe(true);
-    expect(matchesPreScreenList(person(), "Visit email sent", 50, { ...email, sent: true })).toBe(true);
-    expect(matchesPreScreenList(person(), "Visit email sent", 50, email)).toBe(false);
+  it("changes reply age at Bangkok midnight and flags waiting only after 72 hours", () => {
+    const replied = { candidate: person({ preScreen: { submittedAt: "2026-11-25T16:59:00" } }), outbox: [], booked: false };
+    const waiting = {
+      candidate: person({ id: "b", preScreen: null }),
+      outbox: [row("sent", "b:pre-screen", { sentAt: "2026-11-22T17:01:00Z" })],
+      booked: false,
+    };
+    const atMidnight = preScreenQueue([replied, waiting], new Date("2026-11-25T17:00:00Z"), 50, {});
+    expect(atMidnight.decision[0].fact).toBe("Replied 1 day ago");
+    expect(atMidnight.waiting[0].overdue).toBe(false);
+    const aMinuteLater = preScreenQueue([replied, waiting], new Date("2026-11-25T17:01:00Z"), 50, {});
+    expect(aMinuteLater.waiting[0].overdue).toBe(true);
   });
 });
 

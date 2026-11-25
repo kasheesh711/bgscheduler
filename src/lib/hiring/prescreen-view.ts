@@ -37,7 +37,7 @@ export function wasSentForm(c: Pick<Person, "id" | "preScreen">, outbox: OutboxR
  * The visit email from the outbox, because the stage changes when the email is queued, not when it leaves.
  * The dashboard reads outbox rows newest first. A candidate with no row gets the reason.
  */
-export function visitEmail(c: Person, outbox: OutboxRow[], threshold: number | null, hold?: string): VisitEmail {
+export function visitEmail(c: Person, outbox: OutboxRow[], threshold: number | null): VisitEmail {
   const rows = outbox.filter((r) => isVisitInvite(c.id, r.key));
   const sent = rows.some((r) => r.status === "sent");
   const sentDays = rows.flatMap((r) => (r.status === "sent" && r.sentAt ? [formatInTimeZone(new Date(r.sentAt), ZONE, "yyyy-MM-dd")] : []));
@@ -61,7 +61,7 @@ export function visitEmail(c: Person, outbox: OutboxRow[], threshold: number | n
   if (threshold === null) return says("No pass score set", "none");
   const score = preScreenFinalScore(c);
   if (score !== null && score < threshold) return says("Not sent: below pass score", "none");
-  return says(hold ?? "Not sent", "wait");
+  return says("Not sent", "wait");
 }
 
 type QueueEntry = {
@@ -80,6 +80,7 @@ export function preScreenQueue<T extends QueueEntry>(
   threshold: number | null,
   holds: Readonly<Record<string, { state: "next" | "held" }>>,
 ) {
+  const today = Date.parse(formatInTimeZone(now, ZONE, "yyyy-MM-dd"));
   const rows = pool.flatMap((entry) => {
     const { candidate, outbox } = entry;
     const { id, stage } = candidate;
@@ -95,7 +96,8 @@ export function preScreenQueue<T extends QueueEntry>(
     const received = candidate.preScreenRepliedAt ? new Date(candidate.preScreenRepliedAt).getTime() : NaN;
     const submittedAt = parseFormTimestamp(candidate.preScreen?.submittedAt ?? "")?.getTime() ?? NaN;
     const replyAt = Number.isFinite(received) ? received : Number.isFinite(submittedAt) ? submittedAt : Infinity;
-    const replyDays = Number.isFinite(replyAt) ? daysSince(now, replyAt) : null;
+    const replyDays = Number.isFinite(replyAt)
+      ? Math.max(0, (today - Date.parse(formatInTimeZone(replyAt, ZONE, "yyyy-MM-dd"))) / 86_400_000) : null;
     const pendingVisitEmail = visitRows.some((row) => PENDING_EMAIL.includes(row.status));
     const email = visitEmail(candidate, outbox, threshold);
     const failed = [visitRows.find((row) => row.status !== "cancelled"), form]
@@ -127,7 +129,7 @@ export function preScreenQueue<T extends QueueEntry>(
     }
     if (failed && group !== "closed") fact = failed.status === "uncertain" ? "Check email delivery" : "Email failed";
     return [{ ...entry, form, group, fact, score, below, overdue: days !== null && days >= 3,
-      days, replyAt, replyDays, email, emailLogKey: failed?.key, pendingVisitEmail,
+      days, replyAt, replyDays, email, hasVisitEmail: visitRows.length > 0, emailLogKey: failed?.key, pendingVisitEmail,
       canInviteAfterStop: visitRows.every((row) => row.status === "cancelled") }];
   });
   const decision = rows.filter((row) => row.group === "decision")
@@ -137,28 +139,10 @@ export function preScreenQueue<T extends QueueEntry>(
   const invited = rows.filter((row) => row.group === "invited");
   const held = rows.filter((row) => row.group === "held");
   const closed = rows.filter((row) => row.group === "closed");
-  return { decision, waiting, aside, invited, held, closed, all: [...decision, ...waiting, ...aside, ...invited, ...held, ...closed, ...rows.filter((row) => !row.group)] };
-}
-
-export const PRE_SCREEN_FILTERS = ["All", "Replied", "No reply", "Passed", "Below pass score", "Visit email sent"] as const;
-export type PreScreenListFilter = (typeof PRE_SCREEN_FILTERS)[number];
-
-export function matchesPreScreenList(c: Person, filter: PreScreenListFilter, threshold: number | null, email: VisitEmail) {
-  const score = preScreenFinalScore(c);
-  switch (filter) {
-    case "All":
-      return true;
-    case "Replied":
-      return !!c.preScreen;
-    case "No reply":
-      return !c.preScreen;
-    case "Passed":
-      return threshold !== null && score !== null && score >= threshold;
-    case "Below pass score":
-      return threshold !== null && score !== null && score < threshold;
-    case "Visit email sent":
-      return email.sent;
-  }
+  const stopped = closed.filter(({ candidate }) => candidate.stage === "stopped");
+  const otherClosed = closed.filter(({ candidate }) => candidate.stage !== "stopped");
+  return { decision, waiting, invited, aside, held, closed, stopped,
+    all: [...decision, ...waiting, ...invited, ...aside, ...held, ...stopped, ...otherClosed, ...rows.filter((row) => !row.group)] };
 }
 
 /** Any invitation sent in the date range counts. Empty ends are open. */

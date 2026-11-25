@@ -63,7 +63,7 @@ export type CandidateFilter = {
   /** What `ids` are, for the filter line ("Stuck" when absent). */
   label?: string;
 };
-export type Command = (body: unknown, onReload?: (data: HiringData | null) => void, onError?: (message: string) => void) => Promise<boolean>;
+export type Command = (body: unknown, onReload?: (data: HiringData | null) => void, onError?: (message: string, status?: number) => void) => Promise<boolean>;
 export const NO_FILTER: CandidateFilter = { stage: "all", prescreen: "all", bucket: null, subject: null };
 
 const VIEWS = {
@@ -225,6 +225,11 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      if (!response.ok && onError) {
+        const value = await response.json().catch(() => null);
+        onError(typeof value?.error === "string" ? value.error : "", response.status);
+        return false;
+      }
       const value = await response.json();
       if (!response.ok) throw new Error(value.error);
       const action = (body as { action: string }).action;
@@ -262,7 +267,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
       return true;
     } catch (e) {
       const message = e instanceof Error ? e.message : "Could not save.";
-      if (onError) onError(message);
+      if (onError) onError("");
       else setError(message);
       return false;
     } finally {
