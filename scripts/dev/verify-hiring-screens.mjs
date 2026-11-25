@@ -16,6 +16,7 @@ import { chromium, webkit } from "playwright-core";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const OUT = process.argv[2];
 const CHROME = process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const OFFER_TIME = "2026-11-25T05:00:00Z";
 const BRIEF_STATES = [
   ["wait", "Scores open after the mock.", "Check again"],
   ["checking", "Scores are being checked.", "Check again"],
@@ -40,6 +41,7 @@ import { BookingShell } from "@/components/hiring/booking";
 import { BriefShell, InterviewerBrief, ScheduleLink } from "@/components/hiring/brief";
 import { PaperCheck } from "@/components/hiring/paper-check";
 import { OFFER_LETTERS } from "@/lib/hiring/offer-letters";
+import type { OfferRow } from "@/lib/hiring/offer-rows";
 
 const assessment = (summary: string) => ({
   summary, briefSummary: summary, subjects: [{ subject: "Mathematics", relevant: true, evidence: "Taught IGCSE", reason: "Named in the resume" }],
@@ -81,6 +83,7 @@ const payload = {
   holds: { b: { funnel: "pre_screen", state: "next", position: 0, limit: null, subject: "Mathematics" }, a: { funnel: "pre_screen", state: "held", position: 2, limit: "perDay", subject: "Mathematics" } },
   preScreenOrder: ["b", "a", "c2"], callOrder: ["k", "b"], headMocks: {}, heads: {}, candidates, bookings: [],
   visitClashes: { candidateIds: [], stale: false, clashes: {} },
+  offers: [] as OfferRow[],
   outbox: [
     { id: "o2", key: "r1:visit-invite", candidateId: "r1", kind: "email", status: "sent", error: null, sentAt: "2026-11-02T03:04:00Z", workflowStage: "onsite_invited" },
     { id: "o3", key: "r1:pre-screen", candidateId: "r1", kind: "email", status: "sent", error: null, sentAt: "2026-11-01T03:00:00Z", workflowStage: "pre_screen" },
@@ -166,6 +169,49 @@ if (location.search.includes("pipeline=1")) {
     key: "offer:result:approved", status: "sent", sentAt: "2026-11-19T02:00:00Z",
   });
 }
+const offerFixture = new URLSearchParams(location.search);
+if (offerFixture.has("offers")) document.getElementById("root")?.setAttribute("data-offer-fixture", "");
+const offerDay = (days: number, time = "14:00") => {
+  const date = new Date(Date.now() + (days * 24 + 7) * 3600000).toISOString().slice(0, 10);
+  return new Date(date + "T" + time + ":00+07:00").toISOString();
+};
+const signing = (days: number) => ({ start: offerDay(days), end: offerDay(days, "14:30") });
+const sampleOffer = (id: string, name: string, changes: Partial<OfferRow> = {}): OfferRow => ({
+  candidateId: id, decisionId: "decision-" + id, name, subject: "Physics", emailStatus: "sent",
+  sentAt: offerDay(-1), offerType: "part_time", booking: null, uploadedAt: null, submittedAt: null, unknown: {}, ...changes,
+});
+if (offerFixture.get("offers") === "1") {
+  const directHire = { candidateId: "direct", action: "head-decision", detail: { decision: "hire", offer: "full_time" } } as const;
+  payload.offers = [
+    sampleOffer("queued", "Sample Ann", { emailStatus: "pending", sentAt: null }),
+    sampleOffer("future", "Sample Ben", { booking: signing(1), offerType: "specialist" }),
+    sampleOffer("recent", "Sample Chai", { subject: "Mathematics", unknown: { pdf: true } }),
+    sampleOffer("chase", "Sample Dao", { sentAt: offerDay(-5), subject: "History" }),
+    sampleOffer("past", "Sample Eve", { booking: signing(-1), sentAt: offerDay(-3) }),
+    sampleOffer("failed", "Sample Fah", { outboxKey: "failed:result:decision-failed", emailStatus: "failed", sentAt: null }),
+    sampleOffer("done", "Sample Gus", { booking: signing(-2), uploadedAt: offerDay(-2, "16:00"), submittedAt: offerDay(-3) }),
+    sampleOffer("today", "Sample Hana", { booking: signing(0), offerType: "full_time", subject: "Biology" }),
+    sampleOffer("filed", "Sample Ivan", { booking: signing(-2), uploadedAt: offerDay(-1, "16:00") }),
+    sampleOffer(directHire.candidateId, "Sample Jai", { booking: signing(1), offerType: directHire.detail.offer }),
+    sampleOffer("missing", "Sample Mali", { outboxKey: "missing:result:decision-missing", emailStatus: null, sentAt: null }),
+  ];
+  const failed = payload.offers.find((row) => row.candidateId === "failed")!;
+  if (offerFixture.get("emailLog") === "missing") failed.outboxKey = "failed:result:missing";
+  if (offerFixture.get("emailLog") === "invite") failed.outboxKey = "failed:pre-screen";
+  payload.outbox.unshift(
+    { id: "failed-invite", key: "failed:pre-screen", candidateId: "failed", kind: "email", status: "failed", error: "Sample invite failure.", sentAt: null, workflowStage: "pre_screen" },
+    { id: "failed-offer", key: "failed:result:decision-failed", candidateId: "failed", kind: "email", status: "failed", error: "Sample offer failure.", sentAt: null, workflowStage: "hired" },
+  );
+}
+if (!offerFixture.has("offers") && offerFixture.has("pipeline")) {
+  payload.offers = [sampleOffer("offer", "Sample Offer", { booking: signing(-1) })];
+}
+if (offerFixture.has("offers")) {
+  Object.assign(payload, { reviewAccess: { hr: true, gift: false } });
+  Object.assign(payload.config, { enabled: true, deliveryEnabled: true });
+}
+let failOfferVerification = offerFixture.get("upload") === "verifyfail";
+let templateAttempts = 0;
 // ?analytics=1: ~600 made-up candidates spread over the stages, sends, reminders and queue holds, so the Overview
 // analytics read like a real 12-week campaign. Seeded, so every run draws the same people.
 let capacityFixture: unknown = null;
@@ -370,6 +416,40 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   // The Capacity tab reads its own payload, which this fixture does not hold.
   if (String(input).includes("capacity=1")) return capacityFixture ? new Response(JSON.stringify(capacityFixture)) : new Response(JSON.stringify({ error: "Not in this fixture." }), { status: 503 });
   const url = new URL(String(input), location.origin);
+  if (url.pathname === "/api/hiring/contracts" && !url.searchParams.has("type")) {
+    const templates = offerFixture.get("templates");
+    if (templates === "retry") await new Promise((resolve) => setTimeout(resolve, 700));
+    if (templates === "fail" || (templates === "retry" && templateAttempts++ === 0)) return new Response(null, { status: 503 });
+    return new Response(JSON.stringify({ templates: templates === "empty" ? [] : Object.keys(OFFER_LETTERS).map((type) => ({
+      type, format: templates === "word" ? "docx" : "pdf", size: 1000, uploadedAt: offerDay(-10),
+    })) }));
+  }
+  if (url.pathname === "/api/hiring/contracts/signed") {
+    const offer = payload.offers.find((row) => row.candidateId === url.searchParams.get("candidateId"));
+    if (init?.method === "POST") {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      if (!offer || offerFixture.get("upload") === "fail") return new Response(null, { status: 503 });
+      const { replace } = JSON.parse(String(init.body));
+      // A second uploader files the PDF after this tab's preflight but before its write.
+      if (offerFixture.get("upload") === "conflict") offer.uploadedAt ??= offerDay(-1);
+      if (offer.uploadedAt && replace !== true) return new Response(null, { status: 409 });
+      // The signed-file check and every dashboard read in this page use this same saved date.
+      offer.uploadedAt = new Date().toISOString();
+      return new Response(JSON.stringify({ ok: true }));
+    }
+    if (offer?.candidateId === "recent" && !offer.uploadedAt) {
+      if (offerFixture.get("pdf") === "fail") return new Response(null, { status: 503 });
+      if (offerFixture.get("pdf") === "exists") return new Response(JSON.stringify({ uploadedAt: offerDay(-1) }));
+    }
+    if (offer?.candidateId === "past" && !offer.uploadedAt && offerFixture.get("pdf") === "due") {
+      return new Response(JSON.stringify({ uploadedAt: offerDay(-1) }));
+    }
+    if (failOfferVerification && offer?.uploadedAt) {
+      failOfferVerification = false;
+      return new Response(null, { status: 503 });
+    }
+    return new Response(JSON.stringify({ uploadedAt: offer?.uploadedAt ?? null }));
+  }
   // The brief's files (résumé, paper, pdf.js runtime) come from the server; only the brief's sends are answered here.
   if (url.pathname.startsWith("/api/hiring/brief/sample-token/") && init?.method === "POST") {
     if (url.pathname.endsWith("/rubric") && location.search.includes("sendFailed=1"))
@@ -469,6 +549,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/hiring" && url.searchParams.get("head"))
     return new Response(JSON.stringify({ name: "Kru Peat", subjects: ["Mathematics"], days: [0, 1, 2, 3, 4].map((i) => ({ date: "2026-11-0" + (2 + i), office: { start: "09:00", end: "18:00" }, blocks: [] })), visits: [], mocks: 0, limit: 2, stale: false, staleReason: null, weekStart: "2026-11-02", head: "Peat" }));
   if (url.pathname === "/api/hiring") {
+    if (offerFixture.get("offers") === "fail") {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      return new Response(JSON.stringify({ error: "Could not load offers." }), { status: 503 });
+    }
     // ?failFirst=1: the first two list loads fail (the page retries once on its own), so the Try again button can be checked.
     const once = window as unknown as { failed?: number };
     if (location.search.includes("failFirst=1") && (once.failed ?? 0) < 2) {
@@ -545,7 +629,16 @@ const bundled = await build({
     bundler.onResolve({ filter: /^next\/navigation$/ }, () => ({ path: "navigation", namespace: "fixture" }));
     bundler.onResolve({ filter: /^next\/font\/google$/ }, () => ({ path: "font", namespace: "fixture" }));
     bundler.onResolve({ filter: /^@vercel\/blob\/client$/ }, () => ({ path: "blob-client", namespace: "fixture" }));
-    bundler.onLoad({ filter: /^blob-client$/, namespace: "fixture" }, () => ({ contents: "export const upload = async (pathname) => { window.uploaded.push(pathname); return { pathname }; };" }));
+    bundler.onLoad({ filter: /^blob-client$/, namespace: "fixture" }, () => ({ contents: `
+      export const upload = async (pathname, _file, options) => {
+        window.uploaded.push(pathname);
+        if (options?.handleUploadUrl === "/api/hiring/contracts/signed") {
+          const { candidateId } = JSON.parse(options.clientPayload);
+          const response = await fetch(options.handleUploadUrl + "?candidateId=" + encodeURIComponent(candidateId), { method: "POST", body: options.clientPayload });
+          if (!response.ok) throw new Error("Fixture upload failed.");
+        }
+        return { pathname };
+      };` }));
     bundler.onResolve({ filter: /^next-auth\/react$/ }, () => ({ path: "auth", namespace: "fixture" }));
     // next/link needs the Next router; a plain anchor is enough here.
     bundler.onResolve({ filter: /^next\/link$/ }, () => ({ path: "link", namespace: "fixture" }));
@@ -559,7 +652,7 @@ const script = bundled.outputFiles.find((f) => f.path.endsWith(".js")).text;
 const moduleCss = bundled.outputFiles.find((f) => f.path.endsWith(".css"))?.text ?? "";
 const from = path.join(ROOT, "src/app/globals.css");
 const globalCss = (await postcss([tailwind({ base: ROOT })]).process(readFileSync(from, "utf8"), { from })).css;
-const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hiring screens (synthetic)</title><style>${globalCss}${moduleCss}html{--font-inter:Inter,system-ui;--font-cormorant:"Cormorant Garamond";--font-sarabun:Sarabun;--font-instrument-serif:Georgia}#root{display:flex;flex-direction:column;height:100vh;padding:12px 24px;overflow:hidden}</style></head><body><div id="root"></div><script>window.realPacket=${JSON.stringify(realPacket).replaceAll("</", "<\\/")};</script><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`;
+const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hiring screens (synthetic)</title><style>${globalCss}${moduleCss}html{--font-inter:Inter,system-ui;--font-cormorant:"Cormorant Garamond";--font-sarabun:Sarabun;--font-instrument-serif:Georgia}#root{display:flex;flex-direction:column;height:100vh;padding:12px 24px;overflow:hidden}@media(max-width:767px){#root[data-offer-fixture]{padding:12px 16px}}</style></head><body><div id="root"></div><script>window.realPacket=${JSON.stringify(realPacket).replaceAll("</", "<\\/")};</script><script>${script.replaceAll("</script", "<\\/script")}</script></body></html>`;
 const AXE = readFileSync(path.join(ROOT, "node_modules/axe-core/axe.min.js"), "utf8");
 const PDF = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF";
 
@@ -582,6 +675,16 @@ const samplePdf = (text, pages = 1) => {
 const resumeRequests = [];
 const server = createServer((request, response) => {
   const url = new URL(request.url, "http://localhost");
+  if (url.pathname === "/api/hiring/contracts" && url.searchParams.has("type")) {
+    response.writeHead(200, { "Content-Type": "application/pdf", "Content-Disposition": "attachment; filename=sample-contract.pdf" });
+    response.end(samplePdf(`Sample contract - ${url.searchParams.get("type")}`));
+    return;
+  }
+  if (url.pathname === "/api/hiring/contracts/signed" && url.searchParams.get("file") === "1") {
+    response.writeHead(200, { "Content-Type": "application/pdf", "Content-Disposition": "attachment; filename=sample-signed.pdf" });
+    response.end(samplePdf("Signed sample"));
+    return;
+  }
   // The brief's résumé and the marked paper: a one-page made-up PDF, drawn by the real pdf.js runtime files.
   const runtime = /\/(?:pdf-runtime|runtime)\/([A-Za-z0-9_.-]+)$/.exec(url.pathname)?.[1];
   if (runtime && url.pathname.startsWith("/api/hiring/")) {
@@ -609,7 +712,15 @@ const server = createServer((request, response) => {
     return;
   }
   response.writeHead(200, { "Content-Type": "text/html" });
-  response.end(html);
+  // Playwright fixes the clock in the check. A person opening the same fixture in SERVE mode needs the same time.
+  response.end(process.env.SERVE && url.searchParams.has("offers") ? html.replace("<body>", `<body><script>
+    const offerNow = Date.parse(${JSON.stringify(OFFER_TIME)});
+    Date = new Proxy(Date, {
+      construct: (Date, args) => new Date(...(args.length ? args : [offerNow])),
+      apply: (Date) => new Date(offerNow).toString(),
+      get: (Date, key) => key === "now" ? () => offerNow : Reflect.get(Date, key)
+    });
+  </script>`) : html);
 });
 await new Promise((resolve) => server.listen(Number(process.env.SERVE) || 0, "127.0.0.1", resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
@@ -621,6 +732,7 @@ if (process.env.SERVE) {
 
 let browser;
 const textDumps = new Set();
+const offerWords = [];
 const shot = async (page, name, fullPage = false) => {
   if (!OUT) return;
   mkdirSync(OUT, { recursive: true });
@@ -1815,6 +1927,477 @@ try {
     assert.ok(await packetRoot.evaluate((root) => root.scrollWidth <= root.clientWidth), "the packet scrolls sideways with evidence open");
     await page.setViewportSize({ width: 1440, height: 900 });
   });
+  await check("offer climb shots", async () => {
+    const fixedTime = new Date(OFFER_TIME);
+    const axeTags = { tags: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"], all: true };
+    const results = { chromium: {}, webkit: {} };
+    const shotFor = async (engine, name, width, height) => {
+      const context = await engine.newContext({ viewport: { width, height } });
+      await context.route("**/*", (route) => (route.request().url().startsWith(origin) ? route.continue() : route.abort()));
+      const tab = await context.newPage();
+      await tab.clock.setFixedTime(fixedTime);
+      const errors = [];
+      tab.on("pageerror", (error) => errors.push(error.message));
+      const task = tab.getByRole("region", { name: "Approved offers" });
+      const first = () => task.getByRole("button", { name: "Print contract" }).first();
+      const summary = tab.locator("summary").filter({ hasText: /^Templates$/ });
+      const hana = task.getByRole("row").filter({ hasText: "Sample Hana" });
+      const past = task.getByRole("row").filter({ hasText: "Sample Eve" });
+      const navigation = tab.getByRole("navigation", { name: "Hiring steps" });
+      const menu = tab.locator("header details > summary");
+      const upload = () => past.getByLabel("Upload signed PDF for Sample Eve");
+      const file = { name: "signed.pdf", mimeType: "application/pdf", buffer: Buffer.from(samplePdf("Signed sample")) };
+      const open = async (query = "") => {
+        const url = new URL("/hiring?view=offer&offers=1", origin);
+        for (const [key, value] of new URLSearchParams(query)) url.searchParams.set(key, value);
+        await tab.goto(url.href);
+      };
+      const ready = async () => {
+        await first().waitFor();
+        await tab.getByText("Await form", { exact: true }).waitFor();
+      };
+      const assertTaskFont = async (label) => {
+        await label.waitFor();
+        assert.ok(await label.evaluate((note) => parseFloat(getComputedStyle(note).fontSize) >= (innerWidth < 720 ? 16 : 14)),
+          `Task text is too small: ${await label.textContent()}`);
+      };
+      const snapshots = {};
+      async function capture(state) {
+        const stem = `offer-${state}-${width}`;
+        const shotName = name === "webkit" ? `webkit/${stem}` : stem;
+        if (state.startsWith("upload")) await past.scrollIntoViewIfNeeded();
+        if (state.startsWith("templates")) await summary.evaluate((element) => element.scrollIntoView({ block: "start" }));
+        if (OUT) {
+          mkdirSync(path.dirname(path.join(OUT, shotName)), { recursive: true });
+          await shot(tab, shotName);
+        }
+        const snap = await tab.evaluate(() => {
+          const root = document.querySelector("#root");
+          const shown = (el) => {
+            if (el.closest(".sr-only,[hidden]") || (innerWidth < 720 && el.closest("thead"))) return false;
+            const closed = el.closest("details:not([open])");
+            if (closed && !closed.querySelector("summary")?.contains(el)) return false;
+            const style = getComputedStyle(el);
+            return style.visibility === "visible" && el.getClientRects().length > 0;
+          };
+          const first = document.querySelector("#approved-offers button");
+          const top = first?.getBoundingClientRect();
+          const words = (str) => str.trim().split(/\s+/).filter(Boolean).length;
+          const text = [];
+          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+          for (let node; (node = walker.nextNode());) {
+            const value = node.nodeValue.trim();
+            if (!value || !shown(node.parentElement)) continue;
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            const rect = range.getBoundingClientRect();
+            if (rect.width && rect.height) text.push({ value, rect, font: parseFloat(getComputedStyle(node.parentElement).fontSize) });
+          }
+          const smallTargets = [];
+          const controls = [];
+          for (const el of root.querySelectorAll("button,a[href],summary,input:not([type=hidden]),select,textarea")) {
+            const face = el.closest("label") ?? el;
+            if (!shown(face) || el.disabled) continue;
+            const label = el.getAttribute("aria-label") || face.innerText.trim() || face.tagName;
+            const box = face.getBoundingClientRect();
+            const id = controls.push(label) - 1;
+            el.dataset.offerProbe = String(id);
+            if (box.width < 43.99 || box.height < 43.99) smallTargets.push({ label, width: box.width, height: box.height });
+          }
+          const scope = root.querySelector("#approved-offers")?.parentElement;
+          const surface = root.firstElementChild;
+          const wide = (el) => Boolean(el && el.scrollWidth > el.clientWidth);
+          const overflow = {
+            document: wide(document.documentElement),
+            root: wide(root),
+            dashboard: wide(surface),
+            offerPanel: wide(scope),
+          };
+          const style = document.createElement("style");
+          style.textContent = ".sr-only,details:not([open]) > :not(summary){display:none!important}"
+            + (innerWidth < 720 ? "thead{display:none!important}" : "");
+          document.head.append(style);
+          const visibleText = root.innerText.replace(/\n{2,}/g, "\n").trim();
+          style.remove();
+          return {
+            visibleText,
+            words: words(visibleText),
+            scrollBeforeFirstActionPx: top ? Math.max(0, Math.ceil(top.bottom - innerHeight)) : null,
+            wordsAboveFirstAction: top ? text.filter(({ rect }) => rect.bottom <= top.top + 1).reduce((sum, { value }) => sum + words(value), 0) : null,
+            minFontPx: text.length ? Math.min(...text.map(({ font }) => font)) : null,
+            longSentences: visibleText.split(/[.!?](?:\s+|$)|\n+/).filter((line) => words(line) > 20).map((line) => line.trim()),
+            smallTargets,
+            overflow,
+            sidewaysScroll: overflow.document || overflow.offerPanel,
+            controls,
+          };
+        });
+        if (OUT) {
+          writeFileSync(path.join(OUT, `${shotName}.txt`), snap.visibleText + "\n");
+          offerWords.push(`${shotName}: ${snap.words}`);
+        }
+        const axe = await axeProblems(tab, axeTags);
+        const focus = new Map();
+        for (const key of name === "webkit" ? ["Tab", "Alt+Tab"] : ["Tab"]) {
+          await tab.evaluate(() => {
+            const start = document.createElement("span");
+            start.tabIndex = -1;
+            document.body.prepend(start);
+            start.focus({ preventScroll: true });
+            start.addEventListener("focusout", () => start.remove(), { once: true });
+          });
+          for (let i = 0; i < snap.controls.length; i++) {
+            await tab.keyboard.press(key);
+            const check = await tab.evaluate(() => {
+              const el = document.activeElement;
+              if (!el?.hasAttribute("data-offer-probe")) return null;
+              const face = el.closest("label") ?? el;
+              const style = getComputedStyle(face);
+              const box = face.getBoundingClientRect();
+              const x = Math.max(0, Math.min(innerWidth - 1, box.x + box.width / 2));
+              const y = Math.max(0, Math.min(innerHeight - 1, box.y + box.height / 2));
+              return { id: el.dataset.offerProbe, ring: style.outlineStyle !== "none" && parseFloat(style.outlineWidth) > 0,
+                unobscured: face.contains(document.elementFromPoint(x, y)) };
+            });
+            if (!check) break;
+            focus.set(check.id, check);
+          }
+        }
+        const { controls, ...metrics } = snap;
+        delete metrics.visibleText;
+        snapshots[state] = { ...metrics, axe, focusVisible: controls.map((label, i) => {
+          const check = focus.get(String(i));
+          return { label, reached: !!check, visible: !!check?.ring, unobscured: !!check?.unobscured };
+        }) };
+      }
+      try {
+        await open();
+        await ready();
+        assert.deepEqual(await task.locator('th[scope="row"] > span:first-child').allTextContents(),
+          ["Sample Hana", "Sample Dao", "Sample Fah", "Sample Eve", "Sample Ben", "Sample Jai", "Sample Chai", "Sample Ann", "Sample Mali", "Sample Ivan", "Sample Gus"]);
+        const daoCells = task.getByRole("row").filter({ hasText: "Sample Dao" }).getByRole("cell");
+        assert.equal((await daoCells.nth(2).innerText()).trim(), "Chase booking");
+        assert.match((await daoCells.nth(3).innerText()).trim(), /(^|\n)Due(\n|$)/);
+        await daoCells.nth(3).getByLabel("Upload PDF for Sample Dao").waitFor({ state: "attached" });
+        await past.getByRole("cell").nth(2).getByLabel("Upload signed PDF for Sample Eve").waitFor({ state: "attached" });
+        const booked = task.getByRole("row").filter({ hasText: "Sample Jai" });
+        await booked.getByRole("button", { name: "Print contract" }).waitFor();
+        await booked.getByLabel("Upload PDF for Sample Jai", { exact: true }).waitFor({ state: "attached" });
+        const noOutbox = task.getByRole("row").filter({ hasText: "Sample Mali" });
+        await noOutbox.getByRole("cell", { name: "Email not queued" }).waitFor();
+        await noOutbox.getByRole("link", { name: "Check email log" }).waitFor();
+        for (const name of ["Sample Fah", "Sample Ann", "Sample Mali"]) {
+          const action = task.getByRole("row").filter({ hasText: name }).getByLabel(`Upload PDF for ${name}`, { exact: true });
+          assert.equal(await action.locator("..").getAttribute("data-primary"), null);
+        }
+        assert.ok(await task.locator("tr").evaluateAll((rows) => rows.every((row) => row.querySelectorAll("[data-primary]").length <= 1)));
+        await past.getByRole("rowheader", { name: "Sample Eve, Physics" }).waitFor();
+        await past.getByRole("cell", { name: "24 Nov 14:00, visit ended" }).waitFor();
+        assert.equal(await task.getByRole("link", { name: "Onboarding" }).getAttribute("href"), "/hiring/onboarding");
+        await capture("list");
+        assert.equal(snapshots.list.scrollBeforeFirstActionPx, 0);
+        if (width === 390) {
+          assert.ok(snapshots.list.wordsAboveFirstAction <= 30);
+          await hana.getByRole("button", { name: "Print contract" }).press(name === "webkit" ? "Alt+Tab" : "Tab");
+          const hanaUpload = hana.getByLabel("Upload PDF for Sample Hana", { exact: true });
+          assert.equal(await hanaUpload.and(tab.locator(":focus")).count(), 1,
+            "Tab from Print contract must focus Upload PDF in Hana's card");
+        }
+        assert.equal(snapshots.list.sidewaysScroll, false);
+        await summary.click();
+        await tab.getByRole("heading", { name: "Full-time tutor contract" }).waitFor();
+        await capture("templates-open");
+
+        await open("offers=0");
+        await task.getByText("No approved offers.", { exact: true }).waitFor();
+        await capture("empty");
+        await task.getByRole("link", { name: "Final review" }).click();
+        await tab.waitForURL(/view=review/);
+        await tab.locator('nav[aria-label="Hiring steps"] button[data-review][aria-pressed="true"]').first().waitFor({ state: "attached" });
+
+        await open("templates=fail");
+        const retry = hana.getByRole("button", { name: "Retry templates" });
+        const failure = tab.getByText("Could not load templates.", { exact: true }).filter({ visible: true });
+        const hanaFailure = hana.getByRole("cell").filter({ has: tab.getByRole("button", { name: "Retry templates" }) })
+          .getByText("Could not load templates.", { exact: true });
+        await hanaFailure.waitFor();
+        assert.equal(await failure.count(), 1);
+        assert.equal(await hanaFailure.evaluate((note) => getComputedStyle(note).fontSize), "14px");
+        await retry.click();
+        await hanaFailure.waitFor();
+        assert.equal(await retry.evaluate((button) => button === document.activeElement), true);
+        assert.equal(await summary.evaluate((element) => element.parentElement.open), false);
+        await summary.click();
+        const panelRetry = tab.getByRole("button", { name: "Retry", exact: true });
+        await panelRetry.waitFor();
+        assert.equal(await panelRetry.count(), 1);
+        assert.equal(await failure.count(), 1);
+        await capture("templates-fail");
+
+        await open("templates=fail");
+        await summary.click();
+        const panelFailure = tab.locator("details").filter({ has: summary }).getByText("Could not load templates.", { exact: true });
+        await panelFailure.waitFor();
+        const ben = task.getByRole("row").filter({ hasText: "Sample Ben" });
+        await ben.getByRole("button", { name: "Retry templates" }).click();
+        await ben.getByText("Could not load templates.", { exact: true }).waitFor();
+        assert.equal(await failure.count(), 1);
+        assert.equal(await summary.evaluate((element) => element.parentElement.open), true);
+
+        await open("templates=retry");
+        await assertTaskFont(hana.getByText("Checking template…", { exact: true }));
+        await retry.click();
+        await assertTaskFont(hana.getByText("Loading templates…", { exact: true }));
+        await assertTaskFont(hana.getByRole("status").getByText("Templates loaded."));
+        await hana.getByRole("button", { name: "Print contract" }).and(tab.locator(":focus")).waitFor();
+
+        await open("templates=retry");
+        await summary.click();
+        const loadingPanel = tab.locator("details").filter({ has: summary });
+        await assertTaskFont(loadingPanel.getByText("Loading templates…", { exact: true }));
+        await panelRetry.press("Enter");
+        await assertTaskFont(loadingPanel.getByText("Loading templates…", { exact: true }));
+        await tab.getByRole("heading", { name: "Full-time tutor contract" }).waitFor();
+        await summary.and(tab.locator(":focus")).waitFor();
+
+        await open();
+        await ready();
+        await tab.route("**/api/hiring/contracts?type=full_time&format=pdf", (route) => route.fulfill({ status: 404 }));
+        await hana.getByRole("button", { name: "Print contract" }).press("Enter");
+        const addTemplate = hana.getByRole("button", { name: "Add template" });
+        await addTemplate.waitFor();
+        assert.equal(await addTemplate.evaluate((button) => button === document.activeElement), true);
+        assert.equal(await hana.getByRole("status").filter({ hasText: /^Template for Sample Hana not found\.$/ }).count(), 1);
+        assert.equal(await hana.getByRole("button", { name: "Print contract" }).count(), 0);
+        await addTemplate.click();
+        await tab.locator("#contract-template-full_time:focus").getByLabel("Upload full-time tutor contract").waitFor({ state: "attached" });
+        await tab.unroute("**/api/hiring/contracts?type=full_time&format=pdf");
+
+        await open();
+        await task.getByRole("row").filter({ hasText: "Sample Fah" }).getByRole("link", { name: "Open email log" }).click();
+        await tab.waitForURL(/view=setup/);
+        const messages = tab.getByRole("complementary", { name: "Operations" }).getByRole("heading", { name: "Messages", exact: true });
+        await messages.waitFor();
+        assert.equal(await messages.evaluate((heading) => heading === document.activeElement && heading.tabIndex === -1), true);
+        const offerProblem = tab.getByRole("listitem").filter({ hasText: "Sample offer failure." }).filter({ hasText: "Offer email" });
+        assert.equal(await offerProblem.evaluate((row) => {
+          const bounds = row.getBoundingClientRect();
+          return bounds.top >= 0 && bounds.bottom <= innerHeight;
+        }), true);
+        assert.match(await offerProblem.innerText(), /Sample Fah/);
+        if (width === 1440) {
+          await open("emailLog=missing");
+          await task.getByRole("link", { name: "Open email log" }).click();
+          const missingMessage = tab.getByText("Offer email not found in the log.", { exact: true });
+          await missingMessage.waitFor();
+          assert.equal(await missingMessage.count(), 1);
+          await open("emailLog=invite");
+          await task.getByRole("link", { name: "Open email log" }).click();
+          const invite = tab.getByRole("listitem").filter({ hasText: "Sample invite failure." });
+          await invite.waitFor();
+          assert.match(await invite.innerText(), /email · failed/);
+          assert.doesNotMatch(await invite.innerText(), /Offer email/);
+        }
+
+        await open();
+        const walkIn = task.getByRole("row").filter({ hasText: "Sample Chai" });
+        await walkIn.getByRole("cell", { name: "Unbooked" }).waitFor();
+        await walkIn.getByRole("cell", { name: "Unknown" }).waitFor();
+        const walkInUpload = walkIn.getByLabel("Upload PDF for Sample Chai", { exact: true });
+        assert.equal(await walkInUpload.locator("..").getAttribute("data-primary"), null);
+        await walkInUpload.setInputFiles(file);
+        await walkIn.getByRole("link", { name: "Signed PDF for Sample Chai, filed 25 Nov" }).waitFor();
+        await walkIn.getByText("Await form", { exact: true }).waitFor();
+        assert.deepEqual(await tab.evaluate(() => window.uploaded), ["hiring-signed-contracts/recent.pdf"]);
+
+        await open("pdf=exists");
+        await walkIn.getByRole("cell", { name: "Unknown" }).waitFor();
+        await walkInUpload.setInputFiles(file);
+        const discovered = walkIn.getByRole("link", { name: "Signed PDF for Sample Chai, filed 24 Nov" });
+        assert.equal(await discovered.getAttribute("href"), "/api/hiring/contracts/signed?candidateId=recent&file=1");
+        const replaceDiscovered = walkIn.getByLabel("Replace PDF for Sample Chai", { exact: true });
+        assert.equal(await replaceDiscovered.locator("..").getAttribute("data-primary"), null);
+        assert.deepEqual(await tab.evaluate(() => window.uploaded), []);
+        await replaceDiscovered.setInputFiles(file);
+        await walkIn.getByText("Filed 25 Nov", { exact: true }).waitFor();
+        assert.deepEqual(await tab.evaluate(() => window.uploaded), ["hiring-signed-contracts/recent.pdf"]);
+
+        await open("pdf=due");
+        await past.getByRole("cell", { name: "Due" }).waitFor();
+        await upload().setInputFiles(file);
+        await past.getByRole("link", { name: "Signed PDF for Sample Eve, filed 24 Nov" }).waitFor();
+        await past.getByLabel("Replace PDF for Sample Eve", { exact: true }).locator("..").waitFor();
+        await past.getByRole("status").getByText("Existing PDF found. Your file was not uploaded.", { exact: true }).waitFor();
+        assert.deepEqual(await tab.evaluate(() => window.uploaded), []);
+
+        await open("upload=conflict");
+        await past.getByRole("cell", { name: "Due", exact: true }).waitFor();
+        await upload().setInputFiles(file);
+        const preserved = past.getByRole("link", { name: "Signed PDF for Sample Eve, filed 24 Nov" });
+        assert.equal(await preserved.getAttribute("href"), "/api/hiring/contracts/signed?candidateId=past&file=1");
+        await past.getByRole("status").getByText("Existing PDF found. Your file was not uploaded.", { exact: true }).waitFor();
+        await past.getByLabel("Replace PDF for Sample Eve", { exact: true }).locator("..").waitFor();
+        assert.deepEqual(await tab.evaluate(() => window.uploaded), ["hiring-signed-contracts/past.pdf"]);
+        const storedDate = await tab.evaluate(async () => (await (await fetch("/api/hiring/contracts/signed?candidateId=past")).json()).uploadedAt);
+        assert.equal(storedDate.slice(0, 10), "2026-11-24", "A create-only upload must keep the previously filed PDF");
+
+        await open("pdf=fail");
+        await walkInUpload.setInputFiles(file);
+        await walkIn.getByRole("alert").filter({ hasText: "Could not check for a filed PDF. Try again." }).waitFor();
+        assert.deepEqual(await tab.evaluate(() => window.uploaded), []);
+
+        await open("upload=verifyfail");
+        const filed = task.getByRole("row").filter({ hasText: "Sample Ivan" });
+        const filedLink = filed.getByRole("link", { name: "Signed PDF for Sample Ivan, filed 24 Nov" });
+        assert.equal(await filedLink.getAttribute("href"), "/api/hiring/contracts/signed?candidateId=filed&file=1");
+        if (width === 1440) {
+          const download = tab.waitForEvent("download");
+          await filedLink.click();
+          assert.equal((await download).suggestedFilename(), "sample-signed.pdf");
+        }
+        const replace = filed.getByLabel("Replace PDF for Sample Ivan", { exact: true });
+        assert.equal(await replace.locator("..").getAttribute("data-primary"), null);
+        await replace.setInputFiles(file);
+        await filed.getByRole("button", { name: "Check file" }).click();
+        await filed.getByRole("link", { name: "Signed PDF for Sample Ivan, filed 25 Nov" }).waitFor();
+        await filed.getByRole("status").getByText("Sample Ivan's PDF filed.", { exact: true }).waitFor();
+        assert.deepEqual(await tab.evaluate(() => window.uploaded), ["hiring-signed-contracts/filed.pdf"]);
+
+        await open("upload=verifyfail");
+        await ready();
+        await upload().setInputFiles(file);
+        await past.getByText("Uploading PDF…", { exact: true }).waitFor();
+        await past.getByRole("cell", { name: "Unconfirmed" }).waitFor();
+        await past.getByRole("status").getByText("Could not confirm the signed PDF for Sample Eve.", { exact: true }).waitFor();
+        await past.getByRole("button", { name: "Check file" }).click();
+        await past.getByText("Filed 25 Nov", { exact: true }).waitFor();
+        await past.getByRole("status").getByText("Sample Eve's PDF filed.", { exact: true }).waitFor();
+        const awaitForm = past.getByText("Await form", { exact: true });
+        const focus = await awaitForm.evaluate(async (el) => {
+          // Check focus after the dashboard refresh has had a frame to apply it.
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          const active = document.activeElement;
+          return { correct: active === el, element: active === document.body ? "BODY"
+            : `${active?.tagName} ${active?.getAttribute("aria-label") || active?.textContent?.trim().slice(0, 80) || ""}` };
+        });
+        assert.equal(focus.correct, true, `Expected focus on Sample Eve's Await form. Focused element: ${focus.element}`);
+        const uploads = await tab.evaluate(() => window.uploaded.length);
+        assert.equal(uploads, 1, `Expected one signed PDF upload. Upload count: ${uploads}`);
+        await capture("upload-done");
+        if (width < 720) await menu.click();
+        await navigation.getByRole("button", { name: "Paper test" }).click();
+        if (width < 720) await menu.click();
+        await navigation.getByRole("button", { name: "Offer & signing" }).click();
+        await past.getByText("Filed 25 Nov", { exact: true }).waitFor();
+
+        await open("upload=fail");
+        await ready();
+        await upload().setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("Wrong format") });
+        await past.getByText("Choose a PDF.", { exact: true }).waitFor();
+        assert.ok(await upload().getAttribute("aria-describedby"));
+        await upload().setInputFiles(file);
+        await past.getByText("Upload failed. Try again.", { exact: true }).waitFor();
+        await capture("upload-fail");
+
+        if (width === 390 && height === 844) {
+          const lastUpload = task.locator('input[aria-label^="Upload PDF for"]').last();
+          assert.ok(await lastUpload.evaluate((input) => {
+            const label = input.closest("label");
+            const panel = label.closest("[data-offer]");
+            input.focus({ preventScroll: true });
+            panel.scrollTop += Math.floor(label.getBoundingClientRect().top - innerHeight + 8);
+            const top = label.getBoundingClientRect().top;
+            return top >= innerHeight - 8 && top < innerHeight;
+          }), "The lowest upload action must start at the bottom edge");
+          await lastUpload.setInputFiles(file);
+          const uploadError = noOutbox.getByRole("alert").filter({ hasText: "Upload failed. Try again." });
+          await uploadError.waitFor();
+          assert.ok(await uploadError.evaluate((error) => {
+            const input = error.parentElement.querySelector('input[type="file"]');
+            return document.activeElement === input && [input.closest("label"), error].every((element) => {
+              const box = element.getBoundingClientRect();
+              return box.top >= 0 && box.bottom <= innerHeight
+                && element.contains(document.elementFromPoint(box.left + box.width / 2, box.bottom - 1));
+            });
+          }), "The lowest upload action and its error must stay visible without moving focus");
+        }
+
+        if (width !== 320) {
+          await open();
+          await tab.evaluate(() => document.documentElement.classList.add("dark"));
+          await ready();
+          await capture("list-dark");
+        }
+        await open("offers=fail");
+        await assertTaskFont(tab.getByText("Loading hiring: Offer & signing…", { exact: true }));
+        const retryOffers = tab.getByRole("button", { name: "Try again" });
+        await retryOffers.waitFor();
+        if (width < 720) {
+          assert.equal(await retryOffers.evaluate((button) => getComputedStyle(button).fontSize), "16px");
+          const loadAlert = tab.getByRole("alert").filter({ hasText: /^Could not load offers\.$/ });
+          assert.equal(await loadAlert.evaluate((alert) => getComputedStyle(alert).fontSize), "16px");
+        }
+        await retryOffers.click();
+        await assertTaskFont(tab.getByText("Loading offers…", { exact: true }));
+        if (width === 1440) {
+          await open();
+          await ready();
+          await hana.getByText("Full-time", { exact: true }).waitFor();
+          const fetched = tab.waitForResponse((response) => response.url().includes("/api/hiring/contracts?type=full_time&format=pdf") && response.ok());
+          const popup = tab.waitForEvent("popup");
+          await first().click();
+          await fetched;
+          const pdf = await popup;
+          await pdf.waitForURL(/^blob:/);
+          await pdf.close();
+          await open("templates=word&gift=1");
+          await task.getByRole("link", { name: "Download Word" }).first().waitFor();
+          assert.equal(await task.getByRole("link", { name: "Onboarding" }).count(), 1);
+          await open("templates=empty");
+          await task.getByRole("row").filter({ hasText: "Sample Ben" }).getByRole("button", { name: "Add template" }).click();
+          await tab.locator("#contract-template-specialist:focus").getByRole("heading", { name: "Specialist tutor contract" }).waitFor();
+          await open("offers=0&templates=empty");
+          await summary.click();
+          await tab.getByText("No templates uploaded.", { exact: true }).waitFor();
+          await tab.clock.install({ time: new Date("2026-11-25T07:29:00Z") });
+          await open();
+          await hana.getByRole("button", { name: "Print contract" }).waitFor();
+          await tab.clock.fastForward(60_000);
+          await hana.getByLabel("Upload signed PDF for Sample Hana").waitFor({ state: "attached" });
+        }
+        assert.deepEqual(errors, []);
+      } finally {
+        results[name][width] = { width, height, ...snapshots.list, states: snapshots };
+        await context.close();
+      }
+    };
+    let wk;
+    const failures = [];
+    const run = async (engine, name, width, height) => {
+      try {
+        await shotFor(engine, name, width, height);
+      } catch (error) {
+        process.stderr.write(`${name} ${width}×${height}: ${error.stack}\n`);
+        failures.push(`${name} ${width}×${height}: ${error.message.split("\n")[0]}`);
+      }
+    };
+    try {
+      for (const [width, height] of [[1440, 900], [390, 844], [320, 700]]) {
+        await run(browser, "chromium", width, height);
+      }
+      wk = await webkit.launch();
+      await run(wk, "webkit", 390, 844);
+      await run(wk, "webkit", 320, 700);
+      assert.deepEqual(failures, []);
+    } finally {
+      if (OUT) {
+        mkdirSync(OUT, { recursive: true });
+        writeFileSync(path.join(OUT, "metrics.json"), JSON.stringify(results, null, 2) + "\n");
+        writeFileSync(path.join(OUT, "words.txt"), offerWords.join("\n") + "\n");
+      }
+      await wk?.close();
+    }
+  });
   await check("walkthrough", async () => {
     // The three tasks, as a user does them, in each engine at two widths. It records numbers; the anchors are judged from metrics.json.
     const AXE_TAGS = { tags: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"], all: true, first: true };
@@ -1996,7 +2579,8 @@ try {
   });
   await check("the page has no script errors", async () => assert.deepEqual(errors, []));
   if (OUT && textDumps.size) {
-    writeFileSync(path.join(OUT, "words.txt"), execFileSync("wc", ["-w", ...[...textDumps].sort()], { cwd: OUT }));
+    const counts = execFileSync("wc", ["-w", ...[...textDumps].sort()], { cwd: OUT, encoding: "utf8" });
+    writeFileSync(path.join(OUT, "words.txt"), counts + (offerWords.length ? offerWords.join("\n") + "\n" : ""));
   }
 } finally {
   await browser?.close();

@@ -90,7 +90,7 @@ export type HiringView = keyof typeof VIEWS;
 const STEPS = ["prescreen", "assessment", "mock", "review", "offer"] as const;
 const TOOLS = ["overview", "capacity", "visitday", "setup", "admin", "heads"] as const;
 /** One line under the tabs, so a new user can name what each tab is for. */
-const PURPOSE: Record<Exclude<HiringView, "hr" | "heads">, string> = {
+const PURPOSE: Record<Exclude<HiringView, "hr" | "heads" | "offer">, string> = {
   overview: "Where every candidate stands, and who is ready for the next step.",
   capacity: "Which subjects need new tutors first, from busy-hours use and new students.",
   seek: "Check applications from SEEK and their ATS scores.",
@@ -100,7 +100,6 @@ const PURPOSE: Record<Exclude<HiringView, "hr" | "heads">, string> = {
   assessment: "",
   mock: "The tutor gets the graded paper and résumé before the mock. After the rubric, Yes goes to the final review and No queues a rejection email.",
   review: "Kevin adds the behavioral assessment and sends the packet to Gift for approval or rejection.",
-  offer: "After approval, the candidate receives an offer letter and can book a 30-minute signing on site.",
   setup: "Scores, limits, heads and messages. A change applies to every tab.",
   admin: "Who comes when, the paper to print, and where to upload the completed paper.",
 };
@@ -157,9 +156,13 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
   // Gift's review email link opens her Heads screen with that review open, when she is a head; else the review screen.
   const view: HiringView = giftOnly && linkedReview ? ((data?.viewerHead ?? head) ? "heads" : "review") : param && Object.hasOwn(VIEWS, param) ? (param as HiringView) : (data?.viewerHead ?? head ?? headParam) ? "heads" : "overview";
   const giftReview = view === "review" && giftOnly;
+  const offer = view === "offer";
+  const offerLoadFailed = offer && (data ? data.offers == null : !!error);
   const loaded = !!data;
+  const [messageKey, setMessageKey] = useState<string | null>();
   // Next.js keeps useSearchParams in step with pushState, and this does not reload the page.
   const setView = (name: HiringView, keepRole = false) => {
+    if (name !== "setup") setMessageKey(undefined);
     // Leaving a role screen for the full dashboard forgets it. Opening one remembers it.
     if (!keepRole && !demo) remember(isRoleView(name) ? name : null);
     if (name !== view) window.history.pushState(null, "", `?view=${name}${demo ? "&demo=1" : ""}`);
@@ -365,15 +368,15 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
   if ((param === "hr" && hash === null) || (reviewLink && !loaded && !error)) return <TabSkeleton label="Loading hiring…" />;
 
   return (
-    <div className={`${css.surface} ${serif.variable}`} data-heads-review={view === "heads" || view === "review" ? "" : undefined}>
+    <div className={`${css.surface} ${serif.variable}`} data-heads-review={view === "heads" || view === "review" ? "" : undefined} data-offer={offer ? "" : undefined}>
       {demo && <DemoBar onStep={(name: DemoView) => setView(name, true)} briefOpen={briefOpen} setBriefOpen={setBriefOpen} />}
-      <header className={css.topbar} data-compact={view === "hr" || view === "heads" || giftReview ? "" : undefined} data-heads={view === "heads" ? "" : undefined}>
+      <header className={css.topbar} data-compact={view === "hr" || view === "heads" || giftReview || offer ? "" : undefined} data-heads={view === "heads" ? "" : undefined}>
         <div>
           <h1 className={css.title}>
             {giftReview ? VIEWS[view] : <>Tutor <em>hiring</em></>}
           </h1>
           {/* Always one line, so the tabs below do not move down when the data arrives. */}
-          {!giftReview && <p className={role ? css.subtitle : `${css.subtitle} ${css.statusSubtitle}`}>
+          {!giftReview && !offer && <p className={role ? css.subtitle : `${css.subtitle} ${css.statusSubtitle}`}>
             {role ? (
               view === "heads" && data?.viewerHead ? nickname(headName(data.viewerHead, data.tutors)) : view === "heads" && head ? "My list" : VIEWS[view]
             ) : data ? (
@@ -386,8 +389,8 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
               "\u00a0"
             )}
           </p>}
-          {!role && !giftReview && paused && <p className={css.mobileStatus}>{paused}</p>}
-          {view !== "heads" && data?.reviewAccess?.hr && <Link className="mt-2 inline-block text-sm underline underline-offset-4" href="/hiring/onboarding">Tutor onboarding and Experts access</Link>}
+          {!role && !giftReview && paused && <p className={offer ? css.subtitle : css.mobileStatus}>{paused}</p>}
+          {view !== "heads" && !offer && data?.reviewAccess?.hr && <Link className="mt-2 inline-block text-sm underline underline-offset-4" href="/hiring/onboarding">Tutor onboarding and Experts access</Link>}
         </div>
         <div role="status" className={css.notice}>
           {/* Rules and setup shows these beside its Save button, where they are in view. */}
@@ -411,7 +414,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
               </button>
             </div>}
             {!giftReview && (view !== "review" || loaded) && <details
-              className={nav.mobile}
+              className={`${nav.mobile} ${css.stepMenu}`}
               data-review={view === "review" ? "" : undefined}
               onKeyDown={(event) => {
                 if (event.key !== "Escape" || !event.currentTarget.open) return;
@@ -431,9 +434,9 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
           </>
         )}
       </header>
-      {view !== "hr" && view !== "heads" && !giftReview && PURPOSE[view] && <p className={css.purpose}>{PURPOSE[view]}</p>}
+      {view !== "hr" && view !== "heads" && view !== "offer" && !giftReview && PURPOSE[view] && <p className={css.purpose}>{PURPOSE[view]}</p>}
       {/* A head's failed first load has its own message and retry below. */}
-      {error && view !== "setup" && !(view === "heads" && !data) && (
+      {error && view !== "setup" && !offerLoadFailed && !(view === "heads" && !data) && (
         <p role="alert" className={css.alert}>
           {error}
         </p>
@@ -461,7 +464,25 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
       <div hidden={view !== "capacity"} className={css.viewPane}>
         <CapacityScreen active={view === "capacity"} onReport={setCapacity} />
       </div>
-      {!data || !config || !insights ? (
+      {offerLoadFailed ? (
+        <div className={css.loading}>
+          <p role="alert" className={css.offerLoadAlert}>Could not load offers.</p>
+          <button type="button" className={`${css.primary} ${css.retry} ${css.offerRetry}`} aria-disabled={retrying || undefined} onClick={async () => {
+            if (retrying) return;
+            setRetrying(true);
+            try {
+              await load(true);
+              setError("");
+              window.requestAnimationFrame(() => document.getElementById("approved-offers")?.focus());
+            } catch (error) {
+              setError(error instanceof Error ? error.message : "Could not load offers.");
+            } finally {
+              setRetrying(false);
+            }
+          }}>Try again</button>
+          <p role="status">{retrying ? "Loading offers…" : ""}</p>
+        </div>
+      ) : !data || !config || !insights ? (
         error ? (
           view === "heads" ? (
             // A head cannot check the setup, so the list offers a retry and names who to ask (Sol review, round 18).
@@ -513,7 +534,8 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
             <div className={css.main}>
               <LimitMeters usage={data.usage} headMocks={data.headMocks} config={data.config} tutors={data.tutors} />
             </div>
-            <OperationsRail data={data} insights={insights} busy={busy} connect={connect} onSelect={openRecord} />
+            <OperationsRail data={data} insights={insights} busy={busy} connect={connect} onSelect={openRecord}
+              messageKey={messageKey} />
           </div>
         )}
         {/* Hidden, not unmounted, for the same reason: a tab switch keeps the filters and the open résumé. */}
@@ -541,11 +563,16 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
         }} />}
         {(view === "heads" || view === "mock") && <HeadsScreen data={data} head={view === "heads" ? data.viewerHead : undefined} open={linkedReview} reload={() => load(true)} />}
         {(view === "review" || view === "offer") && (
-          <HiringReviewScreen key={view} data={data} offers={view === "offer"} linkedReview={linkedReview} reload={() => load(true)} onOpenResults={(id) => {
-            const rows = assessmentRows(data.bookings, data.papers, data.mocks).filter((row) => row.candidateId === id);
-            setAssessmentVisit((rows.find((row) => row.mockAt) ?? rows[0])?.key ?? null);
-            setView("assessment");
-          }} />
+          <HiringReviewScreen key={view} data={data} offers={view === "offer"} linkedReview={linkedReview} reload={() => load(true)}
+            onOpenEmailLog={(key) => {
+              setMessageKey(key);
+              setView("setup");
+            }}
+            onFinalReview={() => setView("review")} onOpenResults={(id) => {
+              const rows = assessmentRows(data.bookings, data.papers, data.mocks).filter((row) => row.candidateId === id);
+              setAssessmentVisit((rows.find((row) => row.mockAt) ?? rows[0])?.key ?? null);
+              setView("assessment");
+            }} />
         )}
         <div hidden={view !== "visitday"} className={css.viewPane}>
           <RunSheetScreen data={data} />
