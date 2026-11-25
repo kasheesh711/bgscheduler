@@ -356,22 +356,27 @@ export const unsoftReject = (row: { softRejectedFrom: "new" | "review" | null; s
 /** Runs the plan inside the queue lock: rows move between `new`/`review` and `soft_rejected`. No email either way. */
 async function softRejectAndBringBack(tx: Database, config: HiringConfig, now: Date) {
   const plan = softRejectPlan(await formCandidates(tx, undefined, ["new", "review"]), await formCandidates(tx, undefined, ["soft_rejected"]), config);
-  for (const { id, score } of plan.reject) {
-    const row = await lockCandidate(tx, id);
-    if (row.stage !== "new" && row.stage !== "review") continue;
-    await tx
+  // One statement, not a round trip a row: the first run moves hundreds, and a long transaction under the queue lock
+  // lost its connection (25 Nov 2026). SET reads the old stage and note, so each row remembers its own.
+  if (plan.reject.length) {
+    const score = new Map(plan.reject.map((r) => [r.id, r.score]));
+    const moved = await tx
       .update(c)
       .set({
         stage: "soft_rejected",
         softRejectedAt: now,
-        softRejectedFrom: row.stage,
-        softRejectedNote: row.reviewNote,
-        reviewNote: `Soft rejected: profile score ${score.toFixed(1)} is under ${config.profileThreshold}.`,
-        revision: row.revision + 1,
+        softRejectedFrom: sql<"new" | "review">`${c.stage}`,
+        softRejectedNote: sql<string | null>`${c.reviewNote}`,
+        reviewNote: `Soft rejected: the profile score is under ${config.profileThreshold}.`,
+        revision: sql<number>`${c.revision} + 1`,
         updatedAt: now,
       })
-      .where(eq(c.id, id));
-    await audit(tx, "hiring-queue", "soft-reject", id, { score, threshold: config.profileThreshold });
+      .where(and(inArray(c.id, [...score.keys()]), inArray(c.stage, ["new", "review"])))
+      .returning({ id: c.id });
+    if (moved.length)
+      await tx.insert(s.hiringAudit).values(
+        moved.map(({ id }) => ({ actor: "hiring-queue", action: "soft-reject", candidateId: id, detail: { score: score.get(id), threshold: config.profileThreshold } })),
+      );
   }
   for (const id of plan.restore) {
     const row = await lockCandidate(tx, id);
