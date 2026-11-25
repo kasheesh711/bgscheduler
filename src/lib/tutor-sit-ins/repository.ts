@@ -20,7 +20,7 @@ import {
   type CoverageScope,
   type Participant,
 } from "./model";
-import { suggestionsFor, teachingEvidence, type Sources } from "./sources";
+import { createSuggestionScan, suggestionsFor, teachingEvidence, type Sources, type SuggestionScan } from "./sources";
 
 import { allocateScience, type ScienceCandidate } from "./allocation";
 
@@ -77,7 +77,9 @@ export async function generateAssignments(
   sources: Sources,
   db: Database,
   scopes?: CoverageScope[],
+  scan?: SuggestionScan,
 ) {
+  const prepared = scan?.sources === sources ? scan : createSuggestionScan(sources);
   const grants = await db
     .select()
     .from(s.tutorSitInGrants)
@@ -134,6 +136,7 @@ export async function generateAssignments(
             sources,
             db,
             new Date(),
+            prepared,
           )
         ).map((s) => s.start);
       } catch (error) {

@@ -231,16 +231,106 @@ export function teachingEvidence(lesson: Lesson, now = new Date()) {
 // depending on the worker/server host timezone.
 const snapshotInstant = (date: Date) =>
   fromZonedTime(date.toISOString().slice(0, -1), ZONE);
+
+type LessonInterval = {
+  start: Date;
+  end: Date;
+  weekday: number;
+  sameDay: boolean;
+  startMinute: number;
+  endMinute: number;
+};
+export type SuggestionScan = {
+  sources: Sources;
+  lessonsFor: (tutorKey: string) => Lesson[];
+  headFor: (observerKey: string) => Sources["index"]["tutorGroups"][number] | undefined;
+  accountsFor: (observerKey: string) => Sources["accounts"];
+  instant: (date: Date) => Date;
+  intervalFor: (lesson: Lesson) => LessonInterval;
+  available: (observerKey: string, lesson: Lesson, reasons: Set<string>) => boolean;
+};
+
+// Only derived, immutable snapshot data is reused. A scan belongs to one loaded
+// Sources object; grants, bookings and live Wise verification remain fresh reads.
+export function createSuggestionScan(sources: Sources): SuggestionScan {
+  const lessons = new Map<string, Lesson[]>();
+  for (const lesson of sources.lessons) {
+    if (!lesson.tutorKey) continue;
+    const rows = lessons.get(lesson.tutorKey) ?? [];
+    rows.push(lesson);
+    lessons.set(lesson.tutorKey, rows);
+  }
+  const heads = new Map<string, Sources["index"]["tutorGroups"][number]>();
+  for (const head of sources.index.tutorGroups)
+    if (!heads.has(head.canonicalKey)) heads.set(head.canonicalKey, head);
+  const accounts = new Map<string, Sources["accounts"]>();
+  for (const account of sources.accounts) {
+    const rows = accounts.get(account.canonicalKey) ?? [];
+    rows.push(account);
+    accounts.set(account.canonicalKey, rows);
+  }
+  const instants = new WeakMap<Date, Date>();
+  const intervals = new WeakMap<Lesson, LessonInterval>();
+  const results = new WeakMap<Lesson, Map<string, { free: boolean; reasons: string[] }>>();
+  const scan: SuggestionScan = {
+    sources,
+    lessonsFor: (key) => lessons.get(key) ?? [],
+    headFor: (key) => heads.get(key),
+    accountsFor: (key) => accounts.get(key) ?? [],
+    instant(date) {
+      let instant = instants.get(date);
+      if (!instant) {
+        instant = snapshotInstant(date);
+        instants.set(date, instant);
+      }
+      return instant;
+    },
+    intervalFor(lesson) {
+      let interval = intervals.get(lesson);
+      if (!interval) {
+        const start = new Date(lesson.start), end = new Date(lesson.end);
+        const minute = (date: Date) =>
+          Number(formatInTimeZone(date, ZONE, "H")) * 60 +
+          Number(formatInTimeZone(date, ZONE, "m"));
+        const sameDay = localDate(start) === localDate(end);
+        interval = {
+          start, end, sameDay,
+          weekday: Number(formatInTimeZone(start, ZONE, "i")) % 7,
+          startMinute: sameDay ? minute(start) : 0,
+          endMinute: sameDay ? minute(end) : 0,
+        };
+        intervals.set(lesson, interval);
+      }
+      return interval;
+    },
+    available(key, lesson, reasons) {
+      const byHead = results.get(lesson) ?? new Map();
+      let result = byHead.get(key);
+      if (!result) {
+        const review = new Set<string>();
+        result = { free: snapshotAvailable(sources, key, lesson, review, scan), reasons: [...review] };
+        byHead.set(key, result);
+        results.set(lesson, byHead);
+      }
+      for (const reason of result.reasons) reasons.add(reason);
+      return result.free;
+    },
+  };
+  return scan;
+}
+
 export function snapshotAvailable(
   sources: Sources,
   observerKey: string,
   lesson: Lesson,
   reviewReasons?: Set<string>,
+  scan?: SuggestionScan,
 ) {
-  const head = sources.index.tutorGroups.find(
+  const prepared = scan?.sources === sources ? scan : undefined;
+  const head = prepared ? prepared.headFor(observerKey) : sources.index.tutorGroups.find(
     (g) => g.canonicalKey === observerKey,
   );
-  const accounts = sources.accounts.filter(
+  const accounts = prepared ? prepared.accountsFor(observerKey) : sources.accounts.filter(
     (a) => a.canonicalKey === observerKey,
   );
   if (
@@ -276,28 +366,29 @@ export function snapshotAvailable(
     );
     return false;
   }
-  const interval = { start: new Date(lesson.start), end: new Date(lesson.end) };
+  const timing = prepared?.intervalFor(lesson);
+  const interval = timing ?? { start: new Date(lesson.start), end: new Date(lesson.end) };
   const minute = (d: Date) =>
     Number(formatInTimeZone(d, ZONE, "H")) * 60 +
     Number(formatInTimeZone(d, ZONE, "m"));
-  const weekday = Number(formatInTimeZone(interval.start, ZONE, "i")) % 7;
-  if (localDate(interval.start) !== localDate(interval.end)) return false;
+  const weekday = timing?.weekday ?? Number(formatInTimeZone(interval.start, ZONE, "i")) % 7;
+  if (timing ? !timing.sameDay : localDate(interval.start) !== localDate(interval.end)) return false;
   // Observe inside any verified working window, irrespective of account labels
   // or teaching qualifications. Every linked account's classes and leave block.
   if (
     !head.availabilityWindows.some(
       (w) =>
         w.weekday === weekday &&
-        w.startMinute <= minute(interval.start) &&
-        w.endMinute >= minute(interval.end),
+        w.startMinute <= (timing?.startMinute ?? minute(interval.start)) &&
+        w.endMinute >= (timing?.endMinute ?? minute(interval.end)),
     )
   )
     return false;
   if (
     head.leaves.some((l) =>
       overlap(interval, {
-        start: snapshotInstant(l.startTime),
-        end: snapshotInstant(l.endTime),
+        start: prepared ? prepared.instant(l.startTime) : snapshotInstant(l.startTime),
+        end: prepared ? prepared.instant(l.endTime) : snapshotInstant(l.endTime),
       }),
     )
   )
@@ -306,8 +397,8 @@ export function snapshotAvailable(
     (b) =>
       b.isBlocking &&
       overlap(interval, {
-        start: snapshotInstant(b.startTime),
-        end: snapshotInstant(b.endTime),
+        start: prepared ? prepared.instant(b.startTime) : snapshotInstant(b.startTime),
+        end: prepared ? prepared.instant(b.endTime) : snapshotInstant(b.endTime),
       }),
   );
 }
@@ -316,6 +407,7 @@ export async function suggestionsFor(
   sources: Sources,
   db: Database,
   now = new Date(),
+  scan?: SuggestionScan,
 ): Promise<Suggestion[]> {
   if (!assignment.observerEmail)
     throw new SitInError(
@@ -330,7 +422,8 @@ export async function suggestionsFor(
     db,
   );
   const reviewReasons = new Set<string>();
-  const matching = sources.lessons.filter(
+  const prepared = scan?.sources === sources ? scan : createSuggestionScan(sources);
+  const matching = prepared.lessonsFor(assignment.canonicalKey).filter(
     (l) =>
       l.tutorKey === assignment.canonicalKey &&
       lessonScopes(l).includes(scopeOf(assignment)) &&
@@ -342,7 +435,7 @@ export async function suggestionsFor(
       (l) =>
         l.participants.length > 0 &&
         !l.issues?.some((i) => i.category === "students") &&
-        snapshotAvailable(sources, head.canonicalKey, l, reviewReasons),
+        prepared.available(head.canonicalKey, l, reviewReasons),
     )
     .sort((a, b) => a.start.localeCompare(b.start));
   if (!eligible.length) {
