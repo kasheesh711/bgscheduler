@@ -236,4 +236,3 @@ describe("CandidateInspector evidence", () => {
     expect(html).not.toContain("Profile (grey)");
   });
 });
-
