@@ -466,7 +466,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
       </div>
       {offerLoadFailed ? (
         <div className={css.loading}>
-          <p role="alert">Could not load offers.</p>
+          <p role="alert" className={css.offerLoadAlert}>Could not load offers.</p>
           <button type="button" className={`${css.primary} ${css.retry} ${css.offerRetry}`} aria-disabled={retrying || undefined} onClick={async () => {
             if (retrying) return;
             setRetrying(true);

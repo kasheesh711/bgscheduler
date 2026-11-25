@@ -762,7 +762,7 @@ async function approvedOffers(db: Database): Promise<OfferRow[] | null> {
   const decisions = await read("approved offers", db.select({
     decisionId: d.id, candidateId: c.id, name: c.name, visitSubject: c.visitSubject, subjects: c.subjects, key: d.outboxKey,
   }).from(d).innerJoin(c, eq(c.id, d.candidateId))
-    .where(and(eq(d.status, "sent"), eq(d.decision, "hire"))).orderBy(desc(d.createdAt)));
+    .where(and(eq(d.status, "sent"), eq(d.decision, "hire"), eq(c.stage, "hired"))).orderBy(desc(d.createdAt)));
   if (!decisions?.length) return decisions && [];
 
   const keys = decisions.flatMap(({ key }) => key ? [key] : []);
@@ -772,7 +772,7 @@ async function approvedOffers(db: Database): Promise<OfferRow[] | null> {
     read("offer emails", db.select({ key: o.key, status: o.status, sentAt: o.sentAt }).from(o)
       .where(and(eq(o.kind, "email"), inArray(o.key, keys)))),
     read("contract bookings", db.select({ candidateId: b.candidateId, startTime: b.startTime, endTime: b.endTime })
-      .from(b).where(confirmedContractBooking(inArray(b.candidateId, candidates)))),
+      .from(b).where(confirmedContractBooking(inArray(b.candidateId, candidates))).orderBy(asc(b.startTime))),
     read("onboarding dates", db.select({ candidateId: form.candidateId, decisionId: form.decisionId, submittedAt: form.submittedAt })
       .from(form).where(inArray(form.decisionId, decisionIds))),
     read("approved offer types", db.select({
@@ -780,10 +780,11 @@ async function approvedOffers(db: Database): Promise<OfferRow[] | null> {
     }).from(a).innerJoin(packet, and(eq(packet.candidateId, a.candidateId), eq(packet.action, "final-review-packet"),
       sql`${packet.id}::text = ${a.detail}->>'packetId'`))
       .where(and(eq(a.action, "final-review-signed"), inArray(sql`${a.detail}->>'key'`, keys)))),
-    // Gift's direct hire writes the audit and decision with the same database transaction timestamp.
+    // Older direct hires share the same database transaction timestamp with their audit row.
     read("direct hire offer types", db.select({
       decisionId: d.id, type: sql<OfferType | null>`min(${a.detail}->>'offer')`,
-    }).from(d).innerJoin(a, and(eq(a.candidateId, d.candidateId), eq(a.createdAt, d.createdAt),
+    }).from(d).innerJoin(a, and(eq(a.candidateId, d.candidateId),
+      sql`case when ${a.detail} ? 'decisionId' then ${a.detail}->>'decisionId' = ${d.id}::text else ${a.createdAt} = ${d.createdAt} end`,
       eq(a.action, "head-decision"), sql`${a.detail}->>'decision' = 'hire'`, sql`${a.detail} ? 'offer'`))
       .where(inArray(d.id, decisionIds)).groupBy(d.id).having(sql`count(*) = 1`)),
     read("signed contracts", (async () => {
@@ -792,7 +793,7 @@ async function approvedOffers(db: Database): Promise<OfferRow[] | null> {
       const samplePath = signedContractPath("");
       const prefix = samplePath.slice(0, samplePath.lastIndexOf("/") + 1);
       const dates = new Map<string, string>();
-      const abortSignal = AbortSignal.timeout(4_000);
+      const abortSignal = AbortSignal.timeout(2_000);
       let cursor: string | undefined;
       do {
         const page = await list({ prefix, cursor, abortSignal });
@@ -822,7 +823,7 @@ async function approvedOffers(db: Database): Promise<OfferRow[] | null> {
       booking: booking ? { start: booking.startTime.toISOString(), end: booking.endTime.toISOString() } : null,
       uploadedAt: pdfs?.get(candidateId) ?? null,
       submittedAt: form?.candidateId === candidateId ? form.submittedAt.toISOString() : null,
-      unknown: { email: !email, offerType: !offerType, booking: !bookings, pdf: !pdfs, form: !forms },
+      unknown: { email: emails === null, offerType: !offerType, booking: !bookings, pdf: !pdfs, form: !forms },
     };
   });
 }

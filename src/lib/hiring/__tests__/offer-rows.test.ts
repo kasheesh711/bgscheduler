@@ -50,4 +50,10 @@ describe("offerNext", () => {
     expect(offerNext({ ...offer, booking: visit(24), unknown: { pdf: true } }, now).action).toBe("refresh");
     expect(offerNext({ ...offer, uploadedAt: sent, unknown: { form: true } }, now).action).toBe("refresh");
   });
+
+  it("distinguishes a missing email from a failed outbox read", () => {
+    const missing = { ...offer, emailStatus: null, sentAt: null };
+    expect(offerNext(missing, now)).toMatchObject({ state: "notQueued", label: "Ask Kevin" });
+    expect(offerNext({ ...missing, unknown: { email: true } }, now)).toMatchObject({ state: "unknown", action: "refresh" });
+  });
 });

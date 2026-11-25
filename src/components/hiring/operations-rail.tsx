@@ -69,7 +69,7 @@ export function OperationsRail({
   const target = messageKey ? data.outbox.find((j) => j.key === messageKey)
     ?? data.inviteOutbox.find((j) => j.key === messageKey) : undefined;
   const problems = data.outbox.filter((j) => j.key !== messageKey && (j.status === "failed" || j.status === "uncertain"));
-  const messages = target ? [{ ...target, kind: "Offer email" }, ...problems] : problems;
+  const messages = target ? [target, ...problems] : problems;
   const appointments = [...data.bookings].sort(
     (a, b) => new Date(String(b.startTime)).getTime() - new Date(String(a.startTime)).getTime(),
   );
@@ -189,12 +189,15 @@ export function OperationsRail({
         <p className={css.railLede}>
           {insights.messages.sent} sent · {insights.messages.waiting} waiting · {insights.messages.problems} problems
         </p>
+        {messageKey && !target && <p className={css.railLede}>Offer email not found in the log.</p>}
         {messages.length > 0 && (
           <ul className={css.railList}>
             {messages.map((j) => (
               <li key={j.key} className={j.key === messageKey ? css.selectedMessage : undefined}>
                 <span className={css.railName}>{nameOf(j.candidateId)}</span>
-                <span className={css.railMeta}>{j.kind} · {j.status}</span>
+                <span className={css.railMeta}>
+                  {j.key === messageKey && /:result:/.test(j.key) ? "Offer email" : "kind" in j && typeof j.kind === "string" ? j.kind : "email"} · {j.status}
+                </span>
                 {j.error && <span className={css.errorText}>{j.error}</span>}
               </li>
             ))}

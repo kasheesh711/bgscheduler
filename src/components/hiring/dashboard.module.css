@@ -862,4 +862,5 @@
 /* A head's list retry: a full touch target in the workspace navy, dimmed while it retries (critic review, round 21). */
 .primary.retry { min-height: 44px; padding-inline: 18px; background: #14213d; color: #fff; font-size: 15px; }
 .primary.retry[aria-disabled="true"] { opacity: 0.55; cursor: progress; }
-@media (max-width: 719px) { .retry.offerRetry { font-size: 16px; } }
+.surface[data-offer] .loading { font-size: 14px; }
+@media (max-width: 719px) { .retry.offerRetry, .offerLoadAlert, .surface[data-offer] .loading { font-size: 16px; } }

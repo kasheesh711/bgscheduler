@@ -6,9 +6,10 @@ vi.mock("../service", () => ({ audit: vi.fn(), candidateById: vi.fn() }));
 vi.mock("@vercel/blob/client", () => ({ handleUpload: vi.fn() }));
 
 import type { Database } from "@/lib/db";
-import { listContractTemplates, saveContractTemplate } from "../contract-templates";
+import { handleUpload } from "@vercel/blob/client";
+import { listContractTemplates, parseSignedContractPayload, saveContractTemplate, signedContractPath, signedContractUploadHandler } from "../contract-templates";
 import { OFFER_LETTERS } from "../offer-letters";
-import { audit } from "../service";
+import { audit, candidateById } from "../service";
 
 const db = {} as Database;
 beforeEach(() => vi.clearAllMocks());
@@ -42,8 +43,7 @@ it("has one standard offer letter for each contract type, with the name and the 
 });
 
 it("gives signed-contract access only for a hired tutor", async () => {
-  const { candidateById } = await import("../service");
-  const { readSignedContract, signedContractInfo, signedContractPath } = await import("../contract-templates");
+  const { readSignedContract, signedContractInfo } = await import("../contract-templates");
   const id = "11111111-1111-4111-8111-111111111111";
   vi.mocked(candidateById).mockResolvedValue({ id, name: "Nicha Suwan / สุวรรณ", stage: "onsite_booked" } as never);
   await expect(signedContractInfo(id, db)).rejects.toMatchObject({ status: 409 });
@@ -54,4 +54,27 @@ it("gives signed-contract access only for a hired tutor", async () => {
   blob.get.mockResolvedValue({ statusCode: 200, stream: "bytes" });
   expect(await readSignedContract(id, db)).toEqual({ stream: "bytes", name: "BeGifted-signed-contract-Nicha-Suwan.pdf" });
   expect(blob.get).toHaveBeenCalledWith(`hiring-signed-contracts/${id}.pdf`, expect.objectContaining({ access: "private" }));
+});
+
+const candidateId = "11111111-1111-4111-8111-111111111111";
+
+it("accepts legacy signed upload payloads and requires a boolean true to replace", () => {
+  expect(parseSignedContractPayload(candidateId)).toEqual({ candidateId, replace: false });
+  for (const replace of [false, "true", true]) {
+    expect(parseSignedContractPayload(JSON.stringify({ candidateId, replace })))
+      .toEqual({ candidateId, replace: replace === true });
+  }
+});
+
+it("allows overwrite in the upload token only for an explicit replacement", async () => {
+  vi.mocked(candidateById).mockResolvedValue({ id: candidateId, stage: "hired" } as never);
+  const request = new Request("https://example.test/api/hiring/contracts/signed");
+  signedContractUploadHandler(request, { type: "blob.generate-client-token", payload: {
+    pathname: signedContractPath(candidateId), clientPayload: null, multipart: false,
+  } }, "hr@example.test", db);
+  const { onBeforeGenerateToken } = vi.mocked(handleUpload).mock.calls[0][0];
+  for (const replace of [false, true]) {
+    const token = await onBeforeGenerateToken(signedContractPath(candidateId), JSON.stringify({ candidateId, replace }), false);
+    expect(token.allowOverwrite).toBe(replace);
+  }
 });

@@ -72,7 +72,7 @@ export function PrintContract({ type, onMissing }: { type: OfferType; onMissing:
         Print contract
       </button>
       <span id={description} className={r.offerType}>{OFFER_LETTERS[type].label.replace(/ tutor$/, "")}</span>
-      <p className={r.offerNote} role="status">{busy ? "Opening PDF…" : message}</p>
+      <p className={r.offerTaskNote} role="status">{busy ? "Opening PDF…" : message}</p>
     </>
   );
 }
@@ -80,7 +80,7 @@ export function PrintContract({ type, onMissing }: { type: OfferType; onMissing:
 export function ContractTemplates({ templates, reload, showLoadError, retrying, onRetry }: ReturnType<typeof useContractTemplates> & {
   showLoadError: boolean;
   retrying: boolean;
-  onRetry: () => void;
+  onRetry: (button: HTMLButtonElement) => void;
 }) {
   const [busy, setBusy] = useState<OfferType>();
   const [replacing, setReplacing] = useState<OfferType>();
@@ -90,11 +90,13 @@ export function ContractTemplates({ templates, reload, showLoadError, retrying, 
     if (replacing) replacement.current?.focus();
   }, [replacing]);
 
-  if (templates === undefined) return <p className={r.offerNote} role="status">Loading templates…</p>;
+  if (templates === undefined) return <p className={r.offerTaskNote} role="status">Loading templates…</p>;
   if (templates === null) return (
     <div>
-      {showLoadError && <p className={r.offerNote} role="status">{retrying ? "Loading templates…" : "Could not load templates."}</p>}
-      <button type="button" className={r.offerControl} disabled={retrying} onClick={onRetry}>Retry</button>
+      {showLoadError && <p className={retrying ? r.offerTaskNote : r.offerNote} role="status">{retrying ? "Loading templates…" : "Could not load templates."}</p>}
+      <button type="button" className={r.offerControl} aria-disabled={retrying || undefined} onClick={(event) => {
+        if (!retrying) onRetry(event.currentTarget);
+      }}>Retry</button>
     </div>
   );
 
@@ -159,44 +161,56 @@ export function ContractTemplates({ templates, reload, showLoadError, retrying, 
   );
 }
 
-export function SignedContract({ candidateId, name, canUpload, templateMissing, templateRetryNote, onUnverified, onVerified, children }: {
+export function SignedContract({ candidateId, name, fileAction, pdf, form, onUnverified, onVerified, children }: {
   candidateId: string;
   name: string;
-  canUpload: boolean;
-  templateMissing: boolean;
-  templateRetryNote: string | null;
+  fileAction: "Upload signed PDF" | "Upload PDF" | "Replace PDF";
+  pdf: ReactNode;
+  form: ReactNode;
   onUnverified: () => void;
-  onVerified: (date: string) => Promise<void>;
+  onVerified: (date: string, refresh: boolean) => Promise<void>;
   children: ReactNode;
 }) {
   const id = useId();
-  const [phase, setPhase] = useState<"uploading" | "verifying" | "checking" | "unverified" | "saved">();
+  const [phase, setPhase] = useState<"preflight" | "existing" | "uploading" | "verifying" | "checking" | "unverified" | "saved">();
   const [error, setError] = useState("");
+  const alert = useRef<HTMLParagraphElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const check = useRef<HTMLButtonElement>(null);
   const restoreFocus = useRef(false);
-  const busy = phase === "uploading" || phase === "verifying" || phase === "checking";
+  const busy = phase === "preflight" || phase === "uploading" || phase === "verifying" || phase === "checking";
 
   useLayoutEffect(() => {
     const active = document.activeElement;
     if (!restoreFocus.current || (active !== document.body && active !== input.current && active !== check.current)) return;
     if (phase === "unverified") check.current?.focus();
-    if (!phase) input.current?.focus();
   }, [phase]);
+
+  useLayoutEffect(() => {
+    if (error) alert.current?.closest("tr")?.scrollIntoView({ block: "nearest" });
+  }, [error]);
+
+  async function filedDate() {
+    const response = await fetch(`${SIGNED}?candidateId=${candidateId}`, { cache: "no-store" });
+    if (!response.ok) throw new Error();
+    const { uploadedAt } = await response.json();
+    if (uploadedAt === null) return null;
+    if (typeof uploadedAt !== "string" || !Number.isFinite(Date.parse(uploadedAt))) throw new Error();
+    return uploadedAt;
+  }
 
   async function verify(recheck = false) {
     setPhase(recheck ? "checking" : "verifying");
     try {
-      const response = await fetch(`${SIGNED}?candidateId=${candidateId}`, { cache: "no-store" });
-      if (!response.ok) throw new Error();
-      const { uploadedAt } = await response.json();
-      if (typeof uploadedAt !== "string" || !Number.isFinite(Date.parse(uploadedAt))) throw new Error();
+      const uploadedAt = await filedDate();
+      if (!uploadedAt) throw new Error();
       setPhase("saved");
-      await onVerified(uploadedAt);
+      await onVerified(uploadedAt, true);
       // WebKit can lose focus when the refreshed list moves this row.
       const focusNext = () => {
         const section = document.getElementById("approved-offers");
-        if (restoreFocus.current && (document.activeElement === document.body || document.activeElement === section)) {
+        const active = document.activeElement;
+        if (restoreFocus.current && (active === document.body || active === section || active === input.current)) {
           section?.querySelector<HTMLElement>(`[data-offer-next="${CSS.escape(candidateId)}"]`)?.focus();
         }
       };
@@ -213,14 +227,42 @@ export function SignedContract({ candidateId, name, canUpload, templateMissing, 
   async function choose(file: File | undefined) {
     if (!file || busy) return;
     setError("");
+    setPhase(undefined);
     if (!file.size) return setError("Choose a PDF with content.");
     if (file.size > 25 * 1024 * 1024) return setError("Choose a PDF of 25 MB or less.");
     if (file.type ? file.type !== "application/pdf" : !/\.pdf$/i.test(file.name)) return setError("Choose a PDF.");
+    const replace = fileAction === "Replace PDF";
+    if (!replace) {
+      setPhase("preflight");
+      let uploadedAt;
+      try {
+        uploadedAt = await filedDate();
+      } catch {
+        setError("Could not check for a filed PDF. Try again.");
+        setPhase(undefined);
+        return;
+      }
+      if (uploadedAt) {
+        await onVerified(uploadedAt, false);
+        setPhase("existing");
+        return;
+      }
+    }
     restoreFocus.current = true;
     setPhase("uploading");
     try {
-      await upload(`hiring-signed-contracts/${candidateId}.pdf`, file, { access: "private", handleUploadUrl: SIGNED, clientPayload: candidateId, contentType: "application/pdf" });
+      await upload(`hiring-signed-contracts/${candidateId}.pdf`, file, {
+        access: "private", handleUploadUrl: SIGNED, clientPayload: JSON.stringify({ candidateId, replace }), contentType: "application/pdf",
+      });
     } catch {
+      if (!replace) {
+        const uploadedAt = await filedDate().catch(() => null);
+        if (uploadedAt) {
+          await onVerified(uploadedAt, false);
+          setPhase("existing");
+          return;
+        }
+      }
       setError("Upload failed. Try again.");
       setPhase(undefined);
       return;
@@ -228,33 +270,48 @@ export function SignedContract({ candidateId, name, canUpload, templateMissing, 
     await verify();
   }
 
+  const primary = fileAction === "Upload signed PDF";
+  const controlClass = primary ? r.offerControl : `${r.offerControl} ${r.offerQuietControl}`;
+  const fileControl = phase === "unverified" || phase === "checking" ? (
+    <button ref={check} type="button" className={controlClass} aria-disabled={phase === "checking" || undefined}
+      onClick={() => {
+        if (phase === "checking") return;
+        restoreFocus.current = true;
+        void verify(true);
+      }}>Check file</button>
+  ) : (
+    <label className={controlClass} data-primary={primary ? "" : undefined} onClick={busy ? (event) => event.preventDefault() : undefined}>
+      {fileAction}
+      <input ref={input} className="sr-only" type="file" accept=".pdf,application/pdf" aria-disabled={busy || undefined}
+        aria-label={`${fileAction} for ${name}`} aria-describedby={error ? id : undefined} aria-invalid={!!error || undefined}
+        onChange={(event) => { void choose(event.target.files?.[0]); event.target.value = ""; }} />
+    </label>
+  );
+
+  const fileActions = (
+    <>
+      {fileControl}
+      {error && <p ref={alert} id={id} className={r.offerTaskNote} role="alert">{error}</p>}
+    </>
+  );
+  const status = phase === "uploading" ? "Uploading PDF…" : busy ? "Checking the file…"
+    : phase === "existing" ? "Existing PDF found. Your file was not uploaded."
+    : phase === "saved" ? `${name}'s PDF filed.`
+    : phase === "unverified" ? `Could not confirm the signed PDF for ${name}.`
+    : null;
   return (
-    <td className={r.offerNext} role="cell">
-      {canUpload ? (
-        phase === "unverified" || phase === "checking" ? (
-          <button ref={check} type="button" className={r.offerControl} aria-disabled={phase === "checking" || undefined}
-            onClick={() => {
-              if (phase === "checking") return;
-              restoreFocus.current = true;
-              void verify(true);
-            }}>Check file</button>
-        ) : (
-          <label className={r.offerControl} data-primary="" onClick={busy ? (event) => event.preventDefault() : undefined}>
-            Upload signed PDF
-            <input ref={input} className="sr-only" type="file" accept=".pdf,application/pdf" aria-disabled={busy || undefined}
-              aria-label={`Upload signed PDF for ${name}`} aria-describedby={error ? id : undefined} aria-invalid={!!error || undefined}
-              onChange={(event) => { void choose(event.target.files?.[0]); event.target.value = ""; }} />
-          </label>
-        )
-      ) : children}
-      <p className={phase === "saved" || phase === "unverified" || templateMissing ? "sr-only" : r.offerNote}
-        role="status" data-template-retry={templateRetryNote ? "" : undefined}>
-        {templateMissing ? `Template for ${name} not found.`
-          : phase === "uploading" ? "Uploading PDF…" : busy ? "Checking the file…"
-          : phase === "saved" ? `${name}'s PDF filed.`
-          : phase === "unverified" ? `Could not confirm the signed PDF for ${name}.` : templateRetryNote}
-      </p>
-      {error && <p id={id} className={r.offerNote} role="alert">{error}</p>}
-    </td>
+    <>
+      <td className={r.offerNext} role="cell">
+        {primary ? <>{fileActions}<p className={r.offerTaskNote} role="status">{busy ? status : null}</p></> : children}
+      </td>
+      <td className={r.offerPdf} role="cell">
+        {pdf}
+        {!primary && <div>{fileActions}</div>}
+        <p className={phase === "saved" || phase === "unverified" ? "sr-only" : r.offerTaskNote} role="status">
+          {!primary || phase === "unverified" ? status : null}
+        </p>
+      </td>
+      {form}
+    </>
   );
 }
