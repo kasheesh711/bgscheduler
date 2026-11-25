@@ -1022,7 +1022,7 @@ describe("hiring workflow persistence", () => {
       const [notice, ...more] = await notices(near.result.id);
       expect(more).toHaveLength(0);
       expect(notice.groupId).toBe("group");
-      expect(notice.message).toContain("AI score: 75% (pass mark 80%)");
+      expect(notice.message).toContain("AI score 75% · pass mark 80%");
       expect((await mockOf(near.row.id)).status).toBe("confirmed");
       expect(await rejection(near.row.id)).toBeUndefined();
       const token = notice.message.match(/\/hiring\/paper-check\/([\w.-]+)/)![1];
@@ -1099,7 +1099,7 @@ describe("hiring workflow persistence", () => {
       expect(vi.mocked(deliverCalendar)).toHaveBeenCalledTimes(2);
       expect(vi.mocked(pushLineTextMessage)).toHaveBeenCalledTimes(1);
       // The head's notice carries the candidate's contact line.
-      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\nCandidate: .+\nEmail: \S+@example\.com\nPhone: not recorded\nSubject: /);
+      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\n.+ · .+\n.+ · Head: \S+\n\S+@example\.com(\n|$)/);
     });
     it("saves the head's scores from the link before, during and after the mock, and keeps what a resend replaced", async () => {
       const row = await invited();
@@ -1399,7 +1399,7 @@ describe("hiring workflow persistence", () => {
       await bookVisit(link(row), choice(), db);
       await deliverOutbox(db, base);
       // The number the candidate gave at the HR call booking reaches the head with the email.
-      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\nEmail: \S+@example\.com\nPhone: \+66812345678\nSubject: /);
+      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\n\S+@example\.com · \+66812345678(\n|$)/);
       const token = vi.mocked(pushLineTextMessage).mock.calls[0][0].text.match(/\/hiring\/brief\/([\w.-]+)/)![1];
       const [exam, mock] = await rowsOf(row.id);
       expect([exam.kind, mock.kind]).toEqual(["paper", "mock"]);
@@ -1484,8 +1484,8 @@ describe("hiring workflow persistence", () => {
       // The head can tell which of two mocks moved: it prints the old 12:15 and the new time.
       const moved = vi.mocked(pushLineTextMessage).mock.calls[0][0].text;
       expect(moved).toMatch(/moved/i);
-      expect(moved).toContain("02/11/2026, 12:15");
-      expect(moved).toContain("03/11/2026, 12:15");
+      expect(moved).toContain("Old time (cancelled): Mon 2 Nov, 12:15");
+      expect(moved).toContain("\nTue 3 Nov, 12:15–");
       expect(vi.mocked(deliverCalendar).mock.calls.filter((c) => c[4] === true)).toHaveLength(2);
       // The moved notice carries a new candidate page link, and the old one has ended.
       expect(briefOf(moved)).not.toBe(oldBrief);

@@ -697,7 +697,7 @@ export async function deliverOutbox(
           const message = [
             title,
             lineWho(candidate.name, booking.subjects.join(", ")),
-            `${lineSlot(booking.startTime, booking.endTime)} · ${current.config.location}`,
+            `${lineSlot(booking.startTime, booking.endTime)} · ${current.config.location} · Head: ${booking.interviewerKey}`,
             ...(notice === "moved" && movedFrom ? [`Old time (cancelled): ${lineWhen(new Date(movedFrom))}`] : []),
             contactLine(candidate),
             ...(booking.kind === "mock" && notice !== "cancelled" ? [`\nCandidate page (answers, résumé):\n${briefLink(booking)}`] : []),
