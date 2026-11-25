@@ -112,9 +112,10 @@ it("titles a visit's two private events, and only the mock invites the head", as
   expect(events.map((e) => e.visibility)).toEqual(["private", "private"]);
   // Only R1 is on Google Meet. The visit is onsite.
   expect(events.map((e) => e.conferenceData)).toEqual([undefined, undefined]);
-  // Kevin, 23 Nov 2026: HR, Admin, Kevin and the visit's own head are guests on both visit events, once each.
+  // Kevin, 23 Nov 2026: HR, Admin and Kevin are guests on both visit events, once each. Kevin, 25 Nov 2026: the head is a
+  // guest on the mock only, not on the paper test.
   const staff = ["people@begiftededucation.com", "admin@begiftededucation.com", "kevhsh7@gmail.com", "peat@example.com"].map((email) => ({ email }));
-  expect(events[0].attendees).toEqual([{ email: "candidate@example.com" }, ...staff]);
+  expect(events[0].attendees).toEqual([{ email: "candidate@example.com" }, ...staff.filter((g) => g.email !== "peat@example.com")]);
   expect(events[1].attendees).toEqual([{ email: "peat@example.com" }, { email: "candidate@example.com" }, ...staff.filter((g) => g.email !== "peat@example.com")]);
   // A paper row outside a visit (old flow, delivery test) keeps no staff guests.
   await deliverCalendar({ ...row("paper", "00000000-0000-4000-8000-000000000004", null), visitId: null }, candidate, "BeGifted", db, false, []);
