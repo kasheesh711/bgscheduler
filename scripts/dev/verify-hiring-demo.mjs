@@ -29,6 +29,7 @@ const push = window.history.pushState.bind(window.history);
 window.history.pushState = (...args) => { push(...args); window.dispatchEvent(new Event(change)); };
 const subscribe = (fn) => { window.addEventListener(change, fn); window.addEventListener("popstate", fn); return () => { window.removeEventListener(change, fn); window.removeEventListener("popstate", fn); }; };
 export const useSearchParams = () => new URLSearchParams(useSyncExternalStore(subscribe, () => location.search));
+export const useRouter = () => ({ refresh() {}, push() {}, replace() {} });
 `;
 const stub = (bundler, module, name, contents) => {
   bundler.onResolve({ filter: module }, () => ({ path: name, namespace: "fixture" }));
@@ -83,7 +84,7 @@ try {
   await check("1 the application shows with its score", async () => {
     await bar.waitFor();
     assert.match(await current(), /Application and ATS score/);
-    await page.getByText(NAME).first().waitFor();
+    await page.locator(`:text("${NAME}"):visible`).first().waitFor();
     await shot("apply");
   });
   await check("2 Good call moves the candidate on", async () => {
@@ -154,10 +155,10 @@ try {
     await page.locator("article", { hasText: NAME }).first().waitFor();
     await shot("offer");
   });
-  await check("the pipeline board shows on the Overview", async () => {
+  await check("the analytics board shows on the Overview", async () => {
     await page.getByRole("button", { name: "Full dashboard" }).click().catch(() => undefined);
     await page.getByRole("navigation", { name: "Hiring tools" }).first().getByRole("button", { name: "Overview" }).click();
-    await page.getByRole("heading", { name: "Pipeline from the HR call" }).waitFor();
+    await page.getByRole("heading", { name: "Where they are now" }).waitFor();
     await shot("pipeline");
   });
   assert.deepEqual(errors, [], "page errors");

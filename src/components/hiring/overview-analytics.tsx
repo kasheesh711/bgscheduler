@@ -94,6 +94,9 @@ export function OverviewAnalytics({
             ))}
           </select>
         </header>
+        {report.capped && (
+          <p className={css.basis}>Counts can be low: the page reads only the most recently updated candidates.</p>
+        )}
         <Flow g={g} onShow={onShow} />
       </section>
       <section className={`${css.card} ${css.gems}`} aria-labelledby="ov-gems">

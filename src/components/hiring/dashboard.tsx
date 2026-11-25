@@ -17,9 +17,9 @@ import { campaignNames } from "@/lib/hiring/seek-view";
 import type { dashboard } from "@/lib/hiring/service";
 import { CandidateInspector } from "./candidate-inspector";
 import { CandidateTable } from "./candidate-table";
-import { EvidenceChart, ScoreChart, SubjectChart } from "./pipeline-charts";
+import { EvidenceChart, LimitMeters, ScoreChart, SubjectChart } from "./pipeline-charts";
 import { AssessmentScreen } from "./assessment-screen";
-import { WorkerBanner } from "./operations-rail";
+import { OperationsRail, WorkerBanner } from "./operations-rail";
 import { AdminScreen, HeadsScreen, HrScreen, HiringReviewScreen, TodayCalls } from "./role-screens";
 import { PreScreenScreen } from "./prescreen-screen";
 import { CallsScreen } from "./calls-screen";
@@ -506,6 +506,15 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
             error={error}
             notice={notice}
           />
+        )}
+        {/* Moved from the Overview (25 Nov 2026): send limits and system state, beside the rules that set them. */}
+        {view === "setup" && (
+          <div className={css.layout}>
+            <div className={css.main}>
+              <LimitMeters usage={data.usage} headMocks={data.headMocks} config={data.config} tutors={data.tutors} />
+            </div>
+            <OperationsRail data={data} insights={insights} busy={busy} connect={connect} onSelect={openRecord} />
+          </div>
         )}
         {/* Hidden, not unmounted, for the same reason: a tab switch keeps the filters and the open résumé. */}
         <div hidden={view !== "seek"} className={css.viewPane}>
