@@ -353,6 +353,7 @@ describe("hiring decision boundaries", () => {
       "test-secret",
     );
     expect(token).toHaveLength(50);
+    expect(() => bookingToken("not-a-uuid", "mock", expiry, "test-secret")).toThrow();
     // Short links store the kind's position, so links already sent need this order (append only).
     expect(tokenKindSchema.options).toEqual(["paper", "mock", "visit", "paper-visit", "two-day", "brief", "call", "contract", "onboarding", "paper-check"]);
     expect(readBookingToken(token, now, "test-secret")).toEqual({

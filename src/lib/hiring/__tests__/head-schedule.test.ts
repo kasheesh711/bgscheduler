@@ -432,6 +432,7 @@ describe("dashboard with a failing clash check", () => {
     const future = new Date("2099-01-05T05:00:00Z");
     const mock = {
       ...row("mock", MON, 720, 780),
+      id: "00000000-0000-4000-8000-000000000009",
       startTime: future,
       endTime: new Date(future.getTime() + 3600_000),
     };

@@ -13,6 +13,7 @@ export function bookingToken(
   secret = process.env.AUTH_SECRET,
 ) {
   if (!secret) throw new HiringError(503, "Booking links are not configured.");
+  z.uuid().parse(id);
   // Body: booking uuid (16 bytes) + kind index (1) + expiry seconds (4). 50 characters in all.
   const body = Buffer.alloc(21);
   Buffer.from(id.replace(/-/g, ""), "hex").copy(body);
