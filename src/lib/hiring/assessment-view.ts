@@ -1,5 +1,5 @@
-import { bangkokWeekStart } from "./limits";
-import { hireChecksMissing, type MockRubric } from "./marking-sheet";
+import { hireChecksMissing, computeSheet, passRulesFor, rubricTotals, type MockRubric, type PaperMarks } from "./marking-sheet";
+import type { HiringConfig, Subject } from "./model";
 
 type Booking = {
   candidateId: string;
@@ -11,7 +11,7 @@ type Booking = {
   interviewerKey?: string | null;
   subjects: string[];
 };
-type Result = { candidateId: string; status: string; source: string; rubric?: MockRubric | null };
+type Result = { candidateId: string; status: string; source: string; rubric?: MockRubric | null; stuck?: boolean };
 type TrackerRow = Result & { subject: string; history?: { date: string | null } | null };
 
 export type AssessmentRow = {
@@ -103,32 +103,76 @@ export function hireBlockers(papers: Result[], mocks: Result[]) {
   return blockers;
 }
 
-export const ASSESSMENT_CHIPS = ["Needs upload", "Needs check", "Ready to decide", "Past results"] as const;
-export type AssessmentChip = (typeof ASSESSMENT_CHIPS)[number];
-export const ASSESSMENT_RANGES = ["All dates", "This week", "Upcoming", "Past"] as const;
-export type AssessmentRange = (typeof ASSESSMENT_RANGES)[number];
+/** What a paper result means, first word first. The list and the panel read the same numbers from here. */
+export type Verdict = "pass" | "fail" | "checking" | "needs_check" | "marking" | "failed" | "missing_mark" | "recorded";
+export type PaperScore = { verdict: Verdict; percent: number | null; passMark: number | null; level: string | null; scored: number; max: number; head: string | null; note: string | null };
+type PaperLike = { id: string; subject: string; status: string; marks?: Pick<PaperMarks, "questions"> | null; history?: { outcome?: string | null } | null; updatedAt?: Date | string };
+type CheckLike = { resultId: string; percent: number; head?: string | null; headLabel?: string | null; done: { passed: boolean; percent: number; head: string; at?: string } | null };
 
-export function matchesRange(row: AssessmentRow, range: AssessmentRange, now = new Date()) {
-  if (range === "All dates") return true;
-  if (range === "Upcoming") return !row.history && !row.started;
-  if (range === "Past") return row.started;
-  if (!row.at) return false;
-  const start = bangkokWeekStart(now).getTime();
-  return row.at.getTime() >= start && row.at.getTime() < start + 7 * 86400000;
+// The level a pass names: the highest one passed, as "Can teach up to" reads it.
+const PASS_ORDER = ["AS / A-Level", "IB SL / HL", "AP", "IGCSE / GCSE", "Key Stage 3", "Other"];
+
+export function paperScore(paper: PaperLike, config: Pick<HiringConfig, "paperPassRules">, check?: CheckLike): PaperScore {
+  const empty = { percent: null, passMark: null, level: null, scored: 0, max: 0, head: null, note: null };
+  if (paper.history) return { ...empty, verdict: "recorded", note: paper.history.outcome || null };
+  if (paper.status === "marking" || paper.status === "uploaded") return { ...empty, verdict: "marking" };
+  if (paper.status === "failed" || !paper.marks) return { ...empty, verdict: "failed" };
+  const sheet = computeSheet(paper.marks, passRulesFor(config, paper.subject as Subject));
+  const tried = sheet.levels.filter((l) => l.result !== "not_done" && l.max > 0);
+  // A pass names the level it allows; anything else names the best try, which is what a head checks.
+  const passed = PASS_ORDER.map((level) => tried.find((l) => l.level === level && l.result === "passed")).find(Boolean);
+  const best = passed ?? [...tried].sort((a, b) => b.scored / b.max - a.scored / a.max)[0];
+  const base = { ...empty, percent: best ? Math.round((best.scored / best.max) * 1000) / 10 : 0, passMark: best?.passPercent ?? null, level: best?.level ?? null, scored: best?.scored ?? 0, max: best?.max ?? 0 };
+  if (paper.status === "needs_check") return { ...base, verdict: "needs_check" };
+  // A head's answer stands until a person changes the marks after it; then the current marks decide.
+  const stale = !!(check?.done?.at && paper.updatedAt && new Date(paper.updatedAt) > new Date(check.done.at));
+  // A pass keeps the passed level's own percent, so the number and the level agree.
+  if (check?.done && !stale) return { ...base, verdict: check.done.passed ? "pass" : "fail", percent: check.done.passed ? base.percent : check.done.percent, head: check.done.head };
+  if (check?.done) return { ...base, verdict: sheet.result === "passed" ? "pass" : sheet.result === "pass_mark_missing" ? "missing_mark" : "fail" };
+  if (check) return { ...base, verdict: "checking", head: check.headLabel ?? check.head ?? null };
+  return { ...base, verdict: sheet.result === "passed" ? "pass" : sheet.result === "pass_mark_missing" ? "missing_mark" : "fail" };
 }
 
-/** A person with a decision sent is not ready to decide. A no-show has nothing to upload. */
-export function matchesChip(row: AssessmentRow, chip: AssessmentChip | null, papers: Result[], mocks: Result[], decided: boolean) {
-  switch (chip) {
-    case null:
-      return !row.history;
-    case "Needs upload":
-      return !decided && !row.history && row.started && row.status === "confirmed" && ((row.kinds.includes("paper") && !papers.some((p) => p.source !== "tracker")) || (row.kinds.includes("mock") && !mocks.some((m) => m.source !== "tracker")));
-    case "Needs check":
-      return [...papers, ...mocks].some((r) => r.status === "needs_check");
-    case "Ready to decide":
-      return !row.history && !decided && !hireBlockers(papers, mocks).length;
-    case "Past results":
-      return row.history;
-  }
+export function mockScore(rubric: MockRubric) {
+  const totals = rubricTotals(rubric);
+  return { total: totals.total, max: totals.max, percent: totals.percent };
+}
+
+/** Where a visit sits in the work list. The order of LANES is the order of urgency. */
+export const LANES = ["late_scan", "check", "rubric", "scan", "decide", "waiting", "upcoming", "finished"] as const;
+export type Lane = (typeof LANES)[number];
+
+export function laneOf(row: AssessmentRow, papers: Result[], mocks: Result[], verdicts: Verdict[], decided: boolean, now = new Date()): Lane {
+  if (row.history || decided || row.status === "cancelled" || row.status === "no_show") return "finished";
+  const own = (r: Result) => r.source !== "tracker";
+  const results = [...papers, ...mocks].filter(own);
+  // A stuck AI run needs a person to run it again, like a failed one.
+  if (results.some((r) => r.status === "needs_check" || r.status === "failed" || r.stuck)) return "check";
+  if (!row.started) return "upcoming";
+  // A scan before the mock still helps the head; after the mock (or with none booked) it is late.
+  if (row.kinds.includes("paper") && !papers.some(own)) return row.mockAt && row.mockAt > now ? "scan" : "late_scan";
+  if (verdicts.includes("checking") || results.some((r) => r.status === "marking" || r.status === "uploaded")) return "waiting";
+  // A paper that did not pass is final: a person sends the rejection without waiting for the mock.
+  if (verdicts.includes("fail") && !verdicts.includes("pass")) return "decide";
+  if (row.mockAt && row.mockAt <= now && !mocks.some(own)) return "rubric";
+  if (!hireBlockers(papers, mocks).length) return "decide";
+  return "waiting";
+}
+
+type Slot = { id?: string; candidateId: string; kind: "paper" | "mock"; status: string; startTime: Date | string; visitId?: string | null; interviewerKey?: string | null; subjects: string[] };
+const DAY = 86400000;
+const BKK = 7 * 3600000;
+/** Midnight in Bangkok on the day of `at`. Bangkok has no daylight saving. */
+export const bangkokDay = (at: Date) => new Date(Math.floor((at.getTime() + BKK) / DAY) * DAY - BKK);
+
+/** Every paper test and mock from the start of today (Bangkok) for `days` days, soonest first. Cancelled ones are left out. */
+export function arrivals(bookings: Slot[], now = new Date(), days = 7) {
+  const start = bangkokDay(now).getTime();
+  // A visit's paper test has no head of its own; it takes the head of the visit's mock.
+  const headOf = new Map(bookings.filter((b) => b.kind === "mock" && b.visitId).map((b) => [b.visitId!, b.interviewerKey ?? null]));
+  return bookings
+    .filter((b) => b.status !== "cancelled")
+    .map((b) => ({ ...b, at: new Date(b.startTime), head: b.interviewerKey ?? (b.visitId ? headOf.get(b.visitId) ?? null : null), subject: b.subjects[0] ?? "" }))
+    .filter((b) => b.at.getTime() >= start && b.at.getTime() < start + days * DAY)
+    .sort((a, b) => a.at.getTime() - b.at.getTime() || a.kind.localeCompare(b.kind));
 }

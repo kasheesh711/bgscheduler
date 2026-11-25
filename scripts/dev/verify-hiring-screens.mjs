@@ -281,6 +281,79 @@ if (location.search.includes("roles=1")) {
     { ...scored, id: "incomplete", candidateId: "peat-incomplete", bookingId: "peat-incomplete", rubric: null },
   );
 }
+// ?visits=1: a busy Paper test week like production's (25 Nov 2026), all made up: work waiting on past visits, today's
+// arrivals, the next week, and every result state. For the Paper test screen's design review.
+if (location.search.includes("visits=1")) {
+  const at = (days: number, hour: number, minute = 0) => { const d = new Date(Date.now() + days * 86400000); d.setUTCHours(hour - 7, minute, 0, 0); return d.toISOString(); };
+  const LEVELS = ["Key Stage 3", "IGCSE / GCSE", "AS / A-Level", "IB SL / HL", "AP", "Other"];
+  const SUBJ = ["Mathematics", "Physics", "Chemistry", "Economics", "Computer Science", "English Literature", "EFL/ESL", "Thai", "History", "English Language", "Business Studies"];
+  payload.config.paperPassRules = SUBJ.flatMap((subject) => LEVELS.map((level) => ({ subject, level, percent: 80 }))) as never;
+  payload.tutors = [["Gift", "Wanwisa (Gift) Montrikittiphant"], ["Mimi", "Thanit (Mimi) Montrikittiphant"], ["Peat", "Kasidej (Peat) Jungrakangthong"], ["Ek", "Apivit (Ek) Sirithana"], ["Aey", "Usanee (Aey) Tortermpun"], ["Tito", "Smit (Tito) Kanjanapas"]]
+    .map(([canonicalKey, name]) => ({ canonicalKey, name, email: canonicalKey.toLowerCase() + "@example.test", lineReady: true })) as never[];
+  payload.config.interviewers = [["Gift", ["English Literature", "EFL/ESL", "Economics", "Computer Science", "Thai"]], ["Mimi", ["Chemistry"]], ["Peat", ["Mathematics"]], ["Ek", ["Mathematics", "Physics"]], ["Aey", ["Computer Science"]]]
+    .map(([canonicalKey, subjects]) => ({ canonicalKey, email: String(canonicalKey).toLowerCase() + "@example.test", subjects })) as never[];
+  payload.library = SUBJ.map((subject) => ({ id: "qp-" + subject, kind: "question_paper", subject, name: subject + ".pdf", status: "ready" })) as never[];
+  const bookings: unknown[] = [];
+  const papers: unknown[] = [];
+  const mocks: unknown[] = [];
+  const checks: unknown[] = [];
+  const decisions: unknown[] = [];
+  // [id, name, subject, head, test day, test hour, mock day (null = no mock), mock hour, status]
+  const visits = [
+    ["va", "Sample Kasem", "Economics", "Gift", -2, 10, 3, 14, "confirmed"],
+    ["vb", "Sample Nara", "Chemistry", "Mimi", -1, 9, -1, 14, "confirmed"],
+    ["vc", "Sample Rattana", "Computer Science", "Aey", -1, 10, 2, 13, "confirmed"],
+    ["vd", "Sample Ploy", "Mathematics", "Peat", -3, 9, -3, 13, "confirmed"],
+    ["ve", "Sample Niti", "History", null, -4, 10, null, 0, "confirmed"],
+    ["vf", "Sample Joe", "EFL/ESL", null, -2, 15, null, 0, "confirmed"],
+    ["vg", "Sample Wira", "Physics", "Ek", -2, 11, -1, 15, "confirmed"],
+    ["vh", "Sample Dara", "Thai", "Gift", -1, 14, 4, 14, "no_show"],
+    ["vi", "Sample Pim", "English Language", null, -1, 11, null, 0, "confirmed"],
+    ["vj", "Sample Melissa", "Business Studies", "Gift", -12, 10, -12, 12, "confirmed"],
+    ["t1", "Sample Kasom", "Economics", "Gift", 0, 9, 5, 14, "confirmed"],
+    ["t2", "Sample Nayana", "Chemistry", "Mimi", 0, 9, 0, 14, "confirmed"],
+    ["t3", "Sample Aye", "Computer Science", "Gift", 0, 11, 0, 15, "confirmed"],
+    ["t4", "Sample Vinit", "English Literature", "Gift", 0, 11, 0, 13, "confirmed"],
+    ["t5", "Sample Sira", "EFL/ESL", "Gift", 0, 13, 5, 15, "confirmed"],
+    ["u1", "Sample Athisaya", "Thai", "Gift", 1, 14, 7, 14, "confirmed"],
+    ["u2", "Sample Aruna", "EFL/ESL", "Gift", 2, 11, 2, 13, "cancelled"],
+    ["u3", "สมหญิง ตัวอย่าง", "Chemistry", null, 2, 14, null, 0, "confirmed"],
+    ["u4", "Sample Htoo", "English Literature", "Gift", 3, 10, 5, 13, "confirmed"],
+    ["u5", "จรัส ตัวอย่าง", "Mathematics", "Peat", 3, 14, 5, 13, "confirmed"],
+    ["u6", "Sample Patcha", "EFL/ESL", "Gift", 4, 15, 14, 13, "confirmed"],
+    ["u7", "Sample Thae", "Mathematics", "Peat", 4, 15, 5, 15, "confirmed"],
+    ["u8", "ธนพร ตัวอย่าง", "Mathematics", "Peat", 4, 15, 5, 14, "confirmed"],
+    ["u9", "Sample Pong", "Mathematics", "Ek", 5, 12, 5, 15, "confirmed"],
+    ["u10", "Sample Karawat", "Mathematics", "Peat", 6, 9, 6, 12, "confirmed"],
+    ["u11", "Sample Yanisa", "Mathematics", "Ek", 6, 12, 6, 15, "confirmed"],
+  ] as const;
+  const q = (level: string, marks: (number | null)[], max = 10) => marks.map((m, i) => ({ id: level[0] + (i + 1), level, marks: m, max, reason: "Fixture mark", attempted: m !== 0, readable: m !== null, points: [] }));
+  const paper = (id: string, candidateId: string, subject: string, status: string, questions: unknown[], extra = {}) =>
+    papers.push({ id, candidateId, bookingId: candidateId + "e", subject, source: "ai", status, fileId: "f-" + id, updatedAt: "2026-11-24T00:00:00.000Z", markSchemeUsed: true, history: null, error: null, changedBy: null, marks: questions.length ? { missingPages: null, comment: "Made-up marking comment.", questions } : null, ...extra });
+  const mock = (id: string, candidateId: string, subject: string, items: Record<string, number | null>, status = "done") =>
+    mocks.push({ id, candidateId, bookingId: candidateId + "m", subject, source: "ai", status, fileId: "f-" + id, updatedAt: "2026-11-24T00:00:00.000Z", history: null, error: null, changedBy: null, rubric: { comments: "Made-up rubric comment.", items, checksDone: true, stressTest: { listens: true, explains: true, plan: true } } });
+  for (const [id, name, subject, head, day, hour, mockDay, mockHour, status] of visits) {
+    const stage = id === "ve" || id === "vf" ? "rejected" : id.startsWith("v") ? "mock_booked" : "onsite_booked";
+    candidates.push(person(id, name, { seekApplicationId: null, stage, subjects: [subject], visitSubject: subject }));
+    bookings.push({ id: id + "e", candidateId: id, kind: "paper", status, startTime: at(day, hour), endTime: at(day, hour + 2), visitId: id, interviewerKey: null, subjects: [subject] });
+    if (mockDay !== null) bookings.push({ id: id + "m", candidateId: id, kind: "mock", status, startTime: at(mockDay, mockHour), endTime: at(mockDay, mockHour + 1), visitId: id, interviewerKey: head, subjects: [subject] });
+  }
+  paper("pb", "vb", "Chemistry", "needs_check", [...q("IGCSE / GCSE", [8, 9, null, 7]), ...q("AS / A-Level", [6, 7])]);
+  paper("pc", "vc", "Computer Science", "done", [...q("IGCSE / GCSE", [6, 5, 5, 6, 5, 5, 5], 7), ...q("AS / A-Level", [4, 4, 4], 7)]);
+  checks.push({ resultId: "pc", candidateId: "vc", subject: "Computer Science", head: "Aey", headLabel: "Usanee (Aey) Tortermpun", percent: 75.5, line: true, requestedAt: at(-1, 13), path: "/hiring/paper-check/sample-token", done: null });
+  paper("pd", "vd", "Mathematics", "done", [...q("Key Stage 3", [10, 9]), ...q("IGCSE / GCSE", [9, 9, 9, 9]), ...q("AS / A-Level", [7, 6])]);
+  mock("md", "vd", "Mathematics", { accuracy: 9, concepts: 9, clarity: 8, presentation: 8, interaction: 9, pace: 8, organization: 9, materials: 8, formative: 8, feedback: 8 });
+  paper("pe", "ve", "History", "done", q("IGCSE / GCSE", [6, 5, 6, 6]));
+  decisions.push({ id: "de", candidateId: "ve", decision: "reject", status: "sent", outboxKey: "ve:result", decidedBy: "Kevin", emailSubject: "", emailBody: "", reason: "Paper" });
+  paper("pf", "vf", "EFL/ESL", "done", q("IGCSE / GCSE", [7, 8, 7, 7]));
+  checks.push({ resultId: "pf", candidateId: "vf", subject: "EFL/ESL", head: "Tito", headLabel: "Smit (Tito) Kanjanapas", percent: 72.5, line: true, requestedAt: at(-2, 17), path: null, done: { passed: false, percent: 73.1, head: "Smit (Tito) Kanjanapas", at: at(-1, 10) } });
+  decisions.push({ id: "df", candidateId: "vf", decision: "reject", status: "sent", outboxKey: "vf:result", decidedBy: "Kevin", emailSubject: "", emailBody: "", reason: "Paper" });
+  paper("pg", "vg", "Physics", "done", [...q("IGCSE / GCSE", [9, 8, 9, 8]), ...q("AS / A-Level", [7, 8])]);
+  paper("pi", "vi", "English Language", "marking", []);
+  paper("pj", "vj", "Business Studies", "done", q("IGCSE / GCSE", [6, 6, 5, 6]));
+  (payload.inviteOutbox as unknown[]).push({ key: "ve:result", status: "sent", sentAt: at(-3, 9) }, { key: "vf:result", status: "sent", sentAt: at(-1, 11) });
+  Object.assign(payload, { bookings, papers, mocks, paperChecks: checks, decisions });
+}
 let reviewPacket: { id: string; behavioral: string; offer: string } | null = null;
 // ?gift=1: the final review as Gift sees it, with a packet from HR.
 const GIFT = location.search.includes("gift=1");
@@ -870,86 +943,86 @@ try {
     const posted = await page.evaluate(() => window.posted);
     assert.deepEqual(posted.at(-1), { action: "pre_screen_score", id: "r2", revision: 1, score: 70, reason: "Strong in a call" });
   });
-  await check("the mock and paper tab lists visits with date, head and results", async () => {
+  await check("the paper test tab sorts work by urgency and lists who is coming", async () => {
     await page.getByRole("button", { name: "Paper test" }).click();
     const list = page.getByRole("region", { name: "Mock and paper" });
-    await list.locator("tbody tr").first().waitFor();
-    assert.deepEqual(await list.locator("tbody button").allInnerTexts(), ["Reply Low", "Reply Passed"]);
-    await list.getByRole("cell", { name: "Kru Peat" }).waitFor();
-    await list.getByText("Mathematics: 60% · AS / A-Level").waitFor();
-    await list.getByText("84 / 100").waitFor();
+    await list.getByRole("heading", { name: "To do" }).waitFor();
+    // Reply Passed has a paper and a mock result, so the row is ready for a decision.
+    const passed = list.getByRole("listitem").filter({ hasText: "Reply Passed" });
+    await list.getByRole("heading", { name: /^Ready to decide/ }).waitFor();
+    await passed.getByText("Pass", { exact: true }).waitFor();
+    await passed.getByText("55%").waitFor();
+    await passed.getByText(/Paper · Can teach up to AS \/ A-Level · pass mark 50%/).waitFor();
+    await passed.getByText("84 / 100").waitFor();
+    // Reply Low's visit is tomorrow, so it is in Coming up with its paper test and its mock head.
+    const coming = list.getByRole("region", { name: "Coming up" });
+    await coming.getByRole("listitem").filter({ hasText: "Reply Low" }).filter({ hasText: "Paper test" }).getByText(/mock head Kru Ek/).waitFor();
+    assert.match(await coming.getByRole("group", { name: "Visits in the next 7 days" }).getByRole("button").first().getAttribute("aria-label"), /^Today, /);
     await shot(page, "assessment-list");
     await list.getByLabel("Head").selectOption("Peat");
-    assert.deepEqual(await list.locator("tbody button").allInnerTexts(), ["Reply Passed"]);
+    assert.equal(await coming.getByText("Reply Low").count(), 0);
     await list.getByLabel("Head").selectOption("");
-    await list.getByRole("button", { name: /^Ready to decide/ }).click();
-    assert.deepEqual(await list.locator("tbody button").allInnerTexts(), ["Reply Passed"]);
-    await list.getByRole("button", { name: /^Ready to decide/ }).click();
   });
-  await check("the panel tabulates the marking sheet and the rubric from the marks", async () => {
-    await page.getByRole("region", { name: "Mock and paper" }).getByRole("button", { name: "Reply Passed" }).click();
+  await check("the panel leads with the verdict and draws the marking sheet and the rubric", async () => {
+    await page.getByRole("region", { name: "Mock and paper" }).getByRole("button", { name: "Reply Passed" }).first().click();
     const panel = page.getByRole("complementary", { name: "Assessment of Reply Passed" });
     const sheet = panel.getByRole("region", { name: "Paper marking sheet for Mathematics" });
-    await sheet.getByRole("row", { name: /Key Stage 3 18 \/ 20 50% Passed/ }).waitFor();
-    await sheet.getByRole("row", { name: /IB SL \/ HL 7 \/ 20 60% Not passed/ }).waitFor();
-    await sheet.getByRole("row", { name: /IGCSE \/ GCSE – – Not done/ }).waitFor();
+    await sheet.locator("[data-score-hero]").getByText(/Can teach up to AS \/ A-Level · 11\/20 marks · pass mark 50%/).waitFor();
+    await sheet.getByRole("row", { name: /Key Stage 3 .*90% \(18\/20\).*Passed/ }).waitFor();
+    await sheet.getByRole("row", { name: /IB SL \/ HL .*35% \(7\/20\).*Below pass mark/ }).waitFor();
+    await sheet.getByText("Not answered: IGCSE / GCSE, AP, Other").waitFor();
     await sheet.getByText("Marked without a mark scheme").waitFor();
-    assert.ok(await sheet.getByRole("definition").filter({ hasText: "AS / A-Level" }).isVisible());
     const rubric = panel.getByRole("region", { name: "Mock rubric" });
     await rubric.getByRole("row", { name: /Total 84 \/ 100/ }).waitFor();
     await shot(page, "assessment-panel");
   });
-  await check("uploading a scan on the row marks it, and a person clears the check", async () => {
+  await check("uploading a scan in the panel marks it, the row moves to Marks to check, and a person clears the check", async () => {
     const list = page.getByRole("region", { name: "Mock and paper" });
-    await page.locator("input[type=file][aria-label='Upload PDF for the Physics paper']").setInputFiles({ name: "scan.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 fixture") });
-    await list.getByText("Physics: Needs check").waitFor();
+    await list.getByRole("button", { name: "Reply Low" }).first().click();
+    await page.locator("input[type=file][aria-label='Upload scanned PDF for the Physics paper']").setInputFiles({ name: "scan.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 fixture") });
+    const sheet = page.getByRole("region", { name: "Paper marking sheet for Physics" });
+    await sheet.getByText("Missing pages: Page 4").waitFor();
     const posted = await page.evaluate(() => window.posted);
     assert.deepEqual(posted.slice(-3).map((p) => p.action ?? "marking"), ["file_intent", "file_ready", "marking"]);
     assert.deepEqual(posted.at(-1), { marking: { kind: "paper", id: "p2" } });
     assert.deepEqual(posted.at(-3), { action: "file_intent", kind: "paper_scan", subject: "Physics", candidateId: "r2", name: "scan.pdf", size: 16 });
-    await list.getByRole("button", { name: /^Needs check/ }).click();
-    assert.deepEqual(await list.locator("tbody button").allInnerTexts(), ["Reply Low"]);
-    await list.getByRole("button", { name: /^Needs check/ }).click();
-    await list.getByRole("button", { name: "Reply Low" }).click();
-    const sheet = page.getByRole("region", { name: "Paper marking sheet for Physics" });
-    await sheet.getByText("Missing pages: Page 4").waitFor();
+    await list.getByRole("heading", { name: /^Marks to check/ }).waitFor();
+    await list.getByRole("listitem").filter({ hasText: "Reply Low" }).getByRole("button", { name: "Check marks" }).waitFor();
     await sheet.getByRole("button", { name: "Change marks" }).click();
     await sheet.getByLabel("Marks for question Q9").fill("6");
     await sheet.getByRole("button", { name: "Save marks" }).click();
     await sheet.getByText("Changed by").waitFor();
     await shot(page, "assessment-needs-check");
     await sheet.getByRole("button", { name: "I have checked this" }).click();
-    await list.getByText(/^Physics: \d+%/).waitFor();
-    await page.getByRole("complementary", { name: "Assessment of Reply Low" }).getByRole("button", { name: "Close" }).click();
+    await sheet.locator("[data-score-hero]").getByText("No pass mark").waitFor();
+    assert.equal(await list.getByRole("heading", { name: /^Marks to check/ }).count(), 0);
   });
   await check("uploading a mock rubric reads it, a person fills the blank, and the total adds up", async () => {
-    const list = page.getByRole("region", { name: "Mock and paper" });
-    await page.locator("input[type=file][aria-label='Upload rubric for the mock in Physics']").first().setInputFiles({ name: "rubric.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 fixture") });
-    await list.getByText("Needs check", { exact: true }).first().waitFor();
-    const posted = await page.evaluate(() => window.posted);
-    assert.deepEqual(posted.at(-1), { marking: { kind: "mock", id: "m2" } });
-    await list.getByRole("button", { name: "Reply Low" }).click();
+    const panel = page.getByRole("complementary", { name: "Assessment of Reply Low" });
+    await panel.locator("input[type=file][aria-label='Upload rubric for the mock in Physics']").setInputFiles({ name: "rubric.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 fixture") });
     const rubric = page.getByRole("region", { name: "Mock rubric" });
     await rubric.getByRole("row", { name: /Total 63 \/ 100/ }).waitFor();
+    const posted = await page.evaluate(() => window.posted);
+    assert.deepEqual(posted.at(-1), { marking: { kind: "mock", id: "m2" } });
+    await page.getByRole("region", { name: "Mock and paper" }).getByRole("listitem").filter({ hasText: "Reply Low" }).getByText("Needs check").first().waitFor();
     await rubric.getByRole("button", { name: "Change scores" }).click();
     await rubric.getByLabel("Score for Feedback Quality").fill("9");
     await rubric.getByRole("button", { name: "Save scores" }).click();
     await rubric.getByRole("row", { name: /Total 72 \/ 100/ }).waitFor();
     await rubric.getByRole("button", { name: "I have checked this" }).click();
-    await list.getByText("72 / 100").waitFor();
+    await rubric.locator("[data-score-hero]").getByText("Mock teaching score").waitFor();
     assert.deepEqual((await page.evaluate(() => window.posted)).at(-2).items, { feedback: 9 });
-    await page.getByRole("complementary", { name: "Assessment of Reply Low" }).getByRole("button", { name: "Close" }).click();
+    await panel.getByRole("button", { name: "Close" }).click();
   });
   await check("an early rejection saves a draft and previews the email, and Send refuses while the switches are off", async () => {
     const list = page.getByRole("region", { name: "Mock and paper" });
-    await list.getByRole("button", { name: "Reply Passed" }).click();
+    await list.getByRole("button", { name: "Reply Passed" }).first().click();
     const panel = page.getByRole("complementary", { name: "Assessment of Reply Passed" });
     const box = panel.getByRole("region", { name: "Decision" });
     assert.ok(await box.getByRole("button", { name: "Reject: preview email" }).isDisabled());
     await box.getByLabel("Reason").fill("Not a fit for this level");
     await box.getByRole("button", { name: "Reject: preview email" }).click();
     await box.getByLabel("Email message").waitFor();
-    await list.getByText("Draft: Reject").waitFor();
     await box.getByText("Automation and Messages are off").waitFor();
     await box.getByText("r1@example.test").waitFor();
     await box.getByLabel("Email message").fill("Edited by a person.");

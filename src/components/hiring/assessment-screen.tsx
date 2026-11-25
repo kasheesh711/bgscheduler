@@ -2,32 +2,23 @@
 
 import { useMemo, useState } from "react";
 import { formatInTimeZone } from "date-fns-tz";
-import {
-  ASSESSMENT_CHIPS,
-  ASSESSMENT_RANGES,
-  assessmentRows,
-  matchesChip,
-  matchesRange,
-  type AssessmentChip,
-  type AssessmentRange,
-  type AssessmentRow,
-} from "@/lib/hiring/assessment-view";
+import { AlertTriangle, Check, Clock, X } from "lucide-react";
+import { arrivals, assessmentRows, bangkokDay, hireBlockers, LANES, laneOf, mockScore, paperScore, type AssessmentRow, type Lane, type PaperScore, type Verdict } from "@/lib/hiring/assessment-view";
 import { FinalReview, reviewBlocks } from "./final-review";
 import { RUBRIC, computeSheet, passRulesFor, rubricItems, rubricTotals, type LevelResult, type MockRubric, type RubricItem, type StressTicks } from "@/lib/hiring/marking-sheet";
 import { STRESS_ELEMENTS } from "@/lib/hiring/rubric-guide";
-import { SUBJECTS, ZONE, type Subject } from "@/lib/hiring/model";
+import { isDecided, SUBJECTS, ZONE, type Subject } from "@/lib/hiring/model";
 import { markAgain, runMarking, type ResultKind } from "./assessment-setup";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
 import { HeadSchedules } from "./head-schedules";
 import css from "./dashboard.module.css";
+import a from "./assessment.module.css";
 
 type Paper = HiringData["papers"][number];
 type Mock = HiringData["mocks"][number];
 const when = (value: Date) => formatInTimeZone(value, ZONE, "EEE d MMM, HH:mm");
 const clock = (value: Date) => formatInTimeZone(value, ZONE, "HH:mm");
 const day = (value: Date) => formatInTimeZone(value, ZONE, "yyyy-MM-dd");
-/** A two-day visit puts the mock on a later day than the test, so the mock shows its date unless it is the test day. */
-export const mockWhen = (at: Date | null, mockAt: Date) => (at && day(at) === day(mockAt) ? clock(mockAt) : when(mockAt));
 const round = (n: number) => Math.round(n * 10) / 10;
 
 const STATUS: Record<Paper["status"], { label: string; tone: string }> = {
@@ -39,7 +30,7 @@ const STATUS: Record<Paper["status"], { label: string; tone: string }> = {
 };
 const LEVEL: Record<LevelResult, { label: string; tone: string }> = {
   passed: { label: "Passed", tone: css.goodWord },
-  not_passed: { label: "Not passed", tone: css.errorText },
+  not_passed: { label: "Below pass mark", tone: css.errorText },
   not_done: { label: "Not done", tone: css.mutedCell },
   pass_mark_missing: { label: "Pass mark missing", tone: css.warnWord },
 };
@@ -58,13 +49,6 @@ const checkWords = (check: PaperCheck) => check.done
   ? `${check.done.head}'s check: ${check.done.percent}%, ${check.done.passed ? "pass" : "not passed"}`
   : `with ${check.headLabel ?? "a head"} for a check`;
 
-export function paperCell(paper: Paper, config: HiringData["config"], checks: HiringData["paperChecks"] = []) {
-  if (paper.history) return `${paper.subject}: ${paper.history.outcome || "Recorded"}`;
-  if (paper.status !== "done" || !paper.marks) return `${paper.subject}: ${STATUS[paper.status].label}`;
-  const sheet = computeSheet(paper.marks, passRulesFor(config, paper.subject));
-  const check = checkOf(paper, checks);
-  return `${paper.subject}: ${sheet.max ? Math.round((sheet.total / sheet.max) * 100) : 0}% · ${sheet.canTeachUpTo}${check ? ` · ${checkWords(check)}` : ""}`;
-}
 export function mockCell(mock: Mock) {
   if (mock.history) return mock.history.score === null ? mock.history.outcome || "Recorded" : `${mock.history.score} / 100`;
   if (mock.status !== "done" || !mock.rubric) return STATUS[mock.status].label;
@@ -79,11 +63,11 @@ type Reload = () => Promise<void>;
 
 /** The file picker for a candidate's scan. It stays on the row or the panel while the upload and the marking run. */
 /** The blank question paper from the paper library, for the person who prepares the visit. It opens as a PDF to print. */
-export function PrintPaper({ library, subject }: { library: HiringData["library"]; subject: string }) {
+export function PrintPaper({ library, subject, name }: { library: HiringData["library"]; subject: string; name?: string }) {
   const file = library.find((item) => item.subject === subject && item.kind === "question_paper");
   if (!file) return <span className={css.warnWord}>No paper to print. Add it in Rules and setup. </span>;
   return (
-    <a className={css.sourceLink} href={`/api/hiring/file/${encodeURIComponent(file.id)}`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+    <a className={css.sourceLink} href={`/api/hiring/file/${encodeURIComponent(file.id)}`} target="_blank" rel="noopener noreferrer" aria-label={name ? `Print the ${subject} paper for ${name}` : undefined} onClick={(e) => e.stopPropagation()}>
       Print paper
     </a>
   );
@@ -253,12 +237,34 @@ function MarksEditor({ paper, command, busy, onDone }: { paper: Paper; command: 
 export function PaperSheetView({ paper, taken = [], config, command, reload, busy, check }: { paper: Paper; taken?: string[]; config: HiringData["config"]; command: Command; reload: Reload; busy: boolean; check?: PaperCheck }) {
   const stuck = paper.stuck;
   const sheet = paper.marks ? computeSheet(paper.marks, passRulesFor(config, paper.subject)) : null;
+  const score = sheet ? paperScore(paper, config, check) : null;
+  // One pass mark for every level is already in the summary, so the column only shows when levels differ.
+  const passMarks = new Set(sheet?.levels.filter((l) => l.result !== "not_done").map((l) => l.passPercent));
+  const onePassMark = passMarks.size <= 1;
+  // Scan tools sit under the result once there is one, so the result is the first thing a person reads.
+  const fileTools = (
+    <>
+        {paper.source === "ai" && paper.status !== "marking" && (
+          <p>
+            <ResultUpload
+              kind="paper"
+              candidateId={paper.candidateId}
+              subject={paper.subject}
+              reload={reload}
+              label="Replace scan"
+              warning={paper.marks ? "The new scan replaces these marks, including any change a person made. Continue?" : undefined}
+            />
+          </p>
+        )}
+        {paper.source === "ai" && paper.status !== "marking" && paper.fileId && <ChangeSubject key={String(paper.updatedAt)} paper={paper} taken={taken} command={command} reload={reload} busy={busy} />}
+    </>
+  );
   const [editing, setEditing] = useState(false);
   return (
     <section className={css.inspectorSection} aria-label={`Paper marking sheet for ${paper.subject}`}>
       <h3 className={css.inspectorHeading}>
         Paper: {paper.subject}
-        <span className={STATUS[paper.status].tone}>{paper.history ? "From the tracker" : STATUS[paper.status].label}</span>
+        <span className={STATUS[paper.status].tone}>{paper.history ? "From the tracker" : paper.status === "done" ? null : STATUS[paper.status].label}</span>
       </h3>
       {paper.history && (
         <dl className={css.facts}>
@@ -283,19 +289,7 @@ export function PaperSheetView({ paper, taken = [], config, command, reload, bus
       {paper.error && <p className={css.errorText}>{paper.error}</p>}
       {stuck && <p className={css.warnWord}>This run stopped before it finished.</p>}
       {(paper.status === "failed" || paper.status === "uploaded" || stuck) && <RetryMarking kind="paper" id={paper.id} reload={reload} />}
-      {paper.source === "ai" && paper.status !== "marking" && (
-        <p>
-          <ResultUpload
-            kind="paper"
-            candidateId={paper.candidateId}
-            subject={paper.subject}
-            reload={reload}
-            label="Replace scan"
-            warning={paper.marks ? "The new scan replaces these marks, including any change a person made. Continue?" : undefined}
-          />
-        </p>
-      )}
-      {paper.source === "ai" && paper.status !== "marking" && paper.fileId && <ChangeSubject key={String(paper.updatedAt)} paper={paper} taken={taken} command={command} reload={reload} busy={busy} />}
+      {!sheet && fileTools}
       {paper.status === "needs_check" && (
         <p className={css.inspectorNote}>
           The AI could not read part of this paper, and an unreadable answer counts as no marks. Read it beside the scan, change any marks, then confirm.{" "}
@@ -308,52 +302,70 @@ export function PaperSheetView({ paper, taken = [], config, command, reload, bus
         <p className={css.warnWord}>Marked without a mark scheme, from the AI&apos;s own subject knowledge.</p>
       )}
       {paper.marks?.missingPages && <p className={css.warnWord}>Missing pages: {paper.marks.missingPages}</p>}
-      {check && (
-        <p className={check.done ? css.inspectorNote : css.warnWord} data-paper-check="">
-          {check.done ? (
-            <>{checkWords(check)}. {check.done.passed ? "The candidate goes on to mock teaching." : "The rejection email was queued."}</>
-          ) : (
-            <>
-              AI score {check.percent}%: sent to {check.headLabel ?? "no head (none covers this subject)"} for a check
-              {check.line ? " in LINE" : ". No LINE group is set up, so send the link yourself"}. The mock stays booked until the check is in.{" "}
-              {check.path && <a className={css.inlineLink} href={check.path} target="_blank" rel="noopener noreferrer">Open the check page</a>}
-            </>
-          )}
-        </p>
-      )}
-      {sheet && paper.marks && (
+      {sheet && paper.marks && score && (
         <>
-          <table className={css.sheetTable}>
+          <div className={a.hero} data-score-hero="">
+            <div className={a.heroLine}>
+              <VerdictWord verdict={score.verdict} big />
+              <span className={a.heroPct}>{score.percent}%</span>
+              <span className={a.heroNote}>
+                {[levelWords(score), score.level && `${round(score.scored)}/${round(score.max)} marks`, score.passMark !== null && `pass mark ${score.passMark}%`].filter(Boolean).join(" · ")}
+              </span>
+            </div>
+            <Meter percent={score.percent ?? 0} passMark={score.passMark} tone={VERDICT[score.verdict].tone} wide />
+          </div>
+          {check && (
+            <p className={check.done ? css.inspectorNote : css.warnWord} data-paper-check="">
+              {check.done ? (
+                <>{checkWords(check)}. {check.done.passed ? "The candidate goes on to mock teaching." : "The rejection email was queued."}</>
+              ) : (
+                <>
+                  {check.headLabel ? `With ${nick(check.headLabel)}${check.line ? " in LINE" : ". No LINE group is set up, so send the link yourself"}` : "No head covers this subject"}. Mock stays booked.{" "}
+                  {check.path && <a className={css.inlineLink} href={check.path} target="_blank" rel="noopener noreferrer">View re-check status</a>}
+                </>
+              )}
+            </p>
+          )}
+          <table className={`${css.sheetTable} ${a.levelTable}`}>
             <thead>
               <tr>
                 <th>Level</th>
                 <th>Score</th>
-                <th>Pass mark</th>
+                {!onePassMark && <th>Pass mark</th>}
                 <th>Result</th>
               </tr>
             </thead>
             <tbody>
-              {sheet.levels.map((level) => (
-                <tr key={level.level}>
-                  <td>{level.level}</td>
-                  <td className={css.num}>{level.max ? `${round(level.scored)} / ${round(level.max)}` : "–"}</td>
-                  <td className={css.num}>{level.passPercent === null ? "–" : `${level.passPercent}%`}</td>
-                  <td className={LEVEL[level.result].tone}>{LEVEL[level.result].label}</td>
+              {sheet.levels.filter((level) => level.result !== "not_done").map((level) => (
+                <tr key={level.level} data-sets={level.level === score.level ? "" : undefined}>
+                  <td>
+                    {level.level}
+                    {level.level === score.level && <span className={a.setsTag}>{score.verdict === "pass" ? "Highest level passed" : "Best score"}</span>}
+                  </td>
+                  <td>
+                    <span className={a.levelScore}>
+                      {level.max ? `${Math.round((level.scored / level.max) * 1000) / 10}% (${round(level.scored)}/${round(level.max)})` : "–"}
+                      {level.max > 0 && level.result !== "not_done" && <Meter percent={(level.scored / level.max) * 100} passMark={level.passPercent} tone={level.result === "passed" ? "good" : level.result === "not_passed" ? "bad" : "warn"} />}
+                    </span>
+                  </td>
+                  {!onePassMark && <td>{level.passPercent === null || level.result === "not_done" ? "" : `${level.passPercent}%`}</td>}
+                  <td><span className={LEVEL[level.result].tone}>{LEVEL[level.result].label}</span></td>
                 </tr>
               ))}
             </tbody>
           </table>
+          {sheet.levels.some((level) => level.result === "not_done") && (
+            <p className={css.inspectorMeta}>Not answered: {sheet.levels.filter((level) => level.result === "not_done").map((level) => level.level).join(", ")}</p>
+          )}
           <dl className={css.facts}>
-            <div>
-              <dt>Paper score</dt>
-              <dd className={css.num}>
-                {round(sheet.total)} / {round(sheet.max)}
-              </dd>
-            </div>
-            <div>
-              <dt>Can teach up to</dt>
-              <dd>{sheet.canTeachUpTo}</dd>
-            </div>
+
+            {/* The hero names the level; a missing pass mark is the one thing it cannot say. */}
+            {sheet.canTeachUpTo.includes("pass mark missing") && (
+              <div>
+                <dt>Can teach up to</dt>
+                <dd>{sheet.canTeachUpTo}</dd>
+              </div>
+            )}
             {paper.changedBy && (
               <div>
                 <dt>Changed by</dt>
@@ -362,6 +374,7 @@ export function PaperSheetView({ paper, taken = [], config, command, reload, bus
             )}
           </dl>
           <p className={css.inspectorText}>{paper.marks.comment}</p>
+          {fileTools}
           {editing ? (
             <MarksEditor key={String(paper.updatedAt)} paper={paper} command={command} busy={busy} onDone={() => setEditing(false)} />
           ) : (
@@ -561,6 +574,13 @@ export function MockView({ mock, command, reload, busy }: { mock: Mock; command:
       )}
       {totals && mock.rubric && (
         <>
+          <div className={a.hero} data-score-hero="">
+            <div className={a.heroLine}>
+              <span className={a.heroPct}>{totals.total}<small className={a.heroNote}> / {totals.max}</small></span>
+              <span className={a.heroNote}>{mock.status === "needs_check" ? "Blank scores count as 0 until checked" : "Mock teaching score"}</span>
+            </div>
+            <Meter percent={totals.percent} passMark={null} tone="ink" wide />
+          </div>
           <table className={css.sheetTable}>
             <thead>
               <tr>
@@ -756,18 +776,6 @@ function AddPaper({ candidateId, first, taken, reload }: { candidateId: string; 
   );
 }
 
-function decisionCell(rows: DecisionRow[]) {
-  const draft = rows.find((row) => row.status === "draft");
-  const sent = rows.find((row) => row.status === "sent");
-  if (!draft && !sent) return <span className={css.mutedCell}>–</span>;
-  return (
-    <>
-      {sent && <span className={css.pillNote}>{sent.decision === "hire" ? "Hired" : "Rejected"}</span>}
-      {draft && <span className={css.warnWord}>Draft: {draft.decision === "hire" ? "Hire" : "Reject"}</span>}
-    </>
-  );
-}
-
 function AssessmentPanel({
   candidate,
   row,
@@ -790,12 +798,12 @@ function AssessmentPanel({
   onClose: () => void;
 }) {
   return (
-    <aside className={`${css.inspector} ${css.seekPanel}`} aria-label={`Assessment of ${candidate.name}`}>
+    <aside className={`${css.inspector} ${css.seekPanel} ${a.panel}`} aria-label={`Assessment of ${candidate.name}`}>
       <header className={css.inspectorHead}>
         <div>
           <h2 className={css.inspectorName}>{candidate.name}</h2>
           <p className={css.inspectorMeta}>
-            {row.subject} · {row.at ? when(row.at) : row.dateText || "Date not known"}
+            {row.at ? `Paper test ${when(row.at)}` : row.dateText || "Date not known"}{row.mockAt ? ` · Mock ${when(row.mockAt)}` : ""}
           </p>
         </div>
         <button type="button" className={css.inlineLink} onClick={onClose}>
@@ -833,6 +841,90 @@ function AssessmentPanel({
   );
 }
 
+const VERDICT: Record<Verdict, { label: string; tone: "good" | "bad" | "warn" | "quiet" }> = {
+  pass: { label: "Pass", tone: "good" },
+  fail: { label: "Not passed", tone: "bad" },
+  checking: { label: "Head checking", tone: "warn" },
+  needs_check: { label: "Needs check", tone: "warn" },
+  marking: { label: "AI marking", tone: "quiet" },
+  failed: { label: "Marking failed", tone: "bad" },
+  missing_mark: { label: "No pass mark", tone: "warn" },
+  recorded: { label: "Tracker", tone: "quiet" },
+};
+const ICON = { good: Check, bad: X, warn: AlertTriangle, quiet: Clock };
+/** "Wanwisa (Gift) Montrikittiphant" reads as "Gift" where space is short; the full name stays in the title. */
+const nick = (name: string) => /\(([^)]+)\)/.exec(name)?.[1] ?? name;
+
+export function Meter({ percent, passMark, tone, wide }: { percent: number; passMark: number | null; tone: string; wide?: boolean }) {
+  return (
+    <span className={`${a.meter} ${wide ? a.meterWide : ""}`} data-tone={tone} role="img" aria-label={`${percent}%${passMark === null ? "" : ` against a pass mark of ${passMark}%`}`}>
+      <span style={{ width: `${Math.min(100, percent)}%` }} />
+      {passMark !== null && <i style={{ left: `${passMark}%` }} />}
+    </span>
+  );
+}
+
+function VerdictWord({ verdict, big }: { verdict: Verdict; big?: boolean }) {
+  const { label, tone } = VERDICT[verdict];
+  const Icon = ICON[tone];
+  return (
+    <span className={`${a.verdict} ${big ? a.verdictBig : ""}`} data-tone={tone}>
+      <Icon aria-hidden size={big ? 16 : 13} strokeWidth={2.5} />
+      {label}
+    </span>
+  );
+}
+
+/** "Passed IGCSE / GCSE" for a pass; otherwise the best try, which is the level a head checks. */
+const levelWords = (score: PaperScore) => (score.level ? (score.verdict === "pass" ? `Can teach up to ${score.level}` : score.level) : null);
+
+/** A paper result in one line: the verdict, the score against the pass mark, and the level it is for. */
+export function PaperBadge({ score, subject, labelled }: { score: PaperScore; subject?: string; labelled?: boolean }) {
+  const tone = VERDICT[score.verdict].tone;
+  return (
+    <span className={a.badge}>
+      <span className={a.badgeTop}>
+        <VerdictWord verdict={score.verdict} />
+        {score.percent !== null && (
+          <>
+            <b className={a.pct}>{score.percent}%</b>
+            <Meter percent={score.percent} passMark={score.passMark} tone={tone} />
+          </>
+        )}
+      </span>
+      <span className={a.badgeNote}>
+        {[labelled ? "Paper" : null, subject, levelWords(score), score.passMark !== null ? `pass\u00a0mark\u00a0${score.passMark}%` : null, score.head ? `${score.verdict === "checking" ? "with" : "by"} ${nick(score.head)}` : null, score.note].filter(Boolean).join(" · ")}
+      </span>
+    </span>
+  );
+}
+
+function MockBadge({ mock }: { mock: Mock }) {
+  if (mock.history) return <span className={a.badge}><VerdictWord verdict="recorded" /><span className={a.badgeNote}>Mock {mockCell(mock)}</span></span>;
+  if (mock.status !== "done" || !mock.rubric) {
+    const verdict: Verdict = mock.status === "needs_check" ? "needs_check" : mock.status === "failed" ? "failed" : "marking";
+    return <span className={a.badge}><VerdictWord verdict={verdict} /><span className={a.badgeNote}>Mock rubric</span></span>;
+  }
+  const score = mockScore(mock.rubric);
+  return (
+    <span className={a.badge}>
+      <span className={a.badgeTop}>
+        <span className={a.verdict} data-tone="quiet">Mock rubric</span>
+        <b className={a.pct}>{score.total}<small> / {score.max}</small></b>
+      </span>
+    </span>
+  );
+}
+
+const LANE_TITLE: Record<Exclude<Lane, "upcoming" | "finished">, string> = {
+  late_scan: "Overdue scans · mock time passed",
+  scan: "Overdue scans · mock still ahead",
+  check: "Marks to check",
+  rubric: "Overdue mock rubrics",
+  decide: "Ready to decide",
+  waiting: "Waiting on others",
+};
+
 export function AssessmentScreen({
   data,
   selectedVisit,
@@ -841,7 +933,7 @@ export function AssessmentScreen({
   command,
   reload,
   busy,
-  now,
+  now: fixedNow,
 }: {
   data: HiringData;
   selectedVisit: string | null;
@@ -854,28 +946,161 @@ export function AssessmentScreen({
 }) {
   const [mode, setMode] = useState<"list" | "calendar">("list");
   const [head, setHead] = useState("");
-  const [range, setRange] = useState<AssessmentRange>("All dates");
-  const [chip, setChip] = useState<AssessmentChip | null>(null);
+  const now = fixedNow ?? new Date();
 
-  const rows = useMemo(() => assessmentRows(data.bookings, data.papers, data.mocks, now), [data.bookings, data.papers, data.mocks, now]);
+  const rows = useMemo(() => assessmentRows(data.bookings, data.papers, data.mocks, fixedNow), [data.bookings, data.papers, data.mocks, fixedNow]);
   const papers = useMemo(() => byCandidate(data.papers), [data.papers]);
   const mocks = useMemo(() => byCandidate(data.mocks), [data.mocks]);
   const names = useMemo(() => new Map(data.candidates.map((c) => [c.id, c])), [data.candidates]);
   const heads = useMemo(() => new Map(data.tutors.map((t) => [t.canonicalKey, t.name])), [data.tutors]);
-  const decided = useMemo(() => new Set(data.decisions.filter((d) => d.status === "sent").map((d) => d.candidateId)), [data.decisions]);
-  const chipMatch = (row: AssessmentRow, value: AssessmentChip | null) =>
-    matchesChip(row, value, papers.get(row.candidateId) ?? [], mocks.get(row.candidateId) ?? [], decided.has(row.candidateId));
-  const counts = ASSESSMENT_CHIPS.map((value) => rows.filter((row) => chipMatch(row, value)).length);
-  const shown = rows.filter((row) => matchesRange(row, range, now) && (!head || row.headKey === head) && chipMatch(row, chip));
+  // A sent decision, or a closed record (stopped, hired, rejected), is not work any more.
+  const decided = useMemo(() => new Set([...data.decisions.filter((d) => d.status === "sent").map((d) => d.candidateId), ...data.candidates.filter((c) => c.stage === "stopped" || isDecided(c.stage)).map((c) => c.id)]), [data.decisions, data.candidates]);
+  const headName = (key: string | null) => (key ? (heads.get(key) ?? key) : null);
+
+  // A row with a visit shows that visit's results. A past tracker result is in the panel.
+  const rowPapers = (row: AssessmentRow) => (papers.get(row.candidateId) ?? []).filter((paper) => row.history || paper.source !== "tracker");
+  // A person can hold a mock in another subject. A history row has no subject of its own to match.
+  const rowMocks = (row: AssessmentRow) => (mocks.get(row.candidateId) ?? []).filter((mock) => row.history || (mock.subject === row.subject && mock.source !== "tracker"));
+  const scored = rows
+    .filter((row) => !head || row.headKey === head)
+    .map((row) => {
+      const ps = rowPapers(row).map((paper) => ({ paper, score: paperScore(paper, data.config, checkOf(paper, data.paperChecks)) }));
+      const lane = laneOf(row, papers.get(row.candidateId) ?? [], mocks.get(row.candidateId) ?? [], ps.map((p) => p.score.verdict), decided.has(row.candidateId), now);
+      return { row, ps, ms: rowMocks(row), lane };
+    });
+  const lanes = LANES.filter((lane): lane is Exclude<Lane, "upcoming" | "finished"> => lane !== "upcoming" && lane !== "finished")
+    .map((lane) => ({
+      lane,
+      items: scored.filter((item) => item.lane === lane)
+        // Oldest first: the longest wait is the most urgent. Waiting rows go by the next mock.
+        // Scans: the next mock is the real deadline (the head needs the result), so the soonest mock goes first.
+        .sort((x, y) => lane === "scan" || lane === "late_scan" ? (x.row.mockAt?.getTime() ?? x.row.at?.getTime() ?? 0) - (y.row.mockAt?.getTime() ?? y.row.at?.getTime() ?? 0) : lane === "waiting" ? (x.row.mockAt?.getTime() ?? Infinity) - (y.row.mockAt?.getTime() ?? Infinity) : (x.row.at?.getTime() ?? 0) - (y.row.at?.getTime() ?? 0)),
+    }))
+    .filter(({ items }) => items.length);
+  const finished = scored.filter((item) => item.lane === "finished");
+  // Booked beyond the week strip: still reachable, folded away.
+  const horizon = bangkokDay(now).getTime() + 7 * 86400000;
+  const later = scored.filter((item) => item.lane === "upcoming" && (item.row.at?.getTime() ?? 0) >= horizon).sort((x, y) => (x.row.at?.getTime() ?? 0) - (y.row.at?.getTime() ?? 0));
+  const coming = arrivals(data.bookings, now).filter((b) => b.status !== "no_show" && (!head || b.head === head));
+  const next = coming.find((b) => b.at > now);
+  const week = Array.from({ length: 7 }, (_, i) => new Date(bangkokDay(now).getTime() + i * 86400000));
+  const perDay = week.map((d) => ({ d, items: coming.filter((b) => day(b.at) === day(d)) }));
+  const peak = Math.max(1, ...perDay.map(({ items }) => items.length));
   const open = rows.find((row) => row.key === selectedVisit);
   const candidate = open && names.get(open.candidateId);
+
+  const action = ({ row, lane, ps }: (typeof scored)[number]) => {
+    const subject = row.subject as Subject;
+    if (lane === "scan" || lane === "late_scan") return <span className={lane === "late_scan" ? a.urgent : undefined}><ResultUpload kind="paper" candidateId={row.candidateId} subject={subject} reload={reload} label="Upload paper scan" /></span>;
+    if (lane === "rubric") return <ResultUpload kind="mock" candidateId={row.candidateId} subject={subject} reload={reload} label="Upload rubric" />;
+    if (lane === "check") return <button type="button" className={a.act} onClick={() => onSelectVisit(row.key)}>Check marks</button>;
+    if (lane === "decide") return <button type="button" className={a.act} onClick={() => onSelectVisit(row.key)}>{ps.some((p) => p.score.verdict === "fail") && !ps.some((p) => p.score.verdict === "pass") ? "Make decision" : "Review for hire"}</button>;
+    if (lane === "finished") {
+      const sent = data.decisions.find((d) => d.candidateId === row.candidateId && d.status === "sent");
+      const draft = data.decisions.find((d) => d.candidateId === row.candidateId && d.status === "draft");
+      return <span className={a.quiet}>{sent ? (sent.decision === "hire" ? "Hired" : "Rejected") : row.status === "no_show" ? "No-show" : row.status === "cancelled" ? "Visit cancelled" : draft ? `Draft: ${draft.decision === "hire" ? "Hire" : "Reject"}` : "–"}</span>;
+    }
+    const checking = ps.find((p) => p.score.verdict === "checking");
+    if (checking) return <span className={a.quiet}>Waiting for {nick(checking.score.head ?? "a head")}{row.mockAt && row.mockAt > now ? " · mock stays booked" : ""}</span>;
+    if (ps.some((p) => p.score.verdict === "marking")) return null;
+    if (row.mockAt && row.mockAt > now) return <span className={a.quiet}>Mock {when(row.mockAt)}</span>;
+    // After the mock, say what still stops the decision (for example the school's required checks).
+    const blocker = hireBlockers(papers.get(row.candidateId) ?? [], mocks.get(row.candidateId) ?? [])[0];
+    return <span className={a.quiet}>{blocker ?? (row.mockAt ? "Nothing left to do" : "No mock booked")}</span>;
+  };
+
+  const item = (entry: (typeof scored)[number]) => {
+    const { row, ps, ms, lane } = entry;
+    const c = names.get(row.candidateId);
+    const h = headName(row.headKey);
+    return (
+      <li key={row.key} className={a.row} data-lane={lane === "late_scan" ? "scan" : lane} data-selected={selectedVisit === row.key ? "" : undefined}>
+        <span className={a.who}>
+          <button type="button" className={a.name} onClick={() => onSelectVisit(row.key)}>{c?.name ?? "Unknown candidate"}</button>
+          <span className={a.sub} title={h ?? undefined}>{[row.subject, h && nick(h)].filter(Boolean).join(" · ")}</span>
+        </span>
+        <span className={a.when}>
+          {row.at ? `Test ${when(row.at)}` : row.dateText || "–"}
+          {row.mockAt && (
+            <span className={lane === "late_scan" ? a.late : a.sub}>
+              Mock {when(row.mockAt)}
+            </span>
+          )}
+        </span>
+        {lane !== "scan" && lane !== "late_scan" && <span className={a.results}>
+          {ps.map(({ paper, score }) => <PaperBadge key={paper.id} score={score} subject={paper.subject === row.subject ? undefined : paper.subject} labelled={ms.length > 0} />)}
+          {ms.map((mock) => <MockBadge key={mock.id} mock={mock} />)}
+          {!ps.length && !ms.length && <span className={a.quiet}>No results yet</span>}
+        </span>}
+        <span className={a.action}>{action(entry)}</span>
+      </li>
+    );
+  };
+
+  // An arrival row's quiet note when the paper is not simply passed: staff see why the mock may not go ahead.
+  const paperNote = new Map(scored.flatMap(({ row, ps }) => {
+    const v = ps.find((p) => ["checking", "fail", "needs_check"].includes(p.score.verdict))?.score;
+    if (!v) return [];
+    const score = [v.percent !== null && `${v.percent}%${v.level ? ` at ${v.level}` : ""}`, v.passMark !== null && `pass mark ${v.passMark}%`].filter(Boolean).join(" · ");
+    const words = v.verdict === "checking" ? <>Head checking · {score}<br />Mock stays booked</> : v.verdict === "fail" ? `Paper not passed · ${score}` : "Paper needs a check";
+    return [[row.candidateId, <span key="n" className={v.verdict === "fail" ? a.late : a.warnNote}>{words}</span>] as const];
+  }));
+  const checkLink = (candidateId: string) => {
+    const path = data.paperChecks.find((c) => c.candidateId === candidateId && !c.done)?.path;
+    return path ? <a className={css.sourceLink} href={path} target="_blank" rel="noopener noreferrer">View re-check status</a> : null;
+  };
+  const needsScan = new Set(scored.filter(({ lane }) => lane === "scan" || lane === "late_scan").map(({ row }) => row.candidateId));
+  const weekStrip = (
+    <div className={a.weekWrap}>
+                  <div className={a.week} role="group" aria-label="Visits in the next 7 days">
+                    {perDay.map(({ d, items }, i) => {
+                      const tests = items.filter((b) => b.kind === "paper").length;
+                      return (
+                        <button key={day(d)} type="button" className={a.dayCol} data-today={i === 0 ? "" : undefined} disabled={!items.length}
+                          aria-label={`${i === 0 ? "Today, " : ""}${formatInTimeZone(d, ZONE, "EEEE d MMMM")}: ${tests} paper tests, ${items.length - tests} mocks`}
+                          onClick={() => document.getElementById(`day-${day(d)}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                          <span className={a.dayName}>{i === 0 ? "Today" : formatInTimeZone(d, ZONE, "EEE")}</span>
+                          <span className={a.dayDate}>{formatInTimeZone(d, ZONE, formatInTimeZone(d, ZONE, "d") === "1" ? "d MMM" : "d")}</span>
+                          <span className={a.stack} aria-hidden>
+                            <span data-kind="mock" style={{ height: `${((items.length - tests) / peak) * 100}%` }} />
+                            <span data-kind="paper" style={{ height: `${(tests / peak) * 100}%` }} />
+                          </span>
+                          <span className={a.daySplit} aria-hidden>
+                            <span><i data-kind="paper" />P {tests}</span>
+                            <span><i data-kind="mock" />M {items.length - tests}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className={a.legend} aria-hidden><span className={a.key}><i data-kind="paper" /> P = paper test</span><span className={a.key}><i data-kind="mock" /> M = mock</span><span className={a.legendNote}>Counts include earlier visits.</span></p>
+    </div>
+  );
+  const slot = (b: (typeof coming)[number]) => {
+    // The same key assessmentRows gives the row, so an old-flow booking opens its own row.
+    const key = b.visitId ?? `${b.kind}:${b.candidateId}:${b.at.getTime()}`;
+    const h = headName(b.head);
+    return (
+      <li key={`${b.candidateId}:${b.kind}:${b.at.getTime()}`} id={`slot-${b.kind}-${b.candidateId}-${b.at.getTime()}`} tabIndex={-1} className={a.slot}>
+        <span className={a.time} data-kind={b.kind}>{clock(b.at)}</span>
+        <span className={a.who}>
+          <button type="button" className={a.name} onClick={() => onSelectVisit(key)}>{names.get(b.candidateId)?.name ?? "Unknown candidate"}</button>
+          <span className={a.sub} title={h ?? undefined}><b className={a.kind}>{b.kind === "paper" ? "Paper test" : "Mock"}</b> · {b.subject} · {h ? (b.kind === "paper" ? `mock head ${nick(h)}` : `head ${nick(h)}`) : "No mock booked"}</span>
+          {b.kind === "mock" && paperNote.get(b.candidateId)}
+        </span>
+        <span className={a.action}>{b.kind === "paper" && b.at > now && <PrintPaper library={data.library} subject={b.subject} name={names.get(b.candidateId)?.name} />}{b.kind === "mock" && checkLink(b.candidateId)}{b.kind === "mock" && !paperNote.has(b.candidateId) && (needsScan.has(b.candidateId)
+          ? <ResultUpload kind="paper" candidateId={b.candidateId} subject={b.subject as Subject} reload={reload} label="Upload paper scan" />
+          : <span className={a.quiet}>No action due</span>)}</span>
+      </li>
+    );
+  };
 
   return (
     <div className={css.layout}>
       <div className={css.main}>
         <section className={css.tableSection} aria-label="Mock and paper">
           <div className={css.tableTools}>
-            <div className={css.tabs} role="group" aria-label="View">
+            <div className={`${css.tabs} ${a.viewTabs}`} role="group" aria-label="View">
               {(
                 [
                   ["list", "List"],
@@ -888,109 +1113,79 @@ export function AssessmentScreen({
               ))}
             </div>
             {mode === "list" && (
-              <>
-                <label className={css.filterSelect}>
-                  Head
-                  <select value={head} onChange={(e) => setHead(e.target.value)}>
-                    <option value="">All</option>
-                    {data.config.interviewers.map((person) => (
-                      <option key={person.canonicalKey} value={person.canonicalKey}>
-                        {heads.get(person.canonicalKey) ?? person.canonicalKey}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className={css.filterSelect}>
-                  Date
-                  <select value={range} onChange={(e) => setRange(e.target.value as AssessmentRange)}>
-                    {ASSESSMENT_RANGES.map((value) => (
-                      <option key={value}>{value}</option>
-                    ))}
-                  </select>
-                </label>
-                <div className={`${css.tabs} ${css.tabsRow}`} role="group" aria-label="Filter visits">
-                  {ASSESSMENT_CHIPS.map((value, index) => (
-                    <button key={value} type="button" aria-pressed={chip === value} onClick={() => setChip(chip === value ? null : value)}>
-                      {value} <span className={css.tabCount}>{counts[index]} of {rows.length}</span>
-                    </button>
+              <label className={`${css.filterSelect} ${a.headFilter}`}>
+                Head
+                <select value={head} onChange={(e) => setHead(e.target.value)}>
+                  <option value="">All</option>
+                  {data.config.interviewers.map((person) => (
+                    <option key={person.canonicalKey} value={person.canonicalKey}>
+                      {heads.get(person.canonicalKey) ?? person.canonicalKey}
+                    </option>
                   ))}
-                </div>
-              </>
+                </select>
+              </label>
             )}
           </div>
           {mode === "calendar" ? (
             <HeadSchedules heads={data.configSaved ? data.config.interviewers : []} bookings={data.bookings} onOpenCandidate={onOpenRecord} />
           ) : (
-            <div className={css.tableScroll}>
-              <table className={css.table}>
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Candidate</th>
-                    <th>Subject</th>
-                    <th>Head</th>
-                    <th>Paper</th>
-                    <th>Mock</th>
-                    <th>Decision</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shown.map((row) => {
-                    const c = names.get(row.candidateId);
-                    // A row with a visit shows that visit's results. A past tracker result is in the panel.
-                    const rowPapers = (papers.get(row.candidateId) ?? []).filter((paper) => row.history || paper.source !== "tracker");
-                    // A person can hold a mock in another subject. A history row has no subject of its own to match.
-                    const rowMocks = (mocks.get(row.candidateId) ?? []).filter((mock) => row.history || (mock.subject === row.subject && mock.source !== "tracker"));
+            <div className={a.board}>
+              <div className={a.cols}>
+                <section className={a.block} aria-labelledby="todo-title">
+                  <div className={a.titleRow}>
+                    <h2 id="todo-title" className={a.blockTitle}>To do</h2>
+                    <a className={a.jump} href={next ? `#slot-${next.kind}-${next.candidateId}-${next.at.getTime()}` : "#coming-title"}>{next ? `Next: ${when(next.at)} · ${names.get(next.candidateId)?.name ?? ""}` : "Coming up"} ↓</a>
+                  </div>
+                  {!lanes.some(({ lane }) => lane !== "waiting") && <p className={a.quiet}>Nothing waiting on you.</p>}
+                  {lanes.map(({ lane, items }) => lane === "waiting" ? (
+                    <details key={lane} className={a.lane} data-lane={lane}>
+                      <summary className={a.laneTitle}>{LANE_TITLE.waiting} <span className={a.count}>{items.length}</span></summary>
+                      <ul className={a.list}>{items.map(item)}</ul>
+                    </details>
+                  ) : (
+                    <div key={lane} className={a.lane} data-lane={lane}>
+                      <h3 className={a.laneTitle}>{LANE_TITLE[lane]} <span className={a.count}>{items.length}</span></h3>
+                      <ul className={a.list}>{items.map(item)}</ul>
+                    </div>
+                  ))}
+                  {!!later.length && (
+                    <details className={a.lane} data-lane="finished">
+                      <summary className={a.laneTitle}>Booked later <span className={a.count}>{later.length}</span></summary>
+                      <ul className={a.list}>{later.map(item)}</ul>
+                    </details>
+                  )}
+                  {!!finished.length && (
+                    <details className={a.lane} data-lane="finished">
+                      <summary className={a.laneTitle}>Finished <span className={a.count}>{finished.length}</span></summary>
+                      <ul className={a.list}>{finished.sort((x, y) => (y.row.at?.getTime() ?? 0) - (x.row.at?.getTime() ?? 0)).map(item)}</ul>
+                    </details>
+                  )}
+                </section>
+                <section className={`${a.block} ${a.coming}`} aria-labelledby="coming-title">
+                  <h2 id="coming-title" className={a.blockTitle}>Coming up</h2>
+                  {weekStrip}
+
+                  {perDay.filter(({ items }) => items.length).map(({ d, items }) => {
+                    const today = day(d) === day(now);
+                    // Earlier today is done or in the To do list; it folds away so the next arrival is on top.
+                    const earlier = today ? items.filter((b) => b.at <= now) : [];
+                    const later = items.filter((b) => !earlier.includes(b));
                     return (
-                      <tr key={row.key} data-selected={selectedVisit === row.key ? "" : undefined} onClick={() => onSelectVisit(row.key)}>
-                        <td>
-                          {row.at ? when(row.at) : row.dateText || "–"}
-                          {row.mockAt && <span className={css.pillNote}>Mock {mockWhen(row.at, row.mockAt)}</span>}
-                          {row.status === "no_show" && <span className={css.clashWord}>No-show</span>}
-                          {row.status === "cancelled" && <span className={css.clashWord}>Visit cancelled</span>}
-                        </td>
-                        <td className={css.candidateCell}>
-                          <button
-                            type="button"
-                            className={css.nameButton}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onSelectVisit(row.key);
-                            }}
-                          >
-                            {c?.name ?? "Unknown candidate"}
-                          </button>
-                        </td>
-                        <td>{row.subject}</td>
-                        <td className={css.fitCell} title={row.headKey ? (heads.get(row.headKey) ?? row.headKey) : undefined}>{row.headKey ? (heads.get(row.headKey) ?? row.headKey) : "–"}</td>
-                        <td className={`${css.preCell} ${css.wrapCell}`}>
-                          {rowPapers.length ? (
-                            rowPapers.map((paper) => <span key={paper.id} className={css.pillNote}>{paperCell(paper, data.config, data.paperChecks)}</span>)
-                          ) : row.kinds.includes("paper") && row.subject ? (
-                            <>
-                              <PrintPaper library={data.library} subject={row.subject} />
-                              <ResultUpload kind="paper" candidateId={row.candidateId} subject={row.subject as Subject} reload={reload} label="Upload PDF" />
-                            </>
-                          ) : (
-                            <span className={css.mutedCell}>–</span>
-                          )}
-                        </td>
-                        <td className={css.actionCell}>
-                          {rowMocks.length ? (
-                            rowMocks.map((mock) => <span key={mock.id} className={css.pillNote}>{mockCell(mock)}</span>)
-                          ) : row.kinds.includes("mock") && row.subject ? (
-                            <ResultUpload kind="mock" candidateId={row.candidateId} subject={row.subject as Subject} reload={reload} label="Upload rubric" />
-                          ) : (
-                            <span className={css.mutedCell}>–</span>
-                          )}
-                        </td>
-                        <td>{decisionCell(data.decisions.filter((d) => d.candidateId === row.candidateId))}</td>
-                      </tr>
+                      <div key={day(d)} id={`day-${day(d)}`} className={a.lane}>
+                        <h3 className={a.laneTitle} data-today={today ? "" : undefined}>{today ? "Today · " : ""}{formatInTimeZone(d, ZONE, "EEE d MMM")}{today && !later.length ? <span className={a.laneHint}>No visits left today</span> : <span className={a.count}>{today ? `${later.length} left` : items.length}</span>}</h3>
+                        {!!later.length && <ul className={a.list}>{later.map(slot)}</ul>}
+                        {!!earlier.length && (
+                          <details className={a.earlier}>
+                            <summary>Earlier today <span className={a.count}>{earlier.length}</span></summary>
+                            <ul className={a.list}>{earlier.map(slot)}</ul>
+                          </details>
+                        )}
+                      </div>
                     );
                   })}
-                </tbody>
-              </table>
-              {!shown.length && <p className={css.empty}>{rows.length ? "No visits match these filters." : "No visits booked yet."}</p>}
+                  {!coming.length && <p className={a.quiet}>No visits in the next 7 days.</p>}
+                </section>
+              </div>
             </div>
           )}
         </section>
