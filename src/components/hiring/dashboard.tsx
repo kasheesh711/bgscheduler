@@ -122,8 +122,11 @@ function subscribeToReviewLink(change: () => void) {
   };
 }
 
-/** `head`: the signed-in head, known before the data loads, so a head never sees the full dashboard first. */
-export function HiringDashboard({ head = null }: { head?: string | null } = {}) {
+/**
+ * `head`: the signed-in head, known before the data loads, so a head never sees the full dashboard first.
+ * `fullAccess`: the signed-in admin has no page limit, so as a head they keep the way to the full dashboard.
+ */
+export function HiringDashboard({ head = null, fullAccess = false }: { head?: string | null; fullAccess?: boolean } = {}) {
   const [data, setData] = useState<HiringData | null>(null);
   const [config, setConfig] = useState<HiringConfig | null>(null);
   const [configRevision, setConfigRevision] = useState(0);
@@ -391,8 +394,9 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
           {view === "setup" ? "" : notice}
         </div>
         {role ? (
-          // Heads see only their own list (Kevin, 24 Nov 2026). Staff keep the way to the full dashboard.
-          view === "heads" && (data?.viewerHead ?? head) ? null : <div className={css.viewSwitch}>
+          // Heads see only their own list (Kevin, 24 Nov 2026). Staff, and a head with no page limit (Kevin, 25 Nov 2026),
+          // keep the way to the full dashboard.
+          view === "heads" && (data?.viewerHead ?? head) && !fullAccess ? null : <div className={css.viewSwitch}>
             <button type="button" onClick={() => setView("overview")}>
               Full dashboard
             </button>
