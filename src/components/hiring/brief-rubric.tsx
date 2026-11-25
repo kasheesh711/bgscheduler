@@ -50,11 +50,13 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
     setTicksUsed(Object.values(kept).some(Boolean));
     setChecksDone(typeof draft.checksDone === "boolean" ? draft.checksDone : null);
   };
+  // Sent scores compared by value, whether they came from the server or from this form's own send.
+  const baseOf = (sent: Partial<Draft> | null) => sent && JSON.stringify({ items: RUBRIC_ITEMS.map((id) => Number(sent.items?.[id]) || 0), comments: sent.comments ?? "", checksDone: sent.checksDone ?? null });
   // The scores last sent, so "Discard changes" can put them back.
   const sentCopy = useRef<Partial<Draft> | null>(saved ? { items: saved.items as Draft["items"], comments: saved.comments, ticks: saved.stressTest, checksDone: saved.checksDone ?? null } : null);
   useEffect(() => {
     const read = (store: Storage) => {
-      const draft = JSON.parse(store.getItem(draftKey) ?? "null") as Partial<Draft> | null;
+      const draft = JSON.parse(store.getItem(draftKey) ?? "null") as (Partial<Draft> & { base?: string | null }) | null;
       return draft && typeof draft.items === "object" && draft.items ? draft : null;
     };
     try {
@@ -64,8 +66,9 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
         restored.current = true;
         const edit = read(sessionStorage);
         // Only over scores that were sent, and only while they can still change: with none on the server, a sent
-        // recommendation or a closed form, the copy is stale (critic and code reviews, rounds 19–20).
-        if (edit && lastSent && !decisionSent && form !== "closed") {
+        // recommendation or a closed form, the copy is stale (critic and code reviews, rounds 19–20). It must also have
+        // been made over the scores the server has now, not over scores another device has since replaced (round 25).
+        if (edit && lastSent && !decisionSent && form !== "closed" && edit.base === baseOf(sentCopy.current)) {
           apply(edit);
           setEditing(true);
           onEdit();
@@ -75,9 +78,8 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
           if (draft) apply(draft);
         }
       } else if (state !== "sent") {
-        const copy = JSON.stringify({ items, comments, ticks, checksDone } satisfies Draft);
-        if (editedAfterSend) sessionStorage.setItem(draftKey, copy);
-        else if (!lastSent) localStorage.setItem(draftKey, copy);
+        if (editedAfterSend) sessionStorage.setItem(draftKey, JSON.stringify({ items, comments, ticks, checksDone, base: baseOf(sentCopy.current) }));
+        else if (!lastSent) localStorage.setItem(draftKey, JSON.stringify({ items, comments, ticks, checksDone } satisfies Draft));
       }
     } catch {
       // Private mode or a full store: the form still works, without the copy.
@@ -91,6 +93,8 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
   const sentTotal = lastSent?.editCount === editCount ? lastSent.total : null;
   // After a change to sent scores: put the sent scores back and drop the tab copy (critic review, round 19).
   const discard = () => {
+    // Not while scores are sending: the send would then show one total while the form holds another (code review, round 25).
+    if (pending) return;
     if (sentCopy.current) apply(sentCopy.current);
     try {
       sessionStorage.removeItem(draftKey);
@@ -355,7 +359,7 @@ export function BriefRubric({ saved, form, url, editCount, lastSent, decisionSen
                   (next.closest("[data-score-row]") ?? next).scrollIntoView({ block: "center" });
                   next.focus({ preventScroll: true });
                 }}>Next unscored</button>}
-                {lastSent && sentCopy.current && <button type="button" className={b.discard} onClick={discard}>Discard changes</button>}
+                {lastSent && sentCopy.current && <button type="button" className={b.discard} disabled={!!pending} onClick={discard}>Discard changes</button>}
               </div>
               <progress className={c.scoreProgress} aria-label="Scores entered" value={scored} max={RUBRIC_ITEMS.length} />
             </div>

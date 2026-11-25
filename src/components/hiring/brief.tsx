@@ -85,6 +85,8 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   // opens, or the check says the recommendation is not open yet (Sol review, round 18).
   const router = useRouter();
   const [checking, startCheck] = useTransition();
+  // The list's mock-start refresh is quiet: it shows no "Checking…" (code review, round 25).
+  const [, startQuiet] = useTransition();
   const [checked, setChecked] = useState(false);
   const asked = useRef<string | null>(null);
   const refresh = (part: string) => {
@@ -103,14 +105,18 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.origin !== window.location.origin || event.source !== window.parent || event.data?.type !== "hiring-refresh") return;
-      asked.current = typeof event.data.part === "string" ? event.data.part : "";
+      // While a send is in flight, a fetch could return the scores from before it (code review, round 25).
+      if (pending) return;
+      const part = typeof event.data.part === "string" ? event.data.part : "";
       // A refresh at mock start is not a question about the recommendation, so it says nothing (critic review, round 19).
-      if (asked.current === "recommendation") setChecked(true);
+      if (!part) return startQuiet(() => router.refresh());
+      asked.current = part;
+      if (part === "recommendation") setChecked(true);
       startCheck(() => router.refresh());
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [router]);
+  }, [router, pending]);
   const blocked = brief.form === "closed" && brief.mockEnded && !brief.recommendationReady && !decision;
   const earlyRecommendation = brief.form === "closed" && brief.recommendationReady;
   const paperUrl = resumeUrl.replace(/resume$/, "paper");
@@ -194,7 +200,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
                 : "Ask BeGifted admin to check the scores."}</p>
               {/* Stays focusable while it checks; when the recommendation opens, focus moves to it (Sol review, round 19). */}
               {brief.recommendationBlock === "checking" && (
-                <button type="button" className={c.button} data-check="" aria-disabled={checking || undefined} onClick={() => { if (!checking) refresh("recommendation"); }}>Check again</button>
+                <button type="button" className={c.button} data-check="" aria-disabled={checking || !!pending || undefined} onClick={() => { if (!checking && !pending) refresh("recommendation"); }}>Check again</button>
               )}
             </div>
           )}
@@ -227,7 +233,7 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
           {wait && (
             <div className={`${b.panel} ${c.field}`}>
               <p role="status">{checking ? "Checking…" : checked ? "Not open yet. Recommend after the mock ends." : "Recommend after the mock ends."}</p>
-              <button type="button" className={c.button} data-check="" aria-disabled={checking || undefined} onClick={() => { if (!checking) refresh("recommendation"); }}>Check recommendation</button>
+              <button type="button" className={c.button} data-check="" aria-disabled={checking || !!pending || undefined} onClick={() => { if (!checking && !pending) refresh("recommendation"); }}>Check recommendation</button>
             </div>
           )}
         </div>
@@ -240,9 +246,9 @@ export function InterviewerBrief({ brief, resumeUrl, rubricUrl, decisionUrl, pdf
               }}>{label}</button>
             ))}
             {fileUrl && (
-              <a className={b.open} href={fileUrl} target="_blank" rel="noreferrer" aria-label={doc === "paper" ? "Open paper ↗ (graded PDF), opens in a new tab" : brief.resume === "pdf" ? "Open résumé ↗ (PDF), opens in a new tab" : undefined}>
+              <a className={b.open} href={fileUrl} target="_blank" rel="noreferrer" aria-label={doc === "paper" ? "Open paper (graded PDF), opens in a new tab" : brief.resume === "pdf" ? "Open résumé (PDF), opens in a new tab" : undefined}>
                 {/* Names the file, so it does not read as a second "open" for the brief (Sol review, round 16). */}
-                {doc === "resume" && brief.resume !== "pdf" ? "Download résumé (Word)" : doc === "paper" ? "Open paper ↗" : "Open résumé ↗"}
+                {doc === "resume" && brief.resume !== "pdf" ? "Download résumé (Word)" : <>{doc === "paper" ? "Open paper" : "Open résumé"} <span aria-hidden="true">↗</span></>}
               </a>
             )}
           </div>

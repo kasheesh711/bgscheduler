@@ -1341,6 +1341,7 @@ try {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`${origin}/?roles=1&me=Ek`);
     // Log what the status line says from here on: the save must be announced once, with no schedule text in between.
+    await page.getByRole("navigation", { name: /hiring list/ }).getByRole("link", { name: /Sample Joy/ }).waitFor();
     await page.evaluate(() => {
       const line = document.querySelector('p.sr-only[role="status"]');
       const log = window.statusLog = [];
@@ -1418,7 +1419,7 @@ try {
       assert.equal(await page.getByText(message, { exact: true }).count(), 1);
       assert.equal(await page.getByRole("button", { name: "Yes, send to HR" }).count(), state === "closed" ? 1 : 0);
       assert.equal(await page.getByRole("button", { name: "Check again" }).count(), button === "Check again" ? 1 : 0);
-      const resume = page.getByRole("link", { name: "Open résumé ↗ (PDF), opens in a new tab" });
+      const resume = page.getByRole("link", { name: "Open résumé (PDF), opens in a new tab" });
       assert.equal(await resume.evaluate((el) => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
       await shot(page, `brief-${state}-phone`, true);
       if (button) {

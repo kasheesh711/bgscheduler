@@ -12,6 +12,8 @@ async function Body() {
   try {
     email = await requireHiringAdmin();
   } catch (error) {
+    // Next's own signal that the render was abandoned is passed on, never turned into a message (code review, round 25).
+    if (typeof error === "object" && error !== null && (error as { digest?: unknown }).digest === "HANGING_PROMISE_REJECTION") throw error;
     if (error instanceof HiringError && error.status === 401)
       redirect("/login?callbackUrl=%2Fhiring");
     return <p className="p-6">Hiring access is required.</p>;

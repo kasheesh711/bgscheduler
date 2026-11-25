@@ -796,15 +796,16 @@ export function HeadsScreen({ data, readOnly = false, head: fixedHead, open, rel
   // mock scores are kept as drafts, so nothing typed is lost (Sol review, rounds 11–14).
   const selected = wide ? found ?? (mockNow && !picked ? nextItem : undefined) ?? keep ?? all.find((item) => item.urgent) ?? nextItem ?? all[0] : found;
   if ((selected?.id ?? null) !== (shown?.id ?? null)) setShown(selected ?? null);
+  const selectedId = selected?.id;
   // Work in the open pane makes it the head's choice, so a mock that starts does not take it away. Focus inside a frame
   // reaches this page only as a window blur, so that is checked too (code and critic reviews, rounds 20–21).
   useEffect(() => {
     const claim = () => window.setTimeout(() => {
-      if (document.activeElement?.closest("#open-item") && !picked && selected) setPicked(selected.id);
+      if (document.activeElement?.closest("#open-item") && !picked && selectedId) setPicked(selectedId);
     });
     window.addEventListener("blur", claim);
     return () => window.removeEventListener("blur", claim);
-  }, [picked, selected]);
+  }, [picked, selectedId]);
   // A mock that starts while its brief is open: the brief fetches itself again, so its label reads "Mock now" (critic, round 18).
   const liveId = mockNow ? nextItem?.id : undefined;
   // A mock that starts ends the save receipt, so the status line says "mock now" even on the row just saved (critic, round 24).

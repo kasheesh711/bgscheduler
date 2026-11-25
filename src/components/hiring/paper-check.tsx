@@ -155,7 +155,7 @@ export function PaperCheck({ view, token }: { view: View; token: string }) {
         {/* The link sits beside the heading, not in it, so it is not part of the heading's name (code review, round 20). */}
         <div className={k.paperHead}>
           <h2 className={c.stepTitle}>Marked paper</h2>
-          <a className={k.fullPaper} href={`/api/hiring/paper-check/${token}/paper`} target="_blank" rel="noreferrer">View full paper ↗</a>
+          <a className={k.fullPaper} href={`/api/hiring/paper-check/${token}/paper`} target="_blank" rel="noreferrer" aria-label="View full paper, opens in a new tab">View full paper <span aria-hidden="true">↗</span></a>
         </div>
         <PdfPages src={`/api/hiring/paper-check/${token}/paper`} runtime={`/api/hiring/paper-check/${token}/runtime`} title={`Marked paper of ${view.name}`} maxPages={40} />
       </section>

@@ -462,8 +462,8 @@ export function HiringDashboard({ head = null }: { head?: string | null } = {}) 
           view === "heads" ? (
             // A head cannot check the setup, so the list offers a retry and names who to ask (Sol review, round 18).
             // The button stays while it retries, so focus is not lost; on success focus moves to the list (Sol review, round 20).
-            <div role="alert" className={css.loading}>
-              <p>Could not load your hiring list.</p>
+            <div className={css.loading}>
+              <p role="alert">Could not load your hiring list.</p>
               <button type="button" className={`${css.primary} ${css.retry}`} aria-disabled={retrying || undefined} onClick={() => {
                 if (retrying) return;
                 setRetrying(true);
