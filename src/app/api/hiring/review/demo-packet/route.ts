@@ -14,7 +14,6 @@ const input = z.object({
     items: z.partialRecord(z.enum(RUBRIC_ITEMS as [RubricItem, ...RubricItem[]]), z.number().min(0).max(ITEM_MAX).nullable()),
     comments: z.string().max(4000),
     stressTest: z.object({ listens: z.boolean(), explains: z.boolean(), plan: z.boolean() }).optional(),
-    checksDone: z.boolean().optional(),
   }),
 });
 

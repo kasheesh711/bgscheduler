@@ -1,7 +1,10 @@
 import "server-only";
 import { auth } from "@/lib/auth";
 import { resolveTeacherCanonicalKeys } from "@/lib/progress-tests/teacher-access";
+import type { Database } from "@/lib/db";
 import { HiringError } from "./model";
+import { headKeys } from "./role-views";
+import { settings } from "./service";
 export async function requireHiringAdmin() {
   const session = await auth();
   if (!session?.user?.email)
@@ -32,4 +35,10 @@ export async function requireHiringHr() {
   const { finalReviewAccess } = await import("./final-review");
   if (!finalReviewAccess(actor).hr) throw new HiringError(403, "Final review access is required.");
   return actor;
+}
+
+/** Gift's head key: the final reviewer, who owns the school (Kevin, 25 Nov 2026). Null when she is not a head here. */
+export async function finalReviewerKey(db: Database) {
+  const { config } = await settings(db);
+  return headKeyFor(process.env.HIRING_FINAL_REVIEWER_EMAIL, headKeys(config));
 }

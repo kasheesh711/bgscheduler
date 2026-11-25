@@ -79,7 +79,6 @@ const command = z.discriminatedUnion("action", [
       items: z.partialRecord(z.enum(RUBRIC_ITEMS as [RubricItem, ...RubricItem[]]), z.number().nullable()),
       comments: z.string().trim().max(4000),
       stressTest: z.object({ listens: z.boolean(), explains: z.boolean(), plan: z.boolean() }).strict().optional(),
-      checksDone: z.boolean().optional(),
     })
     .strict(),
   z

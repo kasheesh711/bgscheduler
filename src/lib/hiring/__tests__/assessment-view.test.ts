@@ -68,13 +68,11 @@ describe("hireBlockers", () => {
     expect(hireBlockers([result("needs_check")], [result()])[0]).toMatch(/check/);
     expect(hireBlockers([result()], [result("needs_check")])[0]).toMatch(/check/);
   });
-  it("blocks hire until the school's required checks are Yes on a new-form mock", () => {
+  it("does not block hire on the removed required-checks answer", () => {
     const items = Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 7])) as MockRubric["items"];
     const mock = (checksDone: boolean | null) => ({ ...result(), rubric: { items, comments: "", checksDone } });
-    expect(hireBlockers([result()], [mock(true)])).toEqual([]);
-    expect(hireBlockers([result()], [mock(false)])).toEqual(["The school's required checks are not Yes on the mock result."]);
-    expect(hireBlockers([result()], [mock(null)])).toEqual(["The school's required checks are not Yes on the mock result."]);
-    // The old 10-item form has no checks answer, so it does not block.
+    expect(hireBlockers([result()], [mock(false)])).toEqual([]);
+    expect(hireBlockers([result()], [mock(null)])).toEqual([]);
     const legacy = Object.fromEntries(LEGACY_RUBRIC_ITEMS.map((id) => [id, 7])) as MockRubric["items"];
     expect(hireBlockers([result()], [{ ...result(), rubric: { items: legacy, comments: "" } }])).toEqual([]);
   });

@@ -9,7 +9,8 @@ const body = z
     items: z.object(Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, z.int().min(1).max(ITEM_MAX)]))).strict(),
     comments: z.string().trim().max(4000),
     stressTest: z.object({ listens: z.boolean(), explains: z.boolean(), plan: z.boolean() }).strict(),
-    checksDone: z.boolean(),
+    // A page opened before 25 Nov 2026 still sends the removed answer; it is accepted and dropped.
+    checksDone: z.boolean().optional(),
   })
   .strict();
 
@@ -20,7 +21,8 @@ const body = z
 export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
   try {
     requireSameOrigin(request);
-    const rubric = body.parse(await request.json().catch(() => null)) as MockRubric;
+    // The removed answer is dropped, so new rows do not carry it.
+    const rubric = { ...body.parse(await request.json().catch(() => null)), checksDone: undefined } as MockRubric;
     return NextResponse.json({ total: await saveBriefRubric((await context.params).token, rubric) }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return hiringError(error);

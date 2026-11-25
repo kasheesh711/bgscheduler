@@ -155,16 +155,16 @@ A person uploads one scanned PDF for each subject, up to 25 MB, on the row or in
 | Professional Conduct | Personal Hygiene, Stress Test, Safeguarding and Student Security, Nurture Curiosity | 40 |
 
 - **Stress Test ticks.** The head ticks the elements the candidate showed in the parent role-play: A listens and acknowledges, B explains without blaming, C gives a concrete plan. The form shows the score the count suggests (3 = 10, 2 = 7, 1 = 4, 0 = 1). The head still chooses the score, because "all 3 but the plan is vague" is a 7. The ticks are stored and shown to HR and in the review packet.
-- **School's required checks completed (Yes/No).** Not scored. The head must answer it to send. **Hire is not possible until it is Yes** (`hireChecksMissing`, checked in `hireBlockers`, so Gift's sign-off and every other hire path refuse). No does not reject the candidate. When the checks finish later, a person with `/hiring` access sets it to Yes with **Change scores** on the mock result. That changes the evidence, so HR submits a new review packet.
+- **School's required checks: removed (Kevin, 25 November 2026).** The form no longer asks it and nothing checks it. Results scored from 20 to 25 November 2026 may still store `checksDone`; it is ignored.
 - **Interviewer guide.** The interviewer page has a fold-out with the role-play steps, the scenario (a 19% physics test) and the 12-question bank. Each item on the form has a fold-out with its four band descriptions. The text is in `src/lib/hiring/rubric-guide.ts`, word for word from the rubric.
-- **Old results.** A result scored on the old 10-item form (out of 100) stays valid and complete. It has no Professional Conduct items and no checks answer, so the checks rule does not apply to it. The screens show it as x / 100.
+- **Old results.** A result scored on the old 10-item form (out of 100) stays valid and complete. It has no Professional Conduct items. The screens show it as x / 100.
 
 There are two ways to record the head's scores.
 
-**Score form on the interviewer link (the usual way, Kevin's decision of 13 November 2026).** The [interviewer candidate page](#interviewer-candidate-page) has a form with the 14 items, the Stress Test ticks, the required-checks answer and a comment box. It opens when the mock lesson starts. The head chooses a whole score from 1 to 10 for each item and sends it. No file and no AI are used.
+**Score form on the interviewer link (the usual way, Kevin's decision of 13 November 2026).** The [interviewer candidate page](#interviewer-candidate-page) has a form with the 14 items, the Stress Test ticks and a comment box. It opens when the mock lesson starts. The head chooses a whole score from 1 to 10 for each item and sends it. No file and no AI are used.
 
 - `POST /api/hiring/brief/{token}/rubric` saves the scores (`saveBriefRubric`). The link is the only access check, with the same rules as the page: a cancel, a move, a stopped candidate, a sent result or the 7-day end closes it.
-- The result is stored with source `person` and status `done`, so it counts at once. The server calculates the total out of 140. A send without every item or without the checks answer is refused.
+- The result is stored with source `person` and status `done`, so it counts at once. The server calculates the total out of 140. A send without every item is refused.
 - The head can send again while the link works, to correct the head's own scores. A send can replace only that head's own earlier send or a past tracker result. The audit row `mock-rubric-submitted` keeps what was replaced and names the head.
 - The form closes, and a send is refused, when an uploaded rubric is recorded, when a person with `/hiring` access has changed or confirmed the scores, or when a decision is drafted. The page then shows no scores.
 - A mock with more than one subject stores the scores under its first subject, the same subject the **Mock and paper** row uses.
@@ -173,13 +173,13 @@ There are two ways to record the head's scores.
 
 **File upload by a person with `/hiring` access**, for a head who used the paper form:
 
-A person uploads the head's completed rubric as a PDF. The AI copies the 14 scores, the Stress Test ticks, the checks answer and the comments, and the server calculates the part scores and the total out of 140. A checks answer the AI cannot read is blank and needs a check. A scan of the old 10-item form has blank Professional Conduct scores, so it needs a check. A blank score or one off the scale stays blank and needs a check, so the good scores are kept. A file with no score at all fails as the wrong form. A person can change scores, replace the file, or run the AI again. The AI's first read stays unchanged.
+A person uploads the head's completed rubric as a PDF. The AI copies the 14 scores, the Stress Test ticks and the comments, and the server calculates the part scores and the total out of 140. A scan of the old 10-item form has blank Professional Conduct scores, so it needs a check. A blank score or one off the scale stays blank and needs a check, so the good scores are kept. A file with no score at all fails as the wrong form. A person can change scores, replace the file, or run the AI again. The AI's first read stays unchanged.
 
 ### Decision and result email
 
 Clicking Hire or Reject saves a draft with the email text. **A draft creates no outbox row and changes no stage**, so nothing can leave later when the switches come on. The person reads the address, edits the text, and clicks Send. It goes to one candidate at a time.
 
-- **Hire** needs one mock and every uploaded paper finished, with checks cleared, and the school's required checks set to Yes on a mock scored on the current rubric. The person decides freely on low scores. A past result from the tracker does not count.
+- **Hire** needs one mock and every uploaded paper finished, with checks cleared. The person decides freely on low scores. A past result from the tracker does not count.
 - **Reject** works any time, with a reason and an email address. Someone with no address uses Stop in the full record.
 - **Send** refuses while Automation or Messages is off. The email leaves from the website at Send, through Resend.
 - A new Send cancels any earlier result email that has not left. The same result cannot go twice unless the first failed. A sent email is not recalled.
@@ -599,6 +599,8 @@ Kevin's decision, 18 November 2026: the full dashboard stays for the owner. HR, 
 ### Tutor recommendation
 
 After the mock ends, the tutor submits the completed rubric and chooses **Yes** or **No**. No requires a reason and queues a rejection. Yes goes to HR for a final review packet. See [Paper, tutor recommendation and final review](#paper-tutor-recommendation-and-final-review).
+
+**Gift's own mock (Kevin, 25 November 2026).** Gift owns the school, so on a mock where she is the interviewer there is no recommendation. Her page shows **Your decision**: she picks the offer letter (part-time, full-time or specialist) and **Hire, send offer** emails the offer letter and the contract-signing link at once, with no review packet and no second sign-off. No rejects as for any head. The offer needs her signed-in session (the brief link alone is public, so the page links to sign-in first) and the usual hire rules: paper and mock results, the send switches and a readable signing calendar. A plain Yes on her own mock is refused.
 
 ## Interviewer candidate page
 

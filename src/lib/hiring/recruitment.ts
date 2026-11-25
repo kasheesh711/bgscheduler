@@ -122,11 +122,11 @@ export async function queueRecruitmentMock(db: Database, booking: typeof booking
 }
 
 /** A head's decision after a mock. HR prepares the review for a Yes recommendation. One notice for each recorded decision. */
-export async function queueRecruitmentHeadDecision(db: Database, candidate: { id: string; name: string }, input: { decision: "hire" | "reject"; reason: string; head: string; subject: string | null; key: string }) {
+export async function queueRecruitmentHeadDecision(db: Database, candidate: { id: string; name: string }, input: { decision: "hire" | "reject"; reason: string; head: string; subject: string | null; key: string; offerSent?: boolean }) {
   const { config } = await settings(db);
   if (!config.recruitmentLineGroupId) return;
   await enqueueRecruitmentLine(db, `head-decision:${input.key}`, config.recruitmentLineGroupId,
-    `${input.decision === "hire" ? "✅ HIRE" : "❌ DO NOT HIRE"} · ${input.head}\n${lineWho(candidate.name, input.subject ?? "")}${input.reason ? `\nReason: ${input.reason}` : ""}\nNext: ${input.decision === "hire" ? "Kevin adds the assessment and sends the packet to Gift." : "the rejection email is queued."}`,
+    `${input.decision === "hire" ? "✅ HIRE" : "❌ DO NOT HIRE"} · ${input.head}\n${lineWho(candidate.name, input.subject ?? "")}${input.reason ? `\nReason: ${input.reason}` : ""}\nNext: ${input.offerSent ? "the offer letter and contract-signing link are emailed." : input.decision === "hire" ? "Kevin adds the assessment and sends the packet to Gift." : "the rejection email is queued."}`,
     null, "head_decision");
 }
 

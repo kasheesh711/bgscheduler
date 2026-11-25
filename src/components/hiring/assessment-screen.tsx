@@ -57,7 +57,6 @@ export function mockCell(mock: Mock) {
 }
 const LABELS = new Map<string, string>(RUBRIC.flatMap(({ items }) => items.map(([id, label]) => [id, label] as const)));
 const isNewForm = (rubric: MockRubric) => rubricItems(rubric).length === LABELS.size;
-const checksText = (rubric: MockRubric) => (rubric.checksDone === true ? "Yes" : rubric.checksDone === false ? "No" : "Not read");
 
 type Reload = () => Promise<void>;
 
@@ -448,7 +447,6 @@ function RubricEditor({ mock, command, busy, onDone }: { mock: Mock; command: Co
   const [comments, setComments] = useState(mock.rubric!.comments);
   const newForm = isNewForm(mock.rubric!);
   const [ticks, setTicks] = useState<StressTicks>(mock.rubric!.stressTest ?? { listens: false, explains: false, plan: false });
-  const [checks, setChecks] = useState(mock.rubric!.checksDone ?? null);
   const values = Object.fromEntries(Object.entries(items).map(([id, text]) => [id, text.trim() === "" ? null : Number(text)]));
   const valid = Object.values(values).every((value) => value === null || (Number.isInteger(value) && value >= 1 && value <= 10));
   return (
@@ -458,7 +456,7 @@ function RubricEditor({ mock, command, busy, onDone }: { mock: Mock; command: Co
         const changed = Object.fromEntries(Object.entries(values).filter(([id, value]) => value !== mock.rubric!.items[id as RubricItem]));
         const saved = mock.rubric!;
         const ticksChanged = (Object.keys(ticks) as (keyof StressTicks)[]).some((key) => ticks[key] !== !!saved.stressTest?.[key]);
-        const extra = newForm ? { ...(ticksChanged ? { stressTest: ticks } : {}), ...(checks === null || checks === saved.checksDone ? {} : { checksDone: checks }) } : {};
+        const extra = newForm ? (ticksChanged ? { stressTest: ticks } : {}) : {};
         if (await command({ action: "mock_edit", id: mock.id, updatedAt: new Date(mock.updatedAt).toISOString(), items: changed, comments, ...extra })) onDone();
       }}
     >
@@ -491,16 +489,6 @@ function RubricEditor({ mock, command, busy, onDone }: { mock: Mock; command: Co
             </label>
           ))}
         </fieldset>
-      )}
-      {newForm && (
-        <label className={css.fieldLabel}>
-          School&apos;s required checks completed
-          <select className={css.textarea} value={checks === null ? "" : String(checks)} onChange={(e) => setChecks(e.target.value === "" ? null : e.target.value === "true")}>
-            <option value="" disabled>Not read</option>
-            <option value="true">Yes</option>
-            <option value="false">No</option>
-          </select>
-        </label>
       )}
       <label className={css.fieldLabel}>
         Other comments
@@ -609,13 +597,8 @@ export function MockView({ mock, command, reload, busy }: { mock: Mock; command:
               </tr>
               {isNewForm(mock.rubric) && (
                 <tr>
-                  <td>
-                    School&apos;s required checks (not scored, needed to hire)
-                    <span className={css.pillNote}>
-                      Stress Test ticks: {STRESS_ELEMENTS.filter(({ key }) => mock.rubric!.stressTest?.[key]).map(({ label }) => label.slice(0, 1)).join(", ") || "none"}
-                    </span>
-                  </td>
-                  <td className={mock.rubric.checksDone === true ? css.num : css.warnWord}>{checksText(mock.rubric)}</td>
+                  <td>Stress Test ticks</td>
+                  <td className={css.num}>{STRESS_ELEMENTS.filter(({ key }) => mock.rubric!.stressTest?.[key]).map(({ label }) => label.slice(0, 1)).join(", ") || "none"}</td>
                 </tr>
               )}
             </tbody>
@@ -1004,7 +987,7 @@ export function AssessmentScreen({
     if (checking) return <span className={a.quiet}>Waiting for {nick(checking.score.head ?? "a head")}{row.mockAt && row.mockAt > now ? " · mock stays booked" : ""}</span>;
     if (ps.some((p) => p.score.verdict === "marking")) return null;
     if (row.mockAt && row.mockAt > now) return <span className={a.quiet}>Mock {when(row.mockAt)}</span>;
-    // After the mock, say what still stops the decision (for example the school's required checks).
+    // After the mock, say what still stops the decision.
     const blocker = hireBlockers(papers.get(row.candidateId) ?? [], mocks.get(row.candidateId) ?? [])[0];
     return <span className={a.quiet}>{blocker ?? (row.mockAt ? "Nothing left to do" : "No mock booked")}</span>;
   };

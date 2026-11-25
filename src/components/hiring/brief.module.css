@@ -304,6 +304,10 @@
   outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
+/* Gift's offer letter choice: three labelled boxes on their own line under the question. */
+.offerChoices { flex-wrap: wrap; }
+.offerChoices legend { float: none; flex-basis: 100%; margin: 0 0 4px; }
+.offerChoices .choice { padding: 0 12px; }
 .sendEnd {
   display: flex;
   gap: 16px;
@@ -644,11 +648,7 @@
 @media (min-width: 700px) {
   [data-bare] .scale { display: grid; grid-template-columns: repeat(2, max-content); grid-template-rows: repeat(2, auto); grid-auto-flow: column; justify-content: space-between; }
 }
-/* The required checks take their own line in the send bar; on a phone the two answers share it, so nothing covers the score count. */
-.sendBar > .choices { grid-column: 1 / -1; flex-wrap: wrap; }
-.sendBar > .choices legend { float: none; flex-basis: 100%; margin: 0 0 4px; }
 @media (max-width: 699px) {
-  .sendBar > .choices .choice { flex: 1; }
   .sendBar > div:first-of-type { grid-column: 1 / -1; }
   .sendBar > .sendEnd { grid-column: 1 / -1; justify-content: space-between; }
   .sendBar button[type="submit"] { white-space: nowrap; }

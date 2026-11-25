@@ -287,8 +287,7 @@ ${items.map(([id, label]) => `<div class="mock-row mock-item">
 <span>${escape(label)}</span><div class="plot">${mockPlot(mock.rubric.items[id] ?? null)}</div><span class="num">${escape(mock.rubric.items[id] ?? "—")} / ${ITEM_MAX}</span>
 </div>`).join("")}</div>`;
 }).join("")}
-${mockUsed.has("hygiene") ? `<p class="meta">Stress Test ticks: ${escape(STRESS_ELEMENTS.filter(({ key }) => mock.rubric.stressTest?.[key]).map(({ label }) => label).join("; ") || "none")}</p>
-<p class="meta">School's required checks completed: ${mock.rubric.checksDone === true ? "Yes" : mock.rubric.checksDone === false ? "No" : "Not recorded"}</p>` : ""}
+${mockUsed.has("hygiene") ? `<p class="meta">Stress Test ticks: ${escape(STRESS_ELEMENTS.filter(({ key }) => mock.rubric.stressTest?.[key]).map(({ label }) => label).join("; ") || "none")}</p>` : ""}
 <p class="copy">${escape(mock.rubric.comments)}</p></section>
 <section><h2>${value.call ? "Pre-screen call" : "Behavioural assessment"}</h2><p class="meta">${value.call ? `Call result recorded ${date(value.call)}` : "Written for the final review"}</p>
 <p class="copy">${escape(packet.behavioral)}</p></section>

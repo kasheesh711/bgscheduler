@@ -144,7 +144,7 @@ describe("brief score status", () => {
     const start = "2026-11-22T05:00:00Z";
     const end = "2026-11-22T06:00:00Z";
     const booking = { id, candidateId: id, subjects: ["Mathematics"], startTime: start, endTime: end };
-    const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((key) => [key, 8])), checksDone: complete ? true : null };
+    const rubric = { items: { ...Object.fromEntries(RUBRIC_ITEMS.map((key) => [key, 8])), ...(complete ? {} : { accuracy: null }) } };
     const result = { id, bookingId: id, source: "ai", status, rubric };
     const driverRow = (table: typeof schema.hiringBookings | typeof schema.hiringMockResults, values: Record<string, unknown>) =>
       Object.keys(getTableColumns(table)).map((key) => values[key] ?? null);
