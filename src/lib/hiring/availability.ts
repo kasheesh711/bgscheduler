@@ -36,8 +36,12 @@ import {
 
 import { headWeekMocks } from "./limits";
 import { withWiseHours } from "./rules";
+import { classesInHiringRooms, isWeekendDate, weekendTestFits } from "./rooms";
 
 const MAX_SOURCE_AGE = 90 * 60 * 1000;
+/** Kevin, 25 Nov 2026: 12:00–13:00 is every head's lunch, so no mock teaching touches it. */
+export const MOCK_LUNCH = { start: 12 * 60, end: 13 * 60 };
+export const overlapsLunch = (start: number, end: number) => start < MOCK_LUNCH.end && end > MOCK_LUNCH.start;
 // Real data_issue_type values are alias, modality, tag, completeness, conflict_model and sync.
 // Block on alias (identity) and on every completeness issue except the sync's availability message
 // (orchestrator.ts: `Failed to fetch availability for teacher "…"`). Wise hours are not used, and a failed
@@ -260,6 +264,8 @@ export async function availableSlots(
   const slots: Slot[] = [];
   const index = kind === "mock" ? await ensureIndex(indexDb) : null;
   if (index) assertFreshIndex(index, now);
+  // A weekend test needs one of the hiring rooms that no class holds (see rooms.ts).
+  const roomClasses = kind === "paper" ? await classesInHiringRooms(db, dates.filter(isWeekendDate)) : [];
   for (const date of dates) {
     const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
     // A move gives up the candidate's own mock, so it does not count toward the head's week either.
@@ -273,13 +279,17 @@ export async function availableSlots(
       const end = start + duration,
         range = { start: instant(date, start), end: instant(date, end) };
       if (range.start <= now) continue;
+      if (kind === "mock" && overlapsLunch(start, end)) continue;
       if (kind === "paper") {
+        const tests = bookings.filter((b) => b.kind === "paper" && b.candidateId !== movingCandidate);
         if (
-          bookings.filter(
-            (b) =>
-              b.kind === "paper" && b.candidateId !== movingCandidate &&
-              overlap(range, { start: b.startTime, end: b.endTime }),
-          ).length < config.paperCapacity
+          tests.filter((b) => overlap(range, { start: b.startTime, end: b.endTime })).length < config.paperCapacity &&
+          (!isWeekendDate(date) ||
+            weekendTestFits(
+              range,
+              tests.filter((b) => localDate(b.startTime) === date).map((b) => ({ id: b.id, start: b.startTime, end: b.endTime })),
+              roomClasses,
+            ))
         )
           slots.push({
             date,
@@ -374,6 +384,7 @@ export async function availableVisitSlots(
     ) {
       const examRange = { start: instant(date, exam), end: instant(date, exam + 120) };
       if (examRange.start <= now) continue;
+      if (overlapsLunch(exam + MOCK_START, exam + MOCK_END)) continue;
       if (
         bookings.filter(
           (b) =>
