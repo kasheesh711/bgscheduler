@@ -559,9 +559,9 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
               data={data}
               capacity={capacity}
               onOpen={setSelected}
-              onShow={(ids, label, stage) => {
+              onShow={(ids, label) => {
                 // An empty list shows nobody, so a zero count never opens the whole table.
-                setFilter({ ...NO_FILTER, stage: stage ?? "all", ids, label });
+                setFilter({ ...NO_FILTER, ids, label });
                 document.getElementById("candidate-table")?.scrollIntoView({ behavior: "smooth", block: "start" });
               }}
             />

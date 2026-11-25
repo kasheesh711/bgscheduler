@@ -7,13 +7,13 @@ import { buildGems, schoolStrength, type Gem, type GemKind } from "@/lib/hiring/
 import { buildNextEmails, type EmailKind, type NextEmail } from "@/lib/hiring/next-emails";
 import { buildForecast, type ForecastRow } from "@/lib/hiring/forecast";
 import type { CapacityReport } from "@/lib/hiring/capacity";
-import { ZONE, type Stage } from "@/lib/hiring/model";
+import { ZONE } from "@/lib/hiring/model";
 import { groupOptions, pickGroup } from "./funnel-panel";
 import type { HiringData } from "./dashboard";
 import css from "./overview-analytics.module.css";
 
 /** Filters the candidate table below to these ids; `label` names them in the filter line. */
-type Show = (ids: string[], label: string, stage?: Stage) => void;
+type Show = (ids: string[], label: string) => void;
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 const CLOSED = new Set(STUCK_RULES.filter((r) => r.days === null).map((r) => r.stage));
 const DAY = 86_400_000;
@@ -57,12 +57,15 @@ export function OverviewAnalytics({
     () => new Date(Math.max(now.getTime(), data.workerAt ? new Date(data.workerAt).getTime() + 15 * 60_000 : now.getTime())),
     [data, now],
   );
+  // A worker silent for over an hour (or never run) gives no time to promise.
+  const workerLate = !data.workerAt || now.getTime() - new Date(data.workerAt).getTime() > 60 * 60_000;
   const emails = useMemo(() => buildNextEmails(data, now, nextRun), [data, now, nextRun]);
   const paused = !data.config.enabled || !data.config.deliveryEnabled;
   const forecast = useMemo(
     () =>
       buildForecast(
-        data.candidates,
+        // Only people in the window the rates come from; months-old rows would count at today's rates.
+        data.candidates.filter((c) => new Date(c.createdAt).getTime() >= new Date(report.windowStart).getTime()),
         report.groups.all,
         // A subject Capacity could not measure has no need, not a need of 0.
         capacity?.needs.filter((n) => n.status !== "unknown").map((n) => ({ subject: n.subject, hire: n.hire })) ?? null,
@@ -70,7 +73,7 @@ export function OverviewAnalytics({
     [data, report, capacity],
   );
   // Subjects the pipeline is unlikely to cover: their gems come first.
-  const short = useMemo(() => new Set(forecast.filter((r) => r.chance !== null && r.chance < 0.3).map((r) => r.subject)), [forecast]);
+  const short = useMemo(() => new Set(forecast.filter((r) => r.chance !== null && Math.round(r.chance * 100) < 30).map((r) => r.subject)), [forecast]);
   const scoreOf = useMemo(() => new Map(data.candidates.map((c) => [c.id, c.profileScore])), [data]);
   return (
     <div className={css.board}>
@@ -122,7 +125,7 @@ export function OverviewAnalytics({
           </h2>
           <span className={css.dim}>Bangkok time</span>
         </header>
-        <Emails rows={emails} scoreOf={scoreOf} pass={data.config.profileThreshold} now={now} onOpen={onOpen} onShow={onShow} />
+        <Emails rows={emails} scoreOf={scoreOf} pass={data.config.profileThreshold} now={now} workerLate={workerLate} onOpen={onOpen} onShow={onShow} />
       </section>
       </div>
     </div>
@@ -167,7 +170,7 @@ function Pulse({ data, report, now, onShow }: { data: HiringData; report: Funnel
   return (
     <div className={css.pulse}>
       <div className={css.total}>
-        <b>{all.length}</b> candidates <span className={css.dim}>· all campaigns</span>
+        <b>{all.length}</b> candidates <span className={css.dim}>· all campaigns{report.capped ? " · newest only, counts can be low" : ""}</span>
       </div>
       {items.map((item) => (
         <button key={item.label} type="button" className={css.stat} onClick={() => onShow(item.ids, item.label)}>
@@ -187,7 +190,7 @@ function Pulse({ data, report, now, onShow }: { data: HiringData; report: Funnel
         {state(data.config.deliveryEnabled, "Email")}
         <span className={minutes !== null && minutes <= 60 ? css.on : css.off}>
           <i aria-hidden />
-          Worker {minutes === null ? "never ran" : minutes < 90 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`}
+          Worker {minutes === null ? "never ran" : minutes <= 60 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`}
         </span>
         <span className={problems ? css.off : css.on}>
           <i aria-hidden />
@@ -308,7 +311,7 @@ const KINDS = Object.keys(KIND) as EmailKind[];
 const LIMIT: Record<string, string> = { perDay: "daily limit", perWeek: "weekly limit", perSubject: "subject full", waiting: "waiting limit", unbooked: "not-booked limit" };
 
 /** Bars per day (stacked by email kind, one scale) over the send list. A day bar filters the list. */
-function Emails({ rows, scoreOf, pass, now, onOpen, onShow }: { rows: NextEmail[]; scoreOf: Map<string, number | null>; pass: number; now: Date; onOpen: (id: string) => void; onShow: Show }) {
+function Emails({ rows, scoreOf, pass, now, workerLate, onOpen, onShow }: { rows: NextEmail[]; scoreOf: Map<string, number | null>; pass: number; now: Date; workerLate: boolean; onOpen: (id: string) => void; onShow: Show }) {
   const [day, setDay] = useState<string | null>(null);
   const [all, setAll] = useState(false);
   const key = (d: Date) => formatInTimeZone(d, ZONE, "yyyy-MM-dd");
@@ -323,7 +326,9 @@ function Emails({ rows, scoreOf, pass, now, onOpen, onShow }: { rows: NextEmail[
     return { ...c, list, kinds: KINDS.map((k) => list.filter((r) => r.kind === k).length) };
   });
   const max = Math.max(1, ...cols.map((c) => c.list.length));
-  const shown = day ? rows.filter((r) => colOf(r) === day) : rows;
+  // A reload can empty the chosen day: then show every row again.
+  const picked = day && rows.some((r) => colOf(r) === day) ? day : null;
+  const shown = picked ? rows.filter((r) => colOf(r) === picked) : rows;
   const list = all ? shown : shown.slice(0, 6);
   const why = (r: NextEmail) =>
     r.why === "sending" ? "written, not yet sent"
@@ -338,6 +343,7 @@ function Emails({ rows, scoreOf, pass, now, onOpen, onShow }: { rows: NextEmail[
     r.why === "check" ? "Needs a look"
     : r.why === "retry" ? "Retrying"
     : !r.at ? "When a place opens"
+    : workerLate && (r.why === "next_run" || r.why === "sending" || r.overdue) ? "When the worker runs"
     : r.overdue ? `Overdue · ${time(r.at)}`
     : r.why === "perDay" || r.why === "perWeek" ? `Earliest ${time(r.at)}`
     : time(r.at);
@@ -349,9 +355,9 @@ function Emails({ rows, scoreOf, pass, now, onOpen, onShow }: { rows: NextEmail[
             key={c.key}
             type="button"
             className={css.dayCol}
-            aria-pressed={day === c.key}
+            aria-pressed={picked === c.key}
             aria-label={`${c.label}: ${c.list.length} emails`}
-            onClick={() => setDay(day === c.key ? null : c.key)}
+            onClick={() => setDay(picked === c.key ? null : c.key)}
             disabled={!c.list.length}
           >
             <span className={css.dayN}>{c.list.length || ""}</span>
@@ -386,7 +392,7 @@ function Emails({ rows, scoreOf, pass, now, onOpen, onShow }: { rows: NextEmail[
             {all ? "Show fewer" : `Show all ${shown.length}`}
           </button>
         )}
-        <button type="button" className={css.more} onClick={() => onShow(shown.map((r) => r.id), "Next emails")}>
+        <button type="button" className={css.more} onClick={() => onShow([...new Set(shown.map((r) => r.id))], "Next emails")}>
           Open in table
         </button>
       </div>
@@ -615,8 +621,10 @@ function Forecast({ rows, capacity, offers, onShow }: { rows: ForecastRow[]; cap
           <span role="columnheader" className={css.num}>Pool</span>
         </div>
         {shown.map((r) => (
-          <button type="button" key={r.subject} className={css.fcRow} role="row" onClick={() => onShow(r.ids, `${r.subject} pipeline`)}>
-            <span role="cell" className={css.stageName}>{r.subject}</span>
+          <div key={r.subject} className={css.fcRow} role="row">
+            <span role="cell" className={css.stageName}>
+              <button type="button" className={css.link} onClick={() => onShow(r.ids, `${r.subject} pipeline`)}>{r.subject}</button>
+            </span>
             <span role="cell" className={css.barCell}>
               <span className={css.track} title={`${r.expected.toFixed(1)} expected · likely ${r.low}–${r.high}`}>
                 <span className={tone(r)} style={{ width: pct(r.expected / max) }} />
@@ -630,7 +638,7 @@ function Forecast({ rows, capacity, offers, onShow }: { rows: ForecastRow[]; cap
             </span>
             <b role="cell" className={`${css.num} ${toneText(r)}`}>{r.chance === null ? "–" : `${offers < 10 ? "~" : ""}${pct(r.chance)}`}</b>
             <span role="cell" className={`${css.num} ${css.dim}`}>{r.pipeline}</span>
-          </button>
+          </div>
         ))}
       </div>
       <div className={css.mailFoot}>
@@ -639,7 +647,7 @@ function Forecast({ rows, capacity, offers, onShow }: { rows: ForecastRow[]; cap
             {all ? "Only subjects with a need" : `Show all ${rows.length} subjects`}
           </button>
         )}
-        {!hasNeed && <span className={css.dim}>Need shows when Capacity loads.</span>}
+        {!hasNeed && <span className={css.dim}>No need yet: open Capacity to load it.</span>}
       </div>
     </>
   );

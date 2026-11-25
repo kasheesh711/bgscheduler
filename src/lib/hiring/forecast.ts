@@ -16,10 +16,7 @@ const STEP_OF: Partial<Record<Stage, FunnelStep>> = {
   pre_screen: "contacted",
   onsite_invited: "onsite_invited",
   onsite_booked: "visit_booked",
-  paper_invited: "onsite_invited",
-  paper_booked: "visit_booked",
-  paper_passed: "visited",
-  mock_booked: "visited",
+  // Old-flow tracker rows (paper_*, mock_booked) have no decision path: they are left out.
 };
 
 export type ForecastRow = {
