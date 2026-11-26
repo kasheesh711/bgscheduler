@@ -161,6 +161,10 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
   const compactQueue = offer || prescreen;
   const offerLoadFailed = offer && (data ? data.offers == null : !!error);
   const loaded = !!data;
+  const [overviewOpened, setOverviewOpened] = useState(false);
+  useEffect(() => {
+    if (loaded && view === "overview") setOverviewOpened(true);
+  }, [loaded, view]);
   const [messageKey, setMessageKey] = useState<string | null>();
   // Next.js keeps useSearchParams in step with pushState, and this does not reload the page.
   const setView = (name: HiringView, keepRole = false) => {
@@ -308,13 +312,15 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
     }
   }
 
-  const insights = useMemo(() => (data ? buildInsights(data) : null), [data]);
-  const ready = useMemo(
-    () =>
-      new Set(
-        data?.candidates.filter((c) => readyToInvite(c, data.config)).map((c) => c.id) ?? [],
-      ),
-    [data],
+  const { observedAt, ready } = useMemo(() => ({
+    observedAt: new Date(),
+    ready: new Set(data?.candidates.filter((c) => readyToInvite(c, data.config)).map((c) => c.id) ?? []),
+  }), [data]);
+  const showOverview = view === "overview" || overviewOpened;
+  const needsInsights = showOverview || view === "setup";
+  const insights = useMemo(
+    () => data && needsInsights ? buildInsights(data, observedAt, ready.size) : null,
+    [data, needsInsights, observedAt, ready],
   );
   const extras = useMemo(
     () =>
@@ -516,7 +522,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
           }}>Try again</button>
           <p role="status">{retrying ? (prescreen ? "Loading pre-screen…" : "Loading offers…") : ""}</p>
         </div>
-      ) : !data || !config || !insights ? (
+      ) : !data || !config ? (
         error ? (
           view === "heads" ? (
             // A head cannot check the setup, so the list offers a retry and names who to ask (Sol review, round 18).
@@ -563,7 +569,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
           />
         )}
         {/* Moved from the Overview (25 Nov 2026): send limits and system state, beside the rules that set them. */}
-        {view === "setup" && (
+        {view === "setup" && insights && (
           <div className={css.layout}>
             <div className={css.main}>
               <LimitMeters usage={data.usage} headMocks={data.headMocks} config={data.config} tutors={data.tutors} />
@@ -610,10 +616,12 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
         <div hidden={view !== "assessment"} className={css.viewPane}>
           <AssessmentScreen data={data} selectedVisit={assessmentVisit} onSelectVisit={setAssessmentVisit} onOpenRecord={openRecord} command={command} reload={reload} busy={busy} />
         </div>
-        <div className={css.layout} hidden={view !== "overview"}>
+        {/* Keep the Overview state after its first visit, including its search, sort and open résumé. */}
+        {showOverview && insights && <div className={css.layout} hidden={view !== "overview"}>
           <div className={css.main}>
             <OverviewAnalytics
               data={data}
+              now={observedAt}
               capacity={capacity}
               onOpen={setSelected}
               onShow={(ids, label, opener, timingEvidence) => {
@@ -683,7 +691,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
               retentionMonths={data.config.resumeRetentionMonths}
             />
           ) : null}
-        </div>
+        </div>}
         </>
       )}
     </div>

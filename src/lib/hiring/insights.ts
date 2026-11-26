@@ -197,7 +197,11 @@ export function readyToInvite(
   );
 }
 
-export function buildInsights(input: InsightInput, now = new Date()) {
+export function buildInsights(
+  input: InsightInput,
+  now = new Date(),
+  ready = input.candidates.filter((c) => readyToInvite(c, input.config)).length,
+) {
   const { candidates, config } = input;
   const threshold = config.profileThreshold;
   // No reply and No booking stay in `active`: a late reply is scored and a click sends a new link. `parked` says how many they are.
@@ -272,7 +276,7 @@ export function buildInsights(input: InsightInput, now = new Date()) {
       : sorted.length % 2
         ? sorted[mid]
         : (sorted[mid - 1] + sorted[mid]) / 2,
-    ready: candidates.filter((c) => readyToInvite(c, config)).length,
+    ready,
     pastReview: stages.find((s) => s.stage === "pre_screen")?.reached ?? 0,
     stages,
     histogram,
