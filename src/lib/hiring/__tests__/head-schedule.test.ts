@@ -438,7 +438,7 @@ describe("dashboard with a failing clash check", () => {
       startTime: future,
       endTime: new Date(future.getTime() + 3600_000),
     };
-    const rows = new Map<unknown, unknown[]>([[s.hiringBookings, [mock]]]);
+    const rows = new Map<unknown, unknown[]>([[s.hiringBookings, [{ ...mock, recent: true }]]]);
     // Any chain of where/orderBy/limit resolves to the table's rows; the sit-in table rejects.
     const chain = (table: unknown): unknown =>
       new Proxy(() => {}, {
@@ -449,7 +449,12 @@ describe("dashboard with a failing clash check", () => {
               : (ok: (v: unknown[]) => void) => ok(rows.get(table) ?? [])
             : () => chain(table),
       });
-    const db = { select: () => ({ from: (table: unknown) => chain(table) }) };
+    const select = () => ({ from: (table: unknown) => chain(table) });
+    const db = {
+      select,
+      $with: () => ({ as: () => ({ id: mock.id }) }),
+      with: () => ({ select }),
+    };
     const { dashboard } = await import("../service");
     const data = await dashboard(db as never);
     expect(data.visitClashes).toEqual({ candidateIds: [], bookingIds: [], stale: true });

@@ -188,6 +188,8 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
     }
   }, [demo, param, hash, reviewLink, loaded, giftOnly, head, headParam]);
   const [selected, setSelected] = useState<string | null>(null);
+  const [recordAttempt, setRecordAttempt] = useState(0);
+  const [fetchedRecord, setFetchedRecord] = useState<{ id: string; data: HiringData; attempt: number; candidate: HiringCandidate | null } | null>(null);
   const [assessmentVisit, setAssessmentVisit] = useState<string | null>(null);
   // The candidate whose résumé viewer is open. It loads the file only on request.
   const [resumeFor, setResumeFor] = useState<string | null>(null);
@@ -352,7 +354,27 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
     focusCandidateResults();
   }
 
-  const candidate = data?.candidates.find((c) => c.id === selected);
+  const localCandidate = data?.candidates.find((c) => c.id === selected) ?? data?.assessmentCandidates?.find((c) => c.id === selected);
+  const recordId = view === "overview" && !localCandidate ? selected : null;
+  useEffect(() => {
+    if (!recordId || !data) return;
+    const request = new AbortController();
+    async function readRecord(id: string, snapshot: HiringData) {
+      let candidate: HiringCandidate | null = null;
+      try {
+        const response = await fetch(`/api/hiring?candidateId=${encodeURIComponent(id)}&record=1`, { cache: "no-store", signal: request.signal });
+        if (response.ok) ({ candidate } = await response.json());
+      } catch {
+        // A failed read stays in the panel with a retry.
+      }
+      if (!request.signal.aborted) setFetchedRecord({ id, data: snapshot, attempt: recordAttempt, candidate });
+    }
+    void readRecord(recordId, data);
+    return () => request.abort();
+  }, [data, recordAttempt, recordId]);
+  const sameRecord = fetchedRecord?.id === selected ? fetchedRecord : null;
+  const recordPending = !!recordId && (sameRecord?.data !== data || sameRecord?.attempt !== recordAttempt);
+  const candidate = localCandidate ?? sameRecord?.candidate;
   // Next.js commits pushState in a transition. In one transition, the panel mounts visible, so it can take focus.
   const openRecord = (id: string) =>
     startTransition(() => {
@@ -614,7 +636,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
           <RunSheetScreen data={data} />
         </div>
         <div hidden={view !== "assessment"} className={css.viewPane}>
-          <AssessmentScreen data={data} selectedVisit={assessmentVisit} onSelectVisit={setAssessmentVisit} onOpenRecord={openRecord} command={command} reload={reload} busy={busy} />
+          <AssessmentScreen data={data} selectedVisit={assessmentVisit} onSelectVisit={setAssessmentVisit} onOpenRecord={openRecord} command={command} reload={reload} busy={busy} active={view === "assessment"} />
         </div>
         {/* Keep the Overview state after its first visit, including its search, sort and open résumé. */}
         {showOverview && insights && <div className={css.layout} hidden={view !== "overview"}>
@@ -678,7 +700,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
               seekJobId={data.config.seekJobs[0].jobId}
               weights={data.config.profileWeights}
               preWeights={data.config.preScreenWeights}
-              busy={busy}
+              busy={busy || recordPending}
               error={error}
               notice={notice}
               command={command}
@@ -690,6 +712,19 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
               onResumeToggle={(open) => setResumeFor(open ? candidate.id : null)}
               retentionMonths={data.config.resumeRetentionMonths}
             />
+          ) : recordId ? (
+            <aside className={`${css.inspector} ${css.seekPanel}`} aria-label="Candidate record">
+              <div className={css.inspectorHead}>
+                <h2 className={css.inspectorName}>Candidate record</h2>
+                <button className={css.inlineLink} type="button" onClick={() => setSelected(null)}>Close</button>
+              </div>
+              <div className={css.inspectorBody}>
+                {recordPending ? <p role="status">Loading candidate record…</p> : <>
+                  <p role="alert">Could not load the candidate record.</p>
+                  <button className={css.secondary} type="button" onClick={() => setRecordAttempt((attempt) => attempt + 1)}>Try again</button>
+                </>}
+              </div>
+            </aside>
           ) : null}
         </div>}
         </>
