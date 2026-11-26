@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrivals, assessmentRows, bangkokDay, hireBlockers, laneOf, paperScore } from "../assessment-view";
+import { arrivals, assessmentPaperResults, assessmentRows, bangkokDay, hireBlockers, laneOf, paperScore, todayPaperTests } from "../assessment-view";
 import { LEGACY_RUBRIC_ITEMS, RUBRIC_ITEMS, type MockRubric } from "../marking-sheet";
 
 const NOW = new Date("2026-11-04T05:00:00Z"); // Wednesday, noon in Bangkok.
@@ -51,6 +51,37 @@ describe("assessmentRows", () => {
     const tracker = (candidateId: string) => ({ ...result("done", "tracker"), candidateId });
     const rows = assessmentRows(visit("v", "booked", "2026-11-05T03:00:00Z"), [tracker("h"), tracker("booked")], [tracker("h")], NOW);
     expect(rows.map((r) => r.key)).toEqual(["v", "history:h"]);
+  });
+});
+
+describe("assessment admin records", () => {
+  it("shows confirmed paper bookings across the Bangkok day regardless of the queue or results", () => {
+    const booking = (id: string, startTime: string, status = "confirmed") => ({ ...visit(id, id, startTime, { status })[0], id });
+    const last = { ...booking("last", "2026-11-04T16:59:00Z"), visitId: null, endTime: at("2026-11-04T17:59:00Z") };
+    const rows = [last, booking("tomorrow", "2026-11-04T17:00:00Z"), booking("yesterday", "2026-11-03T16:59:00Z"),
+      booking("first", "2026-11-03T17:00:00Z"), booking("no-show", "2026-11-04T04:00:00Z", "no_show"),
+      booking("cancelled", "2026-11-04T04:00:00Z", "cancelled"), ...visit("mock", "mock", "2026-11-04T03:00:00Z").slice(1)];
+    const tests = todayPaperTests(rows, NOW);
+    expect(tests.map((test) => test.candidateId)).toEqual(["first", "last"]);
+    expect(tests[1]).toMatchObject({ key: assessmentRows([last], [], [], NOW)[0].key, start: last.startTime, end: last.endTime });
+  });
+
+  it("opens an older linked paper at its own booking and leaves an unlinked result undated", () => {
+    const bookings = [
+      { ...visit("first", "c", "2026-11-02T03:00:00Z")[0], id: "old" },
+      { ...visit("next", "c", "2026-11-06T03:00:00Z")[0], id: "new" },
+    ];
+    const papers = [
+      { ...result(), id: "first-result", bookingId: "old", updatedAt: "2026-11-03T00:00:00Z" },
+      { ...result(), id: "unlinked", bookingId: null, updatedAt: "2026-11-04T00:00:00Z" },
+      { ...result("done", "tracker"), id: "history", candidateId: "former", bookingId: null, updatedAt: "2026-11-05T00:00:00Z", history: { date: "Oct 2026" } },
+    ];
+    const entries = assessmentPaperResults(papers, bookings, assessmentRows(bookings, papers, [], NOW));
+    expect(entries.map(({ paper, row }) => [paper.id, row.key, row.candidateId, row.at, row.dateText])).toEqual([
+      ["unlinked", "paper-result:unlinked", "c", null, null],
+      ["first-result", "first", "c", bookings[0].startTime, null],
+      ["history", "paper-result:history", "former", null, "Oct 2026"],
+    ]);
   });
 });
 
@@ -140,6 +171,12 @@ describe("paperScore", () => {
     const passing = { ...paper([q("IGCSE / GCSE", 45, 49)]), updatedAt: "2026-11-04T05:00:00Z" };
     expect(paperScore(passing, config, { resultId: "p", percent: 75.5, done: { passed: false, percent: 75.5, head: "Kru Aey", at: "2026-11-03T05:00:00Z" } })).toMatchObject({ verdict: "pass", percent: 91.8 });
     expect(paperScore(passing, config, { resultId: "p", percent: 75.5, done: { passed: true, percent: 99, head: "Kru Aey", at: "2026-11-05T05:00:00Z" } })).toMatchObject({ verdict: "pass", percent: 91.8, head: "Kru Aey" });
+  });
+  it("uses an override only for the version of the marks the head checked", () => {
+    const current = { ...paper([q("IGCSE / GCSE", 37, 49)]), updatedAt: "2026-11-04T05:00:00Z" };
+    const done = { passed: true, percent: 75.5, head: "Kru Aey", at: "2026-11-05T05:00:00Z", override: "Approved" };
+    expect(paperScore(current, config, { resultId: "p", percent: 75.5, done: { ...done, marksAt: current.updatedAt } }).verdict).toBe("pass");
+    expect(paperScore(current, config, { resultId: "p", percent: 75.5, done: { ...done, marksAt: "2026-11-04T04:00:00Z" } }).verdict).toBe("fail");
   });
   it("says marking, failed or needs check before any verdict", () => {
     expect(paperScore(paper([], "marking"), config).verdict).toBe("marking");

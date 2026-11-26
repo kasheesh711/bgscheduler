@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatInTimeZone } from "date-fns-tz";
-import { AlertTriangle, Check, Clock, X } from "lucide-react";
-import { arrivals, assessmentRows, bangkokDay, hireBlockers, LANES, laneOf, mockScore, paperScore, type AssessmentRow, type Lane, type PaperScore, type Verdict } from "@/lib/hiring/assessment-view";
+import { AlertTriangle, Check, Clock, Search, X } from "lucide-react";
+import { arrivals, assessmentPaperResults, assessmentRows, bangkokDay, hireBlockers, LANES, laneOf, mockScore, paperCheckIsStale, paperScore, todayPaperTests, type AssessmentRow, type Lane, type PaperScore, type Verdict } from "@/lib/hiring/assessment-view";
+import { demoFetchInstalled } from "@/lib/hiring/demo";
 import { FinalReview, reviewBlocks } from "./final-review";
 import { RUBRIC, computeSheet, passRulesFor, rubricItems, rubricTotals, type LevelResult, type MockRubric, type RubricItem, type StressTicks } from "@/lib/hiring/marking-sheet";
 import { STRESS_ELEMENTS } from "@/lib/hiring/rubric-guide";
@@ -11,6 +12,7 @@ import { isDecided, SUBJECTS, ZONE, type Subject } from "@/lib/hiring/model";
 import { markAgain, runMarking, type ResultKind } from "./assessment-setup";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
 import { HeadSchedules } from "./head-schedules";
+import { useMinute } from "./use-minute";
 import css from "./dashboard.module.css";
 import a from "./assessment.module.css";
 
@@ -28,6 +30,8 @@ const STATUS: Record<Paper["status"], { label: string; tone: string }> = {
   needs_check: { label: "Needs check", tone: css.warnWord },
   failed: { label: "Failed", tone: css.errorText },
 };
+type SearchCandidate = Pick<HiringCandidate, "id" | "name" | "email" | "visitSubject">;
+const SEARCH_LIMIT = 25;
 const LEVEL: Record<LevelResult, { label: string; tone: string }> = {
   passed: { label: "Passed", tone: css.goodWord },
   not_passed: { label: "Below pass mark", tone: css.errorText },
@@ -234,6 +238,7 @@ function MarksEditor({ paper, command, busy, onDone }: { paper: Paper; command: 
 
 export function PaperSheetView({ paper, taken = [], config, command, reload, busy, check }: { paper: Paper; taken?: string[]; config: HiringData["config"]; command: Command; reload: Reload; busy: boolean; check?: PaperCheck }) {
   const stuck = paper.stuck;
+  const previousCheck = paperCheckIsStale(paper, check);
   const sheet = paper.marks ? computeSheet(paper.marks, passRulesFor(config, paper.subject)) : null;
   const score = sheet ? paperScore(paper, config, check) : null;
   // One pass mark for every level is already in the summary, so the column only shows when levels differ.
@@ -315,7 +320,7 @@ export function PaperSheetView({ paper, taken = [], config, command, reload, bus
           {check && (
             <p className={check.done ? css.inspectorNote : css.warnWord} data-paper-check="">
               {check.done ? (
-                <>{checkWords(check)}. {check.done.passed ? "The candidate goes on to mock teaching." : "The rejection email was queued."}</>
+                <>{previousCheck && "Previous check. "}{checkWords(check)}.{!previousCheck && (check.done.passed ? " The candidate goes on to mock teaching." : " The rejection email was queued.")}</>
               ) : (
                 <>
                   {check.headLabel ? `With ${nick(check.headLabel)}${check.line ? " in LINE" : ". No LINE group is set up, so send the link yourself"}` : "No head covers this subject"}. Mock stays booked.{" "}
@@ -762,6 +767,7 @@ function AssessmentPanel({
   candidate,
   row,
   papers,
+  paperId,
   mocks,
   data,
   command,
@@ -772,6 +778,7 @@ function AssessmentPanel({
   candidate: HiringCandidate;
   row: AssessmentRow;
   papers: Paper[];
+  paperId?: string;
   mocks: Mock[];
   data: HiringData;
   command: Command;
@@ -779,14 +786,35 @@ function AssessmentPanel({
   busy: boolean;
   onClose: () => void;
 }) {
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { heading.current?.focus(); }, [paperId]);
+  const leadPaper = papers.find((paper) => paper.id === paperId);
+  const orderedPapers = leadPaper ? [leadPaper, ...papers.filter((paper) => paper.id !== paperId)] : papers;
+  const times = [
+    row.at && (!row.mockAt || row.kinds.includes("paper")) && `Paper test ${when(row.at)}`,
+    row.mockAt && `Mock ${when(row.mockAt)}`,
+  ].filter(Boolean).join(" · ");
+  const hasMock = [...data.bookings, ...(data.assessmentBookings ?? [])].some((booking) => booking.candidateId === candidate.id && booking.kind === "mock" && booking.status === "confirmed");
   return (
-    <aside className={`${css.inspector} ${css.seekPanel} ${a.panel}`} aria-label={`Assessment of ${candidate.name}`}>
+    <aside className={`${css.inspector} ${css.seekPanel} ${a.panel}`} aria-label={`Assessment of ${candidate.name}`} onKeyDown={(event) => {
+      if (event.key === "Escape" && !event.defaultPrevented) {
+        event.preventDefault();
+        onClose();
+      }
+      if (event.key === "Tab" && !event.ctrlKey && !event.metaKey && window.matchMedia("(max-width: 719px)").matches) {
+        const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("a[href], button, input, select, textarea, summary, [tabindex='0']"))
+          .filter((element) => !element.matches(":disabled") && element.getClientRects().length > 0 && getComputedStyle(element).visibility === "visible");
+        const index = controls.findIndex((element) => element === document.activeElement);
+        if (event.shiftKey ? index <= 0 : index === controls.length - 1) {
+          event.preventDefault();
+          (event.shiftKey ? controls.at(-1) : controls[0])?.focus();
+        }
+      }
+    }}>
       <header className={css.inspectorHead}>
         <div>
-          <h2 className={css.inspectorName}>{candidate.name}</h2>
-          <p className={css.inspectorMeta}>
-            {row.at ? `Paper test ${when(row.at)}` : row.dateText || "Date not known"}{row.mockAt ? ` · Mock ${when(row.mockAt)}` : ""}
-          </p>
+          <h2 className={css.inspectorName} ref={heading} tabIndex={-1}>{candidate.name}</h2>
+          <p className={css.inspectorMeta}>{times || row.dateText || "No test date recorded"}</p>
         </div>
         <button type="button" className={css.inlineLink} onClick={onClose}>
           Close
@@ -794,14 +822,14 @@ function AssessmentPanel({
       </header>
       <div className={css.inspectorBody}>
         {!papers.length && <p className={css.inspectorText}>No paper result yet.</p>}
-        {papers.map((paper) => (
+        {orderedPapers.map((paper) => (
           <PaperSheetView key={paper.id} paper={paper} taken={papers.filter((other) => other.id !== paper.id && other.source !== "tracker").map((other) => other.subject)} config={data.config} command={command} reload={reload} busy={busy} check={checkOf(paper, data.paperChecks)} />
         ))}
         {candidate.stage === "onsite_booked" && papers.some((paper) =>
           paper.subject === row.subject && paper.status === "done" && paper.fileId && paper.marks &&
           // A head's override passes a near miss too (Kevin, 25 Nov 2026).
           paperScore(paper, data.config, checkOf(paper, data.paperChecks)).verdict === "pass"
-        ) && !data.bookings.some((booking) => booking.candidateId === candidate.id && booking.kind === "mock" && booking.status === "confirmed") && (
+        ) && !hasMock && (
           <button type="button" className={css.primary} disabled={busy} onClick={() => {
             if (window.confirm("Confirm the paper pass and invite this candidate to mock teaching?"))
               void command({ action: "paper_pass", id: candidate.id, revision: candidate.revision, subjects: [row.subject as Subject], reason: "Confirmed graded paper pass." });
@@ -907,6 +935,7 @@ const LANE_TITLE: Record<Exclude<Lane, "upcoming" | "finished">, string> = {
   decide: "Ready to decide",
   waiting: "Waiting on others",
 };
+const RECENT_RESULTS = 5;
 
 export function AssessmentScreen({
   data,
@@ -916,6 +945,7 @@ export function AssessmentScreen({
   command,
   reload,
   busy,
+  active = true,
   now: fixedNow,
 }: {
   data: HiringData;
@@ -925,20 +955,101 @@ export function AssessmentScreen({
   command: Command;
   reload: Reload;
   busy: boolean;
+  active?: boolean;
   now?: Date;
 }) {
   const [mode, setMode] = useState<"list" | "calendar">("list");
   const [head, setHead] = useState("");
-  const now = fixedNow ?? new Date();
+  const [query, setQuery] = useState("");
+  const [lookup, setLookup] = useState<{ search: string; candidates: SearchCandidate[]; failed?: boolean } | null>(null);
+  const [resultView, setResultView] = useState<"recent" | "final" | "pending">("recent");
+  const resultHeading = useRef<HTMLHeadingElement>(null);
+  const [openPaper, setOpenPaper] = useState<{ key: string; id: string } | null>(null);
+  const opener = useRef<HTMLButtonElement | null>(null);
+  const minute = useMinute();
+  const now = useMemo(() => fixedNow ?? new Date(minute * 60000), [fixedNow, minute]);
 
-  const rows = useMemo(() => assessmentRows(data.bookings, data.papers, data.mocks, fixedNow), [data.bookings, data.papers, data.mocks, fixedNow]);
+  const rows = useMemo(() => assessmentRows(data.bookings, data.papers, data.mocks, now), [data.bookings, data.papers, data.mocks, now]);
+  const bookings = useMemo(() => [...data.bookings, ...(data.assessmentBookings ?? [])], [data.bookings, data.assessmentBookings]);
+  const allRows = useMemo(() => bookings.length === data.bookings.length ? rows : assessmentRows(bookings, data.papers, data.mocks, now), [bookings, data.bookings.length, rows, data.papers, data.mocks, now]);
+  const paperResults = useMemo(() => assessmentPaperResults(data.papers, bookings, allRows), [data.papers, bookings, allRows]);
+  const todayTests = todayPaperTests(bookings, now);
+  const testsToPrint = todayTests.filter((booking) => booking.start > now);
+  const nextTest = testsToPrint[0];
   const papers = useMemo(() => byCandidate(data.papers), [data.papers]);
   const mocks = useMemo(() => byCandidate(data.mocks), [data.mocks]);
-  const names = useMemo(() => new Map(data.candidates.map((c) => [c.id, c])), [data.candidates]);
+  const names = useMemo(() => new Map([...data.candidates, ...(data.assessmentCandidates ?? [])].map((c) => [c.id, c])), [data.candidates, data.assessmentCandidates]);
   const heads = useMemo(() => new Map(data.tutors.map((t) => [t.canonicalKey, t.name])), [data.tutors]);
   // A sent decision, or a closed record (stopped, hired, rejected), is not work any more.
   const decided = useMemo(() => new Set([...data.decisions.filter((d) => d.status === "sent").map((d) => d.candidateId), ...data.candidates.filter((c) => c.stage === "stopped" || isDecided(c.stage)).map((c) => c.id)]), [data.decisions, data.candidates]);
   const headName = (key: string | null) => (key ? (heads.get(key) ?? key) : null);
+  const checks = useMemo(() => new Map(data.paperChecks.map((check) => [check.resultId, check])), [data.paperChecks]);
+  const results = useMemo(() => paperResults.flatMap(({ paper, row }) => {
+    const person = names.get(paper.candidateId);
+    if (!person) return [];
+    const score = paperScore(paper, data.config, checks.get(paper.id));
+    if (paper.stuck) score.verdict = "failed";
+    return [{ paper, row, person, score }];
+  }), [paperResults, names, data.config, checks]);
+  const isFinal = ({ score }: (typeof results)[number]) => score.verdict === "pass" || score.verdict === "fail" || score.verdict === "recorded";
+  const finalResults = results.filter(isFinal);
+  const pendingResults = results.length - finalResults.length;
+  const listedResults = resultView === "pending" ? results.filter((entry) => !isFinal(entry)) : resultView === "final" ? finalResults : finalResults.slice(0, RECENT_RESULTS);
+
+  const search = query.trim().normalize().toLowerCase();
+  const demo = demoFetchInstalled();
+  useEffect(() => {
+    if (!active || mode !== "list" || !search || demo) return;
+    const request = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/hiring?candidateSearch=${encodeURIComponent(search)}`, { cache: "no-store", signal: request.signal });
+        if (!response.ok) throw new Error();
+        const { candidates } = await response.json() as { candidates: SearchCandidate[] };
+        if (!request.signal.aborted) setLookup({ search, candidates });
+      } catch {
+        if (!request.signal.aborted) setLookup({ search, candidates: [], failed: true });
+      }
+    }, 200);
+    return () => {
+      window.clearTimeout(timer);
+      request.abort();
+    };
+  }, [active, demo, mode, search]);
+  const searchResponse = lookup?.search === search ? lookup : null;
+  const localMatches = search ? [...names.values()].filter((person) =>
+    [person.name, person.email].some((value) => value?.normalize().toLowerCase().includes(search)),
+  ).sort((left, right) => left.name.localeCompare(right.name)).slice(0, SEARCH_LIMIT) : [];
+  const matches = !demo && searchResponse && !searchResponse.failed ? searchResponse.candidates : localMatches;
+  let lookupStatus = `${matches.length} ${matches.length === 1 ? "candidate" : "candidates"} found`;
+  if (searchResponse?.failed && !demo) lookupStatus = "Could not search all candidates. Only matches from this page are shown.";
+  else if (!searchResponse && !demo) lookupStatus = "Searching candidates…";
+  else if (!matches.length) lookupStatus = "No candidates match.";
+  else if (matches.length === SEARCH_LIMIT) lookupStatus = "Showing up to 25 matches. Enter more of the name or email.";
+  const matchRows = matches.map((person) => {
+    const result = results.find(({ paper }) => paper.candidateId === person.id);
+    const visits = allRows.filter((visit) => visit.candidateId === person.id && visit.kinds.includes("paper"));
+    const row = result?.row ?? visits.find((visit) => visit.status === "confirmed") ?? visits[0];
+    return { person, row, result };
+  });
+
+  function openVisit(button: HTMLButtonElement, key: string, paperId?: string) {
+    opener.current = button;
+    setOpenPaper(paperId ? { key, id: paperId } : null);
+    onSelectVisit(key);
+  }
+
+  function closeVisit() {
+    onSelectVisit(null);
+    setOpenPaper(null);
+    if (opener.current?.isConnected) opener.current.focus();
+    opener.current = null;
+  }
+
+  function showResults(view: typeof resultView) {
+    setResultView(view);
+    window.requestAnimationFrame(() => resultHeading.current?.focus({ preventScroll: true }));
+  }
 
   // A row with a visit shows that visit's results. A past tracker result is in the panel.
   const rowPapers = (row: AssessmentRow) => (papers.get(row.candidateId) ?? []).filter((paper) => row.history || paper.source !== "tracker");
@@ -969,15 +1080,15 @@ export function AssessmentScreen({
   const week = Array.from({ length: 7 }, (_, i) => new Date(bangkokDay(now).getTime() + i * 86400000));
   const perDay = week.map((d) => ({ d, items: coming.filter((b) => day(b.at) === day(d)) }));
   const peak = Math.max(1, ...perDay.map(({ items }) => items.length));
-  const open = rows.find((row) => row.key === selectedVisit);
+  const open = allRows.find((row) => row.key === selectedVisit) ?? paperResults.find(({ row }) => row.key === selectedVisit)?.row;
   const candidate = open && names.get(open.candidateId);
 
   const action = ({ row, lane, ps }: (typeof scored)[number]) => {
     const subject = row.subject as Subject;
     if (lane === "scan" || lane === "late_scan") return <span className={lane === "late_scan" ? a.urgent : undefined}><ResultUpload kind="paper" candidateId={row.candidateId} subject={subject} reload={reload} label="Upload paper scan" /></span>;
     if (lane === "rubric") return <ResultUpload kind="mock" candidateId={row.candidateId} subject={subject} reload={reload} label="Upload rubric" />;
-    if (lane === "check") return <button type="button" className={a.act} onClick={() => onSelectVisit(row.key)}>Check marks</button>;
-    if (lane === "decide") return <button type="button" className={a.act} onClick={() => onSelectVisit(row.key)}>{ps.some((p) => p.score.verdict === "fail") && !ps.some((p) => p.score.verdict === "pass") ? "Make decision" : "Review for hire"}</button>;
+    if (lane === "check") return <button type="button" className={a.act} onClick={(event) => openVisit(event.currentTarget, row.key)}>Check marks</button>;
+    if (lane === "decide") return <button type="button" className={a.act} onClick={(event) => openVisit(event.currentTarget, row.key)}>{ps.some((p) => p.score.verdict === "fail") && !ps.some((p) => p.score.verdict === "pass") ? "Make decision" : "Review for hire"}</button>;
     if (lane === "finished") {
       const sent = data.decisions.find((d) => d.candidateId === row.candidateId && d.status === "sent");
       const draft = data.decisions.find((d) => d.candidateId === row.candidateId && d.status === "draft");
@@ -999,11 +1110,11 @@ export function AssessmentScreen({
     return (
       <li key={row.key} className={a.row} data-lane={lane === "late_scan" ? "scan" : lane} data-selected={selectedVisit === row.key ? "" : undefined}>
         <span className={a.who}>
-          <button type="button" className={a.name} onClick={() => onSelectVisit(row.key)}>{c?.name ?? "Unknown candidate"}</button>
+          <button type="button" className={a.name} onClick={(event) => openVisit(event.currentTarget, row.key)}>{c?.name ?? "Unknown candidate"}</button>
           <span className={a.sub} title={h ?? undefined}>{[row.subject, h && nick(h)].filter(Boolean).join(" · ")}</span>
         </span>
         <span className={a.when}>
-          {row.at ? `Test ${when(row.at)}` : row.dateText || "–"}
+          {row.at && row.kinds.includes("paper") ? `Test ${when(row.at)}` : row.dateText}
           {row.mockAt && (
             <span className={lane === "late_scan" ? a.late : a.sub}>
               Mock {when(row.mockAt)}
@@ -1041,7 +1152,7 @@ export function AssessmentScreen({
                       return (
                         <button key={day(d)} type="button" className={a.dayCol} data-today={i === 0 ? "" : undefined} disabled={!items.length}
                           aria-label={`${i === 0 ? "Today, " : ""}${formatInTimeZone(d, ZONE, "EEEE d MMMM")}: ${tests} paper tests, ${items.length - tests} mocks`}
-                          onClick={() => document.getElementById(`day-${day(d)}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                          onClick={() => document.getElementById(i === 0 && tests > 0 ? "today-tests-title" : `day-${day(d)}`)?.scrollIntoView({ block: "start" })}>
                           <span className={a.dayName}>{i === 0 ? "Today" : formatInTimeZone(d, ZONE, "EEE")}</span>
                           <span className={a.dayDate}>{formatInTimeZone(d, ZONE, formatInTimeZone(d, ZONE, "d") === "1" ? "d MMM" : "d")}</span>
                           <span className={a.stack} aria-hidden>
@@ -1071,7 +1182,7 @@ export function AssessmentScreen({
       <li key={`${b.candidateId}:${b.kind}:${b.at.getTime()}`} id={`slot-${b.kind}-${b.candidateId}-${b.at.getTime()}`} tabIndex={-1} className={a.slot}>
         <span className={a.time} data-kind={b.kind}>{clock(b.at)}</span>
         <span className={a.who}>
-          <button type="button" className={a.name} onClick={() => onSelectVisit(key)}>{names.get(b.candidateId)?.name ?? "Unknown candidate"}</button>
+          <button type="button" className={a.name} onClick={(event) => openVisit(event.currentTarget, key)}>{names.get(b.candidateId)?.name ?? "Unknown candidate"}</button>
           <span className={a.sub} title={h ?? undefined}><b className={a.kind}>{b.kind === "paper" ? "Paper test" : "Mock"}</b> · {b.subject} · {h ? (b.kind === "paper" ? `mock head ${nick(h)}` : `head ${nick(h)}`) : "No mock booked"}</span>
           {b.kind === "mock" && paperNote.get(b.candidateId)}
         </span>
@@ -1086,7 +1197,35 @@ export function AssessmentScreen({
     <div className={css.layout}>
       <div className={css.main}>
         <section className={css.tableSection} aria-label="Mock and paper">
-          <div className={css.tableTools}>
+          <div className={`${css.tableTools} ${a.assessmentTools}`}>
+            {mode === "list" && <div className={a.lookup} role="search" aria-label="Hiring candidates">
+              <label htmlFor="assessment-candidate" className="sr-only">Find a candidate</label>
+              <div className={a.searchField}>
+                <Search size={17} aria-hidden />
+                <input id="assessment-candidate" className={css.input} type="search" placeholder="Find by name or email" maxLength={200} value={query} onChange={(event) => setQuery(event.target.value)} />
+              </div>
+              {search && (
+                <>
+                  <p role="status" className={a.quiet}>{lookupStatus}</p>
+                  {matchRows.length > 0 && <ul className={`${a.list} ${a.matches}`}>
+                    {matchRows.map(({ person, row, result }) => <li key={person.id}>
+                      <button type="button" className={a.match} onClick={(event) => row ? openVisit(event.currentTarget, row.key, result?.paper.id) : onOpenRecord(person.id)}>
+                        <span><b>{person.name}</b>{person.email && <span className={a.sub}>{person.email}</span>}</span>
+                        <span className={a.matchDetail}>
+                          {row && <span className={a.sub}>{result?.paper.subject || row.subject || "Subject unknown"}</span>}
+                          {result ? (result.score.verdict === "recorded" ? <span>{result.score.note || "Tracker result"}</span> : <span className={a.matchVerdict}>
+                            <VerdictWord verdict={result.score.verdict} />
+                            {result.score.percent !== null && <b className={a.pct}>{result.score.percent}%</b>}
+                          </span>) : row?.at ? (
+                            <span>{row.status === "cancelled" ? "Cancelled" : row.status === "no_show" ? "No-show" : "Booked for"} {when(row.at)}</span>
+                          ) : <span className={a.sub}>No paper test recorded</span>}
+                        </span>
+                      </button>
+                    </li>)}
+                  </ul>}
+                </>
+              )}
+            </div>}
             <div className={`${css.tabs} ${a.viewTabs}`} role="group" aria-label="View">
               {(
                 [
@@ -1099,24 +1238,79 @@ export function AssessmentScreen({
                 </button>
               ))}
             </div>
-            {mode === "list" && (
-              <label className={`${css.filterSelect} ${a.headFilter}`}>
-                Head
-                <select value={head} onChange={(e) => setHead(e.target.value)}>
-                  <option value="">All</option>
-                  {data.config.interviewers.map((person) => (
-                    <option key={person.canonicalKey} value={person.canonicalKey}>
-                      {heads.get(person.canonicalKey) ?? person.canonicalKey}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
           </div>
           {mode === "calendar" ? (
             <HeadSchedules heads={data.configSaved ? data.config.interviewers : []} bookings={data.bookings} onOpenCandidate={onOpenRecord} />
           ) : (
             <div className={a.board}>
+              <nav className={a.summaryJumps} aria-label="Assessment sections">
+                <a className={a.summaryLink} href="#today-tests-title">Today’s paper tests</a>
+                <a className={a.summaryLink} href="#paper-results-title">Paper results</a>
+              </nav>
+              <div className={a.summaryGrid}>
+                <section className={a.summaryCard} aria-labelledby="today-tests-title">
+                  <header className={a.summaryHeader}>
+                    <div>
+                      <h2 id="today-tests-title" className={a.blockTitle} tabIndex={-1}>Today’s paper tests</h2>
+                      <p className={a.sub}>{formatInTimeZone(now, ZONE, "EEEE d MMMM")} · Bangkok time</p>
+                    </div>
+                    {testsToPrint.length > 0 && <a className={`${css.sourceLink} ${a.summaryLink}`} href={`/api/hiring/print-pack?date=${day(now)}`} target="_blank" rel="noopener noreferrer">Print today’s papers ({testsToPrint.length})</a>}
+                  </header>
+                  {todayTests.length === 0 ? <p className={a.summaryEmpty}>No paper tests scheduled today.</p> : (
+                    <ol className={a.list}>
+                      {todayTests.map((test) => {
+                        const person = names.get(test.candidateId);
+                        const timing = test.end <= now ? "Time ended" : test.start <= now ? "In progress" : test.start.getTime() === nextTest?.start.getTime() ? "Next" : "Scheduled";
+                        return <li className={a.todayRow} key={test.id} id={`slot-paper-${test.candidateId}-${test.start.getTime()}`} data-timing={timing} tabIndex={-1}>
+                          <span className={a.testTime}><time dateTime={test.start.toISOString()}>{clock(test.start)}</time>–<time dateTime={test.end.toISOString()}>{clock(test.end)}</time></span>
+                          <span className={a.who}>
+                            <button type="button" className={a.name} onClick={(event) => openVisit(event.currentTarget, test.key)}>{person?.name ?? "Unknown candidate"}</button>
+                            <span className={a.sub}>{[test.subject, "room" in test ? test.room : null].filter(Boolean).join(" · ")}</span>
+                          </span>
+                          <span className={a.timing}>{timing}</span>
+                          {test.start > now && <span className={`${a.action} ${a.testPrint}`}><PrintPaper library={data.library} subject={test.subject} name={person?.name} candidateId={test.candidateId} date={day(test.start)} /></span>}
+                        </li>;
+                      })}
+                    </ol>
+                  )}
+                </section>
+                <section className={a.summaryCard} aria-labelledby="paper-results-title">
+                  <header className={a.summaryHeader}>
+                    <h2 id="paper-results-title" className={a.blockTitle} ref={resultHeading} tabIndex={-1}>{resultView === "final" ? "All final paper results" : resultView === "pending" ? "Paper results that need attention" : "Recent paper results"}</h2>
+                    <div className={a.resultFilters}>
+                      {resultView === "recent" && finalResults.length > 0 && <button type="button" className={a.summaryLink} onClick={() => showResults("final")}>View all final results ({finalResults.length})</button>}
+                      {resultView !== "pending" && pendingResults > 0 && <button type="button" className={a.summaryLink} onClick={() => showResults("pending")}>Needs attention ({pendingResults})</button>}
+                      {resultView !== "recent" && <button type="button" className={a.summaryLink} onClick={() => showResults("recent")}>Show recent results</button>}
+                    </div>
+                  </header>
+                  <div>
+                    {listedResults.length === 0 && <p className={a.summaryEmpty}>{resultView === "pending" ? "No paper results need attention." : results.length ? "No final results yet." : "No paper results yet."}</p>}
+                    {listedResults.map(({ paper, row, person, score }) => {
+                      const updated = new Date(paper.updatedAt);
+                      return <article key={paper.id} className={a.recentResult}>
+                        <span className={a.who}>
+                          <button type="button" className={a.name} onClick={(event) => openVisit(event.currentTarget, row.key, paper.id)}>{person.name}</button>
+                          <span className={a.sub}>{paper.subject} · {paper.source === "tracker"
+                            ? paper.history?.date || "No date recorded"
+                            : <time dateTime={updated.toISOString()}>Updated {formatInTimeZone(updated, ZONE, "d MMM yyyy")}</time>}</span>
+                        </span>
+                        <PaperBadge score={score} />
+                      </article>;
+                    })}
+                  </div>
+                </section>
+              </div>
+              <div className={a.workFilters}>
+                <label className={`${css.filterSelect} ${a.headFilter}`}>
+                  Head
+                  <select value={head} onChange={(event) => setHead(event.target.value)}>
+                    <option value="">All</option>
+                    {data.config.interviewers.map((person) => (
+                      <option key={person.canonicalKey} value={person.canonicalKey}>{heads.get(person.canonicalKey) ?? person.canonicalKey}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
               <div className={a.cols}>
                 <section className={a.block} aria-labelledby="todo-title">
                   <div className={a.titleRow}>
@@ -1154,12 +1348,14 @@ export function AssessmentScreen({
 
                   {perDay.filter(({ items }) => items.length).map(({ d, items }) => {
                     const today = day(d) === day(now);
+                    if (today) items = items.filter((booking) => booking.kind !== "paper");
+                    if (!items.length) return null;
                     // Earlier today is done or in the To do list; it folds away so the next arrival is on top.
                     const earlier = today ? items.filter((b) => b.at <= now) : [];
                     const later = items.filter((b) => !earlier.includes(b));
                     return (
                       <div key={day(d)} id={`day-${day(d)}`} className={a.lane}>
-                        <h3 className={a.laneTitle} data-today={today ? "" : undefined}>{today ? "Today · " : ""}{formatInTimeZone(d, ZONE, "EEE d MMM")}{today && !later.length ? <span className={a.laneHint}>No visits left today</span> : <span className={a.count}>{today ? `${later.length} left` : items.length}</span>}{printable(later) > 0 && <a className={`${css.sourceLink} ${a.printAll}`} href={`/api/hiring/print-pack?date=${day(d)}`} target="_blank" rel="noopener noreferrer">Print all papers ({printable(later)})</a>}</h3>
+                        <h3 className={a.laneTitle} data-today={today ? "" : undefined}>{today ? "Today’s mocks · " : ""}{formatInTimeZone(d, ZONE, "EEE d MMM")}{today && !later.length ? <span className={a.laneHint}>No mocks left today</span> : <span className={a.count}>{today ? `${later.length} left` : items.length}</span>}{!today && printable(later) > 0 && <a className={`${css.sourceLink} ${a.printAll}`} href={`/api/hiring/print-pack?date=${day(d)}`} target="_blank" rel="noopener noreferrer">Print all papers ({printable(later)})</a>}</h3>
                         {!!later.length && <ul className={a.list}>{later.map(slot)}</ul>}
                         {!!earlier.length && (
                           <details className={a.earlier}>
@@ -1177,18 +1373,19 @@ export function AssessmentScreen({
           )}
         </section>
       </div>
-      {open && candidate && (
+      {active && open && candidate && (
         <AssessmentPanel
           key={open.key}
           candidate={candidate}
           row={open}
           papers={papers.get(open.candidateId) ?? []}
+          paperId={openPaper?.key === open.key ? openPaper.id : undefined}
           mocks={mocks.get(open.candidateId) ?? []}
           data={data}
           command={command}
           reload={reload}
           busy={busy}
-          onClose={() => onSelectVisit(null)}
+          onClose={closeVisit}
         />
       )}
     </div>

@@ -3,7 +3,7 @@ import { queueRecruitmentForm, queueRecruitmentMock } from "./recruitment";
 import { PRESTIGE_RULES } from "./prestige";
 import { createHash, randomUUID } from "node:crypto";
 import { fromZonedTime } from "date-fns-tz";
-import { and, asc, desc, eq, getTableColumns, gte, inArray, isNotNull, like, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gte, ilike, inArray, isNotNull, like, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
@@ -729,6 +729,51 @@ async function assessmentData(db: Database, now: Date) {
 const { profileText, ...candidateColumns } = getTableColumns(s.hiringCandidates);
 /** Not-blank text, as JS `.trim()` sees it: ASCII space and the Unicode spaces it also strips (NBSP, U+FEFF, U+3000…). Listed, so the Postgres locale cannot change it. */
 export const NOT_BLANK_PATTERN = "[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]";
+const candidateSummary = { ...candidateColumns, hasSourceText: sql<boolean>`${profileText} ~ ${NOT_BLANK_PATTERN}` };
+
+function dashboardCandidate(c: Omit<Candidate, "profileText"> & { hasSourceText: boolean }, config: HiringConfig, callInvited: boolean, callBooked: boolean) {
+  const parts = c.preScreenAssessment && c.preScreen ? preScreenPoints(c.preScreenAssessment, config.preScreenWeights,
+    c.universityAssessment?.fraction ?? 0, availabilityFraction(c.preScreen)) : null;
+  const penalty = workRightsPenalty(c.workRightsAnswer, config);
+  return {
+    ...c,
+    queueManual: !!c.queueManual,
+    workRightsConfirmed: undefined,
+    resumePath: undefined,
+    resumeSha256: undefined,
+    resumeState: (c.resumePath ? "available" : c.resumeStoredAt ? "deleted" : "none") as "available" | "deleted" | "none",
+    profileScore: c.profileAssessment ? profileScore(c.profileAssessment, config.profileWeights,
+      c.universityAssessment?.fraction ?? 0, penalty, highSchoolFraction(c.profileAssessment, config)) : null,
+    highSchool: highSchoolMatch(c.profileAssessment?.schools, config.highSchools),
+    preScreenScore: parts?.total ?? null,
+    preScreenParts: parts,
+    workRightsPenalty: penalty,
+    workRightsAccepted: workRightsAccepted(c.workRightsAnswer, config.acceptedWorkRights),
+    callInvited,
+    callBooked,
+  };
+}
+
+export function searchHiringCandidates(db: Database, query: string) {
+  const { id, name, email, visitSubject } = s.hiringCandidates;
+  const value = query.replace(/[\\%_]/g, "\\$&");
+  return db.select({ id, name, email, visitSubject }).from(s.hiringCandidates)
+    .where(or(ilike(name, `%${value}%`), ilike(email, `%${value}%`)))
+    .orderBy(desc(sql<boolean>`coalesce(${email} ilike ${value}, false)`), desc(ilike(name, `${value}%`)), asc(name), asc(id))
+    .limit(25);
+}
+
+export async function hiringCandidateRecord(db: Database, id: string) {
+  const b = s.hiringBookings;
+  const [[candidate], { config }, sentAt, booked] = await Promise.all([
+    db.select(candidateSummary).from(s.hiringCandidates).where(eq(s.hiringCandidates.id, id)),
+    settings(db),
+    callInviteSentAt(db, id),
+    db.select({ id: b.id }).from(b).where(and(eq(b.candidateId, id), eq(b.kind, "call"), eq(b.status, "confirmed"))).limit(1),
+  ]);
+  if (!candidate) throw new HiringError(404, "Candidate not found.");
+  return dashboardCandidate(candidate, config, !!sentAt, booked.length > 0);
+}
 
 /** No link secret means no head links. The dashboard must still load. */
 function briefPaths(bookings: { id: string; kind: string; status: string; endTime: Date }[], now: Date): Record<string, string> {
@@ -831,11 +876,18 @@ async function approvedOffers(db: Database): Promise<OfferRow[] | null> {
 
 export async function dashboard(db: Database = getDb()) {
   const now = new Date();
+  const c = s.hiringCandidates;
+  const b = s.hiringBookings;
+  const visitKinds = ["paper", "mock"] as const;
+  const candidateOrder = [desc(c.updatedAt), asc(c.id)];
+  const bookingOrder = [desc(b.startTime), asc(b.id)];
+  const recentCandidates = db.$with("recent_candidates").as(db.select({ id: c.id }).from(c).orderBy(...candidateOrder).limit(2000));
+  const recentBookings = db.$with("recent_bookings").as(db.select({ id: b.id }).from(b).orderBy(...bookingOrder).limit(2000));
   // Every read here is independent, so they go in one wave. Only visitClashes and the onsite entries wait for this one.
   const [
     { row, config },
-    candidates,
-    allBookings,
+    candidateRows,
+    bookingRows,
     outbox,
     contacts,
     groups,
@@ -855,16 +907,24 @@ export async function dashboard(db: Database = getDb()) {
     offers,
   ] = await Promise.all([
     settings(db),
-    db
-      .select({ ...candidateColumns, hasSourceText: sql<boolean>`${profileText} ~ ${NOT_BLANK_PATTERN}` })
-      .from(s.hiringCandidates)
-      .orderBy(desc(s.hiringCandidates.updatedAt))
-      .limit(2000),
-    db
-      .select()
-      .from(s.hiringBookings)
-      .orderBy(desc(s.hiringBookings.startTime))
-      .limit(2000),
+    // Older records are available in assessment lookup without changing the rows used by other views.
+    db.with(recentCandidates)
+      .select({ ...candidateSummary, recent: sql<boolean>`${recentCandidates.id} is not null` })
+      .from(c)
+      .leftJoin(recentCandidates, eq(c.id, recentCandidates.id))
+      .where(or(
+        isNotNull(recentCandidates.id),
+        inArray(c.id, db.select({ id: b.candidateId }).from(b).where(inArray(b.kind, visitKinds))),
+        inArray(c.id, db.select({ id: s.hiringPaperResults.candidateId }).from(s.hiringPaperResults)),
+        inArray(c.id, db.select({ id: s.hiringMockResults.candidateId }).from(s.hiringMockResults)),
+      ))
+      .orderBy(...candidateOrder),
+    db.with(recentBookings)
+      .select({ ...getTableColumns(b), recent: sql<boolean>`${recentBookings.id} is not null` })
+      .from(b)
+      .leftJoin(recentBookings, eq(b.id, recentBookings.id))
+      .where(or(isNotNull(recentBookings.id), inArray(b.kind, visitKinds)))
+      .orderBy(...bookingOrder),
     db
       .select({
         id: s.hiringOutbox.id,
@@ -934,7 +994,9 @@ export async function dashboard(db: Database = getDb()) {
     approvedOffers(db),
   ]);
   // The visit screens never see an HR call. The Calls tab reads `calls`.
+  const allBookings = bookingRows.flatMap(({ recent, ...booking }) => recent ? [booking] : []);
   const bookings = allBookings.filter(isVisitBooking);
+  const assessmentBookings = bookingRows.flatMap(({ recent, ...booking }) => !recent && isVisitBooking(booking) ? [booking] : []);
   const calls = allBookings
     .filter((b) => b.kind === "call" && b.status === "confirmed")
     .map((b) => ({ candidateId: b.candidateId, start: b.startTime, end: b.endTime }));
@@ -979,7 +1041,7 @@ export async function dashboard(db: Database = getDb()) {
       return {} as Awaited<ReturnType<typeof readWiseWindows>>;
     }),
     // A failed read leaves every weekend test at "no room" on the run sheet; it never fails the dashboard.
-    weekendTestRooms(db, bookings).catch((error) => {
+    weekendTestRooms(db, [...bookings, ...assessmentBookings]).catch((error) => {
       console.error("Hiring dashboard could not read weekend test rooms", error instanceof Error ? error.name : "UnknownError");
       return new Map<string, string | null>();
     }),
@@ -1002,6 +1064,15 @@ export async function dashboard(db: Database = getDb()) {
     for (const e of release) holds[e.id] = { funnel, state: "next", position: 0, limit: null, subject: e.subject };
     for (const e of held) holds[e.id] = { funnel, state: "held", position: e.position, limit: e.limit, subject: e.subject };
   }
+  const invitedCalls = new Set(inviteOutbox.filter((o) => o.status === "sent" && o.key === `${o.candidateId}:call-invite`).map((o) => o.candidateId));
+  const bookedCalls = new Set(calls.map((call) => call.candidateId));
+  const candidates: ReturnType<typeof dashboardCandidate>[] = [];
+  const assessmentCandidates: ReturnType<typeof dashboardCandidate>[] = [];
+  for (const { recent, ...candidate } of candidateRows) {
+    const present = dashboardCandidate(candidate, config, invitedCalls.has(candidate.id), bookedCalls.has(candidate.id));
+    (recent ? candidates : assessmentCandidates).push(present);
+  }
+  const withRoom = (booking: typeof bookings[number]) => testRooms.has(booking.id) ? { ...booking, room: testRooms.get(booking.id) } : booking;
   return {
     config,
     offers,
@@ -1023,51 +1094,10 @@ export async function dashboard(db: Database = getDb()) {
     workerSummary: row?.workerSummary ?? null,
     workerError: row?.workerError ?? null,
     writeGate: runtimeWritesAllowed(),
-    candidates: candidates.map((c) => {
-      const parts =
-        c.preScreenAssessment && c.preScreen
-          ? preScreenPoints(
-              c.preScreenAssessment,
-              config.preScreenWeights,
-              c.universityAssessment?.fraction ?? 0,
-              availabilityFraction(c.preScreen),
-            )
-          : null;
-      return {
-        ...c,
-        // The stored list can be long, and the screen only needs to know the row was moved.
-        queueManual: !!c.queueManual,
-        // The screen reads workRightsAnswer. This old column stays in the database only.
-        workRightsConfirmed: undefined,
-        // The text itself is read on demand. hasSourceText (from SQL) tells the screen whether there is any, such as for a person added from the tracker.
-        // The screen opens a file only through the guarded route, so it never gets the storage path.
-        resumePath: undefined,
-        resumeSha256: undefined,
-        resumeState: (c.resumePath ? "available" : c.resumeStoredAt ? "deleted" : "none") as "available" | "deleted" | "none",
-        profileScore: c.profileAssessment
-          ? profileScore(
-              c.profileAssessment,
-              config.profileWeights,
-              c.universityAssessment?.fraction ?? 0,
-              workRightsPenalty(c.workRightsAnswer, config),
-              highSchoolFraction(c.profileAssessment, config),
-            )
-          : null,
-        highSchool: highSchoolMatch(c.profileAssessment?.schools, config.highSchools),
-        // The pre-screen score is the eight-part total, not the profile formula.
-        preScreenScore: parts?.total ?? null,
-        preScreenParts: parts,
-        workRightsPenalty: workRightsPenalty(c.workRightsAnswer, config),
-        workRightsAccepted: workRightsAccepted(
-          c.workRightsAnswer,
-          config.acceptedWorkRights,
-        ),
-        // The gate on the screen must agree with the worker: a sent call link lifts the earlier-contact hold.
-        callInvited: inviteOutbox.some((o) => o.key === `${c.id}:call-invite` && o.status === "sent"),
-        callBooked: calls.some((call) => call.candidateId === c.id),
-      };
-    }),
-    bookings: bookings.map((b) => (testRooms.has(b.id) ? { ...b, room: testRooms.get(b.id) } : b)),
+    candidates,
+    bookings: bookings.map(withRoom),
+    assessmentCandidates,
+    assessmentBookings: assessmentBookings.map(withRoom),
     calls,
     missedCalls,
     headDecisions: headDecisionRows.map((row) => ({

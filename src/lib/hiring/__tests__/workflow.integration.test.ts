@@ -35,9 +35,11 @@ import {
   briefView,
   changePreScreenScore,
   dashboard,
+  hiringCandidateRecord,
   reviewCandidate,
   saveHeadDays,
   saveSettings,
+  searchHiringCandidates,
   settings,
   sourceHash,
   prestigeCatalogHash,
@@ -232,6 +234,40 @@ describe("hiring workflow persistence", () => {
     expect(outbox[0]).toMatchObject({ key: `${row.id}:pre-screen`, workflowStage: "pre_screen" });
     expect(outbox[0]).not.toHaveProperty("payload");
     expect(JSON.stringify(outbox)).not.toContain("SECRET BODY");
+  });
+  it("keeps booked papers and old results beyond the dashboard's general limits", async () => {
+    const [booked, graded, applicant] = await db.insert(s.hiringCandidates).values([
+      { name: "Booked Tutor", stage: "onsite_booked", updatedAt: now },
+      { name: "Graded Tutor", stage: "rejected", updatedAt: now },
+      { name: "Senior Tutor", email: "retained@example.com", profileText: "Private source", updatedAt: now },
+    ]).returning();
+    const [booking] = await db.insert(s.hiringBookings).values({
+      candidateId: booked.id, kind: "paper", subjects: ["Mathematics"],
+      calendarOwner: "owner@example.com", startTime: new Date(slot.start), endTime: new Date(slot.end), evidence: {},
+    }).returning();
+    const [gradedPaper] = await db.insert(s.hiringPaperResults).values({ candidateId: graded.id, subject: "Mathematics", source: "person", status: "done" }).returning();
+    await db.execute(sql`insert into hiring_candidates (name, updated_at)
+      select 'New applicant ' || n, '2026-11-03T00:00:00Z'::timestamptz from generate_series(1, 2000) n`);
+    await db.execute(sql`insert into hiring_bookings
+      (candidate_id, kind, subjects, interviewer_key, interviewer_email, calendar_owner, start_time, end_time, status, evidence)
+      select ${booked.id}::uuid, 'call', '["Mathematics"]'::jsonb, 'hr-call', 'hr@example.com', 'owner@example.com',
+        '2026-11-03T03:00:00Z'::timestamptz, '2026-11-03T03:30:00Z'::timestamptz, 'cancelled', '{}'::jsonb
+      from generate_series(1, 2000)`);
+
+    const data = await dashboard(db);
+    expect(data.bookings).toEqual([]);
+    expect(data.assessmentBookings).toMatchObject([{ id: booking.id, candidateId: booked.id, startTime: new Date(slot.start) }]);
+    expect(data.papers).toMatchObject([{ id: gradedPaper.id, candidateId: graded.id }]);
+    expect(data.assessmentCandidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "Booked Tutor" }),
+      expect.objectContaining({ name: "Graded Tutor", stage: "rejected" }),
+    ]));
+    expect([...data.candidates, ...data.assessmentCandidates].some((c) => c.id === applicant.id)).toBe(false);
+    expect(await searchHiringCandidates(db, "TAINED@EXAMPLE")).toEqual([{ id: applicant.id, name: "Senior Tutor", email: "retained@example.com", visitSubject: null }]);
+    expect(await searchHiringCandidates(db, "%")).toEqual([]);
+    const record = await hiringCandidateRecord(db, applicant.id);
+    expect(record).toMatchObject({ id: applicant.id, name: "Senior Tutor", hasSourceText: true });
+    expect(record).not.toHaveProperty("profileText");
   });
   it("recovers a citation-format failure in the normal worker and logs the failed answer", async () => {
     const source = "degree subject curriculum teaching english Mathematics";

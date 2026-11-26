@@ -462,6 +462,10 @@ if (location.search.includes("visits=1")) {
   paper("pi", "vi", "English Language", "marking", []);
   paper("pj", "vj", "Business Studies", "done", q("IGCSE / GCSE", [6, 6, 5, 6]));
   (payload.inviteOutbox as unknown[]).push({ key: "ve:result", status: "sent", sentAt: at(-3, 9) }, { key: "vf:result", status: "sent", sentAt: at(-1, 11) });
+  if (offerFixture.get("assessmentCase") === "history") {
+    papers.push({ id: "imported-paper", candidateId: "t", bookingId: null, subject: "Mathematics", status: "done", source: "tracker",
+      updatedAt: at(-1, 9), marks: null, history: { outcome: "Pass", passedSubjects: "Mathematics", levels: "IGCSE", date: "15 Oct 2026" } });
+  }
   Object.assign(payload, { bookings, papers, mocks, paperChecks: checks, decisions });
 }
 let reviewPacket: { id: string; behavioral: string; offer: string } | null = null;
@@ -473,6 +477,8 @@ if (GIFT && location.hash === "#review-r1") {
 }
 // ?live=1: Automation and Messages on, so sign-off is not blocked by a switch.
 if (location.search.includes("live=1")) Object.assign(payload.config, { enabled: true, deliveryEnabled: true });
+// An older application outside the dashboard window is still searchable.
+const archivedCandidate = person("a32378e9-4df7-48bb-9f1d-2e637e3ad3a2", "Sample Oraya", { email: "oraya@example.test" });
 const realFetch = window.fetch;
 (window as unknown as { posted: unknown[] }).posted = [];
 (window as unknown as { uploaded: unknown[] }).uploaded = [];
@@ -651,6 +657,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       payload.candidates.forEach((c) => { c.queueManual = false; });
     }
     return new Response(JSON.stringify({ ok: true }));
+  }
+  if (url.pathname === "/api/hiring" && url.searchParams.has("candidateSearch")) {
+    const term = url.searchParams.get("candidateSearch")!.trim().toLowerCase();
+    const matches = [...payload.candidates, archivedCandidate].filter((candidate) =>
+      candidate.name.toLowerCase().includes(term) || candidate.email?.toLowerCase().includes(term)
+    );
+    return Response.json({ candidates: matches.slice(0, 25).map(({ id, name, email, visitSubject }) => ({ id, name, email, visitSubject })) });
+  }
+  if (url.pathname === "/api/hiring" && url.searchParams.get("record") === "1") {
+    const candidate = [...payload.candidates, archivedCandidate].find((candidate) => candidate.id === url.searchParams.get("candidateId"));
+    return candidate ? Response.json({ candidate }) : new Response(null, { status: 404 });
   }
   if (url.pathname === "/api/hiring" && url.searchParams.get("candidateId"))
     return new Response(JSON.stringify({ id: url.searchParams.get("candidateId"), profileText: "Extracted resume text for the fixture." }));
@@ -1113,6 +1130,21 @@ try {
   const names = () => page.locator("[data-candidate]").allInnerTexts();
   const seekRows = () => page.getByRole("region", { name: "Candidates from SEEK" }).locator("tbody tr");
 
+  await check("assessment search opens an older candidate outside the dashboard window", async () => {
+    const tab = await context.newPage();
+    try {
+      await tab.goto(origin + "/hiring?view=assessment&visits=1");
+      const lookup = tab.getByRole("search", { name: "Hiring candidates" });
+      await lookup.getByRole("searchbox").fill("ORAYA@");
+      const hit = lookup.getByRole("button", { name: /Sample Oraya/ });
+      assert.match(await hit.innerText(), /No paper test recorded/);
+      await hit.click();
+      await tab.getByLabel("Candidate Sample Oraya", { exact: true }).waitFor();
+      assert.deepEqual(await tab.evaluate(() => window.posted), []);
+    } finally {
+      await tab.close();
+    }
+  });
   await check("the Calls tab lists HR's queue and posts each result", async () => {
     await page.goto(`${origin}/?view=calls`);
     const calls = page.getByRole("region", { name: "Candidates for HR to call" });
