@@ -831,7 +831,7 @@ describe("follow-ups", () => {
     expect(text).toMatch(/2-hour test/);
     expect(text).toContain("3. Day 2, if you pass: final round mock teaching");
     expect(text).toContain("Mathematics");
-    expect(text).toContain("https://lin.ee/OjMHF41");
+    expect(text).toContain("https://line.me/R/ti/p/@699fovgg");
     expect(text).toContain("prepare one lesson in Mathematics");
     // The link: a fixed 30-day life, and the same second on the row and in the token.
     const token = text.match(/\/hiring\/book\/([\w.-]+)/)![1];

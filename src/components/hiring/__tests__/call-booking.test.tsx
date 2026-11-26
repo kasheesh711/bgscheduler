@@ -4,7 +4,7 @@ import { BookingShell, CallBooking } from "../booking";
 
 vi.mock("next/font/google", () => ({ Instrument_Serif: () => ({ variable: "" }) }));
 
-const LINE = "https://lin.ee/OjMHF41";
+const LINE = "https://line.me/R/ti/p/@699fovgg";
 // Thursday 5 November 2026, 09:00 and 09:15 in Bangkok, and Friday 09:00. R1 lasts 30 minutes.
 const slots = [
   { date: "2026-11-05", start: "2026-11-05T02:00:00.000Z", end: "2026-11-05T02:30:00.000Z" },
