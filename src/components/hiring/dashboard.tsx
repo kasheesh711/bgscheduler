@@ -357,11 +357,9 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
   const localCandidate = data?.candidates.find((c) => c.id === selected) ?? data?.assessmentCandidates?.find((c) => c.id === selected);
   const recordId = view === "overview" && !localCandidate ? selected : null;
   useEffect(() => {
-    const id = recordId;
-    const snapshot = data;
-    if (!id || !snapshot) return;
+    if (!recordId || !data) return;
     const request = new AbortController();
-    async function readRecord() {
+    async function readRecord(id: string, snapshot: HiringData) {
       let candidate: HiringCandidate | null = null;
       try {
         const response = await fetch(`/api/hiring?candidateId=${encodeURIComponent(id)}&record=1`, { cache: "no-store", signal: request.signal });
@@ -371,7 +369,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
       }
       if (!request.signal.aborted) setFetchedRecord({ id, data: snapshot, attempt: recordAttempt, candidate });
     }
-    void readRecord();
+    void readRecord(recordId, data);
     return () => request.abort();
   }, [data, recordAttempt, recordId]);
   const sameRecord = fetchedRecord?.id === selected ? fetchedRecord : null;
