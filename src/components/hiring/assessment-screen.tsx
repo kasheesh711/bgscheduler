@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatInTimeZone } from "date-fns-tz";
-import { AlertTriangle, Check, Clock, X } from "lucide-react";
-import { arrivals, assessmentRows, bangkokDay, hireBlockers, LANES, laneOf, mockScore, paperScore, type AssessmentRow, type Lane, type PaperScore, type Verdict } from "@/lib/hiring/assessment-view";
+import { AlertTriangle, Check, Clock, Search, X } from "lucide-react";
+import { arrivals, assessmentPaperResults, assessmentRows, bangkokDay, hireBlockers, LANES, laneOf, mockScore, paperScore, todayPaperTests, type AssessmentRow, type Lane, type PaperScore, type Verdict } from "@/lib/hiring/assessment-view";
 import { FinalReview, reviewBlocks } from "./final-review";
 import { RUBRIC, computeSheet, passRulesFor, rubricItems, rubricTotals, type LevelResult, type MockRubric, type RubricItem, type StressTicks } from "@/lib/hiring/marking-sheet";
 import { STRESS_ELEMENTS } from "@/lib/hiring/rubric-guide";
@@ -11,6 +11,7 @@ import { isDecided, SUBJECTS, ZONE, type Subject } from "@/lib/hiring/model";
 import { markAgain, runMarking, type ResultKind } from "./assessment-setup";
 import type { Command, HiringCandidate, HiringData } from "./dashboard";
 import { HeadSchedules } from "./head-schedules";
+import { useMinute } from "./use-minute";
 import css from "./dashboard.module.css";
 import a from "./assessment.module.css";
 
@@ -762,6 +763,7 @@ function AssessmentPanel({
   candidate,
   row,
   papers,
+  paperId,
   mocks,
   data,
   command,
@@ -772,6 +774,7 @@ function AssessmentPanel({
   candidate: HiringCandidate;
   row: AssessmentRow;
   papers: Paper[];
+  paperId?: string;
   mocks: Mock[];
   data: HiringData;
   command: Command;
@@ -779,14 +782,25 @@ function AssessmentPanel({
   busy: boolean;
   onClose: () => void;
 }) {
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { heading.current?.focus(); }, [paperId]);
+  const leadPaper = papers.find((paper) => paper.id === paperId);
+  const orderedPapers = leadPaper ? [leadPaper, ...papers.filter((paper) => paper.id !== paperId)] : papers;
+  const times = [
+    row.at && (!row.mockAt || row.kinds.includes("paper")) && `Paper test ${when(row.at)}`,
+    row.mockAt && `Mock ${when(row.mockAt)}`,
+  ].filter(Boolean).join(" · ");
   return (
-    <aside className={`${css.inspector} ${css.seekPanel} ${a.panel}`} aria-label={`Assessment of ${candidate.name}`}>
+    <aside className={`${css.inspector} ${css.seekPanel} ${a.panel}`} aria-label={`Assessment of ${candidate.name}`} onKeyDown={(event) => {
+      if (event.key === "Escape" && !event.defaultPrevented) {
+        event.preventDefault();
+        onClose();
+      }
+    }}>
       <header className={css.inspectorHead}>
         <div>
-          <h2 className={css.inspectorName}>{candidate.name}</h2>
-          <p className={css.inspectorMeta}>
-            {row.at ? `Paper test ${when(row.at)}` : row.dateText || "Date not known"}{row.mockAt ? ` · Mock ${when(row.mockAt)}` : ""}
-          </p>
+          <h2 className={css.inspectorName} ref={heading} tabIndex={-1}>{candidate.name}</h2>
+          <p className={css.inspectorMeta}>{times || row.dateText || "No test date recorded"}</p>
         </div>
         <button type="button" className={css.inlineLink} onClick={onClose}>
           Close
@@ -794,7 +808,7 @@ function AssessmentPanel({
       </header>
       <div className={css.inspectorBody}>
         {!papers.length && <p className={css.inspectorText}>No paper result yet.</p>}
-        {papers.map((paper) => (
+        {orderedPapers.map((paper) => (
           <PaperSheetView key={paper.id} paper={paper} taken={papers.filter((other) => other.id !== paper.id && other.source !== "tracker").map((other) => other.subject)} config={data.config} command={command} reload={reload} busy={busy} check={checkOf(paper, data.paperChecks)} />
         ))}
         {candidate.stage === "onsite_booked" && papers.some((paper) =>
@@ -907,6 +921,7 @@ const LANE_TITLE: Record<Exclude<Lane, "upcoming" | "finished">, string> = {
   decide: "Ready to decide",
   waiting: "Waiting on others",
 };
+const RECENT_RESULTS = 5;
 
 export function AssessmentScreen({
   data,
@@ -916,6 +931,7 @@ export function AssessmentScreen({
   command,
   reload,
   busy,
+  active = true,
   now: fixedNow,
 }: {
   data: HiringData;
@@ -925,13 +941,23 @@ export function AssessmentScreen({
   command: Command;
   reload: Reload;
   busy: boolean;
+  active?: boolean;
   now?: Date;
 }) {
   const [mode, setMode] = useState<"list" | "calendar">("list");
   const [head, setHead] = useState("");
-  const now = fixedNow ?? new Date();
+  const [query, setQuery] = useState("");
+  const [showAllResults, setShowAllResults] = useState(false);
+  const [openPaper, setOpenPaper] = useState<{ key: string; id: string } | null>(null);
+  const opener = useRef<HTMLButtonElement | null>(null);
+  const minute = useMinute();
+  const now = useMemo(() => fixedNow ?? new Date(minute * 60000), [fixedNow, minute]);
 
-  const rows = useMemo(() => assessmentRows(data.bookings, data.papers, data.mocks, fixedNow), [data.bookings, data.papers, data.mocks, fixedNow]);
+  const rows = useMemo(() => assessmentRows(data.bookings, data.papers, data.mocks, now), [data.bookings, data.papers, data.mocks, now]);
+  const paperResults = useMemo(() => assessmentPaperResults(data.papers, data.bookings, rows), [data.papers, data.bookings, rows]);
+  const todayTests = todayPaperTests(data.bookings, now);
+  const testsToPrint = todayTests.filter((booking) => booking.start > now);
+  const nextTest = testsToPrint[0];
   const papers = useMemo(() => byCandidate(data.papers), [data.papers]);
   const mocks = useMemo(() => byCandidate(data.mocks), [data.mocks]);
   const names = useMemo(() => new Map(data.candidates.map((c) => [c.id, c])), [data.candidates]);
@@ -939,6 +965,35 @@ export function AssessmentScreen({
   // A sent decision, or a closed record (stopped, hired, rejected), is not work any more.
   const decided = useMemo(() => new Set([...data.decisions.filter((d) => d.status === "sent").map((d) => d.candidateId), ...data.candidates.filter((c) => c.stage === "stopped" || isDecided(c.stage)).map((c) => c.id)]), [data.decisions, data.candidates]);
   const headName = (key: string | null) => (key ? (heads.get(key) ?? key) : null);
+  const checks = useMemo(() => new Map(data.paperChecks.map((check) => [check.resultId, check])), [data.paperChecks]);
+  const results = useMemo(() => paperResults.flatMap(({ paper, row }) => {
+    const person = names.get(paper.candidateId);
+    return person ? [{ paper, row, person, score: paperScore(paper, data.config, checks.get(paper.id)) }] : [];
+  }), [paperResults, names, data.config, checks]);
+  const finalResults = results.filter(({ score }) => score.verdict === "pass" || score.verdict === "fail" || score.verdict === "recorded");
+  const pendingResults = results.length - finalResults.length;
+  const listedResults = showAllResults ? results : finalResults.slice(0, RECENT_RESULTS);
+
+  const search = query.trim().normalize().toLowerCase();
+  const matches = search ? data.candidates.flatMap((person) => {
+    if (![person.name, person.email].some((value) => value?.normalize().toLowerCase().includes(search))) return [];
+    const result = results.find(({ paper }) => paper.candidateId === person.id);
+    const row = result?.row ?? rows.find((visit) => visit.candidateId === person.id);
+    return row ? [{ person, row, paperId: result?.paper.id }] : [];
+  }).sort((left, right) => left.person.name.localeCompare(right.person.name)) : [];
+
+  function openVisit(button: HTMLButtonElement, key: string, paperId?: string) {
+    opener.current = button;
+    setOpenPaper(paperId ? { key, id: paperId } : null);
+    onSelectVisit(key);
+  }
+
+  function closeVisit() {
+    onSelectVisit(null);
+    setOpenPaper(null);
+    if (opener.current?.isConnected) opener.current.focus();
+    opener.current = null;
+  }
 
   // A row with a visit shows that visit's results. A past tracker result is in the panel.
   const rowPapers = (row: AssessmentRow) => (papers.get(row.candidateId) ?? []).filter((paper) => row.history || paper.source !== "tracker");
@@ -969,15 +1024,15 @@ export function AssessmentScreen({
   const week = Array.from({ length: 7 }, (_, i) => new Date(bangkokDay(now).getTime() + i * 86400000));
   const perDay = week.map((d) => ({ d, items: coming.filter((b) => day(b.at) === day(d)) }));
   const peak = Math.max(1, ...perDay.map(({ items }) => items.length));
-  const open = rows.find((row) => row.key === selectedVisit);
+  const open = rows.find((row) => row.key === selectedVisit) ?? paperResults.find(({ row }) => row.key === selectedVisit)?.row;
   const candidate = open && names.get(open.candidateId);
 
   const action = ({ row, lane, ps }: (typeof scored)[number]) => {
     const subject = row.subject as Subject;
     if (lane === "scan" || lane === "late_scan") return <span className={lane === "late_scan" ? a.urgent : undefined}><ResultUpload kind="paper" candidateId={row.candidateId} subject={subject} reload={reload} label="Upload paper scan" /></span>;
     if (lane === "rubric") return <ResultUpload kind="mock" candidateId={row.candidateId} subject={subject} reload={reload} label="Upload rubric" />;
-    if (lane === "check") return <button type="button" className={a.act} onClick={() => onSelectVisit(row.key)}>Check marks</button>;
-    if (lane === "decide") return <button type="button" className={a.act} onClick={() => onSelectVisit(row.key)}>{ps.some((p) => p.score.verdict === "fail") && !ps.some((p) => p.score.verdict === "pass") ? "Make decision" : "Review for hire"}</button>;
+    if (lane === "check") return <button type="button" className={a.act} onClick={(event) => openVisit(event.currentTarget, row.key)}>Check marks</button>;
+    if (lane === "decide") return <button type="button" className={a.act} onClick={(event) => openVisit(event.currentTarget, row.key)}>{ps.some((p) => p.score.verdict === "fail") && !ps.some((p) => p.score.verdict === "pass") ? "Make decision" : "Review for hire"}</button>;
     if (lane === "finished") {
       const sent = data.decisions.find((d) => d.candidateId === row.candidateId && d.status === "sent");
       const draft = data.decisions.find((d) => d.candidateId === row.candidateId && d.status === "draft");
@@ -999,11 +1054,11 @@ export function AssessmentScreen({
     return (
       <li key={row.key} className={a.row} data-lane={lane === "late_scan" ? "scan" : lane} data-selected={selectedVisit === row.key ? "" : undefined}>
         <span className={a.who}>
-          <button type="button" className={a.name} onClick={() => onSelectVisit(row.key)}>{c?.name ?? "Unknown candidate"}</button>
+          <button type="button" className={a.name} onClick={(event) => openVisit(event.currentTarget, row.key)}>{c?.name ?? "Unknown candidate"}</button>
           <span className={a.sub} title={h ?? undefined}>{[row.subject, h && nick(h)].filter(Boolean).join(" · ")}</span>
         </span>
         <span className={a.when}>
-          {row.at ? `Test ${when(row.at)}` : row.dateText || "–"}
+          {row.at && row.kinds.includes("paper") ? `Test ${when(row.at)}` : row.dateText}
           {row.mockAt && (
             <span className={lane === "late_scan" ? a.late : a.sub}>
               Mock {when(row.mockAt)}
@@ -1071,7 +1126,7 @@ export function AssessmentScreen({
       <li key={`${b.candidateId}:${b.kind}:${b.at.getTime()}`} id={`slot-${b.kind}-${b.candidateId}-${b.at.getTime()}`} tabIndex={-1} className={a.slot}>
         <span className={a.time} data-kind={b.kind}>{clock(b.at)}</span>
         <span className={a.who}>
-          <button type="button" className={a.name} onClick={() => onSelectVisit(key)}>{names.get(b.candidateId)?.name ?? "Unknown candidate"}</button>
+          <button type="button" className={a.name} onClick={(event) => openVisit(event.currentTarget, key)}>{names.get(b.candidateId)?.name ?? "Unknown candidate"}</button>
           <span className={a.sub} title={h ?? undefined}><b className={a.kind}>{b.kind === "paper" ? "Paper test" : "Mock"}</b> · {b.subject} · {h ? (b.kind === "paper" ? `mock head ${nick(h)}` : `head ${nick(h)}`) : "No mock booked"}</span>
           {b.kind === "mock" && paperNote.get(b.candidateId)}
         </span>
@@ -1099,24 +1154,95 @@ export function AssessmentScreen({
                 </button>
               ))}
             </div>
-            {mode === "list" && (
-              <label className={`${css.filterSelect} ${a.headFilter}`}>
-                Head
-                <select value={head} onChange={(e) => setHead(e.target.value)}>
-                  <option value="">All</option>
-                  {data.config.interviewers.map((person) => (
-                    <option key={person.canonicalKey} value={person.canonicalKey}>
-                      {heads.get(person.canonicalKey) ?? person.canonicalKey}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
           </div>
           {mode === "calendar" ? (
             <HeadSchedules heads={data.configSaved ? data.config.interviewers : []} bookings={data.bookings} onOpenCandidate={onOpenRecord} />
           ) : (
             <div className={a.board}>
+              <div className={a.lookup} role="search" aria-label="Assessment records">
+                <label htmlFor="assessment-candidate">Find a candidate</label>
+                <div className={a.searchField}>
+                  <Search size={17} aria-hidden />
+                  <input id="assessment-candidate" className={css.input} type="search" placeholder="Name or email" value={query} onChange={(event) => setQuery(event.target.value)} />
+                </div>
+                {search && (
+                  <>
+                    <p role="status" className={a.quiet}>{matches.length === 0 ? "No assessment records match." : `${matches.length} ${matches.length === 1 ? "candidate" : "candidates"} found`}</p>
+                    {matches.length > 0 && <ul className={`${a.list} ${a.matches}`}>
+                      {matches.map(({ person, row, paperId }) => <li key={person.id}>
+                        <button type="button" className={a.match} onClick={(event) => openVisit(event.currentTarget, row.key, paperId)}>
+                          <span><b>{person.name}</b>{person.email && <span className={a.sub}>{person.email}</span>}</span>
+                          <span className={a.sub}>{row.subject}</span>
+                        </button>
+                      </li>)}
+                    </ul>}
+                  </>
+                )}
+              </div>
+              <div className={a.summaryGrid}>
+                <section className={a.summaryCard} aria-labelledby="today-tests-title">
+                  <header className={a.summaryHeader}>
+                    <div>
+                      <h2 id="today-tests-title" className={a.blockTitle}>Today’s paper tests</h2>
+                      <p className={a.sub}>{formatInTimeZone(now, ZONE, "EEEE d MMMM")} · Bangkok time</p>
+                    </div>
+                    {testsToPrint.length > 0 && <a className={`${css.sourceLink} ${a.summaryLink}`} href={`/api/hiring/print-pack?date=${day(now)}`} target="_blank" rel="noopener noreferrer">Print today’s papers ({testsToPrint.length})</a>}
+                  </header>
+                  {todayTests.length === 0 ? <p className={a.summaryEmpty}>No paper tests scheduled today.</p> : (
+                    <ol className={a.list}>
+                      {todayTests.map((test) => {
+                        const person = names.get(test.candidateId);
+                        const timing = test.end <= now ? "Time ended" : test.start <= now ? "In progress" : test === nextTest ? "Next" : "Scheduled";
+                        return <li className={a.todayRow} key={test.id} data-timing={timing}>
+                          <span className={a.testTime}><time dateTime={test.start.toISOString()}>{clock(test.start)}</time>–<time dateTime={test.end.toISOString()}>{clock(test.end)}</time></span>
+                          <span className={a.who}>
+                            <button type="button" className={a.name} onClick={(event) => openVisit(event.currentTarget, test.key)}>{person?.name ?? "Unknown candidate"}</button>
+                            <span className={a.sub}>{[test.subject, "room" in test ? test.room : null].filter(Boolean).join(" · ")}</span>
+                          </span>
+                          <span className={a.timing}>{timing}</span>
+                          {test.start > now && <span className={`${a.action} ${a.testPrint}`}><PrintPaper library={data.library} subject={test.subject} name={person?.name} candidateId={test.candidateId} date={day(test.start)} /></span>}
+                        </li>;
+                      })}
+                    </ol>
+                  )}
+                </section>
+                <section className={a.summaryCard} aria-labelledby="paper-results-title">
+                  <header className={a.summaryHeader}>
+                    <h2 id="paper-results-title" className={a.blockTitle}>{showAllResults ? "All paper results" : "Recent paper results"}</h2>
+                    {results.length > 0 && <button type="button" className={a.summaryLink} aria-expanded={showAllResults} aria-controls="paper-result-list" onClick={() => setShowAllResults(!showAllResults)}>{showAllResults ? "Show recent" : `View all results (${results.length})`}</button>}
+                  </header>
+                  <div id="paper-result-list">
+                    {listedResults.length === 0 && <p className={a.summaryEmpty}>{results.length ? "No final results yet." : "No paper results yet."}</p>}
+                    {listedResults.map(({ paper, row, person, score }) => {
+                      const updated = new Date(paper.updatedAt);
+                      return <article key={paper.id} className={a.recentResult}>
+                        <div className={a.resultHead}>
+                          <span className={a.who}>
+                            <button type="button" className={a.name} onClick={(event) => openVisit(event.currentTarget, row.key, paper.id)}>{person.name}</button>
+                            <span className={a.sub}>{paper.subject}</span>
+                          </span>
+                          {paper.source === "tracker"
+                            ? <span className={a.sub}>{paper.history?.date || "No date recorded"}</span>
+                            : <time className={a.sub} dateTime={updated.toISOString()}>Updated {formatInTimeZone(updated, ZONE, "d MMM yyyy")}</time>}
+                        </div>
+                        <PaperBadge score={score} />
+                      </article>;
+                    })}
+                    {!showAllResults && pendingResults > 0 && <p className={a.summaryEmpty}>{pendingResults} {pendingResults === 1 ? "paper has" : "papers have"} no final result.</p>}
+                  </div>
+                </section>
+              </div>
+              <div className={a.workFilters}>
+                <label className={`${css.filterSelect} ${a.headFilter}`}>
+                  Head
+                  <select value={head} onChange={(event) => setHead(event.target.value)}>
+                    <option value="">All</option>
+                    {data.config.interviewers.map((person) => (
+                      <option key={person.canonicalKey} value={person.canonicalKey}>{heads.get(person.canonicalKey) ?? person.canonicalKey}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
               <div className={a.cols}>
                 <section className={a.block} aria-labelledby="todo-title">
                   <div className={a.titleRow}>
@@ -1177,18 +1303,19 @@ export function AssessmentScreen({
           )}
         </section>
       </div>
-      {open && candidate && (
+      {active && open && candidate && (
         <AssessmentPanel
           key={open.key}
           candidate={candidate}
           row={open}
           papers={papers.get(open.candidateId) ?? []}
+          paperId={openPaper?.key === open.key ? openPaper.id : undefined}
           mocks={mocks.get(open.candidateId) ?? []}
           data={data}
           command={command}
           reload={reload}
           busy={busy}
-          onClose={() => onSelectVisit(null)}
+          onClose={closeVisit}
         />
       )}
     </div>

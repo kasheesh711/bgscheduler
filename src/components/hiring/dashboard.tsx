@@ -614,7 +614,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
           <RunSheetScreen data={data} />
         </div>
         <div hidden={view !== "assessment"} className={css.viewPane}>
-          <AssessmentScreen data={data} selectedVisit={assessmentVisit} onSelectVisit={setAssessmentVisit} onOpenRecord={openRecord} command={command} reload={reload} busy={busy} />
+          <AssessmentScreen data={data} selectedVisit={assessmentVisit} onSelectVisit={setAssessmentVisit} onOpenRecord={openRecord} command={command} reload={reload} busy={busy} active={view === "assessment"} />
         </div>
         {/* Keep the Overview state after its first visit, including its search, sort and open résumé. */}
         {showOverview && insights && <div className={css.layout} hidden={view !== "overview"}>
