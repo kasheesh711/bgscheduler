@@ -48,6 +48,8 @@ const WORKSPACE_URL = "https://bgscheduler.vercel.app/post-class-feedback";
 export interface PostClassNotificationSenders {
   primary: ScheduleEmailSender;
   backup: ScheduleEmailSender;
+  /** Sender for staff mail (the admin digest); falls back to the key's sender when absent. */
+  staff?: ScheduleEmailSender;
 }
 
 export interface PostClassReminderResult {
@@ -201,6 +203,8 @@ function defaultSenders(): PostClassNotificationSenders {
   return {
     primary: createOutboundEmailSender("primary"),
     backup: createOutboundEmailSender("backup"),
+    // The admin digest is staff mail, so it leaves from admin@; tutor reminders keep the tutor sender.
+    staff: createOutboundEmailSender("primary", { audience: "staff" }),
   };
 }
 
@@ -952,7 +956,7 @@ async function attemptDelivery(
 
   const attemptNumber = claimed.attemptCount;
   const senderKey = postClassSenderKeyForAttempt(attemptNumber);
-  const sender = senders[senderKey];
+  const sender = (loaded.run.kind === "admin_digest" && senders.staff) || senders[senderKey];
   const [createdAttempt] = await db.insert(schema.postClassNotificationAttempts).values({
     deliveryId,
     attemptNumber,
