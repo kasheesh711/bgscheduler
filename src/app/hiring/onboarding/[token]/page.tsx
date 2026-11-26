@@ -21,7 +21,7 @@ async function Body({ params, searchParams }: Props) {
   } catch (error) {
     return <p role="alert">{error instanceof HiringError ? error.message : "Tutor onboarding is temporarily unavailable. Contact BeGifted."}</p>;
   }
-  return <OnboardingForm token={token} {...view} lineIssue={query.line === "review"} />;
+  return <OnboardingForm key={token} token={token} {...view} lineIssue={query.line === "review"} />;
 }
 
 export default function Page(props: Props) {
