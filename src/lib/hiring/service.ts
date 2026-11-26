@@ -1066,8 +1066,8 @@ export async function dashboard(db: Database = getDb()) {
   }
   const invitedCalls = new Set(inviteOutbox.filter((o) => o.status === "sent" && o.key === `${o.candidateId}:call-invite`).map((o) => o.candidateId));
   const bookedCalls = new Set(calls.map((call) => call.candidateId));
-  const candidates = [];
-  const assessmentCandidates = [];
+  const candidates: ReturnType<typeof dashboardCandidate>[] = [];
+  const assessmentCandidates: ReturnType<typeof dashboardCandidate>[] = [];
   for (const { recent, ...candidate } of candidateRows) {
     const present = dashboardCandidate(candidate, config, invitedCalls.has(candidate.id), bookedCalls.has(candidate.id));
     (recent ? candidates : assessmentCandidates).push(present);
