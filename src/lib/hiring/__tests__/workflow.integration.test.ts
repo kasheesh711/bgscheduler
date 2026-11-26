@@ -704,7 +704,7 @@ describe("hiring workflow persistence", () => {
     });
   });
   describe("one-visit booking", () => {
-    const LINE = "https://lin.ee/OjMHF41";
+    const LINE = "https://line.me/R/ti/p/@699fovgg";
     const LINK = new Date("2026-11-30T00:00:00Z");
     const EXAM = "2026-11-02T03:00:00.000Z";
     // The mock starts 15 minutes after the exam ends (VISIT_GAP_MINUTES).
