@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
+const staffSend = vi.hoisted(() => vi.fn(async () => ({ id: "gmail-1" })));
+const createOutboundEmailSender = vi.hoisted(() => vi.fn(() => ({ sendEmail: staffSend })));
+vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender }));
 vi.mock("@/lib/admissions/calendar", () => ({
   getOpenDeadlinesInRange: vi.fn(async () => []),
 }));
@@ -12,9 +15,11 @@ import {
   admissionsCaseMembers,
   admissionsCases,
   admissionsCaseTasks,
+  admissionsCounselors,
   admissionsNotificationLog,
   admissionsNotificationRuns,
   admissionsSelfReportSections,
+  adminUsers,
 } from "@/lib/db/schema";
 import { getOpenDeadlinesInRange } from "@/lib/admissions/calendar";
 import { listAnnouncementsForCase } from "@/lib/admissions/announcements";
@@ -172,6 +177,26 @@ describe("sendAdmissionsEmail", () => {
     expect(result).toEqual({ skipped: true, resendEmailId: null, logId: null });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(inserts).toHaveLength(0);
+  });
+
+  it.each([
+    ["an enabled admin user", adminUsers],
+    ["an active counselor", admissionsCounselors],
+    ["an active counselor member", admissionsCaseMembers],
+  ])("sends staff mail to %s as admin@ through Gmail, not Resend", async (_who, table) => {
+    const { db, inserts } = makeDb({
+      selects: new Map<unknown, SelectBehavior>([[admissionsNotificationLog, { limit: [] }], [table, { limit: [{ id: "staff-1" }] }]]),
+    });
+
+    const result = await sendAdmissionsEmail({ ...input, dedupeKey: "key-staff" }, db);
+
+    expect(createOutboundEmailSender).toHaveBeenCalledWith("primary", { strictOutcome: true, audience: "staff" });
+    expect(staffSend).toHaveBeenCalledWith(expect.objectContaining({
+      to: "student@example.com", text: "Hello", idempotencyKey: "admissions:key-staff",
+    }));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(inserts[0].values).toEqual(expect.objectContaining({ resendEmailId: "gmail-1" }));
+    expect(result.skipped).toBe(false);
   });
 
   it("sends via Resend and records the log row with the resendEmailId", async () => {

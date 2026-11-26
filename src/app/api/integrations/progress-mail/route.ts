@@ -11,7 +11,7 @@ export async function POST(request:Request) {
  try {
   const body=await request.text();if(body.length>200000)return Response.json({error:transferText.mail_size},{status:413});
   const input=inputSchema.parse(JSON.parse(body));
-  const sent=await createOutboundEmailSender("primary",{strictOutcome:true}).sendEmail(input);
+  const sent=await createOutboundEmailSender("primary",{strictOutcome:true,audience:input.idempotencyKey.startsWith("progress-test-digest:")?"staff":"teacher"}).sendEmail(input);
   return Response.json(sent,{headers:{"Cache-Control":"private, no-store"}});
  }catch(error){
   const rejected=error instanceof ScheduleEmailRejection||error instanceof z.ZodError;

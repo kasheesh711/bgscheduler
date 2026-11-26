@@ -638,7 +638,7 @@ export async function processJobs(
           if (content) {
             assertDeliveryRecipients([job.recipient]);
             await (
-              options.sender || createOutboundEmailSender()
+              options.sender || createOutboundEmailSender("primary", { audience: "staff" })
             ).sendEmail({
               to: job.recipient,
               ...content,

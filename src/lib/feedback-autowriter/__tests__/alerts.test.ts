@@ -38,13 +38,11 @@ function judgeFailing(judge: Partial<NonNullable<PendingAlert["judge"]>>, overri
 
 
 describe("autowriter alert transport", () => {
-  it.each([[undefined, "resend"], ["", "resend"], ["apps_script", "apps_script"], ["gmail", "gmail"]])(
-    "defaults an unset transport to Resend and keeps an explicit choice (%s)", async (configured, expected) => {
-      vi.stubEnv("OUTBOUND_EMAIL_TRANSPORT", configured);
-      expect(await sendAlertDigest({ alerts: [alert()], recipients: ["owner@example.test"], halt: NOT_HALTED })).toEqual({ sent: true, error: null });
-      expect(createOutboundEmailSender).toHaveBeenCalledWith("primary", { strictOutcome: true, audience: "staff" },
-        expect.objectContaining({ OUTBOUND_EMAIL_TRANSPORT: expected }));
-    });
+  it.each([undefined, "", "apps_script", "resend"])("sends as staff mail whatever the transport (%s)", async (configured) => {
+    vi.stubEnv("OUTBOUND_EMAIL_TRANSPORT", configured);
+    expect(await sendAlertDigest({ alerts: [alert()], recipients: ["owner@example.test"], halt: NOT_HALTED })).toEqual({ sent: true, error: null });
+    expect(createOutboundEmailSender).toHaveBeenCalledWith("primary", { strictOutcome: true, audience: "staff" });
+  });
 });
 
 describe("buildAlertDigest", () => {
