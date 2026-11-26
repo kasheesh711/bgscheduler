@@ -138,9 +138,9 @@ it("shows None for empty sections and sends nothing when paused or the group cha
 
 it("announces an invitation only after Gmail accepts it, once across delivery retries", async () => {
   const c = await candidate();
-  await db.update(s.hiringCandidates).set({ stage: "onsite_invited", visitSubject: "Mathematics" }).where(eq(s.hiringCandidates.id, c.id));
-  await db.insert(s.hiringOutbox).values({ candidateId: c.id, key: `${c.id}:visit-invite`, kind: "email",
-    payload: { workflowStage: "onsite_invited", to: "candidate@example.com", subject: "Onsite invite", text: "Book your visit" } });
+  await db.update(s.hiringCandidates).set({ stage: "paper_passed", paperPassedSubjects: ["Mathematics"] }).where(eq(s.hiringCandidates.id, c.id));
+  await db.insert(s.hiringOutbox).values({ candidateId: c.id, key: `${c.id}:mock-invite`, kind: "email",
+    payload: { workflowStage: "paper_passed", to: "candidate@example.com", subject: "Mock invite", text: "Book your mock teaching" } });
   const send = vi.fn().mockRejectedValueOnce(new Error("Connection lost"));
   vi.mocked(createOutboundEmailSender).mockReturnValue({ sendEmail: send });
   await deliverOutbox(db, config);
@@ -154,7 +154,7 @@ it("announces an invitation only after Gmail accepts it, once across delivery re
   await deliverOutbox(db, config);
   const notices = await db.select().from(s.hiringRecruitmentDeliveries);
   expect(notices).toHaveLength(1);
-  expect(notices[0]).toMatchObject({ notice: "invite_sent", message: expect.stringContaining("✉️ Paper test invite sent") });
+  expect(notices[0]).toMatchObject({ notice: "invite_sent", message: expect.stringContaining("✉️ Mock invite sent") });
   expect(notices[0].message).toContain("\ncandidate@example.com");
   expect((await db.select().from(s.hiringOutbox))[0].status).toBe("sent");
   expect(send).toHaveBeenCalledTimes(2);
@@ -167,11 +167,12 @@ it("puts the email and the phone in the form notice, or says that none is record
   expect(messages).toContainEqual(expect.stringMatching(/^📝 Form completed · .+\nWith · Mathematics\nwith@example\.com · \+66812345678$/));
   expect(messages).toContainEqual(expect.stringContaining("Without · Mathematics\nNo email or phone recorded"));
 });
-it("recognizes old mock invitations but excludes reminders and booking confirmations", async () => {
+it("announces mock invitations only: no paper test invite, reminder or booking confirmation", async () => {
   const c = await candidate();
   c.paperPassedSubjects = ["Mathematics"];
   for (const [key, workflowStage, bookingId] of [
     ["tracker-mock:hash", "paper_passed", null],
+    ["visit-invite", "onsite_invited", null],
     ["visit-reminder:1", "onsite_invited", null],
     ["booking-confirmation", undefined, "00000000-0000-4000-8000-000000000001"],
     ["pre-screen", "pre_screen", null],

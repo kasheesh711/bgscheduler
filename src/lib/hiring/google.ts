@@ -117,6 +117,9 @@ export async function deliverCalendar(
   // A paper row with no visitId is the old flow or the delivery test, which stay as they were.
   const staff = booking.kind === "mock" ? [...new Set([...VISIT_STAFF, ...heads.map((head) => head.email.toLowerCase())])]
     : booking.kind === "paper" && booking.visitId ? VISIT_STAFF : [];
+  // A head invited to a visit's paper test before 25 Nov 2026 is taken off (no email); the mock keeps its head.
+  const paperHeads = new Set(booking.kind === "paper" && booking.visitId
+    ? heads.map((head) => head.email.toLowerCase()).filter((email) => !staff.includes(email)) : []);
   // R1: HR Interview: the guests are HR (`interviewerEmail`) and the candidate, by the same rule as a visit. Google adds a
   // Meet link (Kevin, 22 Nov 2026), and its own invitation gives the candidate the join button.
   const call = booking.kind === "call";
@@ -163,11 +166,12 @@ export async function deliverCalendar(
         409,
         "The Calendar copy was changed. Review this appointment.",
       );
-    const attendees = (existing.attendees ?? []) as Array<{ email: string; [key: string]: unknown }>;
+    const existingAttendees = (existing.attendees ?? []) as Array<{ email: string; [key: string]: unknown }>;
+    const attendees = existingAttendees.filter((a) => !paperHeads.has(a.email?.toLowerCase()));
     const missing = staff.filter(email => !attendees.some(a => a.email?.toLowerCase() === email));
     // An event made before the current title or color is brought up to date without a new invitation email.
     const changes = {
-      ...(missing.length > 0 && { attendees: [...attendees, ...missing.map(email => ({ email }))] }),
+      ...((missing.length > 0 || attendees.length < existingAttendees.length) && { attendees: [...attendees, ...missing.map(email => ({ email }))] }),
       ...(existing.summary !== summary && { summary }),
       ...(colorId && existing.colorId !== colorId && { colorId }),
     };
