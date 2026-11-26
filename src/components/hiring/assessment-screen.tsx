@@ -986,7 +986,10 @@ export function AssessmentScreen({
   const checks = useMemo(() => new Map(data.paperChecks.map((check) => [check.resultId, check])), [data.paperChecks]);
   const results = useMemo(() => paperResults.flatMap(({ paper, row }) => {
     const person = names.get(paper.candidateId);
-    return person ? [{ paper, row, person, score: paperScore(paper, data.config, checks.get(paper.id)) }] : [];
+    if (!person) return [];
+    const score = paperScore(paper, data.config, checks.get(paper.id));
+    if (paper.stuck) score.verdict = "failed";
+    return [{ paper, row, person, score }];
   }), [paperResults, names, data.config, checks]);
   const isFinal = ({ score }: (typeof results)[number]) => score.verdict === "pass" || score.verdict === "fail" || score.verdict === "recorded";
   const finalResults = results.filter(isFinal);
@@ -1018,10 +1021,16 @@ export function AssessmentScreen({
     [person.name, person.email].some((value) => value?.normalize().toLowerCase().includes(search)),
   ).sort((left, right) => left.name.localeCompare(right.name)).slice(0, SEARCH_LIMIT) : [];
   const matches = !demo && searchResponse && !searchResponse.failed ? searchResponse.candidates : localMatches;
+  let lookupStatus = `${matches.length} ${matches.length === 1 ? "candidate" : "candidates"} found`;
+  if (searchResponse?.failed && !demo) lookupStatus = "Could not search all candidates. Only matches from this page are shown.";
+  else if (!searchResponse && !demo) lookupStatus = "Searching candidates…";
+  else if (!matches.length) lookupStatus = "No candidates match.";
+  else if (matches.length === SEARCH_LIMIT) lookupStatus = "Showing up to 25 matches. Enter more of the name or email.";
   const matchRows = matches.map((person) => {
     const result = results.find(({ paper }) => paper.candidateId === person.id);
-    const row = result?.row ?? allRows.find((visit) => visit.candidateId === person.id && visit.kinds.includes("paper"));
-    return { person, row, paperId: result?.paper.id };
+    const visits = allRows.filter((visit) => visit.candidateId === person.id && visit.kinds.includes("paper"));
+    const row = result?.row ?? visits.find((visit) => visit.status === "confirmed") ?? visits[0];
+    return { person, row, result };
   });
 
   function openVisit(button: HTMLButtonElement, key: string, paperId?: string) {
@@ -1197,14 +1206,20 @@ export function AssessmentScreen({
               </div>
               {search && (
                 <>
-                  <p role="status" className={a.quiet}>
-                    {searchResponse?.failed && !demo ? "Could not search all candidates. Only matches from this page are shown." : !searchResponse && !demo ? "Searching candidates…" : !matches.length ? "No candidates match." : matches.length === SEARCH_LIMIT ? "Showing up to 25 matches. Enter more of the name or email." : `${matches.length} ${matches.length === 1 ? "candidate" : "candidates"} found`}
-                  </p>
+                  <p role="status" className={a.quiet}>{lookupStatus}</p>
                   {matchRows.length > 0 && <ul className={`${a.list} ${a.matches}`}>
-                    {matchRows.map(({ person, row, paperId }) => <li key={person.id}>
-                      <button type="button" className={a.match} onClick={(event) => row ? openVisit(event.currentTarget, row.key, paperId) : onOpenRecord(person.id)}>
+                    {matchRows.map(({ person, row, result }) => <li key={person.id}>
+                      <button type="button" className={a.match} onClick={(event) => row ? openVisit(event.currentTarget, row.key, result?.paper.id) : onOpenRecord(person.id)}>
                         <span><b>{person.name}</b>{person.email && <span className={a.sub}>{person.email}</span>}</span>
-                        <span className={a.sub}>{row?.subject || (row ? "Subject unknown" : "No paper test recorded")}</span>
+                        <span className={a.matchDetail}>
+                          {row && <span className={a.sub}>{result?.paper.subject || row.subject || "Subject unknown"}</span>}
+                          {result ? (result.score.verdict === "recorded" ? <span>{result.score.note || "Tracker result"}</span> : <span className={a.matchVerdict}>
+                            <VerdictWord verdict={result.score.verdict} />
+                            {result.score.percent !== null && <b className={a.pct}>{result.score.percent}%</b>}
+                          </span>) : row?.at ? (
+                            <span>{row.status === "cancelled" ? "Cancelled" : row.status === "no_show" ? "No-show" : "Booked for"} {when(row.at)}</span>
+                          ) : <span className={a.sub}>No paper test recorded</span>}
+                        </span>
                       </button>
                     </li>)}
                   </ul>}
@@ -1245,7 +1260,7 @@ export function AssessmentScreen({
                     <ol className={a.list}>
                       {todayTests.map((test) => {
                         const person = names.get(test.candidateId);
-                        const timing = test.end <= now ? "Time ended" : test.start <= now ? "In progress" : test === nextTest ? "Next" : "Scheduled";
+                        const timing = test.end <= now ? "Time ended" : test.start <= now ? "In progress" : test.start.getTime() === nextTest?.start.getTime() ? "Next" : "Scheduled";
                         return <li className={a.todayRow} key={test.id} id={`slot-paper-${test.candidateId}-${test.start.getTime()}`} data-timing={timing} tabIndex={-1}>
                           <span className={a.testTime}><time dateTime={test.start.toISOString()}>{clock(test.start)}</time>–<time dateTime={test.end.toISOString()}>{clock(test.end)}</time></span>
                           <span className={a.who}>
