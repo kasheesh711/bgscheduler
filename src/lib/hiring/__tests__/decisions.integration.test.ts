@@ -4,11 +4,14 @@ import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
-import { configSchema } from "../model";
+import { configSchema, instant, localDate } from "../model";
 import { discardDecision, draftDecision, resultEmail, saveDraft, sendDecision, sendRefusal } from "../decisions";
 import { reviewCandidate } from "../service";
 import { isNewFlow, observeSeekState } from "../sources";
 import { deliverOutbox } from "../worker";
+
+// A rejection decided at 19:00 Bangkok yesterday is past the 18:00 hold, so it may leave at once.
+const evening = () => instant(localDate(new Date(Date.now() - 86400000)), 19 * 60);
 
 vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
 vi.mock("../availability", () => ({ availableSlots: vi.fn(), verifyLiveSlot: vi.fn(), readLiveBusy: vi.fn(async () => { throw new Error("no Wise in tests"); }) }));
@@ -129,11 +132,19 @@ describe("sending", () => {
   it("delivers that one row at once, and leaves other rows alone", async () => {
     const { c, draft } = await drafted();
     await db.insert(s.hiringOutbox).values({ key: "other", candidateId: c.id, kind: "email", payload: { to: "x@example.com", subject: "Other", text: "Other" } });
-    const key = await sendDecision(draft.id, email, "person", db);
+    const key = await sendDecision(draft.id, email, "person", db, evening());
     expect(await deliverOutbox(db, on, 1, false, key)).toBe(1);
     expect(sendEmail).toHaveBeenCalledTimes(1);
     expect(sendEmail.mock.calls[0][0]).toMatchObject({ to: "person@example.com", subject: "Your result" });
     expect((await outbox()).find((r) => r.key === "other")!.status).toBe("pending");
+  });
+  it("holds a rejection decided before 18:00 until 18:00 Bangkok, for the delivery cron", async () => {
+    const { draft } = await drafted();
+    const morning = instant(localDate(new Date()), 10 * 60);
+    const key = await sendDecision(draft.id, email, "person", db, morning);
+    const row = (await outbox()).find((r) => r.key === key)!;
+    expect(row.nextAttemptAt?.toISOString()).toBe(instant(localDate(morning), 18 * 60).toISOString());
+    expect(row.payload).toMatchObject({ closeLoop: true, workflowStage: "rejected" });
   });
   it.each([
     { enabled: false, deliveryEnabled: true },
@@ -179,7 +190,7 @@ describe("no duplicate result email", () => {
     const [booking] = await db.insert(s.hiringBookings).values({ candidateId: c.id, kind: "paper", subjects: ["Mathematics"], calendarOwner: "o@example.com", startTime: past, endTime: new Date(past.getTime() + 3600000), status: "confirmed", visitId: crypto.randomUUID(), evidence: {} as never }).returning();
     await db.insert(s.hiringOutbox).values({ key: "visit-email", candidateId: c.id, bookingId: booking.id, kind: "email", status: "failed", firstAttemptAt: past, payload: { to: "a@example.com", subject: "Visit confirmed", text: "See you" } });
     const draft = await draftDecision(c.id, { decision: "reject", reason: "Left early" }, "a", db);
-    await sendDecision(draft.id, email, "a", db);
+    await sendDecision(draft.id, email, "a", db, evening());
     await deliverOutbox(db, on);
     expect(sendEmail.mock.calls.map((call) => call[0].subject)).toEqual(["Your result"]);
     expect((await outbox()).find((r) => r.key === "visit-email")!.status).toBe("cancelled");

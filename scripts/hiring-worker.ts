@@ -7,7 +7,7 @@ import { z } from "zod";
 import { loadEnvConfig } from "@next/env";
 import { getDb } from "../src/lib/db";
 import { hiringCandidates, hiringOutbox, hiringSettings } from "../src/lib/db/schema";
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, ne, or } from "drizzle-orm";
 import {
   LEGACY_SEEK_JOB_ID,
   configSchema,
@@ -89,7 +89,9 @@ async function main() {
       const others = await db
         .select({ key: hiringOutbox.key })
         .from(hiringOutbox)
-        .where(and(inArray(hiringOutbox.status, ["pending", "failed", "uncertain", "processing"]), ne(hiringOutbox.key, key)));
+        // A pending row held until later (a rejection waiting for 18:00) is not in the way.
+        .where(and(inArray(hiringOutbox.status, ["pending", "failed", "uncertain", "processing"]), ne(hiringOutbox.key, key),
+          or(ne(hiringOutbox.status, "pending"), isNull(hiringOutbox.nextAttemptAt), lte(hiringOutbox.nextAttemptAt, new Date()))));
       const refusal = sendOneRefusal(candidate?.stage, await form(), others.map((o) => o.key));
       if (refusal) throw new Error(refusal);
       const { sent } = await requestDelivery({ mode: "one", key });

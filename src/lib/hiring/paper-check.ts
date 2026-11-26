@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, lte, ne, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
-import { headRecommendation, queueFinalResult } from "./decisions";
+import { headRecommendation, queueFinalResult, rejectionSendAt } from "./decisions";
 import { paperResultEmail } from "./email";
 import { computeSheet, passRulesFor, type PaperSheet } from "./marking-sheet";
 import { HiringError, PAPER_CHECK_FROM_PERCENT, paperCheckerFor, ZONE, type Subject } from "./model";
@@ -89,11 +89,11 @@ async function requestCheck(tx: Database, fail: NonNullable<Awaited<ReturnType<t
 }
 
 /** Tells the recruitment group the head's answer and what the tool did. A missing group is not an error. */
-async function noticeCheckDone(tx: Database, input: { name: string; subject: Subject; head: string; percent: number; outcome: string; override: string | null; held: string | null; mockAt: Date | null; resultId: string; config: { recruitmentLineGroupId: string | null } }) {
+async function noticeCheckDone(tx: Database, input: { name: string; subject: Subject; head: string; percent: number; outcome: string; override: string | null; held: string | null; mockAt: Date | null; resultId: string; now: Date; config: { recruitmentLineGroupId: string | null } }) {
   if (!input.config.recruitmentLineGroupId) return;
   const next = input.outcome === "passed"
     ? (input.mockAt ? `Done: the mock stays booked, ${lineWhen(input.mockAt)}.` : "Next: invite the candidate to a mock.")
-    : input.outcome === "rejected" ? "Done: the mock is cancelled and the rejection email is sent."
+    : input.outcome === "rejected" ? `Done: the mock is cancelled and the rejection email ${rejectionSendAt(input.now) ? "goes out at 6 pm today" : "is sent now"}.`
       : `Next: Admin, open the Hiring page and send the result. No email was sent.${input.held ? ` (${input.held})` : ""}`;
   await enqueueRecruitmentLine(tx, `paper-check-done:${input.resultId}`, input.config.recruitmentLineGroupId,
     `${input.outcome === "passed" ? "✅ Paper PASS" : "❌ Paper NOT PASSED"} · ${input.percent}% · checked by ${input.head}${input.override ? ` (head override)\nWhy: ${input.override}` : ""}\n${lineWho(input.name, input.subject)}\n${next}`, null, "paper_check_done");
@@ -176,7 +176,7 @@ export async function afterPaperCounted(db: Database, candidateId: string, subje
     if (check && checkedBy) {
       const { config } = await settings(tx);
       const mock = await futureMock(tx, candidateId, subject, now);
-      await noticeCheckDone(tx, { name: candidate.name, subject, head: checkedBy, percent: check.percent, outcome, override: check.override ?? null, held: heldFor, mockAt: mock?.startTime ?? null, resultId: check.resultId, config });
+      await noticeCheckDone(tx, { name: candidate.name, subject, head: checkedBy, percent: check.percent, outcome, override: check.override ?? null, held: heldFor, mockAt: mock?.startTime ?? null, resultId: check.resultId, now, config });
     }
     return outcome;
   });

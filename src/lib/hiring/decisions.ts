@@ -3,7 +3,7 @@ import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
 import { hireBlockers } from "./assessment-view";
-import { contractTestAllowed, HiringError, runtimeWritesAllowed, type HiringConfig } from "./model";
+import { contractTestAllowed, HiringError, instant, localDate, runtimeWritesAllowed, type HiringConfig } from "./model";
 import { OFFER_LETTERS, type OfferType } from "./offer-letters";
 import { hiringEmailHtmlFromText } from "./email";
 import { bookingToken } from "./tokens";
@@ -97,6 +97,12 @@ export async function headRecommendation(db: Database, candidateId: string) {
   return row;
 }
 
+/** A rejection waits until 18:00 Bangkok on the same day; after 18:00 it goes at once (Kevin, 26 Nov 2026). */
+export function rejectionSendAt(now: Date): Date | null {
+  const six = instant(localDate(now), 18 * 60);
+  return six > now ? six : null;
+}
+
 /**
  * The caller holds the candidate row lock. `styled` replaces the plain Reject text. `ignore` names bookings that may
  * still be open: the paper test that has just been marked.
@@ -144,6 +150,7 @@ export async function queueFinalResult(tx: Database, candidate: Awaited<ReturnTy
   const stage = STAGE[decision];
   await tx.update(d).set({ status: "replaced" }).where(and(eq(d.candidateId, candidate.id), eq(d.status, "draft")));
   await enqueue(tx, { key: outboxKey, candidateId: candidate.id, kind: "email", createdAt: now,
+    nextAttemptAt: decision === "reject" ? rejectionSendAt(now) : null,
     payload: { to: candidate.email!, subject: message.subject, text: message.body, html, closeLoop: true, workflowStage: stage } });
   await tx.update(d).set({ outboxKey, emailSubject: message.subject, emailBody: archivedBody ?? message.body }).where(eq(d.id, row.id));
   await tx.update(s.hiringCandidates).set({ stage, inviteExpiresAt: null, revision: candidate.revision + 1, updatedAt: now })
@@ -275,8 +282,10 @@ export async function sendDecision(id: string, input: { emailSubject: string; em
       candidateId: candidate.id,
       kind: "email",
       createdAt: now,
+      nextAttemptAt: draft.decision === "reject" ? rejectionSendAt(now) : null,
       // A later change of decision moves the stage, and delivery then cancels this row if it has not left.
-      payload: { to: candidate.email!, subject: emailSubject, text: emailBody, workflowStage: stage },
+      // closeLoop lets the delivery cron send a held rejection at 18:00 without the Mac worker.
+      payload: { to: candidate.email!, subject: emailSubject, text: emailBody, workflowStage: stage, closeLoop: true },
     });
     if (!queued) throw new HiringError(409, "This email was already queued.");
     await tx
