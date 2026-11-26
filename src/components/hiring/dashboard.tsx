@@ -395,6 +395,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
             {name === "heads" && (data?.viewerHead ?? head) ? "My list" : VIEWS[name]}
           </button>
         ))}
+        {!demo && <Link prefetch={false} href="/hiring/ats-outcomes">ATS outcomes</Link>}
         {/* A full page load, so the demo starts clean and the real data is gone from the screen. */}
         {!demo && <button type="button" onClick={() => window.location.assign("/hiring?demo=1")}>Demo</button>}
       </nav>

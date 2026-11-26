@@ -305,3 +305,14 @@ describe("buildInsights with the visit stages", () => {
     expect(result.upcomingByInterviewer.Peat).toBe(4);
   });
 });
+
+describe("ATS outcomes", () => {
+  it("keeps a missing score out of the median and counts an exact cutoff as meeting it", async () => {
+    const { summarizeScores } = await import("../ats-outcomes");
+    const score = (value: number) => ({ score: value, parts: [{ name: "Degree", max: 10, earned: 5 }], penalty: 0 });
+    expect(summarizeScores([null, score(59.5), score(60)], 60)).toMatchObject({
+      total: 3, scored: 2, median: 59.75, atOrAbove: 1, bands: [0, 0, 1, 1, 0],
+    });
+    expect(summarizeScores([], 60)).toMatchObject({ total: 0, median: null, meanPenalty: null });
+  });
+});
