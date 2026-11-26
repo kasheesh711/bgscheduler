@@ -199,11 +199,16 @@ export const afterPaperCountedQuietly = (db: Database, candidateId: string, subj
 /** The checks for the dashboard: open ones first. The path is the head's link, so an admin can open it too. */
 export async function paperChecks(db: Database, now: Date) {
   const rows = await db.select().from(s.hiringAudit).where(inArray(s.hiringAudit.action, [PAPER_CHECK_REQUESTED, PAPER_CHECK_DONE]))
-    .orderBy(desc(s.hiringAudit.createdAt)).limit(500);
+    .orderBy(desc(s.hiringAudit.createdAt));
+  const completed = new Map<string, AuditRow>();
+  for (const row of rows) {
+    const resultId = row.detail.resultId;
+    if (row.action === PAPER_CHECK_DONE && typeof resultId === "string" && !completed.has(resultId)) completed.set(resultId, row);
+  }
   const requested = rows.filter((row) => row.action === PAPER_CHECK_REQUESTED);
   return requested.flatMap((row) => {
     const resultId = String(row.detail.resultId);
-    const done = rows.find((r) => r.action === PAPER_CHECK_DONE && r.detail.resultId === resultId);
+    const done = completed.get(resultId);
     let path: string | null = null;
     try {
       path = done ? null : paperCheckPath(resultId, now);
@@ -220,7 +225,14 @@ export async function paperChecks(db: Database, now: Date) {
       line: row.detail.line === true,
       requestedAt: row.createdAt.toISOString(),
       path,
-      done: done ? { passed: done.detail.passed === true, percent: Number(done.detail.percent), head: String(done.detail.head), at: done.createdAt.toISOString(), override: typeof done.detail.override === "string" ? done.detail.override : null } : null,
+      done: done ? {
+        passed: done.detail.passed === true,
+        percent: Number(done.detail.percent),
+        head: String(done.detail.head),
+        at: done.createdAt.toISOString(),
+        override: typeof done.detail.override === "string" ? done.detail.override : null,
+        marksAt: typeof done.detail.marksAt === "string" ? done.detail.marksAt : null,
+      } : null,
     }];
   });
 }

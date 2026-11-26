@@ -8,7 +8,7 @@ import { changePaperMarks, changePaperSubject, changeRubric, clearResultCheck } 
 import { RUBRIC_ITEMS, type RubricItem } from "@/lib/hiring/marking-sheet";
 import { configSchema, localDate, subjectSchema } from "@/lib/hiring/model";
 import { headWeek } from "@/lib/hiring/head-schedule";
-import { callCalendarState, candidateById, changePreScreenScore, dashboard, reviewCandidate, saveHeadDays, saveSettings, settings } from "@/lib/hiring/service";
+import { callCalendarState, candidateById, changePreScreenScore, dashboard, hiringCandidateRecord, reviewCandidate, saveHeadDays, saveSettings, searchHiringCandidates, settings } from "@/lib/hiring/service";
 import { moveInQueue, recordCall, resetQueueOrder, saveCallNotes } from "@/lib/hiring/queue";
 import { discardDecision, draftDecision, saveDraft, sendDecision } from "@/lib/hiring/decisions";
 import { deliverBookingMessages, deliverOutbox } from "@/lib/hiring/worker";
@@ -150,9 +150,19 @@ export async function GET(request: Request) {
         headers: { "Cache-Control": "no-store" },
       });
     }
-    const id = params.get("candidateId");
-    if (id !== null) {
-      const candidate = await candidateById(getDb(), z.uuid().parse(id));
+    const search = params.get("candidateSearch");
+    if (search !== null) {
+      const query = z.string().trim().min(1).max(200).parse(search);
+      return NextResponse.json({ candidates: await searchHiringCandidates(getDb(), query) }, { headers: { "Cache-Control": "no-store" } });
+    }
+    const candidateId = params.get("candidateId");
+    if (candidateId !== null) {
+      const id = z.uuid().parse(candidateId);
+      if (params.get("record") === "1") {
+        const candidate = await hiringCandidateRecord(getDb(), id);
+        return NextResponse.json({ candidate }, { headers: { "Cache-Control": "no-store" } });
+      }
+      const candidate = await candidateById(getDb(), id);
       return NextResponse.json(
         { id: candidate.id, profileText: candidate.profileText },
         { headers: { "Cache-Control": "no-store" } },
