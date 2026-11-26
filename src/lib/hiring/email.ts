@@ -10,7 +10,7 @@ import { hiringEmailAssetUrl, teacherEmailLogoUrl, type HIRING_EMAIL_ASSET_FILES
 import { teacherEmailPublicBaseUrl } from "@/lib/teacher-emails/config";
 import type { Subject } from "./model";
 
-export const HIRING_LINE_URL = "https://lin.ee/OjMHF41";
+export const HIRING_LINE_URL = "https://line.me/R/ti/p/@699fovgg";
 
 const CAMBRIDGE = "https://www.cambridgeinternational.org/programmes-and-qualifications/";
 const syllabus = (title: string, slug: string): EmailResource => ({

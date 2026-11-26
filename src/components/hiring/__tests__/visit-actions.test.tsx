@@ -7,7 +7,7 @@ import type { HiringCandidate } from "../dashboard";
 
 vi.mock("next/font/google", () => ({ Instrument_Serif: () => ({ variable: "" }) }));
 
-const LINE = "https://lin.ee/OjMHF41";
+const LINE = "https://line.me/R/ti/p/@699fovgg";
 const slot = {
   date: "2026-11-03",
   examStart: "2026-11-03T03:00:00.000Z",
@@ -98,7 +98,7 @@ describe("VisitBooking", () => {
   });
   it("makes the address in a notice a real link, with no second link in the footer, and renders no HTML from the text", () => {
     const html = page({ slots: [], notice: `<b>Closed</b>. Contact BeGifted on LINE: ${LINE}` });
-    expect(html.match(/href="https:\/\/lin\.ee\/OjMHF41"/g)).toHaveLength(1);
+    expect(html.match(/href="https:\/\/line\.me\/R\/ti\/p\/@699fovgg"/g)).toHaveLength(1);
     expect(html).toContain(">Contact BeGifted on LINE</a>");
     expect(html).toContain("&lt;b&gt;Closed&lt;/b&gt;");
     expect(html.match(/Contact BeGifted on LINE/g)).toHaveLength(1);

@@ -10,7 +10,7 @@ import cs from "./candidate.module.css";
 type View = Awaited<ReturnType<typeof bookingView>>;
 type VisitView = Awaited<ReturnType<typeof visitView>>;
 type CallView = Awaited<ReturnType<typeof callView> | ReturnType<typeof contractView>>;
-const LINE_URL = "https://lin.ee/OjMHF41";
+const LINE_URL = "https://line.me/R/ti/p/@699fovgg";
 /** A refusal the server explained; its words are shown as they are. */
 export class ApiError extends Error {}
 /** Network failures, non-JSON replies and empty refusals get one plain sentence with the LINE way out (Opus r30). */
