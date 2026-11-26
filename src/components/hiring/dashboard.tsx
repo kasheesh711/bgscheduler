@@ -16,7 +16,7 @@ import { candidateExtras, holdNote } from "@/lib/hiring/status";
 import { campaignNames } from "@/lib/hiring/seek-view";
 import type { dashboard } from "@/lib/hiring/service";
 import { CandidateInspector } from "./candidate-inspector";
-import { CandidateTable } from "./candidate-table";
+import { CandidateTable, focusCandidateResults } from "./candidate-table";
 import { EvidenceChart, LimitMeters, ScoreChart, SubjectChart } from "./pipeline-charts";
 import { AssessmentScreen } from "./assessment-screen";
 import { OperationsRail, WorkerBanner } from "./operations-rail";
@@ -62,6 +62,7 @@ export type CandidateFilter = {
   ids?: string[];
   /** What `ids` are, for the filter line ("Stuck" when absent). */
   label?: string;
+  timingEvidence?: Record<string, string>;
 };
 export type Command = (body: unknown, onReload?: (data: HiringData | null) => void, onError?: (message: string, status?: number) => void) => Promise<boolean>;
 export const NO_FILTER: CandidateFilter = { stage: "all", prescreen: "all", bucket: null, subject: null };
@@ -187,6 +188,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
   // The candidate whose résumé viewer is open. It loads the file only on request.
   const [resumeFor, setResumeFor] = useState<string | null>(null);
   const [filter, setFilter] = useState<CandidateFilter>(NO_FILTER);
+  const [previousResults, setPreviousResults] = useState<{ filter: CandidateFilter; opener: HTMLElement | null } | null>(null);
   // Read once by the Capacity tab; the Overview forecast compares with its hire-now numbers.
   const [capacity, setCapacity] = useState<CapacityReport | null>(null);
   // Head ticks not saved yet. They live here, not in the setup panel, so a tab switch does not drop them.
@@ -339,6 +341,11 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
       ),
     [data],
   );
+  function showTableFilter(next: CandidateFilter) {
+    setFilter(next);
+    focusCandidateResults();
+  }
+
   const candidate = data?.candidates.find((c) => c.id === selected);
   // Next.js commits pushState in a transition. In one transition, the panel mounts visible, so it can take focus.
   const openRecord = (id: string) =>
@@ -600,10 +607,13 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
               data={data}
               capacity={capacity}
               onOpen={setSelected}
-              onShow={(ids, label) => {
+              onShow={(ids, label, opener, timingEvidence) => {
                 // An empty list shows nobody, so a zero count never opens the whole table.
-                setFilter({ ...NO_FILTER, ids, label });
-                document.getElementById("candidate-table")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                setPreviousResults({
+                  filter: filter.ids && previousResults ? previousResults.filter : filter,
+                  opener: opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null),
+                });
+                showTableFilter({ ...NO_FILTER, ids: [...ids], label, timingEvidence });
               }}
             />
             {/* The table is the main work surface, so it sits right under the meters. The charts follow and read the same filter. */}
@@ -619,6 +629,11 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
               threshold={data.config.profileThreshold}
               filter={filter}
               setFilter={setFilter}
+              onReturnFromFinding={filter.ids && previousResults ? () => {
+                setFilter(previousResults.filter);
+                setPreviousResults(null);
+                previousResults.opener?.focus();
+              } : undefined}
               selected={selected}
               onSelect={setSelected}
               onOpenResume={(id) => {
@@ -631,10 +646,10 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
                 insights={insights}
                 threshold={data.config.profileThreshold}
                 filter={filter}
-                setFilter={setFilter}
+                setFilter={showTableFilter}
               />
               <EvidenceChart insights={insights} />
-              <SubjectChart insights={insights} filter={filter} setFilter={setFilter} />
+              <SubjectChart insights={insights} filter={filter} setFilter={showTableFilter} />
             </div>
           </div>
           {candidate ? (

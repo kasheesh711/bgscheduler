@@ -44,13 +44,14 @@ describe("buildGems", () => {
         person("two-rules", "review", { workRightsAnswer: "I require a visa", email: null }),
         person("low", "new", { profileScore: 50, workRightsAnswer: "I require a visa" }),
         person("idle", "onsite_invited"),
+        person("imported", "onsite_invited"),
         person("closed-idle", "rejected"),
         person("fresh", "onsite_invited"),
         person("booked", "onsite_booked"),
         person("both", "review", { workRightsAnswer: "I require a visa" }),
       ] as never,
       config as never,
-      { idle: { stageKey: "onsite_invited", daysInStage: 20, stuck: true }, "closed-idle": { stageKey: "rejected", daysInStage: 30, stuck: false }, fresh: { stageKey: "onsite_invited", daysInStage: 2, stuck: false }, booked: { stageKey: "onsite_booked", daysInStage: 20, stuck: false }, both: { stageKey: "review", daysInStage: 30, stuck: true } },
+      { imported: { stageKey: "onsite_invited", daysInStage: 20, stuck: true, importDateOnly: true }, idle: { stageKey: "onsite_invited", daysInStage: 20, stuck: true }, "closed-idle": { stageKey: "rejected", daysInStage: 30, stuck: false }, fresh: { stageKey: "onsite_invited", daysInStage: 2, stuck: false }, booked: { stageKey: "onsite_booked", daysInStage: 20, stuck: false }, both: { stageKey: "review", daysInStage: 30, stuck: true } },
       new Set(["booked"]),
     );
     expect(gems.school.map((g) => g.id)).toEqual(["school"]);

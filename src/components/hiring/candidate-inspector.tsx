@@ -118,6 +118,25 @@ export function AssessmentBlock({
   );
 }
 
+function HighSchoolPoints({ candidate, max }: { candidate: HiringCandidate; max: number }) {
+  if (!candidate.profileAssessment || max <= 0) return null;
+  return (
+    <section className={css.inspectorSection}>
+      <h3 className={css.inspectorHeading}>
+        High school points
+        <span className={css.num}>{round((candidate.highSchool?.fraction ?? 0) * max)}/{max}</span>
+      </h3>
+      <p className={css.inspectorText}>
+        {candidate.highSchool
+          ? `${candidate.highSchool.name} (${candidate.highSchool.tier === 1 ? "top tier" : "listed school"}).`
+          : candidate.profileAssessment.schools
+            ? "No listed high school found."
+            : "Not read yet. This application was scored before the high-school part."}
+      </p>
+    </section>
+  );
+}
+
 export function ProfileScoreBreakdown({ candidate, weights, showEvidence }: {
   candidate: HiringCandidate;
   weights: HiringConfig["profileWeights"];
@@ -139,21 +158,7 @@ export function ProfileScoreBreakdown({ candidate, weights, showEvidence }: {
           <p className={css.inspectorText}>{university?.reason ?? "No university confirmed."}</p>
         </section>
       )}
-      {candidate.profileAssessment && weights.school > 0 && (
-        <section className={css.inspectorSection}>
-          <h3 className={css.inspectorHeading}>
-            High school points
-            <span className={css.num}>{round((candidate.highSchool?.fraction ?? 0) * weights.school)}/{weights.school}</span>
-          </h3>
-          <p className={css.inspectorText}>
-            {candidate.highSchool
-              ? `${candidate.highSchool.name} (${candidate.highSchool.tier === 1 ? "top tier" : "listed school"}).`
-              : candidate.profileAssessment.schools
-                ? "No listed high school found."
-                : "Not read yet. This application was scored before the high-school part."}
-          </p>
-        </section>
-      )}
+      <HighSchoolPoints candidate={candidate} max={weights.school} />
       {candidate.profileScore !== null && candidate.workRightsPenalty > 0 && (
         <p className={css.inspectorText}>Work rights deduction: {round(candidate.workRightsPenalty)} points.</p>
       )}
@@ -612,6 +617,7 @@ export function CandidateInspector({
             ))}
           </section>
         )}
+        <HighSchoolPoints candidate={candidate} max={weights.school} />
         <details
           className={css.sourceText}
           open={resumeOpen}

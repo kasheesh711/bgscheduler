@@ -23,7 +23,7 @@ export function groupOptions(report: FunnelReport, campaigns: Campaign[]) {
       .reverse()
       .map((g) => ({
         value: g,
-        label: `Applied in ${new Date(`${g.slice(6)}-01`).toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" })}`,
+        label: `First seen in ${new Date(`${g.slice(6)}-01`).toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" })}`,
       })),
     ...keys
       .filter((g) => g.startsWith("week:"))
@@ -31,7 +31,7 @@ export function groupOptions(report: FunnelReport, campaigns: Campaign[]) {
       .reverse()
       .map((g) => {
         const [year, week] = g.slice(5).split("-W");
-        return { value: g, label: `Applied in week ${Number(week)} of ${year}` };
+        return { value: g, label: `First seen in week ${Number(week)} of ${year}` };
       }),
   ];
 }

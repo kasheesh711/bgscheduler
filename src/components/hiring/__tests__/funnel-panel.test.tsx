@@ -29,11 +29,11 @@ describe("funnel panel", () => {
       "All candidates",
       "Campaign: International Curriculum Tutors (SEEK 95633167)",
       "Campaign: Tracker only (no SEEK job)",
-      "Applied in Nov 2026",
-      "Applied in Oct 2026",
-      "Applied in week 47 of 2026",
-      "Applied in week 46 of 2026",
-      "Applied in week 44 of 2026",
+      "First seen in Nov 2026",
+      "First seen in Oct 2026",
+      "First seen in week 47 of 2026",
+      "First seen in week 46 of 2026",
+      "First seen in week 44 of 2026",
     ]);
   });
 
