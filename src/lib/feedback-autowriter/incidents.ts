@@ -145,8 +145,7 @@ export async function drainIncidentOutbox(
       try {
         if (target.startsWith("email:")) {
           const to = target.slice("email:".length);
-          emailSender ??= createOutboundEmailSender("primary", { strictOutcome: true, audience: "staff" },
-            { ...process.env, OUTBOUND_EMAIL_TRANSPORT: process.env.OUTBOUND_EMAIL_TRANSPORT?.trim() || "resend" });
+          emailSender ??= createOutboundEmailSender("primary", { strictOutcome: true, audience: "staff" });
           await emailSender.sendEmail({
             to,
             subject: `Feedback autowriter: ${incident.severity} — ${incident.summary.slice(0, 120)}`,

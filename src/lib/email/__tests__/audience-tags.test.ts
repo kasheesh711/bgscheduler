@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-/** Modules whose recipients are staff only: they ride Resend in wave one. */
+/** Modules whose recipients are staff only: they always send as admin@ through Workspace Gmail. */
 const STAFF_MODULES = [
   "src/lib/internal/cron-watchdog.ts",
   "src/lib/feedback-autowriter/alerts.ts",
