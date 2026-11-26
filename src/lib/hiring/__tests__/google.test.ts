@@ -259,3 +259,26 @@ it("puts R1 on the calendar with a Google Meet link and the backup phone number,
   expect(String(events[0].description)).toContain("Phone (backup): +66812345678");
   expect(String(events[0].description)).toContain("Subject: Mathematics");
 });
+
+it("takes a head off a visit's paper test with no email, and leaves the mock's head", async () => {
+  const db = { select: () => ({ from: () => ({ where: async () => [{ refreshTokenCiphertext: "encrypted", scope: GOOGLE_SCOPES.join(" ") }] }) }) } as unknown as Database;
+  const staff = ["people@begiftededucation.com", "admin@begiftededucation.com", "kevhsh7@gmail.com"];
+  const head = [{ key: "Ek", email: "ek@example.com", colorId: "2" }];
+  const run = async (kind: "paper" | "mock") => {
+    const booking = { id: "00000000-0000-4000-8000-00000000000a", kind, visitId: "00000000-0000-4000-8000-000000000009", calendarOwner: "owner@example.com",
+      interviewerEmail: kind === "mock" ? "ek@example.com" : null, subjects: ["Mathematics"],
+      startTime: new Date("2026-11-27T08:00:00Z"), endTime: new Date("2026-11-27T09:00:00Z") } as typeof hiringBookings.$inferSelect;
+    const summary = `BeGifted ${kind === "mock" ? "mock teaching" : "exam"}: C · Mathematics · Head: Ek`;
+    const event = { summary, colorId: "2", start: { dateTime: booking.startTime.toISOString() }, end: { dateTime: booking.endTime.toISOString() },
+      extendedProperties: { private: { hiringBookingId: booking.id } }, attendees: [...staff, "ek@example.com"].map((email) => ({ email })) };
+    const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => Response.json(event));
+    vi.stubGlobal("fetch", fetcher);
+    await deliverCalendar(booking, { name: "C" } as Candidate, "BeGifted", db, false, head);
+    return fetcher.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "PATCH") as unknown as [string, RequestInit][];
+  };
+  const paper = await run("paper");
+  expect(paper).toHaveLength(1);
+  expect(paper[0][0]).toContain("sendUpdates=none");
+  expect(JSON.parse(paper[0][1]!.body as string).attendees).toEqual(staff.map((email) => ({ email })));
+  expect(await run("mock")).toHaveLength(0);
+});
