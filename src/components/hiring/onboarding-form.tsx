@@ -19,6 +19,7 @@ export function OnboardingForm({ token, submitted, linked, locked, lineIssue }: 
 }) {
   const [saved, setSaved] = useState(submitted);
   const [isLinked, setLinked] = useState(linked);
+  const [lastSubmission, setLastSubmission] = useState<FormData | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(lineIssue ? "LINE sign-in did not finish. Try again or contact BeGifted." : "");
   const endpoint = `/api/hiring/onboarding/${encodeURIComponent(token)}`;
@@ -27,12 +28,14 @@ export function OnboardingForm({ token, submitted, linked, locked, lineIssue }: 
     setPending(true);
     setError("");
     try {
+      const details = new FormData(event.currentTarget);
       const response = await fetch(endpoint, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))),
+        body: JSON.stringify(Object.fromEntries(details)),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Could not save your details. Try again.");
+      setLastSubmission(details);
       setLinked(result.linked === true);
       setSaved(true);
     } catch (failure) {
@@ -56,7 +59,8 @@ export function OnboardingForm({ token, submitted, linked, locked, lineIssue }: 
         {fields.map((field) => <label key={field.name} className="grid gap-1 text-sm font-medium">
           {field.label}
           <input className="min-h-10 rounded-md border px-3 py-2 text-base" required name={field.name}
-            type={field.type} autoComplete={field.autoComplete} maxLength={field.max} />
+            type={field.type} autoComplete={field.autoComplete} maxLength={field.max}
+            defaultValue={lastSubmission?.get(field.name)?.toString()} />
         </label>)}
         <button className={cn(buttonVariants(), "w-fit")} disabled={pending} type="submit">
           {pending ? "Saving…" : "Save details"}

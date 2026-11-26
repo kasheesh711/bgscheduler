@@ -48,7 +48,7 @@ export async function readContractTemplate(type: OfferType, format: ContractForm
   return { stream: blob.stream, contentType: TYPES[format], name: `BeGifted-${type.replace("_", "-")}-tutor-agreement-template.${format}` };
 }
 
-/** The signed contract of one hired tutor: one PDF scan, replaced by a new upload. */
+/** One signed PDF per hired tutor. Only an explicit replacement can overwrite it. */
 export const MAX_SIGNED_BYTES = 25 * 1024 * 1024;
 export const signedContractPath = (candidateId: string) => `hiring-signed-contracts/${candidateId}.pdf`;
 
@@ -59,6 +59,18 @@ async function hiredCandidate(db: Database, candidateId: string) {
   return candidate;
 }
 
+export function parseSignedContractPayload(clientPayload: string | null) {
+  try {
+    const payload = JSON.parse(clientPayload ?? "null");
+    return {
+      candidateId: typeof payload?.candidateId === "string" ? payload.candidateId : "",
+      replace: payload?.replace === true,
+    };
+  } catch {
+    return { candidateId: clientPayload ?? "", replace: false };
+  }
+}
+
 /**
  * A short-lived browser token for that one path, because a scan is larger than a function request allows.
  * The audit row records who started the upload.
@@ -67,15 +79,16 @@ export function signedContractUploadHandler(request: Request, body: HandleUpload
   return handleUpload({
     request,
     body,
-    onBeforeGenerateToken: async (pathname, candidateId) => {
-      const candidate = await hiredCandidate(db, candidateId ?? "");
+    onBeforeGenerateToken: async (pathname, clientPayload) => {
+      const { candidateId, replace } = parseSignedContractPayload(clientPayload);
+      const candidate = await hiredCandidate(db, candidateId);
       if (pathname !== signedContractPath(candidate.id)) throw new HiringError(400, "Invalid upload.");
       await audit(db, actor, "signed-contract-upload", candidate.id, {});
       return {
         allowedContentTypes: ["application/pdf"],
         maximumSizeInBytes: MAX_SIGNED_BYTES,
         addRandomSuffix: false,
-        allowOverwrite: true,
+        allowOverwrite: replace,
         validUntil: Date.now() + 5 * 60_000,
       };
     },

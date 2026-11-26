@@ -8,6 +8,7 @@
  */
 import { baseConfigSchema, type Subject } from "./model";
 import { OFFER_LETTERS, type OfferType } from "./offer-letters";
+import type { OfferRow } from "./offer-rows";
 import { ITEM_MAX, RUBRIC_ITEMS, type MockRubric } from "./marking-sheet";
 
 export const DEMO_ID = "00000000-0000-4000-8000-00000000d001";
@@ -197,6 +198,12 @@ function others(now: Date) {
     decisions: [
       { id: id(51), candidateId: id(10), decision: "hire", status: "sent", reason: "Approved", emailSubject: "Your BeGifted offer", emailBody: "", outboxKey: `${id(10)}:result:approved`, decidedBy: "gift@example.test", createdAt: new Date(now.getTime() - 2 * DAY), sentAt: new Date(now.getTime() - 2 * DAY) },
     ],
+    offer: {
+      candidateId: id(10), decisionId: id(51), name: "Sample Ploy", subject: "Biology", emailStatus: "sent",
+      sentAt: at(now, -2, 10).toISOString(), offerType: "specialist",
+      booking: { start: at(now, -1, 14).toISOString(), end: at(now, -1, 14, 30).toISOString() },
+      uploadedAt: at(now, -1, 15).toISOString(), submittedAt: null, unknown: {},
+    } satisfies OfferRow,
   };
 }
 
@@ -239,8 +246,16 @@ export function demoPayload(now = new Date()) {
     ...(hired ? [sent(DEMO_ID, "result:approved", now)] : []),
   ];
   const file = (n: number, kind: string, subject: Subject) => ({ id: `00000000-0000-4000-8000-00000000f${String(n).padStart(3, "0")}`, kind, subject, name: `${subject} ${kind === "question_paper" ? "paper" : "mark scheme"}.pdf`, status: "ready", createdAt: new Date(now.getTime() - 30 * DAY) });
+  const offers: OfferRow[] = [other.offer];
+  if (hired) offers.push({
+    candidateId: DEMO_ID, decisionId: DECISION_ID, name: NAME, subject: SUBJECT, emailStatus: "sent",
+    sentAt: now.toISOString(), offerType: packet?.offerType ?? null,
+    booking: { start: at(now, 2, 10).toISOString(), end: at(now, 2, 10, 30).toISOString() },
+    uploadedAt: null, submittedAt: null, unknown: { offerType: !packet?.offerType },
+  });
   return {
     config, configSaved: true, configProblems: [], revision: 1, workerAt: new Date(now.getTime() - 5 * 60_000), workerError: null, writeGate: true,
+    offers,
     workerSummary: { scanned: 140, imported: 3, remaining: 0, folders: [{ status: "Inbox", count: 140, imported: 140 }] },
     usage: { preScreen: { perDay: 2, perWeek: 6, waiting: 1, unbooked: 2, bySubject: {} }, onsite: { perDay: 1, perWeek: 3, waiting: 0, unbooked: 1, bySubject: {} } },
     holds: {}, preScreenOrder: [], callOrder: [],

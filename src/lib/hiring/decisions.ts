@@ -191,9 +191,6 @@ export async function saveBriefDecision(token: string, input: { decision: Decisi
     }
     const head = mock.interviewerKey ?? "Interviewer";
     const actor = `interviewer:${head}`;
-    const [row] = await tx.insert(s.hiringAudit).values({ actor, action: HEAD_DECISION, candidateId: candidate.id,
-      detail: { decision: input.decision, reason, head, bookingId: mock.id, mockResultId: result.id, ...(owner ? { offer: owner.offerType } : {}) },
-    }).returning({ id: s.hiringAudit.id });
     let queued: string | null = null;
     if (owner) {
       const { config } = await settings(tx);
@@ -202,7 +199,12 @@ export async function saveBriefDecision(token: string, input: { decision: Decisi
       if (refusal) throw new HiringError(409, refusal);
       const offer = OFFER_LETTERS[owner.offerType].text(candidate.name, candidate.visitSubject ?? candidate.subjects[0]);
       queued = await queueFinalResult(tx, candidate, "hire", reason, owner.actor, offer, now);
-    } else if (input.decision === "reject") queued = await queueFinalResult(tx, candidate, "reject", reason, actor, null, now);
+    }
+    const [row] = await tx.insert(s.hiringAudit).values({ actor, action: HEAD_DECISION, candidateId: candidate.id,
+      detail: { decision: input.decision, reason, head, bookingId: mock.id, mockResultId: result.id,
+        ...(owner && queued ? { offer: owner.offerType, decisionId: queued.split(":").at(-1) } : {}) },
+    }).returning({ id: s.hiringAudit.id });
+    if (input.decision === "reject") queued = await queueFinalResult(tx, candidate, "reject", reason, actor, null, now);
     await queueRecruitmentHeadDecision(tx, candidate, { decision: input.decision, reason, head,
       subject: mock.subjects[0] ?? null, key: row.id, offerSent: !!owner });
     return { queued };

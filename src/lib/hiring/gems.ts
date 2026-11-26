@@ -53,13 +53,13 @@ export function buildGems(
     const school = schoolStrength(c, config);
     const base = { id: c.id, name: c.name, subject: c.subjects?.[0] ?? null, score, school, closed: c.stage === "stopped" };
     const gate = UNWORKED.has(c.stage) && score >= pass ? profileGate(c, config) : null;
-    const days = byCandidate[c.id]?.daysInStage ?? 0;
+    const timing = byCandidate[c.id];
     // A pending HR call is not a second rule: count only the reasons a person must resolve.
     const rules = gate?.short.filter((r) => !NOT_A_BLOCKER.has(r)) ?? [];
     if (gate && rules.length === 1 && !gate.short.includes("Below profile threshold"))
       out.blocker.push({ ...base, kind: "blocker", reason: rules[0] });
-    else if (!CLOSED.has(c.stage) && score >= pass && days >= IDLE_DAYS)
-      out.idle.push({ ...base, kind: "idle", reason: `${Math.floor(days)} d in ${STAGE_WORD[c.stage] ?? c.stage}` });
+    else if (!CLOSED.has(c.stage) && score >= pass && timing && !timing.importDateOnly && timing.daysInStage >= IDLE_DAYS)
+      out.idle.push({ ...base, kind: "idle", reason: `${Math.floor(timing.daysInStage)} d in ${STAGE_WORD[c.stage] ?? c.stage}` });
     else if (UNWORKED.has(c.stage) && score < pass && school >= STRONG_SCHOOL)
       out.school.push({ ...base, kind: "school", reason: `school ${Math.round(school * 100)}% · ${Math.round(score)} of ${pass}` });
   }

@@ -173,11 +173,11 @@ describe("visit slots", () => {
       modality,
       wiseTeacherId: "w",
     });
-    // Monday 12:00–16:00 onsite fits mocks at 12:15, 13:15 and 14:15. Tuesday is online only. The saved week is ignored.
+    // Monday 12:00–16:00 onsite fits mocks at 13:15 and 14:15 (12:15 touches lunch). Tuesday is online only. The saved week is ignored.
     const gift = head("Gift", { hoursFromWise: true, fallbackWeek: week([1, 2, 3, 4, 5]) });
     const windows = [wise(1, 720, 960), wise(2, 600, 960, "online")];
     const slots = await run({ interviewers: [gift] }, { groups: [group("Gift", { availabilityWindows: windows })] });
-    expect(slots.filter((x) => x.date === "2026-11-02").map((x) => x.examStart)).toEqual([600, 660, 720].map((m) => instant("2026-11-02", m).toISOString()));
+    expect(slots.filter((x) => x.date === "2026-11-02").map((x) => x.examStart)).toEqual([660, 720].map((m) => instant("2026-11-02", m).toISOString()));
     // No Wise windows: no hours, so nothing is offered.
     expect(await run({ interviewers: [gift] }, { groups: [group("Gift")] })).toEqual([]);
   });
@@ -189,20 +189,20 @@ describe("visit slots", () => {
         r.filter((x) => x.date === "2026-11-02").map((x) => x.examStart),
       );
     const base = await times(group("Ek"));
-    expect(base).toHaveLength(3);
-    // The mock of the 10:00 exam is 12:15–13:15.
+    expect(base).toHaveLength(2);
+    // The mock of the 11:00 exam is 13:15–14:15.
     const withClass = await times(
-      group("Ek", { sessionBlocks: [block("2026-11-02", 750, 780)] }),
+      group("Ek", { sessionBlocks: [block("2026-11-02", 795, 825)] }),
     );
     expect(withClass).toEqual(base.filter((_, i) => i !== 0));
     const cancelled = await times(
-      group("Ek", { sessionBlocks: [block("2026-11-02", 720, 780, false)] }),
+      group("Ek", { sessionBlocks: [block("2026-11-02", 795, 855, false)] }),
     );
     expect(cancelled).toEqual(base);
     const withLeave = await times(
       group("Ek", {
         leaves: [
-          { startTime: stored("2026-11-02", 720), endTime: stored("2026-11-02", 780) },
+          { startTime: stored("2026-11-02", 795), endTime: stored("2026-11-02", 855) },
         ],
       }),
     );
@@ -211,7 +211,7 @@ describe("visit slots", () => {
     // Leave coverage that stops before the mock hour is incomplete.
     expect(
       await times(
-        group("Ek", { leavesCompleteThrough: instant("2026-11-02", 795) }),
+        group("Ek", { leavesCompleteThrough: instant("2026-11-02", 855) }),
       ),
     ).toEqual([base[0]]);
   });
@@ -219,18 +219,19 @@ describe("visit slots", () => {
   it("a Wise class during the exam does not block the head", async () => {
     const slots = await run(
       { interviewers: [head("Ek")] },
-      { ...ek, groups: [group("Ek", { sessionBlocks: [block("2026-11-02", 600, 720)] })] },
+      { ...ek, groups: [group("Ek", { sessionBlocks: [block("2026-11-02", 660, 780)] })] },
     );
-    // Exam 10:00–12:00 overlaps the class. Mock 12:15–13:15 does not.
-    expect(slots.some((x) => x.date === "2026-11-02" && x.examStart === instant("2026-11-02", 600).toISOString())).toBe(true);
+    // Exam 11:00–13:00 overlaps the class. Mock 13:15–14:15 does not.
+    expect(slots.some((x) => x.date === "2026-11-02" && x.examStart === instant("2026-11-02", 660).toISOString())).toBe(true);
   });
 
-  it("starts exams on the hour from 10:00 to 12:00, with the mock 15 minutes after the exam", async () => {
+  it("starts exams on the hour from 11:00 to 12:00, with the mock 15 minutes after the exam and never at lunch", async () => {
     const slots = (await run({ interviewers: [head("Ek")] }, ek)).filter(
       (x) => x.date === "2026-11-02",
     );
     expect(slots).toEqual(
-      [600, 660, 720].map((m) => ({
+      // The 10:00 exam's mock (12:15–13:15) would touch the 12:00–13:00 lunch.
+      [660, 720].map((m) => ({
         date: "2026-11-02",
         examStart: instant("2026-11-02", m).toISOString(),
         examEnd: instant("2026-11-02", m + 120).toISOString(),
@@ -252,8 +253,8 @@ describe("visit slots", () => {
         .map((x) => x.examStart);
     const at = (...hours: number[]) =>
       hours.map((h) => instant("2026-11-02", h * 60).toISOString());
-    // End 17:00: the last exam starts 13:00, mock 15:15–16:15.
-    expect(await starts({ visitEndMinute: 1020 })).toEqual(at(10, 11, 12, 13));
+    // End 17:00: the last exam starts 13:00, mock 15:15–16:15. 10:00 is out: its mock touches lunch.
+    expect(await starts({ visitEndMinute: 1020 })).toEqual(at(11, 12, 13));
     // Start 10:30 rounds up to 11:00.
     expect(await starts({ visitStartMinute: 630 })).toEqual(at(11, 12));
   });
@@ -271,7 +272,7 @@ describe("visit slots", () => {
       { interviewers: [head("Ek")], paperCapacity: 2 },
       { ...ek, bookings: [booking("2026-11-02", "paper", 600, 720)] },
     );
-    expect(room.filter((x) => x.date === "2026-11-02")).toHaveLength(3);
+    expect(room.filter((x) => x.date === "2026-11-02")).toHaveLength(2);
   });
 
   it("removes a head at the weekly mock limit", async () => {
@@ -335,14 +336,14 @@ describe("visit slots", () => {
     // Peat has one mock that week: Ek gets the visits, except where Ek is busy.
     const busy = await run(cfg, {
       ...f,
-      groups: [group("Peat"), group("Ek", { sessionBlocks: [block("2026-11-02", 720, 780)] })],
+      groups: [group("Peat"), group("Ek", { sessionBlocks: [block("2026-11-02", 795, 855)] })],
       bookings: [booking("2026-11-06", "mock", 900, 960)],
     });
-    const first = (key: string) => busy.find((x) => x.date === "2026-11-02" && x.examStart === instant("2026-11-02", 600).toISOString() && x.interviewerKey === key);
-    expect(first("Ek")).toBeUndefined(); // Ek has a class in the 12:00 mock hour, so Peat takes it.
+    const first = (key: string) => busy.find((x) => x.date === "2026-11-02" && x.examStart === instant("2026-11-02", 660).toISOString() && x.interviewerKey === key);
+    expect(first("Ek")).toBeUndefined(); // Ek has a class in the 13:15 mock hour, so Peat takes it.
     expect(first("Peat")).toBeDefined();
     expect(
-      busy.find((x) => x.date === "2026-11-02" && x.examStart === instant("2026-11-02", 660).toISOString())
+      busy.find((x) => x.date === "2026-11-02" && x.examStart === instant("2026-11-02", 720).toISOString())
         ?.interviewerKey,
     ).toBe("Ek");
   });
