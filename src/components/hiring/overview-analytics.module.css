@@ -8,14 +8,21 @@
   --c-blocker: oklch(0.55 0.17 320);
   --c-idle: oklch(0.7 0.15 70);
   --c-amber: oklch(0.74 0.15 65);
+  display: block;
+}
+.detailGrid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   grid-template-areas: "pulse pulse" "a b";
   align-items: start;
   gap: 12px;
-  padding: 12px 24px;
+
   font-size: 13px;
 }
+.board { padding: 12px 24px; font-size: 13px; }
+.moreDetails { margin-top: 12px; }
+.moreDetails > summary { padding: 9px 0; cursor: pointer; color: var(--accent-text); text-underline-offset: 3px; }
+.detailGrid { margin-top: 8px; }
 .card { min-width: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
 .pulse { grid-area: pulse; }
 .col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
@@ -91,7 +98,7 @@
 .stageRow, .stageHead { display: contents; }
 .stageHead > span { color: var(--muted); font-size: 11px; }
 .stageRow > * { padding: 5px 0; border-top: 1px solid var(--line); }
-.stageName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stageName, .board .stageName .link { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
 .stageBar { display: flex; align-items: center; gap: 1px; }
 /* .board prefix: .surface button resets background. */
 .board .okPart, .board .stuckPart { height: 14px; min-width: 2px; }
@@ -117,7 +124,7 @@
 .mailList .link { grid-area: name; }
 .when, .whenWait { grid-area: when; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .whenWait { color: var(--muted); }
-.mailWhy { grid-area: why; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.mailWhy { grid-area: why; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .mailFoot { display: flex; gap: 16px; margin-top: 6px; }
 .board .more { color: var(--accent-text); }
 
@@ -129,7 +136,8 @@
 .fcRow:hover > * { background: var(--tint); }
 
 /* Flow */
-.flowGrid { display: grid; grid-template-columns: minmax(92px, auto) 40px minmax(140px, 1fr) minmax(80px, 0.55fr); column-gap: 8px; }
+.flow { container-type: inline-size; align-self: stretch; }
+.flowGrid { display: grid; grid-template-columns: minmax(76px, auto) max-content minmax(100px, 1fr) minmax(66px, 0.55fr); column-gap: 8px; }
 .callouts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .board .callout { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; }
 .callout i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
@@ -139,16 +147,19 @@
 .flowHead, .flowRow { display: contents; }
 .flowHead > span { color: var(--muted); font-size: 11px; }
 .flowRow > * { padding: 5px 0; border-top: 1px solid var(--line); }
-.flowBar { display: flex; align-self: center; gap: 1px; height: 18px; border-radius: 3px; background: var(--tint); overflow: hidden; }
-.board .flowBar > * { display: flex; align-items: center; justify-content: center; height: 18px; min-width: 2px; overflow: hidden; font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.board .flowBar button:disabled { opacity: 1; cursor: default; }
+.flowShares { display: grid; align-content: center; gap: 3px; min-width: 0; color: var(--support); font-size: 12px; }
+.board .flowShares > button { text-align: left; text-decoration: underline; text-underline-offset: 3px; }
+.flowBar { display: flex; gap: 1px; height: 10px; border-radius: 3px; background: var(--tint); overflow: hidden; }
+.board .flowBar > * { display: flex; align-items: center; justify-content: center; height: 10px; min-width: 0; overflow: hidden; font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.board .flowBar label { cursor: pointer; }
 .board .onPart { background: var(--stone-dark); color: var(--paper); }
 .board .waitPart { background: var(--c-form-soft); }
 .board .leftPart { background: var(--stone); }
 .board .leftBig { color: var(--paper); background: repeating-linear-gradient(135deg, var(--danger) 0 3px, color-mix(in oklch, var(--danger) 45%, var(--paper)) 3px 6px); }
-.board .flowBar button:not(:disabled):hover { outline: 2px solid var(--accent-text); outline-offset: -2px; }
-.daysText { min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; }
-.daysText small { margin-left: 3px; color: var(--muted); font-size: 10px; }
+.board .flowBar label:hover { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+.board .timingButton { display: flex; align-items: center; justify-content: flex-end; gap: 6px; width: 100%; min-width: 0; }
+.daysText { text-decoration: underline; text-underline-offset: 2px; min-width: 0; white-space: normal; text-align: right; font-variant-numeric: tabular-nums; }
+.daysText small { display: block; color: var(--muted); font-size: 11px; }
 .whisker { flex: 1; min-width: 30px; height: 10px; }
 .whisker line { stroke: var(--stone); stroke-width: 3; stroke-linecap: round; }
 .whisker circle { fill: var(--stone-dark); }
@@ -172,18 +183,22 @@ i.g_school { background: var(--c-school); }
 i.g_blocker { background: var(--c-blocker); }
 i.g_idle { background: var(--c-idle); }
 .gemHeadRow { display: flex; align-items: baseline; gap: 10px; }
-.board .jump { color: var(--accent-text); font-size: 12px; }
 .gemLists { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .board .gemHead { display: flex; align-items: center; gap: 6px; text-align: left; }
 .board .gemHead:hover:not(:disabled) b { text-decoration: underline; }
 .gemHead b { font-family: var(--serif); font-size: 20px; line-height: 1; }
 .gemGroup ul { margin: 2px 0 0 15px; padding: 0; list-style: none; }
 .gemGroup li { display: grid; grid-template-columns: minmax(0, 1fr); font-size: 12px; }
-.gemGroup li .dim { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.gemGroup li .dim { font-size: 11px; overflow-wrap: anywhere; }
+.plotValues { margin-top: 6px; }
+.plotValues summary { cursor: pointer; }
+.plotValues ul { display: grid; gap: 5px; max-height: 18rem; margin: 4px 0 0; padding: 0 3px; overflow: auto; list-style: none; }
+.plotValues li { display: grid; font-size: 12px; overflow-wrap: anywhere; }
 
 @media (max-width: 900px) {
   /* Phone: one list in decision order (stages, outlook, emails, funnel, gems). */
   .board { display: flex; flex-direction: column; padding: 10px 12px; }
+  .detailGrid { display: flex; flex-direction: column; }
   .col { display: contents; }
   .stages { order: 1; }
   .forecast { order: 2; }
@@ -192,11 +207,16 @@ i.g_idle { background: var(--c-idle); }
   .gems { order: 5; }
   .status { margin-left: 0; }
   .gemGrid { grid-template-columns: minmax(0, 1fr); }
-  .flowGrid { grid-template-columns: minmax(76px, auto) 30px minmax(90px, 1fr) 48px; column-gap: 5px; font-size: 12px; }
-  .flowGrid .whisker { display: none; }
+  .dayStrip { grid-template-columns: repeat(auto-fit, minmax(40px, 1fr)); }
+  .flowGrid { grid-template-columns: minmax(60px, auto) max-content minmax(68px, 1fr) 60px; column-gap: 5px; font-size: 12px; }
   .fcGrid { grid-template-columns: minmax(76px, auto) minmax(50px, 1fr) 56px 40px 28px; column-gap: 5px; font-size: 12px; }
   .stageList { grid-template-columns: minmax(84px, auto) minmax(40px, 1fr) 30px 34px 40px; column-gap: 6px; font-size: 12px; }
   .board .stat { min-width: 0; flex: 1 1 40%; }
 }
-/* The bar is itself a grid cell: no cell padding inside its fixed height. */
-.flowRow > .flowBar { padding: 0; margin: 5px 0; border-top: 0; box-shadow: 0 -6px 0 -5px var(--line); }
+
+@container (max-width: 440px) {
+  .flowGrid .whisker { display: none; }
+}
+.flowShares, .stepEvidence { overflow-wrap: anywhere; }
+.stepEvidence { display: flex; flex-wrap: wrap; gap: 2px 7px; align-items: baseline; color: var(--support); font-size: 12px; }
+.stepEvidence button { text-decoration: underline; text-underline-offset: 3px; }

@@ -288,21 +288,22 @@ describe("table for the visit stages and holds", () => {
   });
 });
 
-describe("PreScreenScreen chips", () => {
-  it("gives each count its share of all, and All the median days to reply", () => {
+describe("PreScreenScreen queue", () => {
+  it("starts with replies that need a decision", () => {
     const replied = { ...people[2], preScreenRepliedAt: "2026-10-30T15:00:00Z" } as unknown as HiringCandidate;
     const data = {
       candidates: [people[0], people[1], replied, people[3]],
+      bookings: [],
+      holds: {},
       inviteOutbox: [job("a", "pre-screen", "2026-10-29T03:00:00Z"), job("b", "pre-screen", "2026-10-29T03:00:00Z"), job("c", "pre-screen", "2026-10-29T03:00:00Z")],
       config: { preScreenThreshold: 60, preScreenWeights: weights },
     } as unknown as HiringData;
     const html = renderToStaticMarkup(
-      <PreScreenScreen data={data} extras={extras} holds={new Map()} command={async () => true} busy={false} error="" notice="" />,
+      <PreScreenScreen data={data} extras={extras} command={async () => true} busy={false}
+        reload={async () => data} onOpenEmailLog={() => {}} onOpenOverview={() => {}} />,
     );
-    // Three were sent the form; c replied 1.5 days after it.
-    expect(html).toMatch(/All <span[^>]*>3<\/span><span[^>]*> · 1.5 d to reply</);
-    expect(html).toMatch(/Replied <span[^>]*>1<\/span><span[^>]*> · 33%</);
-    expect(html).toMatch(/No reply <span[^>]*>2<\/span><span[^>]*> · 67%</);
+    expect(html).toContain("Review Person c");
+    expect(html).not.toMatch(/Review Person [abd]/);
   });
 });
 
