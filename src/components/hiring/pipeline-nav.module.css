@@ -7,13 +7,14 @@
   gap: 0 12px;
 }
 
-.tools.tools > button {
+.tools.tools > :is(button, a) {
   min-height: 36px;
   padding-inline: 4px;
   color: var(--support);
 }
 
-.tools button:hover, .tools button[aria-pressed="true"] {
+.tools a { display: inline-flex; align-items: center; }
+.tools a:hover, .tools button:hover, .tools button[aria-pressed="true"] {
   color: var(--ink);
   text-decoration: underline;
   text-underline-offset: 4px;
@@ -95,7 +96,7 @@
     transform: rotate(45deg);
   }
   .mobile[open] > summary::after { transform: rotate(225deg); }
-  .tools.tools > button { min-width: 44px; min-height: 44px; }
+  .tools.tools > :is(button, a) { min-width: 44px; min-height: 44px; }
 }
 
 @media (min-width: 720px) {

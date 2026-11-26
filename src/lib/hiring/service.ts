@@ -1505,7 +1505,7 @@ export async function briefCandidateId(token: string, db: Database = getDb(), no
   return (await briefMock(token, db, now, ["mock", "call"])).candidateId;
 }
 /** The résumé (ATS) score in parts, with the same numbers as the final review. Null before the résumé is assessed. */
-function briefAts(
+export function resumeAts(
   candidate: Pick<typeof s.hiringCandidates.$inferSelect, "profileAssessment" | "universityAssessment" | "workRightsAnswer">,
   config: HiringConfig,
 ) {
@@ -1575,7 +1575,7 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     interviewer: mock.interviewerKey,
     location: config.location,
     answers: candidate.preScreen,
-    ats: briefAts(candidate, config),
+    ats: resumeAts(candidate, config),
     resume: storedResume(mock.candidateId, candidate.resumePath, candidate.resumeType)?.extension ?? null,
     // The interviewer's own scores for this mock, to show again. Never an AI score or another person's.
     rubric: own.rubric,
