@@ -474,7 +474,7 @@
   }
   .panel .chart,
   .panel .sankey {
-    height: clamp(112px, 18vh, 175px);
+    height: clamp(130px, 20.5vh, 190px);
     min-height: 0;
     flex: 1 1 auto;
     margin: 0;
