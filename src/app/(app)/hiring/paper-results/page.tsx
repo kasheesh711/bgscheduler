@@ -1,4 +1,4 @@
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, count, eq, isNotNull, not, sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { HiringReportJump, HiringReportNav } from "@/components/hiring/hiring-report-nav";
@@ -29,20 +29,41 @@ async function Report() {
     return <p role="alert">Hiring access is required.</p>;
   }
   const db = getDb();
+  const markedAndDone = and(eq(papers.status, "done"), isNotNull(papers.marks))!;
+  const excluded = db.select({
+    id: sql<null>`null::uuid`, subject: papers.subject, status: papers.status, source: papers.source,
+    marks: sql<null>`null::jsonb`, updatedAt: sql<null>`null::timestamptz`, records: count(),
+  }).from(papers).where(not(markedAndDone)).groupBy(papers.subject, papers.status, papers.source);
   const [{ config }, rows, checks] = await Promise.all([
     settings(db),
-    db.select({ id: papers.id, subject: papers.subject, status: papers.status, marks: papers.marks, updatedAt: papers.updatedAt })
-      .from(papers).where(and(eq(papers.status, "done"), isNotNull(papers.marks))),
+    db.select({
+      id: sql<string | null>`${papers.id}`, subject: papers.subject, status: papers.status, source: papers.source,
+      marks: papers.marks,
+      updatedAt: sql<Date | null>`${papers.updatedAt}`.mapWith((value: string): Date | null => papers.updatedAt.mapFromDriverValue(value)),
+      records: sql<number>`1`.mapWith(Number),
+    }).from(papers).where(markedAndDone).unionAll(excluded),
     paperChecks(db, new Date()),
   ]);
-  const groups = new Map<string, { score: number; subject: string; maximum: number }[]>();
+  const groups = new Map<string, { score: number; subject: string; earned: number; maximum: number }[]>();
   const checkById = new Map(checks.map(check => [check.resultId, check]));
+  const exclusions = { unfinished: 0, review: 0, historical: 0, unscored: 0 };
   for (const paper of rows) {
-    const result = paperScore(paper, config, checkById.get(paper.id));
-    if ((result.verdict !== "pass" && result.verdict !== "fail") || result.percent === null || !result.max) continue;
+    if (paper.id === null) {
+      if (paper.status === "needs_check") exclusions.review += paper.records;
+      else if (paper.status !== "done") exclusions.unfinished += paper.records;
+      else if (paper.source === "tracker") exclusions.historical += paper.records;
+      else exclusions.unscored += paper.records;
+      continue;
+    }
+    const result = paperScore({ ...paper, id: paper.id, updatedAt: paper.updatedAt ?? undefined }, config, checkById.get(paper.id));
+    if ((result.verdict !== "pass" && result.verdict !== "fail") || result.percent === null || !result.max) {
+      if (result.verdict === "checking" || result.verdict === "needs_check") exclusions.review++;
+      else exclusions.unscored++;
+      continue;
+    }
     const group = paperGroup(paper.subject);
     const observations = groups.get(group) ?? [];
-    observations.push({ score: result.percent, subject: paper.subject, maximum: result.max });
+    observations.push({ score: result.percent, subject: paper.subject, earned: result.scored, maximum: result.max });
     groups.set(group, observations);
   }
   const summary = [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([subject, observations]) => {
@@ -53,12 +74,17 @@ async function Report() {
   });
   const empty = [...new Set(SUBJECTS.map(paperGroup))].filter(group => !groups.has(group)).sort();
   const n = summary.reduce((total, row) => total + row.data.scores.length, 0);
+  const excludedCount = exclusions.unfinished + exclusions.review + exclusions.historical + exclusions.unscored;
   return <>
     {summary.length > 0 && <ScoreExplorer rows={summary} />}
-    <details className="-mt-3 text-sm text-muted-foreground">
-      <summary className="cursor-pointer font-medium">How the {n} final papers are counted</summary>
-      <p className="mt-2 max-w-3xl">Scores cover {summary.length} test groups. For a multi-level paper, Hiring reports the highest level passed, or the best level attempted if none passed. Papers awaiting review and historical outcomes without marks are excluded.</p>
-      {empty.length > 0 && <p className="mt-1">Awaiting final scores for {empty.join(", ")}.</p>}
+    <details className="-mt-3 rounded-lg border bg-card p-3 text-sm">
+      <summary className="min-h-10 cursor-pointer py-2 font-medium">Paper records across all groups · {n} counted · {excludedCount} excluded</summary>
+      <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-2 tabular-nums sm:grid-cols-4">
+        {([["Unfinished or failed marking", exclusions.unfinished], ["Awaiting review", exclusions.review], ["Historical record without marks", exclusions.historical], ["Other record without a final score", exclusions.unscored]] as const).map(([label, number]) =>
+          <div key={label}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="font-semibold">{number}</dd></div>)}
+      </dl>
+      <p className="mt-3 max-w-3xl text-muted-foreground">A final score of 0% counts. For a paper with several levels, the score comes from the highest level passed or the best level attempted.</p>
+      {empty.length > 0 && <p className="mt-1 text-muted-foreground">Awaiting final scores for {empty.join(", ")}.</p>}
     </details>
     <CambridgeThresholds />
   </>;

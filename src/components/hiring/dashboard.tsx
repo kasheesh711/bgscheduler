@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 
-import { startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { Instrument_Serif } from "next/font/google";
 import { signIn } from "next-auth/react";
@@ -75,6 +75,8 @@ export type HiringView = keyof typeof VIEWS;
 const STEPS = ["prescreen", "assessment", "mock", "review", "offer"] as const;
 const WORKSPACE = ["overview", "capacity", "visitday"] as const;
 const MORE_TOOLS = ["setup", "admin", "heads"] as const;
+const TOOL_HINTS = { setup: "Scores, limits and messages", admin: "Prepare rooms and papers", heads: "Mock teaching and decisions" } as const;
+const REPORT_HINTS = { "paper-results": "Scores and cutoffs", "ats-outcomes": "Invitation scores and outcomes" } as const;
 
 function closeToolsMenu(menu: HTMLDetailsElement) {
   menu.open = false;
@@ -87,6 +89,48 @@ function dismissToolsMenu(event: KeyboardEvent<HTMLDetailsElement>) {
   event.stopPropagation();
   closeToolsMenu(event.currentTarget);
 }
+function ToolsMenu({ label, children, className, panelClass, review }: {
+  label: ReactNode; children: ReactNode; className: string; panelClass: string; review?: boolean;
+}) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  const close = useRef<HTMLButtonElement>(null);
+  const keyboard = useRef(false);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const menu = ref.current;
+    if (!open || !menu) return;
+    const dismiss = (event: PointerEvent) => {
+      if (event.target instanceof Node && !menu.contains(event.target)) {
+        if (menu.contains(document.activeElement)) closeToolsMenu(menu);
+        else menu.open = false;
+      }
+    };
+    document.addEventListener("pointerdown", dismiss);
+    return () => document.removeEventListener("pointerdown", dismiss);
+  }, [open]);
+  return <details ref={ref} className={className} data-review={review ? "" : undefined}
+    onKeyDown={dismissToolsMenu}
+    onBlur={(event) => {
+      if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
+    }}
+    onToggle={(event) => {
+      const menu = event.currentTarget;
+      setOpen(menu.open);
+      if (menu.open && keyboard.current) close.current?.focus({ preventScroll: true });
+      keyboard.current = false;
+    }}>
+    <summary onKeyDown={(event) => {
+      if (event.key === "Enter" || event.key === " ") keyboard.current = true;
+    }}>{label}</summary>
+    <div className={panelClass}>
+      <button ref={close} type="button" className={nav.closeTools} onClick={() => {
+        if (ref.current) closeToolsMenu(ref.current);
+      }}>Close menu <kbd>Esc</kbd></button>
+      {children}
+    </div>
+  </details>;
+}
+
 /** One line under the tabs, so a new user can name what each tab is for. */
 const PURPOSE: Record<Exclude<HiringView, "hr" | "heads" | "offer" | "prescreen">, string> = {
   overview: "Where every candidate stands, and who is ready for the next step.",
@@ -394,46 +438,52 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
   useLayoutEffect(() => {
     if (loaded && !demo) return restoreHiringScroll(scrollKey, surface.current);
   }, [loaded, demo, scrollKey]);
+  const personalHead = data?.viewerHead ?? head;
+  const chooseWorkspace = (event: MouseEvent<HTMLAnchorElement>, name: HiringView) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    const menu = event.currentTarget.closest("details");
+    if (menu) closeToolsMenu(menu);
+    switchView(name);
+  };
+  const workspaceLink = (name: HiringView, label: string, hint?: string) => (
+    <a key={name} href={`/hiring?view=${name}${demo ? "&demo=1" : ""}`} aria-label={label}
+      aria-current={view === name ? "page" : undefined} onClick={(event) => chooseWorkspace(event, name)}>
+      {view === name && <span className={nav.activeMark} aria-hidden="true">✓</span>}
+      <span>{label}{hint && <small>{hint}</small>}</span>
+    </a>
+  );
+  const workspace = <div className={nav.toolGroup} role="group" aria-label="Workspace">
+    <span className={nav.groupLabel} aria-hidden="true">Workspace</span>
+    {WORKSPACE.map((name) => workspaceLink(name, VIEWS[name]))}
+  </div>;
+  const reportLinks = (phone: boolean) => (
+    <div className={`${nav.toolGroup} ${nav.reportGroup}`} role="group" aria-label="Reports">
+      <span className={nav.groupLabel}>Read-only reports</span>
+      {(["paper-results", "ats-outcomes"] as const).map((report) => (
+        <Link key={report} href={hiringReportHref(report, reportFrom)} prefetch={false} scroll={false}
+          aria-label={HIRING_REPORTS[report]} aria-description={REPORT_HINTS[report]}
+          onNavigate={() => saveHiringScroll(scrollKey, surface.current)}>
+          <span>{HIRING_REPORTS[report]}{!phone && <small>{REPORT_HINTS[report]}</small>}</span>
+        </Link>
+      ))}
+    </div>
+  );
+  const staffTools = <>
+    {MORE_TOOLS.map((name) => workspaceLink(name, name === "heads" && personalHead ? "My list" : VIEWS[name], name === "heads" && personalHead ? "Your mock teaching and decisions" : TOOL_HINTS[name]))}
+    {!demo && <a href="/hiring?demo=1" target="_blank" rel="noopener" className={nav.practice}
+      aria-label="Practice demo, opens in a new tab" aria-description="Uses sample data">
+      <span>Practice demo <span aria-hidden="true">↗</span><small>Sample data</small></span>
+    </a>}
+  </>;
   const tools = (
     <nav className={nav.tools} aria-label="Hiring tools">
-      <div className={nav.toolGroup} role="group" aria-label="Workspace">
-        <span className={nav.groupLabel} aria-hidden="true">Workspace</span>
-        {WORKSPACE.map((name) => (
-          <button key={name} type="button" aria-pressed={view === name} onClick={() => switchView(name)}>{VIEWS[name]}</button>
-        ))}
-      </div>
-      {!demo && <div className={nav.toolGroup} role="group" aria-label="Reports">
-        <span className={nav.groupLabel} aria-hidden="true">Reports</span>
-        {(["paper-results", "ats-outcomes"] as const).map((report) => (
-          <Link key={report} href={hiringReportHref(report, reportFrom)} prefetch={false} scroll={false}
-            onNavigate={() => saveHiringScroll(scrollKey, surface.current)}
-            onClick={(event) => {
-              if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-              const menu = event.currentTarget.closest("details");
-              if (menu) closeToolsMenu(menu);
-            }}>
-            {HIRING_REPORTS[report]}
-          </Link>
-        ))}
-      </div>}
-      <details className={nav.moreTools} onKeyDown={dismissToolsMenu} onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
-      }}>
-        <summary>{view === "setup" ? <>More tools<span className={nav.activeTool}> · {VIEWS.setup}</span></> : "More tools"}</summary>
-        <div className={nav.moreItems}>
-          {MORE_TOOLS.map((name) => (
-            <button key={name} type="button" aria-pressed={view === name} onClick={(event) => {
-              const menu = event.currentTarget.closest("details");
-              if (menu) closeToolsMenu(menu);
-              switchView(name);
-            }}>
-              {name === "heads" && (data?.viewerHead ?? head) ? "My list" : VIEWS[name]}
-            </button>
-          ))}
-          {/* A full page load clears real data before the demo starts. */}
-          {!demo && <button type="button" onClick={() => window.location.assign("/hiring?demo=1")}>Demo</button>}
-        </div>
-      </details>
+      {workspace}
+      {!demo && reportLinks(false)}
+      <ToolsMenu className={nav.moreTools} panelClass={nav.moreItems}
+        label={view === "setup" ? <>More tools <span className={nav.activeTool}>· {VIEWS.setup}</span></> : "More tools"}>
+        {staffTools}
+      </ToolsMenu>
     </nav>
   );
   const workflow = (
@@ -508,17 +558,20 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
       </header>
       {!role && <header className={`${nav.toolsBar} ${demo || view === "setup" ? "" : nav.stickyTools}`} data-layout={toolsLayout} data-empty-mobile={giftReview || (view === "review" && !loaded) ? "" : undefined}>
         <div className={nav.desktop}>{tools}</div>
-        {!giftReview && (view !== "review" || loaded) && <details
-          className={`${nav.mobile} ${css.stepMenu}`}
-          data-review={view === "review" ? "" : undefined}
-          onKeyDown={dismissToolsMenu}
-          onClick={(event) => {
-            if (event.target instanceof Element && event.target.closest("button")) closeToolsMenu(event.currentTarget);
-          }}
-        >
-          <summary>{step ? `${step} ${VIEWS[view]}` : VIEWS[view]}</summary>
-          <div className={nav.phonePanel}>{tools}{workflow}</div>
-        </details>}
+        {!giftReview && (view !== "review" || loaded) && <div className={nav.mobileBar}>
+          {!demo && <nav className={nav.phoneReports} aria-label="Hiring reports">{reportLinks(true)}</nav>}
+          <ToolsMenu className={`${nav.mobile} ${css.stepMenu}`} panelClass={nav.phonePanel} review={view === "review"}
+            label={<span className={nav.mobileLabel}>Tools and steps<small><span aria-hidden="true">✓ </span>{step ? `${step} ${VIEWS[view]}` : VIEWS[view]}</small></span>}>
+            <nav className={nav.tools} aria-label="Hiring tools">
+              {workspace}
+              <div className={nav.phoneStaff} role="group" aria-label="More tools">
+                <span className={nav.groupLabel} aria-hidden="true">More tools</span>
+                {staffTools}
+              </div>
+            </nav>
+            {workflow}
+          </ToolsMenu>
+        </div>}
       </header>}
       {!role && <div className={`${nav.desktop} ${nav.workflowBar}`} data-layout={toolsLayout}>{workflow}</div>}
       {view !== "hr" && view !== "heads" && view !== "offer" && view !== "prescreen" && !giftReview && PURPOSE[view] && (

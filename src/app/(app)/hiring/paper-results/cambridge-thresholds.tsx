@@ -20,7 +20,7 @@ export function CambridgeThresholds() {
     <p className="my-2 text-sm text-muted-foreground">Five June exam series, 2022–2026. Each value is the average of five annual thresholds, expressed as a percentage of the maximum weighted mark for the stated combination of papers. For the all-pairs English reference, each pair has equal weight within its June series, and each series has equal weight in the average. Other subjects use variant 2 where available and the extended route for tiered subjects. Other combinations can have different thresholds.</p>
     <p className="mb-3 text-sm">Compare the 80% hiring benchmark with the minimum for each Cambridge grade. A positive gap means 80% is above the average A* threshold.</p>
     </details>
-    <details className="mt-3"><summary className="mb-2 cursor-pointer text-sm font-medium">All grade thresholds and annual source tables</summary>
+    <details className="mt-3"><summary className="mb-2 min-h-10 cursor-pointer py-2 text-sm font-medium">All grade thresholds and annual source tables</summary>
     <div className="overflow-x-auto rounded-lg border bg-card">
       <table className="w-full text-left text-sm tabular-nums">
         <caption className="sr-only">Five-year average threshold by syllabus and grade. Gap is 80% minus the A* threshold in percentage points.</caption>
@@ -45,15 +45,16 @@ export function CambridgeThresholds() {
     <h3 className="mt-5 font-semibold">Annual thresholds and source papers</h3>
     <div className="mt-2 divide-y rounded-lg border bg-card">{syllabuses.map(({ subject, code, years }) =>
       <details key={subject} id={routeId(code, years[0].components)} className="scroll-mt-4 px-3 py-2 text-sm">
-        <summary className="cursor-pointer font-medium">{subject} ({code})</summary>
-        <div className="mt-2 overflow-x-auto"><table className="w-full text-left tabular-nums">
-          <caption className="mb-1 text-left text-xs text-muted-foreground">{subject === englishWrittenAverage.subject ? "Mean weighted marks across eligible paper pairs by grade." : "Minimum weighted marks by grade."} Select a year to open the official table.</caption>
-          <thead><tr><th scope="col">June series</th><th scope="col" className={cell}>Components</th><th scope="col" className={cell}>Maximum</th>
+        <summary className="min-h-10 cursor-pointer py-2 font-medium">{subject} ({code})</summary>
+        <div className="mt-2 sm:overflow-x-auto"><table role="table" className="w-full text-left tabular-nums">
+          <caption className="mb-1 text-left text-xs text-muted-foreground">{subject === englishWrittenAverage.subject ? "Mean weighted marks across eligible paper pairs by grade." : "Minimum weighted marks by grade."} Select a year to open its table in a new tab.</caption>
+          <thead role="rowgroup" className="max-sm:sr-only"><tr role="row"><th scope="col">June series</th><th scope="col" className={cell}>Components</th><th scope="col" className={cell}>Maximum</th>
             {grades.map(grade => <th scope="col" className={cell} key={grade}>{grade}</th>)}</tr></thead>
-          <tbody>{years.map(year => <tr key={year.year} className="border-t">
-            <th scope="row"><a href={year.source} className="underline underline-offset-4" aria-label={subject + " June " + year.year + " Cambridge PDF"}>{year.year}</a></th>
-            <td className={cell}>{year.components}</td><td className={cell}>{year.max}</td>
-            {year.marks.map((mark, i) => <td key={grades[i]} className={cell}>{mark === null ? "—" : Number.isInteger(mark) ? mark : mark.toFixed(2)}</td>)}
+          <tbody role="rowgroup">{years.map(year => <tr key={year.year} role="row" className="grid grid-cols-4 gap-y-1 border-t py-2 sm:table-row">
+            <th scope="row" role="rowheader" className="col-span-4 whitespace-nowrap"><a href={year.source} target="_blank" rel="noreferrer" className="inline-flex min-h-10 items-center text-primary underline underline-offset-4" aria-label={subject + " June " + year.year + " Cambridge PDF"}>{year.year}<span className="ml-1 text-xs font-normal text-muted-foreground max-sm:hidden">PDF</span><span className="ml-1 text-xs font-normal sm:hidden">Cambridge table ↗</span></a></th>
+            <td role="cell" className="col-span-2 max-sm:text-xs sm:px-3 sm:py-2 sm:text-right"><span className="text-muted-foreground sm:hidden">Components </span>{year.components}</td>
+            <td role="cell" className="col-span-2 max-sm:text-xs sm:px-3 sm:py-2 sm:text-right"><span className="text-muted-foreground sm:hidden">Maximum </span>{year.max}</td>
+            {year.marks.map((mark, i) => <td key={grades[i]} role="cell" className="max-sm:text-xs sm:px-3 sm:py-2 sm:text-right"><span className="mr-1 font-medium text-muted-foreground sm:hidden">{grades[i]} </span>{mark === null ? "—" : Number.isInteger(mark) ? mark : mark.toFixed(2)}</td>)}
           </tr>)}</tbody>
         </table></div>
       </details>)}</div>

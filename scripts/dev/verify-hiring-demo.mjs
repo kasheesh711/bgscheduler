@@ -157,7 +157,7 @@ try {
   });
   await check("the analytics board shows on the Overview", async () => {
     await page.getByRole("button", { name: "Full dashboard" }).click().catch(() => undefined);
-    await page.getByRole("navigation", { name: "Hiring tools" }).first().getByRole("button", { name: "Overview" }).click();
+    await page.getByRole("navigation", { name: "Hiring tools" }).first().getByRole("link", { name: "Overview" }).click();
     await page.getByRole("heading", { name: "Where they are now" }).waitFor();
     await shot("pipeline");
   });

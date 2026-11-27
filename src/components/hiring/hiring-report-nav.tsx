@@ -36,7 +36,7 @@ export function hiringReportHref(report: Report, from: string | null) {
 
 const SCROLL_KEY = "hiring-report-scroll";
 const JUMP_KEY = "hiringReportJump";
-type JumpBookmark = { href: string; fragment: string; top: number };
+type JumpBookmark = { href: string; fragment: string; top: number; openerId?: string };
 const currentHref = () => window.location.pathname + window.location.search + window.location.hash;
 type ScrollTrip = {
   positions: Record<string, number>;
@@ -158,12 +158,12 @@ export function restoreHiringScroll(key: string, pane: HTMLElement | null, fragm
   return stop;
 }
 
-export function HiringReportJump({ fragment, children, className }: { fragment: string; children: ReactNode; className?: string }) {
+export function HiringReportJump({ fragment, children, className, id }: { fragment: string; children: ReactNode; className?: string; id?: string }) {
   const link = useRef<HTMLAnchorElement>(null);
-  return <Link ref={link} className={className} href={`#${fragment}`} prefetch={false} scroll={false} onNavigate={() => {
-    const pane = link.current?.closest("section");
+  return <Link ref={link} id={id} className={className} href={`#${fragment}`} prefetch={false} scroll={false} onNavigate={() => {
+    const pane = link.current?.closest("section[tabindex='0']");
     if (!pane) return;
-    const bookmark: JumpBookmark = { href: currentHref(), fragment, top: pane.scrollTop };
+    const bookmark: JumpBookmark = { href: currentHref(), fragment, top: pane.scrollTop, openerId: id };
     window.history.replaceState({ ...window.history.state, [JUMP_KEY]: bookmark }, "");
     restoreHiringScroll(window.location.pathname + window.location.search, pane, fragment, true);
   }}>{children}</Link>;
@@ -189,7 +189,8 @@ export function HiringReportNav({ active, fragments }: { active: Report; fragmen
       const bookmark: JumpBookmark | undefined = window.history.state?.[JUMP_KEY];
       if (pane?.clientHeight && bookmark?.href === currentHref() && fragments.includes(bookmark.fragment)) {
         pane.scrollTop = bookmark.top;
-        pane.querySelector<HTMLAnchorElement>(`a[href="#${bookmark.fragment}"]`)?.focus({ preventScroll: true });
+        const opener = bookmark.openerId && pane.querySelector<HTMLAnchorElement>(`#${CSS.escape(bookmark.openerId)}`);
+        (opener || pane.querySelector<HTMLAnchorElement>(`a[href="#${bookmark.fragment}"]`))?.focus({ preventScroll: true });
         return;
       }
       const fragment = fragments.find(id => window.location.hash === `#${id}`);
@@ -226,7 +227,7 @@ export function HiringReportNav({ active, fragments }: { active: Report; fragmen
         <span className={nav.backShort}>Hiring</span>
       </Link>
       {(Object.keys(HIRING_REPORTS) as Report[]).map((report) => {
-        if (report === active) return <span key={report} aria-current="page">{HIRING_REPORTS[report]}</span>;
+        if (report === active) return <span key={report} aria-current="page"><span className={nav.activeMark} aria-hidden="true">✓</span>{HIRING_REPORTS[report]}</span>;
         const href = hiringReportHref(report, from);
         return <Link key={report} href={href} prefetch={false} scroll={false} onNavigate={() => rememberPlace(href)}>{HIRING_REPORTS[report]}</Link>;
       })}
