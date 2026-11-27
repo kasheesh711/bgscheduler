@@ -182,6 +182,11 @@ export function setWorkRightsPenalty(config: HiringConfig, answer: string, point
 
 export const HEAD_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"] as const;
 export const DEFAULT_WINDOW = { start: "10:00", end: "16:00" };
+// Tito's mock teaching week is managed in Hiring. His attendance week also covers other duties.
+export function hiringMockWeek(head: { canonicalKey?: string; fallbackWeek?: Week }): Week | undefined {
+  if (head.canonicalKey !== "Tito") return undefined;
+  return head.fallbackWeek ?? [null, null, DEFAULT_WINDOW, null, DEFAULT_WINDOW, DEFAULT_WINDOW, null];
+}
 export type HeadDayState = {
   /**
    * `fallback`: no attendance record, hours live in Hiring settings. `ended`: the attendance enrollment is switched off.
@@ -227,10 +232,10 @@ export function wiseWeek(windows: WiseWindow[]): Week {
  * The head as the hour checks see it. A head set to use Wise hours gets its onsite Wise week as its fallback week;
  * no Wise data gives no hours. An enrolled head still follows Tutor Attendance, which ignores the fallback week.
  */
-export const withWiseHours = <H extends { hoursFromWise?: boolean; fallbackWeek?: Week }>(
+export const withWiseHours = <H extends { canonicalKey?: string; hoursFromWise?: boolean; fallbackWeek?: Week }>(
   head: H,
   windows: WiseWindow[] | null | undefined,
-): H => (head.hoursFromWise ? { ...head, fallbackWeek: windows ? wiseWeek(windows) : undefined } : head);
+): H => (head.hoursFromWise && !hiringMockWeek(head) ? { ...head, fallbackWeek: windows ? wiseWeek(windows) : undefined } : head);
 
 /** The newest saved schedule counts, even one that starts tomorrow, so the screen shows what was last saved. */
 export function headDayState(
@@ -241,6 +246,9 @@ export function headDayState(
   wiseWindows?: WiseWindow[],
 ): HeadDayState {
   const enrollment = enrollments.find((e) => e.canonicalKey === head.canonicalKey);
+  const mockWeek = hiringMockWeek(head);
+  if (mockWeek && (!enrollment || (enrollment.active && (!enrollment.endDate || enrollment.endDate >= today))))
+    return { state: "fallback", week: mockWeek, from: null };
   if (!enrollment && head.hoursFromWise)
     return { state: "wise", week: withWiseHours(head, wiseWindows).fallbackWeek ?? null, from: null };
   if (!enrollment) return { state: "fallback", week: head.fallbackWeek ?? null, from: null };

@@ -35,7 +35,7 @@ import {
 } from "./model";
 
 import { headWeekMocks } from "./limits";
-import { withWiseHours } from "./rules";
+import { hiringMockWeek, withWiseHours } from "./rules";
 import { classesInHiringRooms, isWeekendDate, weekendTestFits } from "./rooms";
 
 const MAX_SOURCE_AGE = 90 * 60 * 1000;
@@ -150,7 +150,7 @@ const minuteOf = (time: string) =>
 
 /**
  * The head's saved hours on that date, or null when the head is out. An enrolled head uses the Tutor
- * Attendance schedule version in force on the date (a future version is not applied early). Any other head
+ * Attendance schedule version in force on the date unless Hiring owns their mock week. Any other head
  * uses the fallback week in Hiring settings. Closures, excused days and one-day hours follow Tutor
  * Attendance for both.
  */
@@ -169,15 +169,19 @@ export function headOfficeWindow(
       (enrolled.endDate && enrolled.endDate < date))
   )
     return null;
-  const schedules = enrolled
+  const mockWeek = hiringMockWeek(head);
+  const mockWindow = mockWeek?.[new Date(`${date}T12:00:00Z`).getUTCDay()];
+  if (mockWeek && !mockWindow) return null;
+  const fallbackWeek = mockWeek ?? head.fallbackWeek;
+  const schedules = enrolled && !mockWeek
     ? ctx.schedules
-    : head.fallbackWeek
+    : fallbackWeek
       ? [
           {
             id: "fallback",
             canonicalKey: head.canonicalKey,
             effectiveFrom: "0000-01-01",
-            week: head.fallbackWeek,
+            week: fallbackWeek,
             revision: 0,
           },
         ]
@@ -188,9 +192,11 @@ export function headOfficeWindow(
     schedules,
     ctx.exceptions,
   );
-  return required && "start" in required
-    ? { start: required.start, end: required.end }
-    : null;
+  if (!required || !("start" in required)) return null;
+  if (!mockWindow) return { start: required.start, end: required.end };
+  const start = required.start > mockWindow.start ? required.start : mockWindow.start;
+  const end = required.end < mockWindow.end ? required.end : mockWindow.end;
+  return start < end ? { start, end } : null;
 }
 
 /** True when the whole [startMinute, endMinute) range sits inside the head's saved hours on that date. */
