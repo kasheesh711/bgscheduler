@@ -33,6 +33,11 @@ import { connectSeek, importSeek, readSeekPhones } from "./hiring-seek";
 const phoneTried = new Set<string>();
 /** Twelve panels with the 10-second watch pause add about two minutes to a 15-minute cycle. */
 const PHONE_READS_PER_CYCLE = 12;
+/**
+ * A watch cycle that runs longer than this is taken as hung (26 Nov 2026: a dropped connection left one cycle waiting
+ * for 15 hours). The process exits and launchd KeepAlive starts a new one. Normal cycles take about 15 minutes.
+ */
+const CYCLE_LIMIT_MS = 2 * 60 * 60 * 1000;
 /** Failed phone walks in a row for each closed ad. After three, that ad is left alone until the worker restarts. */
 const phoneWalkFailures = new Map<string, number>();
 
@@ -99,6 +104,13 @@ async function main() {
       return;
     }
     do {
+      const hung =
+        mode === "--watch"
+          ? setTimeout(() => {
+              console.error("A worker cycle ran over two hours. The worker stops so that launchd starts it again.");
+              void killChildren(children).finally(() => process.exit(1));
+            }, CYCLE_LIMIT_MS)
+          : undefined;
       try {
         const { config } = await settings(db);
         // A stored config that breaks a rule stops the worker with a message Kevin can act on. A save repairs it.
@@ -232,6 +244,8 @@ async function main() {
           .catch(() => {});
         if (mode === "--once") throw new Error(message);
         console.error(message);
+      } finally {
+        clearTimeout(hung);
       }
       if (mode === "--watch" && !stop)
         for (let i = 0; i < 90 && !stop; i++)
