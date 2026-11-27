@@ -10,6 +10,8 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
   const { scores, mean, median, sd } = data;
   const official = cutoffs.length === 1 ? cutoffs[0] : 80;
   const [cutoff, setCutoff] = useState(official);
+  const [comparing, setComparing] = useState(false);
+  const [draft, setDraft] = useState(String(official));
   const [selected, setSelected] = useState<number | null>(null);
   const [hover, setHover] = useState<number | null>(null);
   const inspected = hover ?? selected;
@@ -28,7 +30,7 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
     [score, 100 - 90 * Math.exp(-0.5 * ((score - mean) / (sd || 1)) ** 2)].join(",")).join(" ");
   const inspectText = inspected === null ? "Hover or select a score to inspect it." :
     `${fmt(inspected)}% · ${counts.get(inspected)} ${counts.get(inspected) === 1 ? "paper" : "papers"} · ${inspected === cutoff ? "at the cutoff" : fmt(Math.abs(inspected - cutoff)) + " points " + (inspected > cutoff ? "above" : "below") + " the cutoff"}`;
-  return <article aria-label={subject + " distribution"} className="min-w-0 rounded-xl border bg-card shadow-sm">
+  return <article aria-label={subject + " distribution"} className="min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm">
     <header className="flex flex-wrap items-baseline justify-between gap-1 border-b px-4 py-3 sm:px-6">
       <h3 className="text-xl font-semibold">{subject}</h3>
       <span className="text-sm text-muted-foreground">{scores.length} final {scores.length === 1 ? "paper" : "papers"}</span>
@@ -38,7 +40,7 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
         {([["Mean", fmt(mean) + "%"], ["Median", fmt(median) + "%"], ["Std. deviation", fmt(sd) + " pp"]] as const).map(([label, value]) =>
           <div key={label} className="pl-3 first:pl-0"><dt className="text-muted-foreground">{label}</dt><dd className="text-lg font-semibold tabular-nums sm:text-2xl">{value}</dd></div>)}
       </dl>
-      <div className="mx-3 mb-8 mt-7 relative h-32 border-b border-foreground/40 sm:h-40" aria-label="Scores from zero to one hundred percent"
+      <div className="mx-3 mb-8 mt-7 relative h-32 border-b border-foreground/40 sm:h-48" aria-label="Scores from zero to one hundred percent"
         onPointerMove={e => { if (e.pointerType === "mouse") setHover(nearestScore(e)); }}
         onPointerLeave={() => setHover(null)}
         onClick={e => { if (e.target instanceof Element && !e.target.closest("button")) setSelected(nearestScore(e)); }}>
@@ -73,14 +75,25 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
         <div className="mt-2 flex flex-wrap gap-2">{[...counts].map(([score, n]) => <button key={score} type="button" className="rounded border px-2 py-1" onClick={() => { setSelected(score); setHover(null); }}>{fmt(score)}%{n > 1 && " × " + n}</button>)}</div>
       </details>
     </div>
-    <div className="rounded-b-xl border-t bg-muted/45 px-4 py-4 sm:px-6">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <label htmlFor="trial-cutoff" className="font-medium">Trial cutoff <strong className="ml-1 text-lg tabular-nums">{cutoff}%</strong></label>
-        <output className="text-sm tabular-nums" htmlFor="trial-cutoff">{meets} of {scores.length} at or above</output>
+    <div className="rounded-b-xl border-t px-4 py-3 sm:px-6">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+        <output className="tabular-nums"><strong>{meets} of {scores.length}</strong> at or above {cutoff}%</output>
+        <button type="button" aria-expanded={comparing} aria-controls="compare-cutoff" className="cursor-pointer font-medium text-primary hover:underline"
+          onClick={() => { setComparing(!comparing); setDraft(String(official)); if (comparing) setCutoff(official); }}>
+          {comparing ? "Close comparison" : "Compare a cutoff"}
+        </button>
       </div>
-      <input id="trial-cutoff" className="my-1 h-7 w-full cursor-pointer accent-primary" type="range" min="0" max="100" step="1" value={cutoff} aria-valuetext={cutoff + " percent"} onChange={e => setCutoff(Number(e.target.value))} />
-      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground"><span>Preview the effect on these scores.</span>
-        <button className="underline disabled:opacity-50" disabled={cutoff === official} onClick={() => setCutoff(official)}>Reset to {official}%</button></div>
+      {comparing && <form id="compare-cutoff" className="mt-3 flex flex-wrap items-end gap-2" onSubmit={e => {
+        e.preventDefault();
+        setCutoff(Number(draft));
+      }}>
+        <label className="text-xs text-muted-foreground">Trial cutoff (%)
+          <input aria-label="Trial cutoff (%)" type="number" inputMode="decimal" min="0" max="100" step="any" required
+            className="mt-1 block w-20 rounded-md border bg-background px-2 py-1.5 text-sm text-foreground tabular-nums"
+            value={draft} onChange={e => setDraft(e.target.value)} />
+        </label>
+        <button type="submit" className="cursor-pointer rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground">Compare</button>
+      </form>}
     </div>
   </article>;
 }
@@ -90,7 +103,7 @@ export function ScoreExplorer({ rows }: { rows: Row[] }) {
   const active = rows.find(row => row.subject === subject) ?? rows[0];
   return <section aria-labelledby="score-heading">
     <h2 id="score-heading" className="mb-3 text-xl font-semibold">Score distributions</h2>
-    <div className="grid items-start gap-3 lg:grid-cols-[minmax(17rem,0.7fr)_minmax(0,1.3fr)]">
+    <div className="grid items-start gap-4 lg:grid-cols-[minmax(17rem,0.65fr)_minmax(0,1.35fr)]">
       <div className="rounded-xl border bg-card p-3">
         <label className="flex items-center justify-between gap-2 text-sm font-medium lg:hidden">Test group
           <select aria-label="Test group" className="min-w-0 rounded-md border bg-background p-2" value={active.subject} onChange={e => setSubject(e.target.value)}>{rows.map(row => <option key={row.subject}>{row.subject}</option>)}</select></label>

@@ -59,18 +59,23 @@ async function Report() {
   const n = summary.reduce((total, row) => total + row.data.scores.length, 0);
   return <>
     {summary.length > 0 && <ScoreExplorer rows={summary} />}
-    <p className="text-sm text-muted-foreground">{n} final papers across {summary.length} test groups.{empty.length > 0 && <> Awaiting final scores for {empty.join(", ")}.</>}</p>
+    <details className="-mt-3 text-sm text-muted-foreground">
+      <summary className="cursor-pointer font-medium">How the {n} final papers are counted</summary>
+      <p className="mt-2 max-w-3xl">Scores cover {summary.length} test groups. For a multi-level paper, Hiring reports the highest level passed, or the best level attempted if none passed. Papers awaiting review and historical outcomes without marks are excluded.</p>
+      {empty.length > 0 && <p className="mt-1">Awaiting final scores for {empty.join(", ")}.</p>}
+    </details>
     <CambridgeThresholds />
   </>;
 }
 
 export default function Page() {
   return <section aria-labelledby="paper-title" tabIndex={0} className="min-h-0 flex-1 overflow-y-auto">
-    <div className="mx-auto grid max-w-5xl gap-6 px-2 py-3 sm:px-6 sm:py-6">
-      <header><Link href="/hiring?view=assessment" className="text-sm underline underline-offset-4">Back to Paper test</Link>
-        <h1 id="paper-title" className="mt-3 text-3xl font-semibold tracking-tight">Paper results by subject</h1>
-        <p className="mt-2 max-w-3xl text-muted-foreground">All-time final hiring scores grouped by test. EFL/ESL, English Language and English Literature share one reading and writing paper. For a multi-level paper, Hiring reports the highest level passed, or the best level attempted if none passed. Papers awaiting review and historical outcomes without marks are excluded.</p>
-        <a href="#cambridge-thresholds" className="mt-2 inline-block text-sm underline underline-offset-4">Jump to Cambridge grade thresholds</a>
+    <div className="mx-auto grid max-w-6xl gap-6 px-3 py-3 sm:px-6 sm:py-6">
+      <header className="border-b pb-5"><Link href="/hiring?view=assessment" className="text-sm text-muted-foreground hover:underline">← Paper test</Link>
+        <div className="mt-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h1 id="paper-title" className="text-3xl font-semibold tracking-tight sm:text-4xl">Hiring paper results</h1>
+          <a href="#cambridge-thresholds" className="text-sm font-medium text-primary hover:underline">Cambridge thresholds ↓</a>
+        </div>
       </header>
       <Suspense fallback={<p role="status">Loading paper results…</p>}><Report /></Suspense>
     </div>
