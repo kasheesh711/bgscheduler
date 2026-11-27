@@ -26,7 +26,7 @@
 }
 .split {
   display: grid;
-  grid-template-columns: minmax(320px, 0.82fr) minmax(0, 1.48fr);
+  grid-template-columns: minmax(390px, 1.45fr) minmax(320px, 1fr);
   gap: clamp(8px, 1.2vw, 20px);
   flex: 1;
   min-height: 0;
@@ -42,7 +42,9 @@
 }
 .panel {
   padding: clamp(12px, 1.2vw, 22px);
-  align-self: start;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
   max-height: 100%;
   overflow: auto;
   --columns: minmax(145px, 2.5fr) repeat(2, minmax(53px, 0.85fr));
@@ -110,7 +112,8 @@
 .chart {
   position: relative;
   width: 100%;
-  height: clamp(115px, 20vh, 205px);
+  flex: 1;
+  min-height: 150px;
   margin: 0 auto 12px;
   border-radius: 8px;
   overflow: hidden;
@@ -177,9 +180,48 @@
   font-size: 0.67rem;
   font-weight: 600;
 }
+.sankey {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 150px;
+  padding: clamp(10px, 1.8vw, 28px);
+  background: #201c30;
+}
+.sankeyScroll {
+  flex: 1;
+  overflow: auto;
+}
 .sankeyPlot {
   position: relative;
+  height: 100%;
 }
+.stageNode small {
+  display: block;
+  font-weight: 450;
+  font-size: 0.75em;
+  color: #ded9ec;
+  margin-top: 4px;
+}
+.stageStats {
+  max-height: 42%;
+  overflow: auto;
+  flex-shrink: 0;
+}
+.toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border-top: 1px solid var(--border);
+  padding: 11px 2px;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+.toggle span:last-child {
+  font-size: 1.1rem;
+}
+
 .sankeyPlot svg {
   position: absolute;
   width: 100%;
@@ -198,7 +240,8 @@
   position: absolute;
   transform: translateY(-50%);
   width: 30%;
-  font-size: clamp(0.61rem, 0.78vw, 0.77rem);
+  font-size: clamp(0.69rem, 0.96vw, 1rem);
+  font-weight: 550;
   line-height: 1.15;
   color: #efebfa;
   overflow-wrap: anywhere;
@@ -206,11 +249,13 @@
 }
 .subjectNode {
   left: 0;
+  width: 20%;
   text-align: right;
   padding-right: 3px;
 }
 .stageNode {
-  left: 70%;
+  left: 74%;
+  width: 26%;
   text-align: left;
 }
 .subjectNode b,
@@ -270,8 +315,7 @@
   color: var(--muted-foreground);
   font-size: 0.67rem;
 }
-.mobileLabel,
-.toggle {
+.mobileLabel {
   display: none;
 }
 .caption {
@@ -388,7 +432,7 @@
 }
 @media (min-width: 1500px) {
   .split {
-    grid-template-columns: minmax(430px, 0.75fr) minmax(0, 1.55fr);
+    grid-template-columns: minmax(470px, 1.45fr) minmax(0, 1fr);
   }
   .candidate {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1.35fr);
@@ -416,61 +460,69 @@
   .top p {
     font-size: 0.65rem;
   }
-  .panel {
-    align-self: stretch;
-    padding: 5px 10px;
-    max-height: 43%;
-    flex-shrink: 0;
-  }
-  .panelTitle {
-    margin: 0;
-  }
   .panelTitle h2 {
     font-size: 0.95rem;
   }
-  .toggle {
-    display: block;
-    padding: 4px;
-    color: var(--muted-foreground);
-    font-size: 0.72rem;
-    text-decoration: underline;
+  .panel {
+    padding: 8px;
+    flex-shrink: 0;
+    min-height: 148px;
+    max-height: 37%;
   }
-  .panel[data-expanded="false"] {
-    display: grid;
-    grid-template-columns: 48px 1fr;
-    gap: 8px;
-    align-items: center;
+  .panelTitle {
+    margin-bottom: 5px;
   }
-  .panel[data-expanded="false"] .panelTitle {
-    grid-column: 2;
-    grid-row: 1;
-  }
-  .panel[data-expanded="false"] .chart {
-    grid-column: 1;
-    grid-row: 1;
-    height: 32px;
-    width: 44px;
+  .panel .chart,
+  .panel .sankey {
+    height: clamp(112px, 18vh, 175px);
+    min-height: 0;
+    flex: 1 1 auto;
     margin: 0;
   }
-  .panel[data-expanded="false"]:has(.sankey) .panelTitle {
-    grid-column: 1 / -1;
+  .sankey {
+    padding: 6px;
   }
-  .panel[data-expanded="false"] .modeBar,
-  .panel .chartCount,
-  .panel .chartStage,
-  .panel[data-expanded="false"] .sankey,
-  .panel .bandLabel {
+  .sankeyPlot svg {
+    width: 80%;
+    left: 10%;
+  }
+  .subjectNode {
+    width: 26%;
+  }
+  .stageNode {
+    left: 70%;
+    width: 30%;
+  }
+  .subjectNode,
+  .stageNode {
+    font-size: 0.64rem;
+  }
+  .stageNode small {
     display: none;
   }
-  .panel[data-expanded="false"] .bandRow,
-  .panel[data-expanded="false"] .headings,
-  .panel[data-expanded="false"] .caption {
+  .sankeyHead {
+    font-size: 0.56rem;
+  }
+  .panel .toggle {
+    font-size: 0.67rem;
+    padding: 3px 0;
+    border: 0;
+  }
+  .panel .caption {
     display: none;
   }
+  .stageStats {
+    max-height: 110px;
+  }
+  .panel[data-expanded="true"] {
+    max-height: 44%;
+  }
+  .panel[data-expanded="true"] .sankey,
   .panel[data-expanded="true"] .chart {
-    height: 78px;
-    width: 100%;
-    margin-bottom: 4px;
+    height: 95px;
+  }
+  .panel .chartStage {
+    font-size: 0.52rem;
   }
   .panel[data-expanded="true"] .bandRow {
     min-height: 33px;

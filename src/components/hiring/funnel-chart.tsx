@@ -3,7 +3,7 @@ import { Fragment, type DragEvent } from "react";
 import type { CurrentFunnel, FunnelPerson, FunnelStage } from "@/lib/hiring/current-funnel";
 import styles from "./current-funnel.module.css";
 
-export const stageColors = ["#9b91ee", "#9982dd", "#a27ad2", "#ae71bd", "#b569a4", "#bd6f91", "#c77c88"];
+export const stageColors = ["#968aff", "#898af6", "#b998ee", "#cb84dd", "#ed89b2", "#f79b93", "#f6bb81"];
 export type ChartMode = "Funnel" | "Sankey";
 export function chartSubjects(person: FunnelPerson): string[] {
   const subjects = [...new Set([...person.appliedSubjects, ...person.subjects])];
@@ -178,7 +178,7 @@ export function SubjectSankey({
       if (!link) return [];
       const width = link.weight * scale,
         to = target.y + target.used;
-      const path = `M32 ${from} C48 ${from} 52 ${to} 68 ${to} v${width} C52 ${to + width} 48 ${from + width} 32 ${from + width} Z`;
+      const path = `M22 ${from} C48 ${from} 52 ${to} 72 ${to} v${width} C52 ${to + width} 48 ${from + width} 22 ${from + width} Z`;
       target.used += width;
       from += width;
       return [{ ...link, path, stage: target.stage, color: target.color }];
@@ -191,92 +191,98 @@ export function SubjectSankey({
         <span>Teaching subject</span>
         <span>Current stage</span>
       </div>
-      <div className={styles.sankeyPlot} style={{ height }}>
-        <svg
-          viewBox={`0 0 100 ${height}`}
-          preserveAspectRatio="none"
-          role="group"
-          aria-label="Candidates by subject and stage"
-          onMouseLeave={() => onHighlight(null)}
+      <div className={styles.sankeyScroll}>
+        <div
+          className={styles.sankeyPlot}
+          style={{ minHeight: Math.max(subjects.length, active.length) * 27 }}
         >
-          {sources.map((s) => (
-            <g key={s.name}>
-              <rect x="30.8" y={s.y} width="1.2" height={s.size} rx=".4" fill="#c3b4f1" />
-              {s.links.map((l) => {
-                const label = `${s.name} → ${l.stage} · ${l.people} ${l.people === 1 ? "candidate" : "candidates"}`;
-                return (
-                  <path
-                    key={l.stage}
-                    d={l.path}
-                    fill={l.color}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={label}
-                    data-drop-stage={l.stage}
-                    data-weight={l.weight}
-                    opacity={
-                      (!subject || subject === s.name) && (!highlight || highlight === l.stage) ? 0.82 : 0.2
-                    }
-                    onClick={() => onSelect(l.stage, s.name)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        onSelect(l.stage, s.name);
+          <svg
+            viewBox={`0 0 100 ${height}`}
+            preserveAspectRatio="none"
+            role="group"
+            aria-label="Candidates by subject and stage"
+            onMouseLeave={() => onHighlight(null)}
+          >
+            {sources.map((s) => (
+              <g key={s.name}>
+                <rect x="20.8" y={s.y} width="1.2" height={s.size} rx=".4" fill="#c3b4f1" />
+                {s.links.map((l) => {
+                  const label = `${s.name} → ${l.stage} · ${l.people} ${l.people === 1 ? "candidate" : "candidates"}`;
+                  return (
+                    <path
+                      key={l.stage}
+                      d={l.path}
+                      fill={l.color}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={label}
+                      data-drop-stage={l.stage}
+                      data-weight={l.weight}
+                      opacity={
+                        (!subject || subject === s.name) && (!highlight || highlight === l.stage) ? 0.82 : 0.2
                       }
-                    }}
-                    onMouseEnter={() => onHighlight(l.stage)}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => onDrop(e, l.stage)}
-                  >
-                    <title>{label}</title>
-                  </path>
-                );
-              })}
-            </g>
+                      onClick={() => onSelect(l.stage, s.name)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onSelect(l.stage, s.name);
+                        }
+                      }}
+                      onMouseEnter={() => onHighlight(l.stage)}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => onDrop(e, l.stage)}
+                    >
+                      <title>{label}</title>
+                    </path>
+                  );
+                })}
+              </g>
+            ))}
+            {targets.map((t) => (
+              <rect
+                key={t.stage}
+                x="72"
+                y={t.y}
+                width="1.2"
+                height={t.size}
+                rx=".4"
+                fill={t.color}
+                data-drop-stage={t.stage}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => onDrop(e, t.stage)}
+              />
+            ))}
+          </svg>
+          {sources.map((s) => (
+            <button
+              key={s.name}
+              type="button"
+              className={styles.subjectNode}
+              style={{ top: (100 * (s.y + s.size / 2)) / height + "%" }}
+              onClick={() => onSelect(null, s.name)}
+              aria-pressed={s.name === subject}
+              title={s.name}
+            >
+              {s.name} <b>{s.people}</b>
+            </button>
           ))}
           {targets.map((t) => (
-            <rect
+            <button
               key={t.stage}
-              x="68"
-              y={t.y}
-              width="1.2"
-              height={t.size}
-              rx=".4"
-              fill={t.color}
+              type="button"
+              className={styles.stageNode}
+              style={{ top: (100 * (t.y + t.size / 2)) / height + "%" }}
+              onClick={() => onSelect(t.stage)}
               data-drop-stage={t.stage}
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => onDrop(e, t.stage)}
-            />
+              title={t.stage}
+            >
+              {t.stage} <b>{t.count}</b>
+              <small>{t.current === null ? "Wait unknown" : t.current.toFixed(1) + " d avg. wait"}</small>
+            </button>
           ))}
-        </svg>
-        {sources.map((s) => (
-          <button
-            key={s.name}
-            type="button"
-            className={styles.subjectNode}
-            style={{ top: s.y + s.size / 2 }}
-            onClick={() => onSelect(null, s.name)}
-            aria-pressed={s.name === subject}
-            title={s.name}
-          >
-            {s.name} <b>{s.people}</b>
-          </button>
-        ))}
-        {targets.map((t) => (
-          <button
-            key={t.stage}
-            type="button"
-            className={styles.stageNode}
-            style={{ top: t.y + t.size / 2 }}
-            onClick={() => onSelect(t.stage)}
-            data-drop-stage={t.stage}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => onDrop(e, t.stage)}
-            title={t.stage}
-          >
-            {t.stage} <b>{t.count}</b>
-          </button>
-        ))}
+        </div>
       </div>
     </div>
   );

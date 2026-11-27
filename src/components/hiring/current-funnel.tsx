@@ -122,7 +122,7 @@ export function CurrentFunnelWorkspace({
   const dialog = useRef<HTMLDialogElement>(null),
     opener = useRef<HTMLElement | null>(null);
   const now = Date.parse(report.now);
-  const [chartMode, setChartMode] = useState<ChartMode>("Funnel");
+  const [chartMode, setChartMode] = useState<ChartMode>("Sankey");
   const [hovered, setHovered] = useState<FunnelStage | null>(null);
   function moveTo(person: FunnelPerson | undefined, stage: FunnelStage) {
     setDrag(null);
@@ -284,9 +284,9 @@ export function CurrentFunnelWorkspace({
       <div className={layout.split}>
         <section className={layout.panel} data-expanded={expanded} aria-label="Current hiring funnel">
           <div className={layout.panelTitle}>
-            <h2>Stages</h2>
+            <h2>{chartMode === "Sankey" ? "Subjects by stage" : "Candidates by stage"}</h2>
             <div className={layout.modeBar} aria-label="Chart view">
-              {(["Funnel", "Sankey"] as const).map((mode) => (
+              {(["Sankey", "Funnel"] as const).map((mode) => (
                 <Button
                   key={mode}
                   size="sm"
@@ -302,67 +302,72 @@ export function CurrentFunnelWorkspace({
                 </Button>
               ))}
             </div>
-            <button
-              type="button"
-              className={layout.toggle}
-              aria-expanded={expanded}
-              onClick={() => setExpanded(!expanded)}
-            >
-              {expanded ? "Hide charts and averages" : "Show charts and averages"}
-            </button>
           </div>
           {chartMode === "Funnel" ? (
             <FunnelChart {...chartProps} />
           ) : (
             <SubjectSankey {...chartProps} rows={report.rows} subject={subject} />
           )}
-          <div className={layout.headings} aria-hidden="true">
-            <span>Stage · active candidates</span>
-            <span>Avg. wait</span>
-            <span>Avg. stay</span>
-          </div>
-          {report.stages.map((s, i) => {
-            const person = report.rows.find((p) => p.id === drag);
-            const action = destination(s.stage, person);
-            const eligible = !!(person && action && moves(person, fullAccess).includes(action));
-            return (
-              <button
-                key={s.stage}
-                className={layout.bandRow}
-                data-selected={(hovered ?? stage) === s.stage}
-                onMouseEnter={() => setHovered(s.stage)}
-                onMouseLeave={() => setHovered(null)}
-                onFocus={() => setHovered(s.stage)}
-                onBlur={() => setHovered(null)}
-                data-drop-stage={s.stage}
-                data-eligible={eligible}
-                aria-pressed={stage === s.stage}
-                onClick={() => selectChart(s.stage)}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = eligible ? "move" : "none";
-                }}
-                onDrop={(e) => dropCandidate(e, s.stage)}
-              >
-                <span className={layout.stageName}>
-                  <i style={{ backgroundColor: stageColors[i] }} />
-                  {s.stage} <b>{s.count}</b>
-                </span>
-                {(
-                  [
-                    ["Current wait", s.current, s.dated],
-                    ["Completed stay", s.history, s.completed],
-                  ] as const
-                ).map(([label, value, n]) => (
-                  <span className={layout.metric} key={label}>
-                    <span className={layout.mobileLabel}>{label} </span>
-                    <strong>{value === null ? "—" : value.toFixed(1) + " d"}</strong>
-                    <small>{n} dated</small>
-                  </span>
-                ))}
-              </button>
-            );
-          })}
+          <button
+            type="button"
+            className={layout.toggle}
+            aria-expanded={expanded}
+            onClick={() => setExpanded(!expanded)}
+          >
+            <span>Stage averages</span>
+            <span aria-hidden="true">{expanded ? "−" : "+"}</span>
+          </button>
+          {expanded && (
+            <div className={layout.stageStats}>
+              <div className={layout.headings} aria-hidden="true">
+                <span>Stage · active candidates</span>
+                <span>Avg. wait</span>
+                <span>Avg. stay</span>
+              </div>
+              {report.stages.map((s, i) => {
+                const person = report.rows.find((p) => p.id === drag);
+                const action = destination(s.stage, person);
+                const eligible = !!(person && action && moves(person, fullAccess).includes(action));
+                return (
+                  <button
+                    key={s.stage}
+                    className={layout.bandRow}
+                    data-selected={(hovered ?? stage) === s.stage}
+                    onMouseEnter={() => setHovered(s.stage)}
+                    onMouseLeave={() => setHovered(null)}
+                    onFocus={() => setHovered(s.stage)}
+                    onBlur={() => setHovered(null)}
+                    data-drop-stage={s.stage}
+                    data-eligible={eligible}
+                    aria-pressed={stage === s.stage}
+                    onClick={() => selectChart(s.stage)}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = eligible ? "move" : "none";
+                    }}
+                    onDrop={(e) => dropCandidate(e, s.stage)}
+                  >
+                    <span className={layout.stageName}>
+                      <i style={{ backgroundColor: stageColors[i] }} />
+                      {s.stage} <b>{s.count}</b>
+                    </span>
+                    {(
+                      [
+                        ["Current wait", s.current, s.dated],
+                        ["Completed stay", s.history, s.completed],
+                      ] as const
+                    ).map(([label, value, n]) => (
+                      <span className={layout.metric} key={label}>
+                        <span className={layout.mobileLabel}>{label} </span>
+                        <strong>{value === null ? "—" : value.toFixed(1) + " d"}</strong>
+                        <small>{n} dated</small>
+                      </span>
+                    ))}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <footer className={layout.caption}>
             {chartMode === "Funnel"
               ? "Funnel area shows each stage’s share of active candidates."
@@ -422,9 +427,7 @@ export function CurrentFunnelWorkspace({
               onChange={(e) => setFilter(e.target.value)}
             />
           </div>
-          <p className={layout.queueCaption}>
-            Longest wait first · Drag a candidate to a stage or use Move forward.
-          </p>
+          <p className={layout.queueCaption}>Longest wait first</p>
           <div role="status">
             {notice} {notice && delivery && "Email · " + delivery}
             {notice.includes("to rebook") && openerId && (
