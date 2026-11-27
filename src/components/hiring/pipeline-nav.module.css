@@ -1,24 +1,119 @@
 .desktop { display: contents; }
 .mobile { display: none; }
 
-.tools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0 12px;
+.toolsBar {
+  position: relative;
+  z-index: 6;
+  flex-shrink: 0;
+  padding: 2px 24px;
+  background: var(--paper);
 }
 
-.tools.tools > :is(button, a) {
+.stickyTools { position: sticky; top: 0; }
+
+.tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 20px;
+}
+
+.toolGroup {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 8px;
+}
+
+.groupLabel {
+  margin-inline-end: 4px;
+  color: var(--muted);
+  font-size: 0.85em;
+  font-weight: 650;
+}
+
+.tools.tools :is(button, a, summary) {
+  display: inline-flex;
+  align-items: center;
   min-height: 36px;
   padding-inline: 4px;
   color: var(--support);
 }
 
-.tools a { display: inline-flex; align-items: center; }
-.tools a:hover, .tools button:hover, .tools button[aria-pressed="true"] {
+.tools :is(a, button):hover, .tools button[aria-pressed="true"], .activeTool {
   color: var(--ink);
   text-decoration: underline;
   text-underline-offset: 4px;
 }
+
+.tools .moreTools { position: relative; }
+.tools .moreTools > summary { gap: 6px; list-style: none; cursor: pointer; }
+.tools .moreTools > summary::-webkit-details-marker { display: none; }
+.tools .moreTools > summary::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin: -3px 2px 0 0;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+.tools .moreTools[open] > summary::after { margin-top: 3px; transform: rotate(225deg); }
+
+.moreItems {
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-start: 100%;
+  display: grid;
+  min-width: max-content;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.1);
+}
+
+.workflowBar {
+  display: block;
+  flex-shrink: 0;
+  padding: 0 24px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+:is(.toolsBar, .workflowBar)[data-layout="compact"] { padding-inline: 16px; font-size: 14px; }
+:is(.toolsBar, .workflowBar)[data-layout="review"] {
+  padding-inline: max(16px, calc((100% - 948px) / 2));
+  font-size: 14px;
+}
+.toolsBar[data-layout="compact"] .tools :is(button, a, summary) { min-height: 44px; }
+
+.reportNav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 18px;
+  padding: 0 4px;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 0.875rem;
+}
+
+.reportNav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  min-height: 44px;
+  min-width: 44px;
+  text-underline-offset: 4px;
+}
+
+.reportNav a:hover, .reportNav a[aria-current="page"], .reportBack { text-decoration: underline; }
+.reportNav a[aria-current="page"] { font-weight: 650; }
+.reportNav a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
 .workflow {
   flex: 0 0 100%;
@@ -72,6 +167,34 @@
 
 @media (width < 720px) {
   .desktop { display: none; }
+  .toolsBar { padding-block: 4px; }
+  .toolsBar[data-empty-mobile] { display: none; }
+  .phonePanel {
+    position: absolute;
+    inset: 100% 16px auto;
+    max-height: min(68dvh, 530px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 8px 12px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--paper);
+    box-shadow: 0 6px 18px rgb(0 0 0 / 0.1);
+  }
+  .tools { display: block; padding-block-end: 4px; }
+  .toolGroup { gap: 0 6px; }
+  .toolGroup + .toolGroup { margin-top: 2px; }
+  .groupLabel { flex-basis: 100%; padding: 3px 4px 0; }
+  .tools .moreTools > summary { width: 100%; padding-inline: 4px; }
+  .tools .moreTools > summary::after { margin-inline-start: auto; }
+  .moreItems {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    box-shadow: none;
+  }
   .mobile { display: block; flex: 0 0 100%; min-width: 0; }
   .mobile > summary {
     display: flex;
@@ -96,7 +219,7 @@
     transform: rotate(45deg);
   }
   .mobile[open] > summary::after { transform: rotate(225deg); }
-  .tools.tools > :is(button, a) { min-width: 44px; min-height: 44px; }
+  .tools.tools :is(button, a, summary) { min-width: 44px; min-height: 44px; }
 }
 
 @media (min-width: 720px) {
@@ -105,4 +228,9 @@
 
 @media (min-width: 1100px) {
   .steps { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+}
+
+@media (720px <= width < 860px) {
+  .tools .moreTools { position: static; }
+  .moreItems { inset-inline: auto 24px; }
 }

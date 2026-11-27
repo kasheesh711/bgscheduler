@@ -1,6 +1,6 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
+import { HiringReportNav } from "@/components/hiring/hiring-report-nav";
 import { AtsOutcomes } from "@/components/hiring/ats-outcomes";
 import { OwnerSelections } from "@/components/hiring/owner-selections";
 import { getDb } from "@/lib/db";
@@ -26,10 +26,10 @@ async function Body() {
 }
 
 export default function Page() {
-  return <section aria-labelledby="ats-title" tabIndex={0} className="min-h-0 flex-1 overflow-y-auto">
+  return <section aria-labelledby="ats-title" tabIndex={0} className="min-h-0 flex-1 overflow-y-auto scroll-pt-24 sm:scroll-pt-14">
     <div className="mx-auto grid max-w-5xl gap-5 px-1 py-3 sm:px-6 sm:py-6">
+    <Suspense><HiringReportNav active="ats-outcomes" /></Suspense>
     <header>
-      <Link href="/hiring" className="text-sm underline underline-offset-4">Back to Hiring</Link>
       <h1 id="ats-title" className="mt-3 text-3xl font-semibold tracking-tight">ATS scoring review</h1>
       <p className="mt-2 text-muted-foreground">Check the invitation rule against subject papers, mock teaching and final hiring decisions.</p>
       <a href="#owner-selections" className="mt-2 inline-block text-sm underline underline-offset-4">View Kevin’s candidate selections</a>
