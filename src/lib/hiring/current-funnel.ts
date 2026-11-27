@@ -55,6 +55,7 @@ export type FunnelPerson = {
   email: string | null;
   phone: string | null;
   subjects: Subject[];
+  appliedSubjects: Subject[];
   rawStage: Stage;
   stage: FunnelStage;
   since: string | null;
@@ -306,6 +307,7 @@ export async function currentFunnel(db: Database, now = new Date()) {
       phone: p.phone,
       stage,
       rawStage: p.stage,
+      appliedSubjects: p.subjects,
       subjects: p.visitSubject ? [p.visitSubject] : p.subjects,
       revision: p.revision,
       answered: p.answered,

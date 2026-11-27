@@ -5,7 +5,7 @@ Open **Hiring → Current funnel** with a controlled hiring account. Use synthet
 | Points | Task | Pass condition |
 |---:|---|---|
 | 10 | Prioritize a candidate | Find the longest wait and the next action. Identify time in stage and time since last contact. |
-| 10 | Verify the funnel | Recalculate a stage’s current and completed means from known dates and sample counts. Confirm that an unknown start stays out of the mean. Confirm that stage area equals its share of all active candidates and that zero-count stages remain selectable. |
+| 10 | Verify the funnel | Recalculate a stage’s current and completed means from known dates and sample counts. Confirm that an unknown start stays out of the mean. Confirm that stage area equals its share of all active candidates and that zero-count stages remain selectable. In Sankey, select a subject and stage ribbon and match the names to the queue. Confirm that a multi-subject candidate contributes one total unit of width and that a candidate with no subject appears under Subject unknown. |
 | 10 | Use the queue | Find an older active candidate and an outstanding contract. Filter by stage, open the right record and return to the same list position. |
 | 10 | Open a résumé | Open the correct original file with one activation. Identify a missing file from the row. |
 | 10 | Escalate a contact | Identify an email-only case. Open its stored phone number, record an outcome and follow-up date, and verify both after refresh. |

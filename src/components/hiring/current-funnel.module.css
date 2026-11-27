@@ -90,30 +90,143 @@
   outline-offset: 1px;
   z-index: 1;
 }
+.modeBar {
+  margin-left: auto;
+  background: var(--muted);
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 8px;
+}
+.modeBar button {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 0.72rem;
+}
+.modeBar [aria-pressed="true"] {
+  background: var(--card);
+  box-shadow: 0 1px 3px #20162b24;
+}
 .chart {
   position: relative;
-  width: 92%;
-  height: clamp(100px, 20vh, 220px);
-  margin: 0 auto 16px;
+  width: 100%;
+  height: clamp(115px, 20vh, 205px);
+  margin: 0 auto 12px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #221e30;
 }
 .figure {
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  inset: 5% 3%;
+  width: 94%;
+  height: 90%;
   display: block;
 }
-.bandLabel {
-  position: absolute;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: white;
-  font-weight: 600;
-  font-size: clamp(0.65rem, 0.8vw, 0.85rem);
-  text-align: center;
-  pointer-events: none;
-  line-height: 1.05;
-}
-.figure polygon {
+.figure g {
   cursor: pointer;
+  transition: opacity 0.12s ease-out;
+}
+.bandLabel,
+.chartCount,
+.chartStage {
+  position: absolute;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.bandLabel,
+.chartCount,
+.chartStage {
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+}
+.bandLabel {
+  top: 50%;
+  border-radius: 999px;
+  background: #fcfbff;
+  color: #30263c;
+  padding: 2px 5px;
+  font-size: clamp(0.56rem, 0.7vw, 0.78rem);
+  font-weight: 650;
+  line-height: 1.1;
+  box-shadow: 0 1px 4px #18132430;
+}
+.chartCount {
+  top: 14%;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: #fff;
+}
+.chartStage {
+  top: 91%;
+  font-size: 0.65rem;
+  color: #e1dced;
+}
+.emptyChart,
+.sankey {
+  color: #f4f2fb;
+  background: #221e30;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  padding: 8px;
+}
+.sankeyHead {
+  display: flex;
+  justify-content: space-between;
+  color: #ccc4de;
+  font-size: 0.67rem;
+  font-weight: 600;
+}
+.sankeyPlot {
+  position: relative;
+}
+.sankeyPlot svg {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+}
+.sankeyPlot path {
+  cursor: pointer;
+}
+.sankeyPlot path:focus-visible {
+  stroke: white;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.subjectNode,
+.stageNode {
+  position: absolute;
+  transform: translateY(-50%);
+  width: 30%;
+  font-size: clamp(0.61rem, 0.78vw, 0.77rem);
+  line-height: 1.15;
+  color: #efebfa;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.subjectNode {
+  left: 0;
+  text-align: right;
+  padding-right: 3px;
+}
+.stageNode {
+  left: 70%;
+  text-align: left;
+}
+.subjectNode b,
+.stageNode b {
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.subjectNode:hover,
+.stageNode:hover,
+.subjectNode[aria-pressed="true"] {
+  text-decoration: underline;
+}
+@media (prefers-reduced-motion: reduce) {
+  .figure g {
+    transition: none;
+  }
 }
 .stageName {
   display: flex;
@@ -339,6 +452,10 @@
     width: 44px;
     margin: 0;
   }
+  .panel[data-expanded="false"] .modeBar,
+  .panel .chartCount,
+  .panel .chartStage,
+  .panel[data-expanded="false"] .sankey,
   .panel .bandLabel {
     display: none;
   }
@@ -348,8 +465,8 @@
     display: none;
   }
   .panel[data-expanded="true"] .chart {
-    height: 60px;
-    width: 50%;
+    height: 78px;
+    width: 100%;
     margin-bottom: 4px;
   }
   .panel[data-expanded="true"] .bandRow {

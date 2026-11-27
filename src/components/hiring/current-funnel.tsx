@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import type { CurrentFunnel, FunnelPerson, FunnelStage } from "@/lib/hiring/current-funnel";
+import { Button } from "@/components/ui/button";
+import { FunnelChart, SubjectSankey, chartSubjects, stageColors, type ChartMode } from "./funnel-chart";
 import layout from "./current-funnel.module.css";
 import { phoneView } from "@/lib/hiring/phone";
 
@@ -33,7 +35,6 @@ const date = (s: string) => {
   const value = (key: string) => parts.find((p) => p.type === key)?.value;
   return [value("day"), value("month")].join(" ") + ", " + value("hour") + ":" + value("minute");
 };
-const stageColors = ["#6054b6", "#6751ac", "#734e9f", "#80498f", "#89457d", "#92446e", "#934761"];
 const button =
   "min-h-11 rounded-md border px-2.5 py-2 text-sm font-medium hover:bg-muted focus-visible:outline-2 disabled:opacity-50";
 const moves = (p: FunnelPerson, full: boolean): Action[] => {
@@ -103,11 +104,16 @@ export function CurrentFunnelWorkspace({
   const [report, setReport] = useState(initial),
     [stage, setStage] = useState<FunnelStage | null>(null),
     [filter, setFilter] = useState("");
+  const [subject, setSubject] = useState<string | null>(null);
   const [op, setOp] = useState<Operation | null>(null),
     [reason, setReason] = useState(""),
     [outcome, setOutcome] = useState("Reached"),
     [follow, setFollow] = useState("");
-  const [preview, setPreview] = useState<{ html: string; subject: string; to: string } | null>(null),
+  const [preview, setPreview] = useState<{
+      html: string;
+      subject: string;
+      to: string;
+    } | null>(null),
     [busy, setBusy] = useState(false),
     [notice, setNotice] = useState(""),
     [error, setError] = useState("");
@@ -116,27 +122,8 @@ export function CurrentFunnelWorkspace({
   const dialog = useRef<HTMLDialogElement>(null),
     opener = useRef<HTMLElement | null>(null);
   const now = Date.parse(report.now);
-  const total = report.stages.reduce((sum, stage) => sum + stage.count, 0);
-  // The width falls from 1 to 0.18. Integrating that width gives the area above each boundary.
-  const boundary = (count: number) =>
-    total ? (1 - Math.sqrt(1 - ((1 - 0.18 ** 2) * count) / total)) / 0.82 : 0;
-  let cumulative = 0;
-  const bands = report.stages.map((stage, index) => {
-    const top = boundary(cumulative);
-    cumulative += stage.count;
-    const bottom = boundary(cumulative);
-    const x0 = 50 * 0.82 * top,
-      x1 = 50 * 0.82 * bottom;
-    const points = [
-      [x0, top * 100],
-      [100 - x0, top * 100],
-      [100 - x1, bottom * 100],
-      [x1, bottom * 100],
-    ]
-      .map((p) => p.join(","))
-      .join(" ");
-    return { ...stage, index, points, top, bottom };
-  });
+  const [chartMode, setChartMode] = useState<ChartMode>("Funnel");
+  const [hovered, setHovered] = useState<FunnelStage | null>(null);
   function moveTo(person: FunnelPerson | undefined, stage: FunnelStage) {
     setDrag(null);
     const action = destination(stage, person);
@@ -158,12 +145,28 @@ export function CurrentFunnelWorkspace({
       stage,
     );
   }
+  function selectChart(nextStage: FunnelStage | null, nextSubject?: string) {
+    const clear = stage === nextStage && subject === (nextSubject ?? null);
+    setStage(clear ? null : nextStage);
+    setSubject(clear ? null : (nextSubject ?? null));
+  }
+  const chartProps = {
+    stages: report.stages,
+    highlight: hovered ?? stage,
+    onHighlight: setHovered,
+    onSelect: selectChart,
+    onDrop: dropCandidate,
+  };
   const rows = report.rows.filter(
     (p) =>
-      (!stage || p.stage === stage) && p.name.toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase()),
+      (!stage || p.stage === stage) &&
+      (!subject || chartSubjects(p).includes(subject)) &&
+      p.name.toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase()),
   );
   async function refresh() {
-    const response = await fetch("/api/hiring/current-funnel", { cache: "no-store" });
+    const response = await fetch("/api/hiring/current-funnel", {
+      cache: "no-store",
+    });
     if (!response.ok) throw Error("Could not refresh the queue.");
     setReport(await response.json());
   }
@@ -237,7 +240,12 @@ export function CurrentFunnelWorkspace({
       const r = await fetch("/api/hiring/current-funnel", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: op.p.id, revision: op.p.revision, action: op.action, ...body }),
+        body: JSON.stringify({
+          id: op.p.id,
+          revision: op.p.revision,
+          action: op.action,
+          ...body,
+        }),
       });
       const res = await r.json();
       if (!r.ok) throw Error(res.error || "Action failed.");
@@ -277,6 +285,23 @@ export function CurrentFunnelWorkspace({
         <section className={layout.panel} data-expanded={expanded} aria-label="Current hiring funnel">
           <div className={layout.panelTitle}>
             <h2>Stages</h2>
+            <div className={layout.modeBar} aria-label="Chart view">
+              {(["Funnel", "Sankey"] as const).map((mode) => (
+                <Button
+                  key={mode}
+                  size="sm"
+                  variant={chartMode === mode ? "secondary" : "ghost"}
+                  aria-pressed={chartMode === mode}
+                  onClick={() => {
+                    setChartMode(mode);
+                    if (mode === "Funnel") setSubject(null);
+                    setHovered(null);
+                  }}
+                >
+                  {mode}
+                </Button>
+              ))}
+            </div>
             <button
               type="button"
               className={layout.toggle}
@@ -286,45 +311,11 @@ export function CurrentFunnelWorkspace({
               {expanded ? "Hide averages" : "Show averages"}
             </button>
           </div>
-          <div className={layout.chart}>
-            <svg
-              className={layout.figure}
-              viewBox="0 0 100 100"
-              preserveAspectRatio="none"
-              aria-label="Active candidates by stage. Area shows the share of active candidates."
-              role="img"
-            >
-              <polygon points="0,0 100,0 59,100 41,100" fill="var(--muted)" />
-              {bands
-                .filter((b) => b.count > 0)
-                .map((b) => (
-                  <polygon
-                    key={b.stage}
-                    data-drop-stage={b.stage}
-                    points={b.points}
-                    fill={stageColors[b.index]}
-                    stroke="var(--card)" strokeWidth={0.7} vectorEffect="non-scaling-stroke"
-                    opacity={stage && stage !== b.stage ? 0.42 : 1}
-                    onClick={() => setStage(stage === b.stage ? null : b.stage)}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => dropCandidate(e, b.stage)}
-                  >
-                    <title>{`${b.stage} · ${b.count} candidates · ${((100 * b.count) / total).toFixed(1)}%`}</title>
-                  </polygon>
-                ))}
-            </svg>
-            {bands
-              .filter((b) => b.bottom - b.top >= 0.12)
-              .map((b) => (
-                <span
-                  key={b.stage}
-                  className={layout.bandLabel}
-                  style={{ top: (b.top + b.bottom) * 50 + "%" }}
-                >
-                  {b.stage==="Offer and contract"?"Offer":b.stage} · {b.count}
-                </span>
-              ))}
-          </div>
+          {chartMode === "Funnel" ? (
+            <FunnelChart {...chartProps} />
+          ) : (
+            <SubjectSankey {...chartProps} rows={report.rows} subject={subject} />
+          )}
           <div className={layout.headings} aria-hidden="true">
             <span>Stage · active candidates</span>
             <span>Avg. wait</span>
@@ -338,11 +329,15 @@ export function CurrentFunnelWorkspace({
               <button
                 key={s.stage}
                 className={layout.bandRow}
-                data-selected={stage === s.stage}
+                data-selected={(hovered ?? stage) === s.stage}
+                onMouseEnter={() => setHovered(s.stage)}
+                onMouseLeave={() => setHovered(null)}
+                onFocus={() => setHovered(s.stage)}
+                onBlur={() => setHovered(null)}
                 data-drop-stage={s.stage}
                 data-eligible={eligible}
                 aria-pressed={stage === s.stage}
-                onClick={() => setStage(stage === s.stage ? null : s.stage)}
+                onClick={() => selectChart(s.stage)}
                 onDragOver={(e) => {
                   e.preventDefault();
                   e.dataTransfer.dropEffect = eligible ? "move" : "none";
@@ -369,7 +364,10 @@ export function CurrentFunnelWorkspace({
             );
           })}
           <footer className={layout.caption}>
-            Funnel area shows the share of active candidates. Avg. stay includes exits in the past 12 weeks.
+            {chartMode === "Funnel"
+              ? "Funnel area shows each stage’s share of active candidates."
+              : "Select a subject or ribbon to see its candidates. Each person contributes one unit of width, split equally across their subjects. Labels count people."}{" "}
+            Avg. stay includes exits in the past 12 weeks.
           </footer>
         </section>
         {drag && (
@@ -402,11 +400,18 @@ export function CurrentFunnelWorkspace({
         <section className={layout.queue} aria-label="Candidate queue">
           <div className={layout.queueTop}>
             <h2 className="text-xl font-semibold">
-              {stage ?? "Candidates"} <span className={layout.count}>{rows.length}</span>
+              {[subject, stage].filter(Boolean).join(" · ") || "Candidates"}{" "}
+              <span className={layout.count}>{rows.length}</span>
             </h2>
-            {stage && (
-              <button className={button} onClick={() => setStage(null)}>
-                All stages
+            {(stage || subject) && (
+              <button
+                className={button}
+                onClick={() => {
+                  setStage(null);
+                  setSubject(null);
+                }}
+              >
+                {subject ? "Clear filters" : "All stages"}
               </button>
             )}
             <input
@@ -490,7 +495,7 @@ export function CurrentFunnelWorkspace({
                       {p.name}
                     </a>
                     <p className="text-sm">
-                      {p.subjects.join(", ") || "Subject unknown"} · {p.stage}
+                      {chartSubjects(p).join(", ")} · {p.stage}
                     </p>
                     <p>
                       <strong>
@@ -588,7 +593,8 @@ export function CurrentFunnelWorkspace({
                           )
                         }
                       >
-                        Cancel visit{visits.length > 1 ? " · " + date(v.start) : ""}
+                        Cancel visit
+                        {visits.length > 1 ? " · " + date(v.start) : ""}
                       </button>
                     ))}
                   </div>
