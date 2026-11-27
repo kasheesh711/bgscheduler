@@ -13,11 +13,12 @@ export function CambridgeThresholds() {
   return <section aria-labelledby="cambridge-title" id="cambridge-thresholds" className="scroll-mt-4">
     <h2 id="cambridge-title" className="text-xl font-semibold">Cambridge IGCSE grade thresholds</h2>
     <p className="mt-1 text-sm text-muted-foreground">Five-year reference 2022–2026 · Written English history from 2011 · English Language includes all written paper variants</p>
+    <p className="mt-2 text-sm">Cambridge grades apply to Cambridge exams. Hiring paper results show tutor assessment scores.</p>
     <ThresholdChart />
     <details><summary className="cursor-pointer text-sm font-medium">How the Cambridge comparison works</summary>
     <p className="mt-2 text-sm">Bangkok is in Cambridge administrative Zone 4. The English Language comparison includes every published pair of written exams for First Language English (0500), with no oral endorsement. Component 03 is coursework. For a known entry, you can also inspect the variant 2 reference. <a className="underline" href={zoneLookup}>Bangkok zone lookup</a> · <a className="underline" href={zoneTimetable}>Zone 4 timetable</a></p>
     <p className="my-2 text-sm text-muted-foreground">Five June exam series, 2022–2026. Each value is the average of five annual thresholds, expressed as a percentage of the maximum weighted mark for the stated combination of papers. For the all-pairs English reference, each pair has equal weight within its June series, and each series has equal weight in the average. Other subjects use variant 2 where available and the extended route for tiered subjects. Other combinations can have different thresholds.</p>
-    <p className="mb-3 text-sm">Compare the 80% hiring benchmark with the minimum for each Cambridge grade. A positive gap means 80% is above the average A* threshold. Hiring papers assess different questions and levels, so this comparison cannot assign a Cambridge grade to a candidate.</p>
+    <p className="mb-3 text-sm">Compare the 80% hiring benchmark with the minimum for each Cambridge grade. A positive gap means 80% is above the average A* threshold.</p>
     </details>
     <details className="mt-3"><summary className="mb-2 cursor-pointer text-sm font-medium">All grade thresholds and annual source tables</summary>
     <div className="overflow-x-auto rounded-lg border bg-card">

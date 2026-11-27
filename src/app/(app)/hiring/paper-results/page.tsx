@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { and, eq, isNotNull } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
@@ -67,11 +68,11 @@ async function Report() {
 export default function Page() {
   return <section aria-labelledby="paper-title" tabIndex={0} className="min-h-0 flex-1 overflow-y-auto scroll-pt-24 sm:scroll-pt-14">
     <div className="mx-auto grid max-w-6xl gap-6 px-3 py-3 sm:px-6 sm:py-6">
-      <Suspense><HiringReportNav active="paper-results" /></Suspense>
+      <Suspense><HiringReportNav active="paper-results" fragment="cambridge-thresholds" /></Suspense>
       <header className="border-b pb-5">
         <div className="mt-3 flex flex-wrap items-baseline justify-between gap-2">
           <h1 id="paper-title" className="text-3xl font-semibold tracking-tight sm:text-4xl">Hiring paper results</h1>
-          <a href="#cambridge-thresholds" className="text-sm font-medium text-primary hover:underline">Cambridge thresholds ↓</a>
+          <Link prefetch={false} href="#cambridge-thresholds" className="text-sm font-medium text-primary hover:underline">Cambridge thresholds ↓</Link>
         </div>
       </header>
       <Suspense fallback={<p role="status">Loading paper results…</p>}><Report /></Suspense>

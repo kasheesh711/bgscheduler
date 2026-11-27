@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type MouseEvent } from "react";
+import { useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import type { paperDistribution } from "@/lib/hiring/paper-distribution";
 
 type Row = { subject: string; data: NonNullable<ReturnType<typeof paperDistribution>>; cutoffs: number[]; observations: { score: number; subject: string; maximum: number }[] };
@@ -9,9 +9,16 @@ const fmt = (value: number) => value.toFixed(1);
 function SubjectChart({ subject, data, cutoffs, observations }: Row) {
   const { scores, mean, median, sd } = data;
   const official = cutoffs.length === 1 ? cutoffs[0] : 80;
-  const [cutoff, setCutoff] = useState(official);
+  const [trialCutoff, setTrialCutoff] = useState<number | null>(null);
+  const cutoff = trialCutoff ?? official;
+  const cutoffName = trialCutoff !== null ? "trial cutoff" : cutoffs.length === 1 ? "official cutoff" : "reference cutoff";
+  const showTrialLine = trialCutoff !== null && !cutoffs.includes(trialCutoff);
   const [comparing, setComparing] = useState(false);
   const [draft, setDraft] = useState(String(official));
+  const trialInput = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => {
+    if (comparing) trialInput.current?.focus();
+  }, [comparing]);
   const [selected, setSelected] = useState<number | null>(null);
   const [hover, setHover] = useState<number | null>(null);
   const inspected = hover ?? selected;
@@ -24,12 +31,12 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
   }
   const meets = scores.filter(score => score >= cutoff).length;
   const maxima = [...new Set(observations.map(o => o.maximum))].sort((a, b) => a - b);
-  const different = !cutoffs.includes(cutoff);
+  // Round SVG coordinates so server and browser math produce the same markup.
   const curve = [0, ...Array.from({ length: 129 }, (_, i) => mean + sd * (i - 64) / 12)
     .filter(score => score > 0 && score < 100), 100].map(score =>
-    [score, 100 - 90 * Math.exp(-0.5 * ((score - mean) / (sd || 1)) ** 2)].join(",")).join(" ");
+    [score, 100 - 90 * Math.exp(-0.5 * ((score - mean) / (sd || 1)) ** 2)].map(value => value.toFixed(4)).join(",")).join(" ");
   const inspectText = inspected === null ? "Hover or select a score to inspect it." :
-    `${fmt(inspected)}% · ${counts.get(inspected)} ${counts.get(inspected) === 1 ? "paper" : "papers"} · ${inspected === cutoff ? "at the cutoff" : fmt(Math.abs(inspected - cutoff)) + " points " + (inspected > cutoff ? "above" : "below") + " the cutoff"}`;
+    `${fmt(inspected)}% · ${counts.get(inspected)} ${counts.get(inspected) === 1 ? "paper" : "papers"} · ${inspected === cutoff ? "at the " + cutoffName : fmt(Math.abs(inspected - cutoff)) + " points " + (inspected > cutoff ? "above" : "below") + " the " + cutoffName}`;
   return <article aria-label={subject + " distribution"} className="min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm">
     <header className="flex flex-wrap items-baseline justify-between gap-1 border-b px-4 py-3 sm:px-6">
       <h3 className="text-xl font-semibold">{subject}</h3>
@@ -52,7 +59,7 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
           <polyline points={curve} fill="none" stroke="currentColor" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
         </svg>}
         {cutoffs.map(value => <div key={value} className="pointer-events-none absolute inset-y-0 border-l-2 border-dashed border-[var(--chart-2)]" style={{ left: value + "%" }} />)}
-        {different && <div className="pointer-events-none absolute inset-y-0 border-l-2 border-[var(--chart-3)]" style={{ left: cutoff + "%" }} />}
+        {showTrialLine && <div className="pointer-events-none absolute inset-y-0 border-l-2 border-[var(--chart-3)]" style={{ left: cutoff + "%" }} />}
         {inspected !== null && <div className="pointer-events-none absolute inset-y-0 border-l border-dotted border-primary" style={{ left: inspected + "%" }}>
           <span className="absolute top-0 rounded bg-primary px-1.5 py-0.5 text-xs font-semibold text-primary-foreground" style={{ transform: inspected > 85 ? "translateX(-100%)" : inspected < 15 ? "none" : "translateX(-50%)" }}>{fmt(inspected)}%</span>
         </div>}
@@ -66,34 +73,42 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
       <p className="min-h-6 text-sm font-medium tabular-nums" role="status">{inspectText}</p>
       <p className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <span><span className="mr-1 inline-block w-4 align-middle border-t-2 border-dashed border-[var(--chart-2)]" />Hiring pass line {cutoffs.length ? cutoffs.join("% / ") + "%" : "unconfigured"}</span>
-        {different && <span><span className="mr-1 inline-block w-4 align-middle border-t-2 border-[var(--chart-3)]" />Trial cutoff {cutoff}%</span>}
+        {trialCutoff !== null && <span>{showTrialLine && <span className="mr-1 inline-block w-4 align-middle border-t-2 border-[var(--chart-3)]" />}Trial cutoff {cutoff}%</span>}
         <span>{sd > 0 ? "Fitted normal curve" : scores.length === 1 ? "One score available" : "All scores equal"}</span>
       </p>
-      {subject === "English Language" && <p className="mb-3 rounded-md border-l-2 border-[var(--chart-2)] bg-muted/50 px-3 py-2 text-xs leading-relaxed">Teachers applying for EFL/ESL, English Language or English Literature take the English Language paper. {maxima.length > 1 && <>Saved marking totals vary ({maxima.join(", ")} marks). The chart uses the recorded final percentages.</>}</p>}
       {inspected !== null && <p className="mb-2 text-xs text-muted-foreground">{observations.filter(o => o.score === inspected).map(o => "Teaching subject: " + o.subject + " · marked out of " + o.maximum).join(" / ")}</p>}
+      <div className="mb-3 rounded-lg border bg-muted/30 px-3 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+          <output className="tabular-nums"><span className="capitalize">{cutoffName}</span> · <strong>{meets} of {scores.length}</strong> at or above {cutoff}%</output>
+          <button type="button" aria-expanded={comparing} aria-controls="compare-cutoff" className="min-h-9 cursor-pointer rounded-sm px-1 font-medium text-primary hover:underline focus-visible:outline-2 focus-visible:outline-primary"
+            onClick={event => {
+              setComparing(!comparing);
+              setDraft(String(official));
+              if (comparing) {
+                setTrialCutoff(null);
+                event.currentTarget.focus();
+              }
+            }}>
+            {comparing ? "Close comparison" : "Compare a cutoff"}
+          </button>
+        </div>
+        {comparing && <form id="compare-cutoff" className="mt-3 flex flex-wrap items-end gap-2" onSubmit={e => {
+          e.preventDefault();
+          setTrialCutoff(Number(draft));
+        }}>
+          <label className="text-xs text-muted-foreground">Trial cutoff (%)
+            <input ref={trialInput} aria-label="Trial cutoff (%)" type="number" inputMode="decimal" min="0" max="100" step="any" required
+              className="mt-1 block w-20 rounded-md border bg-background px-2 py-1.5 text-sm text-foreground tabular-nums focus-visible:outline-2 focus-visible:outline-primary"
+              value={draft} onChange={e => setDraft(e.target.value)} />
+          </label>
+          <button type="submit" className="cursor-pointer rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground">Apply trial cutoff</button>
+        </form>}
+      </div>
+      {subject === "English Language" && <p className="mb-3 rounded-md border-l-2 border-[var(--chart-2)] bg-muted/50 px-3 py-2 text-xs leading-relaxed">Teachers applying for EFL/ESL, English Language or English Literature take the English Language paper. {maxima.length > 1 && <>Saved marking totals vary ({maxima.join(", ")} marks). The chart uses the recorded final percentages.</>}</p>}
+
       <details className="mb-4 text-xs"><summary className="cursor-pointer">Inspect individual scores</summary>
         <div className="mt-2 flex flex-wrap gap-2">{[...counts].map(([score, n]) => <button key={score} type="button" className="rounded border px-2 py-1" onClick={() => { setSelected(score); setHover(null); }}>{fmt(score)}%{n > 1 && " × " + n}</button>)}</div>
       </details>
-    </div>
-    <div className="rounded-b-xl border-t px-4 py-3 sm:px-6">
-      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-        <output className="tabular-nums"><strong>{meets} of {scores.length}</strong> at or above {cutoff}%</output>
-        <button type="button" aria-expanded={comparing} aria-controls="compare-cutoff" className="cursor-pointer font-medium text-primary hover:underline"
-          onClick={() => { setComparing(!comparing); setDraft(String(official)); if (comparing) setCutoff(official); }}>
-          {comparing ? "Close comparison" : "Compare a cutoff"}
-        </button>
-      </div>
-      {comparing && <form id="compare-cutoff" className="mt-3 flex flex-wrap items-end gap-2" onSubmit={e => {
-        e.preventDefault();
-        setCutoff(Number(draft));
-      }}>
-        <label className="text-xs text-muted-foreground">Trial cutoff (%)
-          <input aria-label="Trial cutoff (%)" type="number" inputMode="decimal" min="0" max="100" step="any" required
-            className="mt-1 block w-20 rounded-md border bg-background px-2 py-1.5 text-sm text-foreground tabular-nums"
-            value={draft} onChange={e => setDraft(e.target.value)} />
-        </label>
-        <button type="submit" className="cursor-pointer rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground">Compare</button>
-      </form>}
     </div>
   </article>;
 }

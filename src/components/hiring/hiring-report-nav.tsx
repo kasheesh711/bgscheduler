@@ -55,18 +55,20 @@ export function saveHiringScroll(key: string, pane: HTMLElement | null, next?: s
   }
 }
 
-export function restoreHiringScroll(key: string, pane: HTMLElement | null) {
+export function restoreHiringScroll(key: string, pane: HTMLElement | null, fragment?: string) {
   if (!pane) return;
-  let top: number;
+  const hash = fragment ? `#${fragment}` : null;
+  const openFragment = window.location.hash === hash;
+  let top = Number.NaN;
   try {
     const trip = hiringScrollTrip();
-    if (trip.pending !== key) return;
-    top = trip.positions[key];
+    if (trip.pending === key) top = trip.positions[key];
   } catch {
-    return;
+    // A shared hash link can still open without browser storage.
   }
+  if (!openFragment && !Number.isFinite(top)) return;
   const pathname = key.startsWith("/") ? key.split("?")[0] : "/hiring";
-  const deadline = performance.now() + 5000;
+  const deadline = performance.now() + (openFragment ? 10000 : 5000);
   const input = ["pointerdown", "wheel", "touchmove", "keydown"] as const;
   const stop = () => {
     cancelAnimationFrame(frame);
@@ -86,27 +88,32 @@ export function restoreHiringScroll(key: string, pane: HTMLElement | null) {
   };
   let restoredFrames = 0;
   const restore = (now: number) => {
-    if (now >= deadline || (window.location.pathname === pathname && window.location.hash)) return finish();
-    // The route can show its navigation before its contents arrive.
-    if (window.location.pathname === pathname && pane.clientHeight && pane.scrollHeight - pane.clientHeight >= top - 1) {
-      if (pane.scrollTop !== top) {
-        pane.scrollTop = top;
-        restoredFrames = 0;
+    if (now >= deadline) return finish();
+    if (window.location.pathname === pathname && pane.clientHeight) {
+      // A report can show its navigation before its contents arrive.
+      if (window.location.hash) {
+        if (window.location.hash !== hash || pane.scrollTop > 0) return finish();
+        const target = hash && pane.querySelector(hash);
+        if (target) {
+          target.scrollIntoView({ block: "start" });
+          return finish();
+        }
+      } else if (pane.scrollHeight - pane.clientHeight >= top - 1) {
+        if (Math.abs(pane.scrollTop - top) > 0.5) {
+          pane.scrollTop = top;
+          restoredFrames = 0;
+        }
+        if (++restoredFrames === 3) return finish();
       }
-      if (++restoredFrames === 3) return finish();
     }
     frame = requestAnimationFrame(restore);
   };
   let frame = requestAnimationFrame(restore);
-  if (!Number.isFinite(top)) {
-    finish();
-    return;
-  }
   for (const event of input) pane.addEventListener(event, finish, { passive: true });
   return stop;
 }
 
-export function HiringReportNav({ active }: { active: Report }) {
+export function HiringReportNav({ active, fragment }: { active: Report; fragment: string }) {
   const origin = useSearchParams().get("from");
   const view = origin && Object.hasOwn(HIRING_VIEWS, origin) ? origin as keyof typeof HIRING_VIEWS : null;
   const from = view ?? (origin === "dashboard" ? origin : null);
@@ -115,7 +122,7 @@ export function HiringReportNav({ active }: { active: Report }) {
   const navRef = useRef<HTMLElement>(null);
   const key = hiringReportHref(active, from);
   const rememberPlace = (next: string) => saveHiringScroll(key, navRef.current?.closest("section") ?? null, next);
-  useLayoutEffect(() => restoreHiringScroll(key, navRef.current?.closest("section") ?? null), [key]);
+  useLayoutEffect(() => restoreHiringScroll(key, navRef.current?.closest("section") ?? null, fragment), [key, fragment]);
   return (
     <nav ref={navRef} className={nav.reportNav} aria-label="Hiring reports">
       <Link href={back} prefetch={false} scroll={false} className={nav.reportBack} onNavigate={() => rememberPlace(`workspace:${from ?? "overview"}`)}>

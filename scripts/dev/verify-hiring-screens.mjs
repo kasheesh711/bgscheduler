@@ -1411,6 +1411,7 @@ try {
     await page.getByRole("region", { name: "Mock and paper" }).getByRole("group", { name: "View" }).getByRole("button", { name: "List" }).click();
   });
   await check("settings hold the pass marks and the paper library", async () => {
+    await page.getByRole("navigation", { name: "Hiring tools" }).getByText("More tools", { exact: true }).click();
     await page.getByRole("button", { name: "Rules and setup" }).click();
     assert.equal(await page.getByLabel("Mathematics Key Stage 3 pass percentage").inputValue(), "50");
     await page.getByRole("heading", { name: "Paper library" }).waitFor();
@@ -1573,7 +1574,7 @@ try {
     assert.ok(await tools.getByRole("button", { name: "Visit schedule" }).isVisible());
     assert.equal(await workflow.getByRole("button", { name: "HR calls" }).getAttribute("aria-pressed"), "true");
     await page.getByRole("region", { name: "Candidates for HR to call" }).waitFor();
-    const menu = page.locator("header details > summary");
+    const menu = page.locator('header details:has(nav[aria-label="Hiring steps"]) > summary');
     for (const width of [1440, 768, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await shot(page, `hiring-workflow-${width}`);
@@ -2201,7 +2202,7 @@ try {
       const hana = task.getByRole("row").filter({ hasText: "Sample Hana" });
       const past = task.getByRole("row").filter({ hasText: "Sample Eve" });
       const navigation = tab.getByRole("navigation", { name: "Hiring steps" });
-      const menu = tab.locator("header details > summary");
+      const menu = tab.locator('header details:has(nav[aria-label="Hiring steps"]) > summary');
       const upload = () => past.getByLabel("Upload signed PDF for Sample Eve");
       const file = { name: "signed.pdf", mimeType: "application/pdf", buffer: Buffer.from(samplePdf("Signed sample")) };
       const open = async (query = "") => {
