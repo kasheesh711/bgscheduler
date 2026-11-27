@@ -1,3 +1,4 @@
+import { trialScore, summarizeScores } from "../ats-trial";
 import { describe, expect, it } from "vitest";
 import { type Stage } from "../model";
 import { buildInsights, criterionValues, profileGate, readyToInvite } from "../insights";
@@ -307,8 +308,15 @@ describe("buildInsights with the visit stages", () => {
 });
 
 describe("ATS outcomes", () => {
-  it("keeps a missing score out of the median and counts an exact cutoff as meeting it", async () => {
-    const { summarizeScores } = await import("../ats-outcomes");
+  it("reapplies the work rights deduction before flooring a simulated score", () => {
+    const ats = { score: 0, penalty: 12, parts: [
+      { name: "Teaching", max: 20, earned: 10 }, { name: "Curriculum", max: 15, earned: 0 },
+    ] };
+    expect(trialScore(ats, "Curriculum", "Teaching")).toBe(0.5);
+    expect(trialScore(ats, "Teaching", "")).toBe(0);
+  });
+
+  it("keeps a missing score out of the median and counts an exact cutoff as meeting it", () => {
     const score = (value: number) => ({ score: value, parts: [{ name: "Degree", max: 10, earned: 5 }], penalty: 0 });
     expect(summarizeScores([null, score(59.5), score(60)], 60)).toMatchObject({
       total: 3, scored: 2, median: 59.75, atOrAbove: 1, bands: [0, 0, 1, 1, 0],
