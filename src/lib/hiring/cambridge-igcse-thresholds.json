@@ -1,0 +1,222 @@
+[
+  {
+    "subject": "First Language English \u00b7 two papers",
+    "code": "0500",
+    "years": [
+      {"year": 2022, "components": "12, 22", "max": 160, "marks": [110, 97, 84, 72, 61, 50, 39, 28], "source": "https://www.cambridgeinternational.org/Images/661174-cambridge-igcse-english-first-language-0500-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "12, 22", "max": 160, "marks": [114, 102, 90, 78, 65, 53, 40, 27], "source": "https://www.cambridgeinternational.org/Images/692753-first-language-english-oral-endorsement-0500-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "12, 22", "max": 160, "marks": [111, 100, 89, 78, 66, 54, 41, 28], "source": "https://www.cambridgeinternational.org/Images/716122-first-language-english-oral-endorsement-0500-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "12, 22", "max": 160, "marks": [109, 98, 87, 76, 65, 54, 41, 28], "source": "https://www.cambridgeinternational.org/Images/741386-first-language-english-oral-endorsement-0500-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "12, 22", "max": 160, "marks": [107, 96, 85, 74, 63, 53, 41, 29], "source": "https://www.cambridgeinternational.org/Images/762830-first-language-english-oral-endorsement-0500-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "First Language English \u00b7 coursework",
+    "code": "0500",
+    "years": [
+      {"year": 2022, "components": "03, 12", "max": 160, "marks": [115, 101, 87, 73, 61, 50, 39, 28], "source": "https://www.cambridgeinternational.org/Images/661174-cambridge-igcse-english-first-language-0500-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "03, 12", "max": 160, "marks": [120, 106, 92, 79, 66, 53, 40, 27], "source": "https://www.cambridgeinternational.org/Images/692753-first-language-english-oral-endorsement-0500-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "03, 12", "max": 160, "marks": [117, 104, 91, 79, 66, 54, 41, 28], "source": "https://www.cambridgeinternational.org/Images/716122-first-language-english-oral-endorsement-0500-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "03, 12", "max": 160, "marks": [116, 103, 90, 78, 66, 54, 41, 28], "source": "https://www.cambridgeinternational.org/Images/741386-first-language-english-oral-endorsement-0500-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "03, 12", "max": 160, "marks": [114, 101, 88, 75, 64, 53, 41, 29], "source": "https://www.cambridgeinternational.org/Images/762830-first-language-english-oral-endorsement-0500-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "Literature in English \u00b7 two papers",
+    "code": "0475",
+    "years": [
+      {"year": 2022, "components": "12, 22", "max": 100, "marks": [60, 52, 44, 36, 31, 26, 21, 16], "source": "https://www.cambridgeinternational.org/Images/661167-cambridge-igcse-literature-in-english-0475-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "12, 22", "max": 100, "marks": [65, 56, 47, 39, 33, 28, 24, 20], "source": "https://www.cambridgeinternational.org/Images/692746-literature-in-english-0475-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "12, 22", "max": 100, "marks": [67, 57, 47, 38, 33, 28, 24, 20], "source": "https://www.cambridgeinternational.org/Images/716107-literature-in-english-0475-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "12, 22", "max": 100, "marks": [69, 59, 49, 39, 33, 28, 24, 20], "source": "https://www.cambridgeinternational.org/Images/741413-literature-in-english-0475-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "12, 22", "max": 100, "marks": [69, 59, 49, 39, 33, 28, 24, 20], "source": "https://www.cambridgeinternational.org/Images/762824-literature-in-english-0475-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "Literature in English \u00b7 three papers",
+    "code": "0475",
+    "years": [
+      {"year": 2022, "components": "12, 32, 42", "max": 100, "marks": [68, 59, 50, 41, 36, 31, 25, 19], "source": "https://www.cambridgeinternational.org/Images/661167-cambridge-igcse-literature-in-english-0475-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "12, 32, 42", "max": 100, "marks": [69, 59, 49, 40, 34, 28, 24, 20], "source": "https://www.cambridgeinternational.org/Images/692746-literature-in-english-0475-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "12, 32, 42", "max": 100, "marks": [71, 60, 49, 39, 33, 28, 24, 20], "source": "https://www.cambridgeinternational.org/Images/716107-literature-in-english-0475-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "12, 32, 42", "max": 100, "marks": [73, 62, 51, 40, 34, 28, 24, 20], "source": "https://www.cambridgeinternational.org/Images/741413-literature-in-english-0475-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "12, 32, 42", "max": 100, "marks": [73, 62, 51, 40, 34, 28, 24, 20], "source": "https://www.cambridgeinternational.org/Images/762824-literature-in-english-0475-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "Literature in English \u00b7 coursework",
+    "code": "0475",
+    "years": [
+      {"year": 2022, "components": "05, 12, 32", "max": 100, "marks": [70, 61, 52, 43, 36, 29, 22, 15], "source": "https://www.cambridgeinternational.org/Images/661167-cambridge-igcse-literature-in-english-0475-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "05, 12, 32", "max": 100, "marks": [72, 62, 52, 43, 36, 29, 23, 17], "source": "https://www.cambridgeinternational.org/Images/692746-literature-in-english-0475-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "05, 12, 32", "max": 100, "marks": [74, 63, 52, 42, 35, 29, 23, 17], "source": "https://www.cambridgeinternational.org/Images/716107-literature-in-english-0475-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "05, 12, 32", "max": 100, "marks": [76, 65, 54, 43, 36, 29, 23, 17], "source": "https://www.cambridgeinternational.org/Images/741413-literature-in-english-0475-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "05, 12, 32", "max": 100, "marks": [76, 65, 54, 43, 36, 29, 23, 17], "source": "https://www.cambridgeinternational.org/Images/762824-literature-in-english-0475-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "EFL/ESL",
+    "code": "0510",
+    "years": [
+      {"year": 2022, "components": "22, 42, 52", "max": 200, "marks": [184, 168, 148, 128, 108, 88, null, null], "source": "https://www.cambridgeinternational.org/Images/661181-cambridge-igcse-english-as-a-second-language-speaking-endorsement-0510-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "22, 42, 52", "max": 200, "marks": [186, 173, 154, 135, 115, 95, null, null], "source": "https://www.cambridgeinternational.org/Images/692761-english-as-a-second-language-speaking-endorsement-0510-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "12, 22, 32", "max": 150, "marks": [141, 136, 122, 109, 96, 84, 74, 64], "source": "https://www.cambridgeinternational.org/Images/716138-english-as-a-second-language-speaking-endorsement-0510-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "12, 22, 32", "max": 150, "marks": [142, 135, 121, 108, 96, 85, 75, 65], "source": "https://www.cambridgeinternational.org/Images/741378-english-as-a-second-language-speaking-endorsement-0510-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "12, 22, 32", "max": 150, "marks": [143, 136, 123, 111, 99, 87, 75, 63], "source": "https://www.cambridgeinternational.org/Images/762837-english-as-a-second-language-speaking-endorsement-0510-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "Art & Design",
+    "code": "0400",
+    "years": [
+      {"year": 2022, "components": "01, 02", "max": 200, "marks": [149, 129, 109, 89, 71, 54, 37, 20], "source": "https://www.cambridgeinternational.org/Images/661146-cambridge-igcse-art-and-design-0400-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "01, 02", "max": 200, "marks": [154, 134, 114, 94, 76, 58, 40, 22], "source": "https://www.cambridgeinternational.org/Images/692725-art-and-design-0400-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "01, 02", "max": 200, "marks": [154, 134, 114, 94, 76, 58, 40, 22], "source": "https://www.cambridgeinternational.org/Images/716082-art-and-design-0400-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "01, 02", "max": 200, "marks": [154, 134, 114, 94, 76, 58, 40, 22], "source": "https://www.cambridgeinternational.org/Images/741352-art-and-design-0400-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "01, 02", "max": 200, "marks": [154, 134, 114, 94, 76, 58, 40, 22], "source": "https://www.cambridgeinternational.org/Images/762805-art-and-design-0400-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "Design & Technology",
+    "code": "0445",
+    "years": [
+      {"year": 2022, "components": "02, 12, 32", "max": 200, "marks": [151, 133, 115, 97, 83, 70, 56, 42], "source": "https://www.cambridgeinternational.org/Images/661156-cambridge-igcse-design-technology-0445-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "02, 12, 32", "max": 200, "marks": [153, 136, 119, 102, 87, 73, 60, 47], "source": "https://www.cambridgeinternational.org/Images/692734-design-and-technology-0445-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "02, 12, 32", "max": 200, "marks": [152, 134, 116, 99, 85, 71, 59, 47], "source": "https://www.cambridgeinternational.org/Images/716091-design-and-technology-0445-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "02, 12, 32", "max": 200, "marks": [160, 141, 122, 103, 88, 74, 61, 48], "source": "https://www.cambridgeinternational.org/Images/741368-design-and-technology-0445-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "02, 12, 32", "max": 200, "marks": [161, 142, 123, 104, 89, 75, 62, 49], "source": "https://www.cambridgeinternational.org/Images/762812-design-and-technology-0445-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "Biology",
+    "code": "0610",
+    "years": [
+      {"year": 2022, "components": "22, 42, 62", "max": 200, "marks": [157, 132, 107, 83, 68, 54, 40, 26], "source": "https://www.cambridgeinternational.org/Images/661199-cambridge-igcse-biology-0610-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "22, 42, 62", "max": 200, "marks": [164, 140, 116, 93, 79, 65, 51, 37], "source": "https://www.cambridgeinternational.org/Images/692779-biology-0610-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "22, 42, 62", "max": 200, "marks": [172, 145, 118, 91, 77, 63, 50, 37], "source": "https://www.cambridgeinternational.org/Images/716102-biology-0610-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "22, 42, 62", "max": 200, "marks": [174, 149, 124, 99, 85, 71, 58, 45], "source": "https://www.cambridgeinternational.org/Images/741355-biology-0610-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "22, 42, 62", "max": 200, "marks": [167, 141, 115, 90, 77, 64, 53, 42], "source": "https://www.cambridgeinternational.org/Images/762855-biology-0610-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "Business Studies",
+    "code": "0450",
+    "years": [
+      {"year": 2022, "components": "12, 22", "max": 160, "marks": [89, 73, 57, 42, 35, 29, 23, 17], "source": "https://www.cambridgeinternational.org/Images/661158-cambridge-igcse-business-studies-0450-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "12, 22", "max": 160, "marks": [98, 82, 66, 50, 41, 32, 24, 16], "source": "https://www.cambridgeinternational.org/Images/692736-business-studies-0450-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "12, 22", "max": 160, "marks": [105, 87, 69, 52, 43, 34, 26, 18], "source": "https://www.cambridgeinternational.org/Images/716093-business-studies-0450-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "12, 22", "max": 160, "marks": [106, 89, 72, 56, 47, 38, 28, 18], "source": "https://www.cambridgeinternational.org/Images/741357-business-studies-0450-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "12, 22", "max": 160, "marks": [105, 89, 73, 57, 48, 39, 29, 19], "source": "https://www.cambridgeinternational.org/Images/762814-business-studies-0450-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "Chemistry",
+    "code": "0620",
+    "years": [
+      {"year": 2022, "components": "22, 42, 62", "max": 200, "marks": [145, 118, 91, 65, 55, 46, 37, 28], "source": "https://www.cambridgeinternational.org/Images/661200-cambridge-igcse-chemistry-0620-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "22, 42, 62", "max": 200, "marks": [157, 128, 99, 70, 61, 52, 44, 36], "source": "https://www.cambridgeinternational.org/Images/692780-chemistry-0620-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "22, 42, 62", "max": 200, "marks": [170, 141, 110, 79, 68, 58, 48, 38], "source": "https://www.cambridgeinternational.org/Images/716105-chemistry-0620-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "22, 42, 62", "max": 200, "marks": [173, 146, 117, 89, 78, 67, 55, 43], "source": "https://www.cambridgeinternational.org/Images/741360-chemistry-0620-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "22, 42, 62", "max": 200, "marks": [169, 139, 109, 80, 68, 57, 46, 35], "source": "https://www.cambridgeinternational.org/Images/762856-chemistry-0620-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "Computer Science",
+    "code": "0478",
+    "years": [
+      {"year": 2022, "components": "12, 22", "max": 125, "marks": [85, 68, 51, 35, 29, 24, 19, 14], "source": "https://www.cambridgeinternational.org/Images/661168-cambridge-igcse-computer-science-0478-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "12, 22", "max": 150, "marks": [109, 86, 63, 40, 33, 27, 21, 15], "source": "https://www.cambridgeinternational.org/Images/692747-computer-science-0478-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "12, 22", "max": 150, "marks": [120, 95, 70, 45, 37, 29, 22, 15], "source": "https://www.cambridgeinternational.org/Images/716109-computer-science-0478-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "12, 22", "max": 150, "marks": [123, 100, 77, 54, 47, 41, 35, 29], "source": "https://www.cambridgeinternational.org/Images/741364-computer-science-0478-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "12, 22", "max": 150, "marks": [120, 94, 68, 43, 36, 29, 22, 15], "source": "https://www.cambridgeinternational.org/Images/762825-computer-science-0478-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "Economics",
+    "code": "0455",
+    "years": [
+      {"year": 2022, "components": "12, 22", "max": 150, "marks": [114, 95, 76, 58, 47, 36, 27, 18], "source": "https://www.cambridgeinternational.org/Images/661162-cambridge-igcse-economics-0455-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "12, 22", "max": 150, "marks": [125, 106, 87, 68, 57, 47, 37, 27], "source": "https://www.cambridgeinternational.org/Images/692739-economics-0455-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "12, 22", "max": 150, "marks": [122, 103, 84, 66, 56, 46, 36, 26], "source": "https://www.cambridgeinternational.org/Images/716096-economics-0455-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "12, 22", "max": 150, "marks": [125, 106, 87, 68, 58, 48, 38, 28], "source": "https://www.cambridgeinternational.org/Images/741372-economics-0455-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "12, 22", "max": 150, "marks": [115, 97, 79, 62, 52, 43, 35, 27], "source": "https://www.cambridgeinternational.org/Images/762817-economics-0455-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "French",
+    "code": "0520",
+    "years": [
+      {"year": 2022, "components": "03, 12, 22, 42", "max": 200, "marks": [157, 137, 117, 98, 82, 66, 50, 34], "source": "https://www.cambridgeinternational.org/Images/661185-cambridge-igcse-french-foreign-language-0520-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "03, 12, 22, 42", "max": 200, "marks": [159, 139, 119, 99, 84, 69, 53, 37], "source": "https://www.cambridgeinternational.org/Images/692765-french-foreign-language-0520-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "03, 12, 22, 42", "max": 200, "marks": [166, 144, 122, 101, 85, 69, 53, 37], "source": "https://www.cambridgeinternational.org/Images/716147-french-foreign-language-0520-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "03, 12, 22, 42", "max": 200, "marks": [167, 144, 121, 99, 84, 69, 53, 37], "source": "https://www.cambridgeinternational.org/Images/741397-french-foreign-language-0520-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "03, 12, 22, 42", "max": 200, "marks": [168, 145, 122, 99, 84, 69, 53, 37], "source": "https://www.cambridgeinternational.org/Images/762841-french-foreign-language-0520-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "Geography",
+    "code": "0460",
+    "years": [
+      {"year": 2022, "components": "12, 22, 42", "max": 220, "marks": [156, 135, 114, 93, 78, 64, 50, 36], "source": "https://www.cambridgeinternational.org/Images/661164-cambridge-igcse-geography-0460-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "12, 22, 42", "max": 220, "marks": [169, 146, 123, 101, 85, 70, 55, 40], "source": "https://www.cambridgeinternational.org/Images/692741-geography-0460-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "12, 22, 42", "max": 220, "marks": [174, 152, 130, 108, 91, 75, 58, 41], "source": "https://www.cambridgeinternational.org/Images/716099-geography-0460-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "12, 22, 42", "max": 220, "marks": [177, 154, 131, 109, 92, 76, 60, 44], "source": "https://www.cambridgeinternational.org/Images/741398-geography-0460-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "12, 22, 42", "max": 220, "marks": [178, 154, 130, 107, 91, 76, 61, 46], "source": "https://www.cambridgeinternational.org/Images/762819-geography-0460-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "History",
+    "code": "0470",
+    "years": [
+      {"year": 2022, "components": "12, 22, 42", "max": 150, "marks": [91, 78, 65, 53, 45, 37, 30, 23], "source": "https://www.cambridgeinternational.org/Images/661165-cambridge-igcse-history-0470-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "12, 22, 42", "max": 150, "marks": [92, 80, 68, 56, 49, 43, 37, 31], "source": "https://www.cambridgeinternational.org/Images/692742-history-0470-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "12, 22, 42", "max": 150, "marks": [90, 77, 64, 51, 45, 40, 33, 28], "source": "https://www.cambridgeinternational.org/Images/716101-history-0470-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "12, 22, 42", "max": 150, "marks": [94, 79, 64, 50, 45, 40, 34, 28], "source": "https://www.cambridgeinternational.org/Images/741403-history-0470-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "12, 22, 42", "max": 150, "marks": [98, 83, 68, 53, 47, 41, 34, 27], "source": "https://www.cambridgeinternational.org/Images/762820-history-0470-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "ICT",
+    "code": "0417",
+    "years": [
+      {"year": 2022, "components": "12, 22, 32", "max": 300, "marks": [210, 172, 134, 96, 79, 63, 46, 29], "source": "https://www.cambridgeinternational.org/Images/661152-cambridge-igcse-information-and-communication-technology-0417-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "12, 22, 32", "max": 280, "marks": [198, 171, 144, 118, 97, 76, 55, 34], "source": "https://www.cambridgeinternational.org/Images/692731-information-and-communication-technology-0417-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "12, 22, 32", "max": 280, "marks": [207, 177, 147, 117, 97, 78, 59, 40], "source": "https://www.cambridgeinternational.org/Images/716088-information-and-communication-technology-0417-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "12, 22, 32", "max": 280, "marks": [193, 167, 141, 115, 96, 77, 58, 39], "source": "https://www.cambridgeinternational.org/Images/741405-information-and-communication-technology-0417-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "12, 22, 32", "max": 280, "marks": [204, 177, 150, 124, 103, 83, 63, 43], "source": "https://www.cambridgeinternational.org/Images/762811-information-and-communication-technology-0417-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "Mathematics",
+    "code": "0580",
+    "years": [
+      {"year": 2022, "components": "22, 42", "max": 200, "marks": [159, 127, 95, 63, 46, 30, null, null], "source": "https://www.cambridgeinternational.org/Images/661196-cambridge-igcse-mathematics-0580-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "22, 42", "max": 200, "marks": [174, 148, 113, 78, 61, 44, null, null], "source": "https://www.cambridgeinternational.org/Images/692776-mathematics-without-coursework-0580-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "22, 42", "max": 200, "marks": [175, 150, 117, 85, 66, 48, null, null], "source": "https://www.cambridgeinternational.org/Images/716164-mathematics-without-coursework-0580-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "22, 42", "max": 200, "marks": [176, 152, 119, 86, 68, 51, null, null], "source": "https://www.cambridgeinternational.org/Images/741420-mathematics-without-coursework-0580-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "22, 42", "max": 200, "marks": [177, 154, 120, 87, 68, 49, null, null], "source": "https://www.cambridgeinternational.org/Images/762852-mathematics-without-coursework-0580-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "Physics",
+    "code": "0625",
+    "years": [
+      {"year": 2022, "components": "22, 42, 62", "max": 200, "marks": [137, 113, 89, 66, 56, 46, 37, 28], "source": "https://www.cambridgeinternational.org/Images/661201-cambridge-igcse-physics-0625-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "22, 42, 62", "max": 200, "marks": [151, 125, 99, 73, 62, 52, 42, 32], "source": "https://www.cambridgeinternational.org/Images/692781-physics-0625-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "22, 42, 62", "max": 200, "marks": [149, 124, 99, 74, 64, 54, 44, 34], "source": "https://www.cambridgeinternational.org/Images/716106-physics-0625-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "22, 42, 62", "max": 200, "marks": [153, 128, 103, 78, 67, 57, 47, 37], "source": "https://www.cambridgeinternational.org/Images/741426-physics-0625-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "22, 42, 62", "max": 200, "marks": [161, 134, 107, 80, 70, 61, 51, 41], "source": "https://www.cambridgeinternational.org/Images/762857-physics-0625-june-2026-grade-threshold-table.pdf"}
+    ]
+  },
+  {
+    "subject": "Thai",
+    "code": "0518",
+    "years": [
+      {"year": 2022, "components": "01, 02", "max": 100, "marks": [75, 66, 57, 49, 38, 28, 19, 10], "source": "https://www.cambridgeinternational.org/Images/661184-cambridge-igcse-thai-first-language-0518-grade-threshold-table-june-2022.pdf"},
+      {"year": 2023, "components": "01, 02", "max": 100, "marks": [79, 69, 59, 50, 39, 29, 20, 11], "source": "https://www.cambridgeinternational.org/Images/692764-first-language-thai-0518-june-2023-grade-threshold-table.pdf"},
+      {"year": 2024, "components": "01, 02", "max": 100, "marks": [79, 70, 61, 52, 42, 32, 22, 12], "source": "https://www.cambridgeinternational.org/Images/716146-first-language-thai-0518-june-2024-grade-threshold-table.pdf"},
+      {"year": 2025, "components": "01, 02", "max": 100, "marks": [78, 68, 58, 49, 39, 30, 20, 10], "source": "https://www.cambridgeinternational.org/Images/741393-first-language-thai-0518-june-2025-grade-threshold-table.pdf"},
+      {"year": 2026, "components": "01, 02", "max": 100, "marks": [76, 67, 58, 49, 39, 30, 20, 10], "source": "https://www.cambridgeinternational.org/Images/762840-first-language-thai-0518-june-2026-grade-threshold-table.pdf"}
+    ]
+  }
+]
