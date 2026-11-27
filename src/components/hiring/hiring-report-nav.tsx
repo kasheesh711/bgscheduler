@@ -115,6 +115,7 @@ export function restoreHiringScroll(key: string, pane: HTMLElement | null, fragm
       const trip = hiringScrollTrip();
       if (trip.pending !== key) return;
       delete trip.positions[key];
+      if (trip.origin?.key === key) delete trip.origin;
       trip.pending = null;
       sessionStorage.setItem(SCROLL_KEY, JSON.stringify(trip));
     } catch {
@@ -208,7 +209,7 @@ export function HiringReportNav({ active, fragments }: { active: Report; fragmen
   }, [key, fragments]);
   return (
     <nav ref={navRef} className={nav.reportNav} aria-label="Hiring reports">
-      <Link href={back} prefetch={false} scroll={false} className={nav.reportBack} aria-label={`Back to ${backLabel}`} onNavigate={(event) => {
+      <Link href={back} prefetch={false} scroll={false} className={nav.reportBack} aria-label={backLabel === "Hiring" ? "Back to Hiring" : `Back to ${backLabel} in Hiring`} onNavigate={(event) => {
         rememberPlace(workspaceKey);
         try {
           const href = from && hiringOrigin(workspaceKey, hiringScrollTrip());
