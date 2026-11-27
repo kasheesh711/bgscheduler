@@ -78,7 +78,7 @@ export function AtsOutcomes({ report }: { report: Report }) {
     </section>
     <section className={panel}><h2 className={heading}>Which criteria awarded full points?</h2>
       <p className={small}>Read each column as candidates with full credit out of scored candidates with that outcome. A subject paper tests subject knowledge. The mock provides separate evidence of teaching ability.</p>
-      {criteriaCounts.length ? <table className={table + " [&_td]:px-1 [&_th]:px-1 sm:[&_td]:px-2 sm:[&_th]:px-2"}><thead><tr><th>Criterion</th><th>Paper pass</th><th>Paper fail</th><th>Hired</th><th>Rejected</th></tr></thead>
+      {criteriaCounts.length ? <table className={table + " [&_td]:px-1 [&_th]:px-1 max-[360px]:text-xs max-[360px]:[&_td]:px-0.5 max-[360px]:[&_th]:px-0.5 sm:[&_td]:px-2 sm:[&_th]:px-2"}><thead><tr><th>Criterion</th><th>Paper pass</th><th>Paper fail</th><th>Hired</th><th>Rejected</th></tr></thead>
         <tbody>{criteriaCounts.map(p => <tr key={p.name}><th scope="row" className="font-normal">{p.name} <span className={small}>({p.max})</span></th><td>{passed.length ? p.pass + " / " + passed.length : "—"}</td><td>{failed.length ? p.fail + " / " + failed.length : "—"}</td><td>{accepted.scored ? p.hire + " / " + accepted.scored : "—"}</td><td>{rejected.scored ? p.reject + " / " + rejected.scored : "—"}</td></tr>)}</tbody></table> : <p>No scored assessments yet.</p>}
     </section>
     <section className={panel}><h2 id="candidate-evidence" tabIndex={-1} className={heading}>Candidate evidence</h2>

@@ -35,6 +35,9 @@ export function hiringReportHref(report: Report, from: string | null) {
 }
 
 const SCROLL_KEY = "hiring-report-scroll";
+const JUMP_KEY = "hiringReportJump";
+type JumpBookmark = { href: string; fragment: string; top: number };
+const currentHref = () => window.location.pathname + window.location.search + window.location.hash;
 type ScrollTrip = {
   positions: Record<string, number>;
   pending: string | null;
@@ -60,7 +63,7 @@ export function saveHiringScroll(key: string, pane: HTMLElement | null, next?: s
     const trip: ScrollTrip = next ? hiringScrollTrip() : {
       positions: {},
       pending: null,
-      origin: { key, href: window.location.pathname + window.location.search + window.location.hash },
+      origin: { key, href: currentHref() },
     };
     trip.positions[key] = Math.max(0, pane.scrollTop);
     trip.pending = next ?? null;
@@ -68,6 +71,18 @@ export function saveHiringScroll(key: string, pane: HTMLElement | null, next?: s
   } catch {
     // Browser storage can be unavailable.
   }
+}
+
+function revealFragment(pane: HTMLElement, hash: string, center = false) {
+  const target = pane.querySelector<HTMLElement>(`#${CSS.escape(hash.slice(1))}`);
+  if (!target) return false;
+  const rect = target.getBoundingClientRect();
+  const padding = parseFloat(getComputedStyle(pane).scrollPaddingTop) || 0;
+  const margin = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
+  const offset = center ? (pane.clientHeight - rect.height) / 2 : padding + margin;
+  pane.scrollTop += rect.top - pane.getBoundingClientRect().top - offset;
+  target.focus({ preventScroll: true });
+  return true;
 }
 
 export function restoreHiringScroll(key: string, pane: HTMLElement | null, fragment?: string, followFragment = false) {
@@ -87,6 +102,7 @@ export function restoreHiringScroll(key: string, pane: HTMLElement | null, fragm
   }
   if (!openFragment && !Number.isFinite(top)) return;
   const pathname = key.startsWith("/") ? key.split("?")[0] : "/hiring";
+  const workspaceUrl = workspaceOrigin && new URL(workspaceOrigin, window.location.origin);
   const deadline = performance.now() + (openFragment ? 10000 : 5000);
   const input = ["pointerdown", "wheel", "touchmove", "keydown"] as const;
   const stop = () => {
@@ -109,20 +125,22 @@ export function restoreHiringScroll(key: string, pane: HTMLElement | null, fragm
   const restore = (now: number) => {
     if (now >= deadline) return finish();
     if (window.location.pathname === pathname && pane.clientHeight) {
-      // A report can show its navigation before its contents arrive.
+      if (workspaceUrl && workspaceUrl.search === window.location.search && currentHref() !== workspaceOrigin) {
+        const oldURL = window.location.href;
+        window.history.replaceState(window.history.state, "", workspaceOrigin);
+        window.dispatchEvent(new HashChangeEvent("hashchange", { oldURL, newURL: window.location.href }));
+      }
       if (openFragment) {
-        if (window.location.hash === hash) {
-          const target = hash && pane.querySelector<HTMLElement>(hash);
-          if (target) {
-            const padding = parseFloat(getComputedStyle(pane).scrollPaddingTop) || 0;
-            const margin = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
-            pane.scrollTop += target.getBoundingClientRect().top - pane.getBoundingClientRect().top - padding - margin;
-            target.focus({ preventScroll: true });
-            return finish();
-          }
+        // A report can show its navigation before its contents arrive.
+        if (hash && window.location.hash === hash && revealFragment(pane, hash)) {
+          if (window.scrollY) window.scrollTo(0, 0);
+          if (++restoredFrames === 3) return finish();
         }
         if (window.location.hash !== hash && !followFragment) return finish();
-      } else if (window.location.hash && !(top > 0 && workspaceOrigin === window.location.pathname + window.location.search + window.location.hash)) {
+      } else if (window.location.hash && workspaceOrigin !== currentHref()) {
+        return finish();
+      } else if (window.location.hash && top === 0) {
+        revealFragment(pane, window.location.hash, true);
         return finish();
       } else if (pane.scrollHeight - pane.clientHeight >= top - 1) {
         if (Math.abs(pane.scrollTop - top) > 0.5) {
@@ -142,7 +160,11 @@ export function restoreHiringScroll(key: string, pane: HTMLElement | null, fragm
 export function HiringReportJump({ fragment, children, className }: { fragment: string; children: ReactNode; className?: string }) {
   const link = useRef<HTMLAnchorElement>(null);
   return <Link ref={link} className={className} href={`#${fragment}`} prefetch={false} scroll={false} onNavigate={() => {
-    restoreHiringScroll(window.location.pathname + window.location.search, link.current?.closest("section") ?? null, fragment, true);
+    const pane = link.current?.closest("section");
+    if (!pane) return;
+    const bookmark: JumpBookmark = { href: currentHref(), fragment, top: pane.scrollTop };
+    window.history.replaceState({ ...window.history.state, [JUMP_KEY]: bookmark }, "");
+    restoreHiringScroll(window.location.pathname + window.location.search, pane, fragment, true);
   }}>{children}</Link>;
 }
 
@@ -158,8 +180,31 @@ export function HiringReportNav({ active, fragments }: { active: Report; fragmen
   const workspaceKey = `workspace:${from ?? "overview"}`;
   const rememberPlace = (next: string) => saveHiringScroll(key, navRef.current?.closest("section") ?? null, next);
   useLayoutEffect(() => {
-    const fragment = fragments.find(id => window.location.hash === `#${id}`);
-    return restoreHiringScroll(key, navRef.current?.closest("section") ?? null, fragment);
+    const pane = navRef.current?.closest("section") ?? null;
+    let frame = 0;
+    let stop: (() => void) | undefined;
+    const restore = () => {
+      stop?.();
+      const bookmark: JumpBookmark | undefined = window.history.state?.[JUMP_KEY];
+      if (pane?.clientHeight && bookmark?.href === currentHref() && fragments.includes(bookmark.fragment)) {
+        pane.scrollTop = bookmark.top;
+        pane.querySelector<HTMLAnchorElement>(`a[href="#${bookmark.fragment}"]`)?.focus({ preventScroll: true });
+        return;
+      }
+      const fragment = fragments.find(id => window.location.hash === `#${id}`);
+      stop = restoreHiringScroll(key, pane, fragment);
+    };
+    restore();
+    const onPop = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(restore);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      cancelAnimationFrame(frame);
+      stop?.();
+    };
   }, [key, fragments]);
   return (
     <nav ref={navRef} className={nav.reportNav} aria-label="Hiring reports">
@@ -169,7 +214,7 @@ export function HiringReportNav({ active, fragments }: { active: Report; fragmen
           const href = from && hiringOrigin(workspaceKey, hiringScrollTrip());
           if (href && href !== back) {
             event.preventDefault();
-            router.push(href, { scroll: false });
+            router.push(href.split("#")[0], { scroll: false });
           }
         } catch {
           // The link can still return to the named workspace.

@@ -97,6 +97,8 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
           <span className={`rounded-full border-2 border-card bg-primary ${inspected === score ? "ring-2 ring-primary" : ""}`} style={{ width: Math.min(20, 10 + 2 * n), height: Math.min(20, 10 + 2 * n) }} />
         </button>)}
       </div>
+      <p className="min-h-6 text-sm font-medium tabular-nums" role="status">{inspectText}</p>
+      {inspected !== null && <p className="mb-2 text-xs text-muted-foreground">{observations.filter(o => o.score === inspected).map(o => "Teaching subject: " + o.subject + " · marked out of " + o.maximum).join(" / ")}</p>}
       <label className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm font-medium">Inspect score
         <select aria-label="Inspect score" className="min-h-10 max-w-full rounded-md border bg-background px-2 text-sm font-normal focus-visible:outline-2 focus-visible:outline-primary"
           value={selected ?? ""} onChange={event => { setSelected(event.target.value === "" ? null : Number(event.target.value)); setHover(null); }}>
@@ -104,13 +106,11 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
           {[...counts].map(([score, n]) => <option key={score} value={score}>{fmt(score)}% · {n} {n === 1 ? "paper" : "papers"}</option>)}
         </select>
       </label>
-      <p className="min-h-6 text-sm font-medium tabular-nums" role="status">{inspectText}</p>
       <p className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <span><span className="mr-1 inline-block w-4 align-middle border-t-2 border-dashed border-[var(--chart-2)]" />Hiring pass line {cutoffs.length ? cutoffs.join("% / ") + "%" : "unconfigured"}</span>
         {trialCutoff !== null && <span>{showTrialLine && <span className="mr-1 inline-block w-4 align-middle border-t-2 border-[var(--chart-3)]" />}Trial cutoff {cutoff}%</span>}
         <span>{sd > 0 ? "Fitted normal curve" : scores.length === 1 ? "One score available" : "All scores equal"}</span>
       </p>
-      {inspected !== null && <p className="mb-2 text-xs text-muted-foreground">{observations.filter(o => o.score === inspected).map(o => "Teaching subject: " + o.subject + " · marked out of " + o.maximum).join(" / ")}</p>}
       {subject === "English Language" && <p className="mb-3 rounded-md border-l-2 border-[var(--chart-2)] bg-muted/50 px-3 py-2 text-xs leading-relaxed">Teachers applying for EFL/ESL, English Language or English Literature take the English Language paper. {maxima.length > 1 && <>Saved marking totals vary ({maxima.join(", ")} marks). The chart uses the recorded final percentages.</>}</p>}
     </div>
   </article>;
