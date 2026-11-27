@@ -1,4 +1,4 @@
-import syllabuses from "@/lib/hiring/cambridge-igcse-thresholds.json";
+import { englishWrittenAverage, syllabuses } from "@/lib/hiring/cambridge-thresholds";
 
 import { ThresholdChart } from "./threshold-chart";
 import { grades } from "./grades";
@@ -7,16 +7,16 @@ const cell = "px-3 py-2 text-right whitespace-nowrap";
 
 const zoneLookup = "https://www.cambridgeinternational.org/exam-administration/cambridge-exams-officers-guide/phase-1-preparation/timetabling-exams/administrative-zone/?Location=Bangkok";
 const zoneTimetable = "https://www.cambridgeinternational.org/Images/757649-november-2026-zone-4-timetable.pdf";
-const routeId = (code: string, components: string) => "igcse-" + code + "-" + components.replaceAll(", ", "-");
+const routeId = (code: string, components: string) => "igcse-" + code + "-" + components.toLowerCase().replace(/[, ]+/g, "-");
 
 export function CambridgeThresholds() {
   return <section aria-labelledby="cambridge-title" id="cambridge-thresholds" className="scroll-mt-4">
     <h2 id="cambridge-title" className="text-xl font-semibold">Cambridge IGCSE grade thresholds</h2>
-    <p className="mt-1 text-sm text-muted-foreground">Five-year reference 2022–2026 · Written English history from 2011 · Bangkok, Zone 4 · English paper variant 2</p>
+    <p className="mt-1 text-sm text-muted-foreground">Five-year reference 2022–2026 · Written English history from 2011 · English Language includes all written paper variants</p>
     <ThresholdChart />
     <details><summary className="cursor-pointer text-sm font-medium">How the Cambridge comparison works</summary>
-    <p className="mt-2 text-sm">Bangkok is in Cambridge administrative Zone 4. First Language English (0500) and Literature in English (0475) use paper variant 2. Choose the row for the components on the school’s entry. <a className="underline" href={zoneLookup}>Bangkok zone lookup</a> · <a className="underline" href={zoneTimetable}>Zone 4 timetable</a></p>
-    <p className="my-2 text-sm text-muted-foreground">Five June exam series, 2022–2026. Each value is the average of five annual thresholds, expressed as a percentage of the maximum weighted mark for the stated combination of papers. We use variant 2 where available and the extended route for tiered subjects. Other combinations can have different thresholds.</p>
+    <p className="mt-2 text-sm">Bangkok is in Cambridge administrative Zone 4. The English Language comparison includes every published pair of written exams for First Language English (0500), with no oral endorsement. Component 03 is coursework. For a known entry, you can also inspect the variant 2 reference. <a className="underline" href={zoneLookup}>Bangkok zone lookup</a> · <a className="underline" href={zoneTimetable}>Zone 4 timetable</a></p>
+    <p className="my-2 text-sm text-muted-foreground">Five June exam series, 2022–2026. Each value is the average of five annual thresholds, expressed as a percentage of the maximum weighted mark for the stated combination of papers. For the all-pairs English reference, each pair has equal weight within its June series, and each series has equal weight in the average. Other subjects use variant 2 where available and the extended route for tiered subjects. Other combinations can have different thresholds.</p>
     <p className="mb-3 text-sm">Compare the 80% hiring benchmark with the minimum for each Cambridge grade. A positive gap means 80% is above the average A* threshold. Hiring papers assess different questions and levels, so this comparison cannot assign a Cambridge grade to a candidate.</p>
     </details>
     <details className="mt-3"><summary className="mb-2 cursor-pointer text-sm font-medium">All grade thresholds and annual source tables</summary>
@@ -46,13 +46,13 @@ export function CambridgeThresholds() {
       <details key={subject} id={routeId(code, years[0].components)} className="scroll-mt-4 px-3 py-2 text-sm">
         <summary className="cursor-pointer font-medium">{subject} ({code})</summary>
         <div className="mt-2 overflow-x-auto"><table className="w-full text-left tabular-nums">
-          <caption className="mb-1 text-left text-xs text-muted-foreground">Minimum weighted marks by grade. Select a year to open the official table.</caption>
+          <caption className="mb-1 text-left text-xs text-muted-foreground">{subject === englishWrittenAverage.subject ? "Mean weighted marks across eligible paper pairs by grade." : "Minimum weighted marks by grade."} Select a year to open the official table.</caption>
           <thead><tr><th scope="col">June series</th><th scope="col" className={cell}>Components</th><th scope="col" className={cell}>Maximum</th>
             {grades.map(grade => <th scope="col" className={cell} key={grade}>{grade}</th>)}</tr></thead>
           <tbody>{years.map(year => <tr key={year.year} className="border-t">
             <th scope="row"><a href={year.source} className="underline underline-offset-4" aria-label={subject + " June " + year.year + " Cambridge PDF"}>{year.year}</a></th>
             <td className={cell}>{year.components}</td><td className={cell}>{year.max}</td>
-            {year.marks.map((mark, i) => <td key={grades[i]} className={cell}>{mark ?? "—"}</td>)}
+            {year.marks.map((mark, i) => <td key={grades[i]} className={cell}>{mark === null ? "—" : Number.isInteger(mark) ? mark : mark.toFixed(2)}</td>)}
           </tr>)}</tbody>
         </table></div>
       </details>)}</div>
