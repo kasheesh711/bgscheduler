@@ -1,7 +1,7 @@
-import { and, eq, isNotNull } from "drizzle-orm";
-import Link from "next/link";
+import { and, count, eq, isNotNull, not, sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
+import { HiringReportJump, HiringReportNav } from "@/components/hiring/hiring-report-nav";
 import { getDb } from "@/lib/db";
 import { hiringPaperResults as papers } from "@/lib/db/schema";
 import { requireHiringAdmin } from "@/lib/hiring/access";
@@ -29,20 +29,41 @@ async function Report() {
     return <p role="alert">Hiring access is required.</p>;
   }
   const db = getDb();
+  const markedAndDone = and(eq(papers.status, "done"), isNotNull(papers.marks))!;
+  const excluded = db.select({
+    id: sql<null>`null::uuid`, subject: papers.subject, status: papers.status, source: papers.source,
+    marks: sql<null>`null::jsonb`, updatedAt: sql<null>`null::timestamptz`, records: count(),
+  }).from(papers).where(not(markedAndDone)).groupBy(papers.subject, papers.status, papers.source);
   const [{ config }, rows, checks] = await Promise.all([
     settings(db),
-    db.select({ id: papers.id, subject: papers.subject, status: papers.status, marks: papers.marks, updatedAt: papers.updatedAt })
-      .from(papers).where(and(eq(papers.status, "done"), isNotNull(papers.marks))),
+    db.select({
+      id: sql<string | null>`${papers.id}`, subject: papers.subject, status: papers.status, source: papers.source,
+      marks: papers.marks,
+      updatedAt: sql<Date | null>`${papers.updatedAt}`.mapWith((value: string | Date | null) => typeof value === "string" ? new Date(value) : value),
+      records: sql<number>`1`.mapWith(Number),
+    }).from(papers).where(markedAndDone).unionAll(excluded),
     paperChecks(db, new Date()),
   ]);
-  const groups = new Map<string, { score: number; subject: string; maximum: number }[]>();
+  const groups = new Map<string, { score: number; subject: string; earned: number; maximum: number }[]>();
   const checkById = new Map(checks.map(check => [check.resultId, check]));
+  const exclusions = { unfinished: 0, review: 0, historical: 0, unscored: 0 };
   for (const paper of rows) {
-    const result = paperScore(paper, config, checkById.get(paper.id));
-    if ((result.verdict !== "pass" && result.verdict !== "fail") || result.percent === null || !result.max) continue;
+    if (paper.id === null) {
+      if (paper.status === "needs_check") exclusions.review += paper.records;
+      else if (paper.status !== "done") exclusions.unfinished += paper.records;
+      else if (paper.source === "tracker") exclusions.historical += paper.records;
+      else exclusions.unscored += paper.records;
+      continue;
+    }
+    const result = paperScore({ ...paper, id: paper.id, updatedAt: paper.updatedAt ?? undefined }, config, checkById.get(paper.id));
+    if ((result.verdict !== "pass" && result.verdict !== "fail") || result.percent === null || !result.max) {
+      if (result.verdict === "checking" || result.verdict === "needs_check") exclusions.review++;
+      else exclusions.unscored++;
+      continue;
+    }
     const group = paperGroup(paper.subject);
     const observations = groups.get(group) ?? [];
-    observations.push({ score: result.percent, subject: paper.subject, maximum: result.max });
+    observations.push({ score: result.percent, subject: paper.subject, earned: result.scored, maximum: result.max });
     groups.set(group, observations);
   }
   const summary = [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([subject, observations]) => {
@@ -53,24 +74,30 @@ async function Report() {
   });
   const empty = [...new Set(SUBJECTS.map(paperGroup))].filter(group => !groups.has(group)).sort();
   const n = summary.reduce((total, row) => total + row.data.scores.length, 0);
+  const excludedCount = exclusions.unfinished + exclusions.review + exclusions.historical + exclusions.unscored;
   return <>
     {summary.length > 0 && <ScoreExplorer rows={summary} />}
-    <details className="-mt-3 text-sm text-muted-foreground">
-      <summary className="cursor-pointer font-medium">How the {n} final papers are counted</summary>
-      <p className="mt-2 max-w-3xl">Scores cover {summary.length} test groups. For a multi-level paper, Hiring reports the highest level passed, or the best level attempted if none passed. Papers awaiting review and historical outcomes without marks are excluded.</p>
-      {empty.length > 0 && <p className="mt-1">Awaiting final scores for {empty.join(", ")}.</p>}
+    <details className="-mt-3 rounded-lg border bg-card p-3 text-sm">
+      <summary className="min-h-10 cursor-pointer py-2 font-medium">Paper records across all groups · {n} counted · {excludedCount} excluded</summary>
+      <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-2 tabular-nums sm:grid-cols-4">
+        {([["Unfinished or failed marking", exclusions.unfinished], ["Awaiting review", exclusions.review], ["Historical record without marks", exclusions.historical], ["Other record without a final score", exclusions.unscored]] as const).map(([label, number]) =>
+          <div key={label}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="font-semibold">{number}</dd></div>)}
+      </dl>
+      <p className="mt-3 max-w-3xl text-muted-foreground">A final score of 0% counts. For a paper with several levels, the score comes from the highest level passed or the best level attempted.</p>
+      {empty.length > 0 && <p className="mt-1 text-muted-foreground">Awaiting final scores for {empty.join(", ")}.</p>}
     </details>
     <CambridgeThresholds />
   </>;
 }
 
 export default function Page() {
-  return <section aria-labelledby="paper-title" tabIndex={0} className="min-h-0 flex-1 overflow-y-auto">
-    <div className="mx-auto grid max-w-6xl gap-6 px-3 py-3 sm:px-6 sm:py-6">
-      <header className="border-b pb-5"><Link href="/hiring?view=assessment" className="text-sm text-muted-foreground hover:underline">← Paper test</Link>
+  return <section aria-labelledby="paper-title" tabIndex={0} className="min-h-0 flex-1 overflow-y-auto scroll-pt-24 sm:scroll-pt-14">
+    <div className="mx-auto grid max-w-6xl grid-cols-1 gap-6 px-3 py-3 sm:px-6 sm:py-6">
+      <Suspense><HiringReportNav active="paper-results" fragments={["cambridge-thresholds"]} /></Suspense>
+      <header className="border-b pb-5">
         <div className="mt-3 flex flex-wrap items-baseline justify-between gap-2">
           <h1 id="paper-title" className="text-3xl font-semibold tracking-tight sm:text-4xl">Hiring paper results</h1>
-          <a href="#cambridge-thresholds" className="text-sm font-medium text-primary hover:underline">Cambridge thresholds ↓</a>
+          <HiringReportJump fragment="cambridge-thresholds" className="text-sm font-medium text-primary hover:underline">Cambridge thresholds ↓</HiringReportJump>
         </div>
       </header>
       <Suspense fallback={<p role="status">Loading paper results…</p>}><Report /></Suspense>

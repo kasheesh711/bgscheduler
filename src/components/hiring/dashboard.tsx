@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 
-import { startTransition, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { Instrument_Serif } from "next/font/google";
 import { signIn } from "next-auth/react";
@@ -15,6 +15,7 @@ import { dedupePriority, headDaysNotice } from "@/lib/hiring/rules";
 import { candidateExtras, holdNote } from "@/lib/hiring/status";
 import { campaignNames } from "@/lib/hiring/seek-view";
 import type { dashboard } from "@/lib/hiring/service";
+import { HIRING_REPORTS, HIRING_VIEWS as VIEWS, hiringReportHref, restoreHiringScroll, saveHiringScroll } from "./hiring-report-nav";
 import { CandidateInspector } from "./candidate-inspector";
 import { CandidateTable, focusCandidateResults } from "./candidate-table";
 import { EvidenceChart, LimitMeters, ScoreChart, SubjectChart } from "./pipeline-charts";
@@ -67,29 +68,69 @@ export type CandidateFilter = {
 export type Command = (body: unknown, onReload?: (data: HiringData | null) => void, onError?: (message: string, status?: number) => void) => Promise<boolean>;
 export const NO_FILTER: CandidateFilter = { stage: "all", prescreen: "all", bucket: null, subject: null };
 
-const VIEWS = {
-  overview: "Overview",
-  capacity: "Capacity",
-  seek: "SEEK intake",
-  calls: "HR calls",
-  prescreen: "Pre-screen form",
-  visitday: "Visit schedule",
-  assessment: "Paper test",
-  mock: "Mock teaching",
-  review: "Final review",
-  offer: "Offer & signing",
-  setup: "Rules and setup",
-  // The simple screens, one for each role. Each has its own link: /hiring?view=hr, admin or heads.
-  hr: "Final review",
-  admin: "Admin",
-  heads: "Heads",
-};
 export type HiringView = keyof typeof VIEWS;
 // Kevin, 24 Nov 2026: there is no HR team now. SEEK intake and HR calls are retired from the tabs, and the HR role screen
 // has no button. The screens stay in the code, and `?view=seek`, `?view=calls` and `?view=hr` still open them: Gift's
 // review link uses `?view=hr`.
 const STEPS = ["prescreen", "assessment", "mock", "review", "offer"] as const;
-const TOOLS = ["overview", "capacity", "visitday", "setup", "admin", "heads"] as const;
+const WORKSPACE = ["overview", "capacity", "visitday"] as const;
+const MORE_TOOLS = ["setup", "admin", "heads"] as const;
+const TOOL_HINTS = { setup: "Scores, limits and messages", admin: "Prepare rooms and papers", heads: "Mock teaching and decisions" } as const;
+const REPORT_HINTS = { "paper-results": "Scores and cutoffs", "ats-outcomes": "Invitation scores and outcomes" } as const;
+
+function closeToolsMenu(menu: HTMLDetailsElement) {
+  menu.open = false;
+  menu.querySelector("summary")?.focus({ preventScroll: true });
+}
+
+function dismissToolsMenu(event: KeyboardEvent<HTMLDetailsElement>) {
+  if (event.key !== "Escape" || !event.currentTarget.open) return;
+  event.preventDefault();
+  event.stopPropagation();
+  closeToolsMenu(event.currentTarget);
+}
+function ToolsMenu({ label, children, className, panelClass, review }: {
+  label: ReactNode; children: ReactNode; className: string; panelClass: string; review?: boolean;
+}) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  const close = useRef<HTMLButtonElement>(null);
+  const keyboard = useRef(false);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const menu = ref.current;
+    if (!open || !menu) return;
+    const dismiss = (event: PointerEvent) => {
+      if (event.target instanceof Node && !menu.contains(event.target)) {
+        if (menu.contains(document.activeElement)) closeToolsMenu(menu);
+        else menu.open = false;
+      }
+    };
+    document.addEventListener("pointerdown", dismiss);
+    return () => document.removeEventListener("pointerdown", dismiss);
+  }, [open]);
+  return <details ref={ref} className={className} data-review={review ? "" : undefined}
+    onKeyDown={dismissToolsMenu}
+    onBlur={(event) => {
+      if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
+    }}
+    onToggle={(event) => {
+      const menu = event.currentTarget;
+      setOpen(menu.open);
+      if (menu.open && keyboard.current) close.current?.focus({ preventScroll: true });
+      keyboard.current = false;
+    }}>
+    <summary onKeyDown={(event) => {
+      if (event.key === "Enter" || event.key === " ") keyboard.current = true;
+    }}>{label}</summary>
+    <div className={panelClass}>
+      <button ref={close} type="button" className={nav.closeTools} onClick={() => {
+        if (ref.current) closeToolsMenu(ref.current);
+      }}>Close menu <kbd>Esc</kbd></button>
+      {children}
+    </div>
+  </details>;
+}
+
 /** One line under the tabs, so a new user can name what each tab is for. */
 const PURPOSE: Record<Exclude<HiringView, "hr" | "heads" | "offer" | "prescreen">, string> = {
   overview: "Where every candidate stands, and who is ready for the next step.",
@@ -149,6 +190,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
   }, [demo]);
   const demoStep = useDemoState();
   const [briefOpen, setBriefOpen] = useState(false);
+  const [newReportTab, setNewReportTab] = useState(false);
   const hash = useSyncExternalStore(subscribeToReviewLink, () => window.location.hash, () => null);
   const reviewLink = param === "hr" && hash ? /^#review-(.+)$/.exec(hash)?.[1] : undefined;
   const giftOnly = !!data?.reviewAccess?.gift && !data.reviewAccess.hr;
@@ -386,33 +428,90 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
     setView("setup");
   };
   const step = STEPS.findIndex((name) => name === view) + 1;
-  const navigation = (
-    <>
-      <nav className={nav.tools} aria-label="Hiring tools">
-        {TOOLS.map((name) => (
-          <button key={name} type="button" aria-pressed={view === name} onClick={() => setView(name)}>
-            {/* A head finds the way back to their own list by its name (blind test, 24 Nov 2026). */}
-            {name === "heads" && (data?.viewerHead ?? head) ? "My list" : VIEWS[name]}
-          </button>
+  const surface = useRef<HTMLDivElement>(null);
+  const switchView = (name: HiringView) => {
+    if (name !== view && surface.current) surface.current.scrollTop = 0;
+    setView(name);
+  };
+  const toolsLayout = view === "review" ? "review" : compactQueue ? "compact" : undefined;
+  const reportFrom = param && Object.hasOwn(VIEWS, param) ? view : "dashboard";
+  const scrollKey = `workspace:${reportFrom}`;
+  useLayoutEffect(() => {
+    if (loaded && !demo) return restoreHiringScroll(scrollKey, surface.current);
+  }, [loaded, demo, scrollKey]);
+  const personalHead = data?.viewerHead ?? head;
+  const paperChecksDue = fullAccess && personalHead && data
+    ? data.paperChecks.filter((check) => check.head === personalHead && !check.done && check.path).length
+    : null;
+  const personalTask = paperChecksDue === null ? "Your mock teaching and decisions" : paperChecksDue === 0
+    ? "No papers to re-mark" : `${paperChecksDue} ${paperChecksDue === 1 ? "paper" : "papers"} to re-mark`;
+  const chooseWorkspace = (event: MouseEvent<HTMLAnchorElement>, name: HiringView) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    const menu = event.currentTarget.closest("details");
+    if (menu) closeToolsMenu(menu);
+    switchView(name);
+  };
+  const workspaceLink = (name: HiringView, label: string, hint?: string, descriptionId?: string) => (
+    <a key={name} href={`/hiring?view=${name}${demo ? "&demo=1" : ""}`} aria-label={label}
+      aria-current={view === name ? "page" : undefined} aria-describedby={descriptionId} onClick={(event) => chooseWorkspace(event, name)}>
+      {view === name && <span className={nav.activeMark} aria-hidden="true">✓</span>}
+      <span>{label}{hint && <small id={descriptionId}>{hint}</small>}</span>
+    </a>
+  );
+  const workspace = <div className={nav.toolGroup} role="group" aria-label="Workspace">
+    <span className={nav.groupLabel} aria-hidden="true">Workspace</span>
+    {WORKSPACE.map((name) => workspaceLink(name, VIEWS[name]))}
+  </div>;
+  const reportLinks = (phone: boolean) => (
+    <div className={`${nav.toolGroup} ${nav.reportGroup}`} role="group" aria-label="Reports">
+      <span className={nav.groupLabel}>Read-only reports</span>
+      {(["paper-results", "ats-outcomes"] as const).map((report) => {
+        const descriptionId = `hiring-${phone ? "phone" : "desktop"}-${report}-task`;
+        return <Link key={report} href={hiringReportHref(report, reportFrom)} prefetch={false} scroll={false}
+          aria-label={HIRING_REPORTS[report]} aria-describedby={descriptionId}
+          target={newReportTab ? "_blank" : undefined} rel={newReportTab ? "noopener" : undefined}
+          onNavigate={() => saveHiringScroll(scrollKey, surface.current)}>
+          <span>{HIRING_REPORTS[report]}<small id={descriptionId} className={phone ? "sr-only" : undefined}>{REPORT_HINTS[report]}</small></span>
+        </Link>;
+      })}
+    </div>
+  );
+  const staffTools = (phone: boolean) => <>
+    {MORE_TOOLS.map((name) => workspaceLink(name, name === "heads" && personalHead ? "My list" : VIEWS[name],
+      name === "heads" && personalHead ? personalTask : TOOL_HINTS[name], `hiring-${phone ? "phone" : "desktop"}-${name}-task`))}
+    {!demo && <label className={nav.reportPreference}>
+      <input type="checkbox" checked={newReportTab} onChange={(event) => setNewReportTab(event.target.checked)} />
+      <span>Open reports in new tabs<small>Keep unsaved setup changes open</small></span>
+    </label>}
+    {!demo && <a href="/hiring?demo=1" target="_blank" rel="noopener" className={nav.practice}
+      aria-label="Practice demo, opens in a new tab" aria-describedby={phone ? "hiring-phone-practice-data" : "hiring-desktop-practice-data"}>
+      <span>Practice demo <span aria-hidden="true">↗</span><small id={phone ? "hiring-phone-practice-data" : "hiring-desktop-practice-data"}>Sample data</small></span>
+    </a>}
+  </>;
+  const tools = (
+    <nav className={nav.tools} aria-label="Hiring tools">
+      {workspace}
+      {!demo && reportLinks(false)}
+      <ToolsMenu className={nav.moreTools} panelClass={nav.moreItems}
+        label={view === "setup" ? <>More tools <span className={nav.activeTool}>· {VIEWS.setup}</span></> : "More tools"}>
+        {staffTools(false)}
+      </ToolsMenu>
+    </nav>
+  );
+  const workflow = (
+    <nav className={nav.workflow} aria-label="Hiring steps">
+      <ol className={nav.steps} role="list">
+        {STEPS.map((name, index) => (
+          <li key={name}>
+            <button type="button" data-review={name === "review" ? "" : undefined} aria-pressed={view === name} onClick={() => switchView(name)}>
+              <span aria-hidden="true">{index + 1}</span>
+              {VIEWS[name]}
+            </button>
+          </li>
         ))}
-        {!demo && <Link prefetch={false} href="/hiring/paper-results">Paper analytics</Link>}
-        {!demo && <Link prefetch={false} href="/hiring/ats-outcomes">ATS outcomes</Link>}
-        {/* A full page load, so the demo starts clean and the real data is gone from the screen. */}
-        {!demo && <button type="button" onClick={() => window.location.assign("/hiring?demo=1")}>Demo</button>}
-      </nav>
-      <nav className={nav.workflow} aria-label="Hiring steps">
-        <ol className={nav.steps} role="list">
-          {STEPS.map((name, index) => (
-            <li key={name}>
-              <button type="button" data-review={name === "review" ? "" : undefined} aria-pressed={view === name} onClick={() => setView(name)}>
-                <span aria-hidden="true">{index + 1}</span>
-                {VIEWS[name]}
-              </button>
-            </li>
-          ))}
-        </ol>
-      </nav>
-    </>
+      </ol>
+    </nav>
   );
 
   const paused = data && [
@@ -423,7 +522,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
   if ((param === "hr" && hash === null) || (reviewLink && !loaded && !error)) return <TabSkeleton label="Loading hiring…" />;
 
   return (
-    <div className={`${css.surface} ${serif.variable}`} data-heads-review={view === "heads" || view === "review" ? "" : undefined} data-offer={offer ? "" : undefined} data-prescreen={prescreen ? "" : undefined}>
+    <div ref={surface} data-workspace className={`${css.surface} ${serif.variable}`} data-heads-review={view === "heads" || view === "review" ? "" : undefined} data-offer={offer ? "" : undefined} data-prescreen={prescreen ? "" : undefined}>
       {demo && <DemoBar onStep={(name: DemoView) => setView(name, true)} briefOpen={briefOpen} setBriefOpen={setBriefOpen} />}
       <header className={css.topbar} data-compact={view === "hr" || view === "heads" || giftReview || compactQueue ? "" : undefined} data-heads={view === "heads" ? "" : undefined}>
         <div>
@@ -461,34 +560,33 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
           </div>
         ) : (
           <>
-            <div className={nav.desktop}>{navigation}</div>
-            {/* Gift's phone screen has no step menu, so this is her way to the other tabs. */}
+            {/* Gift's phone screen has no step menu. */}
             {giftReview && <div className={`${css.viewSwitch} ${css.phoneOnly}`}>
               <button type="button" onClick={() => setView("overview")}>
                 Full dashboard
               </button>
             </div>}
-            {!giftReview && (view !== "review" || loaded) && <details
-              className={`${nav.mobile} ${css.stepMenu}`}
-              data-review={view === "review" ? "" : undefined}
-              onKeyDown={(event) => {
-                if (event.key !== "Escape" || !event.currentTarget.open) return;
-                event.preventDefault();
-                event.currentTarget.open = false;
-                event.currentTarget.querySelector("summary")?.focus();
-              }}
-              onClick={(event) => {
-                if (!(event.target instanceof Element) || !event.target.closest("button")) return;
-                event.currentTarget.open = false;
-                event.currentTarget.querySelector("summary")?.focus();
-              }}
-            >
-              <summary>{step ? `${step} ${VIEWS[view]}` : VIEWS[view]}</summary>
-              {navigation}
-            </details>}
           </>
         )}
       </header>
+      {!role && <header className={`${nav.toolsBar} ${demo || view === "setup" ? "" : nav.stickyTools}`} data-layout={toolsLayout} data-empty-mobile={giftReview || (view === "review" && !loaded) ? "" : undefined}>
+        <div className={nav.desktop}>{tools}</div>
+        {!giftReview && (view !== "review" || loaded) && <div className={nav.mobileBar}>
+          {!demo && <nav className={nav.phoneReports} aria-label="Hiring reports">{reportLinks(true)}</nav>}
+          <ToolsMenu className={`${nav.mobile} ${css.stepMenu}`} panelClass={nav.phonePanel} review={view === "review"}
+            label={<span className={nav.mobileLabel}>Tools and steps<small><span aria-hidden="true">✓ </span>{step ? `${step} ${VIEWS[view]}` : VIEWS[view]}</small></span>}>
+            <nav className={nav.tools} aria-label="Hiring tools">
+              {workspace}
+              <div className={nav.phoneStaff} role="group" aria-label="More tools">
+                <span className={nav.groupLabel} aria-hidden="true">More tools</span>
+                {staffTools(true)}
+              </div>
+            </nav>
+            {workflow}
+          </ToolsMenu>
+        </div>}
+      </header>}
+      {!role && <div className={`${nav.desktop} ${nav.workflowBar}`} data-layout={toolsLayout}>{workflow}</div>}
       {view !== "hr" && view !== "heads" && view !== "offer" && view !== "prescreen" && !giftReview && PURPOSE[view] && (
         <p className={view === "overview" ? `${css.purpose} ${css.overviewPurpose}` : css.purpose}>
           {PURPOSE[view]}
