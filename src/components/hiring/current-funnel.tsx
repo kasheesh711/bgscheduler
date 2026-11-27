@@ -303,6 +303,7 @@ export function CurrentFunnelWorkspace({
                     data-drop-stage={b.stage}
                     points={b.points}
                     fill={stageColors[b.index]}
+                    stroke="var(--card)" strokeWidth={0.7} vectorEffect="non-scaling-stroke"
                     opacity={stage && stage !== b.stage ? 0.42 : 1}
                     onClick={() => setStage(stage === b.stage ? null : b.stage)}
                     onDragOver={(e) => e.preventDefault()}
@@ -313,14 +314,14 @@ export function CurrentFunnelWorkspace({
                 ))}
             </svg>
             {bands
-              .filter((b) => b.bottom - b.top >= 0.16)
+              .filter((b) => b.bottom - b.top >= 0.12)
               .map((b) => (
                 <span
                   key={b.stage}
                   className={layout.bandLabel}
                   style={{ top: (b.top + b.bottom) * 50 + "%" }}
                 >
-                  {b.stage} · {b.count}
+                  {b.stage==="Offer and contract"?"Offer":b.stage} · {b.count}
                 </span>
               ))}
           </div>
