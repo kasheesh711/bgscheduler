@@ -366,8 +366,18 @@ Classes waiting for captions then go to Soniox at their next look, and no SQL is
 
 One digest per sweep to `FEEDBACK_AUTOWRITER_ALERT_EMAILS` for classes that need a person: held (draft failed
 checks, absence, form/billing drift), expired, no summary 3 h after class, no recording 3 h after class (§5), a
-judge that keeps failing, and any halt-causing outcome.
+judge that keeps failing, a 48-hour fallback note that could not be posted (`fallback_failed`), and any halt-causing
+outcome.
 In `shadow` (and `off`) only the halt-causing outcomes are emailed; draft alerts stay on the dashboard.
+
+**Held classes post by themselves after about 42 hours** (owner rule, 25 Oct 2026): if nobody has written a held
+class by then, the sweep posts the no-show note or a short fact-only note (feature doc, "48-hour fallback"), while the
+autowriter is live, not halted and the tutor is switched on. Holds that billing, the form or the submission blocks
+never post. To give a
+class real feedback, write it in Wise before then; a later edit that still meets the 300-character rule keeps the class on time. A
+`fallback_failed` alert means the note was not posted: billing, the form or the submission blocked it (no more
+tries), or it still failed in its last 90 minutes before the deadline (it keeps trying until the 30-minute margin).
+Write that class by hand.
 
 **`judge_failing`** ("The draft could not be checked N runs in a row (…) …"): the class's draft was written, but
 it could not be checked, run after run — runs that ended at the judge stage with no answer of the judge in between.
