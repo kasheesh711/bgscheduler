@@ -36,10 +36,10 @@ const writerJson = JSON.stringify({
 const glm = (content: string): OpenRouterCallResult => ({
   ok: true, content, model: "z-ai/glm-5.3-flash", provider: "Together", generationId: "g", finishReason: "stop", usage, latencyMs: 5,
 });
-const sol = (content: string): OpenRouterCallResult => ({
-  ok: true, content, model: "openai/gpt-6.1-sol", provider: "Azure", generationId: "g", finishReason: "stop", usage, latencyMs: 5,
+const terra = (content: string): OpenRouterCallResult => ({
+  ok: true, content, model: "openai/gpt-6.1-terra", provider: "Azure", generationId: "g", finishReason: "stop", usage, latencyMs: 5,
 });
-const luna = (content: string): OpenRouterCallResult => ({ ...sol(content), model: "openai/gpt-6-luna" });
+const luna = (content: string): OpenRouterCallResult => ({ ...terra(content), model: "openai/gpt-6-luna" });
 /** A v4 judge verdict that passes the draft, and the model reply carrying it. Rows seeded with `{ faithful, unsupported }` hold stored v3 verdicts. */
 const PASSING_VERDICT = { faithful: true, unsupported: [], misattributed: [], missingHomework: [], homeworkNotSet: [] };
 const FAITHFUL_VERDICT = JSON.stringify(PASSING_VERDICT);
@@ -48,14 +48,14 @@ const PASSING_STORED = { ...PASSING_VERDICT, levels: { medium: PASSING_VERDICT, 
 /** One draft's model calls: the writer, then the judge at both levels. */
 const DRAFT_CALLS = ["post_class_feedback"];
 
-/** Writer (Sol) + judge (GLM, both levels) replies for as many drafts as a test needs. */
+/** Writer (Terra) + judge (GLM, both levels) replies for as many drafts as a test needs. */
 function fakeModel() {
   const calls: string[] = [];
   const models: string[] = [];
   const callModel = vi.fn(async (request: { schemaName: string; model: string }) => {
     calls.push(request.schemaName);
     models.push(request.model);
-    return request.schemaName === "post_class_feedback" ? sol(writerJson) : glm(FAITHFUL_VERDICT);
+    return request.schemaName === "post_class_feedback" ? terra(writerJson) : glm(FAITHFUL_VERDICT);
   });
   return { callModel, calls, models };
 }
@@ -189,7 +189,7 @@ async function seedClass(wiseSessionId: string, hoursToDeadline: number, overrid
 
 /** The writer route's upstream rate limit, as OpenRouter reported it on 30 Sep (HTTP 200, code 429 in the body). */
 const RATE_LIMITED: OpenRouterCallResult = {
-  ok: false, error: "openai/gpt-6.1-sol is temporarily rate-limited upstream. Please retry shortly.", httpStatus: 429,
+  ok: false, error: "openai/gpt-6.1-terra is temporarily rate-limited upstream. Please retry shortly.", httpStatus: 429,
   model: null, provider: null, finishReason: null, usage: null, latencyMs: 900,
 };
 
@@ -216,10 +216,10 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     expect(outcome).toMatchObject({ result: "verified" });
     expect(wise.posts).toHaveLength(1);
     expect(model.calls).toEqual(DRAFT_CALLS);
-    expect(model.models).toEqual(["openai/gpt-6.1-sol"]);
+    expect(model.models).toEqual(["openai/gpt-6.1-terra"]);
     const row = await readSessionRow(db, SESSION_ID);
-    // Arm `sol` passes the widened CHECK constraints (migration 0100) on both tables.
-    expect(row).toMatchObject({ state: "verified", arm: "sol", wiseTeacherUserId: KEVIN });
+    // Arm `terra` passes the widened CHECK constraints (migration 0117) on both tables.
+    expect(row).toMatchObject({ state: "verified", arm: "terra", wiseTeacherUserId: KEVIN });
     expect(row?.leaseToken).toBeNull();
     // The draft is stored without a fabricated approval.
     expect(row?.metadata).toMatchObject({ judge: null, pipeline: { judgeVersion: null, qualityReview: "deferred" } });
@@ -230,7 +230,7 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     expect(retained.lessonRecord).toBe(extractAiSummary(sessionDetail())?.text);
     const calls = await db.select().from(schema.feedbackAutowriterCalls);
     expect(calls.map((call) => `${call.role}:${call.arm}:${call.requestedModel}`).toSorted())
-      .toEqual(["writer:sol:openai/gpt-6.1-sol"]);
+      .toEqual(["writer:terra:openai/gpt-6.1-terra"]);
     // No pre-post judge call is made.
     const judged = calls.filter((call) => call.role === "judge");
     expect(judged).toEqual([]);
@@ -245,14 +245,14 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     const wise = fakeWise();
     // As OpenRouter reported the writer route's upstream limit on 30 Sep (HTTP 200, code 429 in the body).
     const limited: OpenRouterCallResult = {
-      ok: false, error: "openai/gpt-6.1-sol is temporarily rate-limited upstream. Please retry shortly.", httpStatus: 429,
+      ok: false, error: "openai/gpt-6.1-terra is temporarily rate-limited upstream. Please retry shortly.", httpStatus: 429,
       model: null, provider: null, finishReason: null, usage: null, latencyMs: 900,
     };
     const writerReplies = [limited, limited];
     const models: string[] = [];
     const callModel = vi.fn(async (request: { schemaName: string; model: string }) => {
       models.push(request.model);
-      return request.schemaName === "post_class_feedback" ? writerReplies.shift() ?? sol(writerJson) : glm(FAITHFUL_VERDICT);
+      return request.schemaName === "post_class_feedback" ? writerReplies.shift() ?? terra(writerJson) : glm(FAITHFUL_VERDICT);
     });
     const waits: number[] = [];
     const outcome = await processSession(
@@ -263,11 +263,11 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     expect(outcome).toMatchObject({ result: "verified" });
     expect(wise.posts).toHaveLength(1);
     // The writer's own model each time: a rate limit never sends the class on to the fallback writer.
-    expect(models).toEqual(["openai/gpt-6.1-sol", "openai/gpt-6.1-sol", "openai/gpt-6.1-sol"]);
+    expect(models).toEqual(["openai/gpt-6.1-terra", "openai/gpt-6.1-terra", "openai/gpt-6.1-terra"]);
     // The two waits (4 s and 10 s, here at the low end of their ±30%) went through the injected wait.
     expect(waits.filter((ms) => ms === 2_800 || ms === 7_000)).toEqual([2_800, 7_000]);
     const row = await readSessionRow(db, SESSION_ID);
-    expect(row).toMatchObject({ state: "verified", arm: "sol", retryCount: 0 });
+    expect(row).toMatchObject({ state: "verified", arm: "terra", retryCount: 0 });
     const calls = await db.select().from(schema.feedbackAutowriterCalls);
     const writes = calls.filter((call) => call.role === "writer")
       .map((call) => ({ ok: call.ok, costUsd: call.costUsd, retry: (call.result as { rateLimitRetry?: unknown }).rateLimitRetry ?? null }));
@@ -292,11 +292,11 @@ describe("processSession (Postgres + fake Wise and models)", () => {
         .toMatchObject({ result: "infra" });
       const row = await readSessionRow(db, SESSION_ID);
       expect(row, `${run}`).toMatchObject({ state: "pending", evidence: "summary" });
-      expect(row?.reason).toMatch(/^infra:sol:Key limit exceeded/u);
+      expect(row?.reason).toMatch(/^infra:terra:Key limit exceeded/u);
       expect(row?.metadata).not.toHaveProperty("alertKind");
     }
     // A recovered writer posts without waiting for the unavailable judge.
-    const judgeRefused = vi.fn(async (request: { schemaName: string }) => request.schemaName === "post_class_feedback" ? sol(writerJson) : keyLimit);
+    const judgeRefused = vi.fn(async (request: { schemaName: string }) => request.schemaName === "post_class_feedback" ? terra(writerJson) : keyLimit);
     expect(await processSession(deps(fakeWise().ops, { callModel: judgeRefused as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
       .toMatchObject({ result: "verified" });
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "verified" });
@@ -445,7 +445,7 @@ describe("processSession (Postgres + fake Wise and models)", () => {
     const wise = fakeWise();
     const callModel = vi.fn(async (request: { schemaName: string }) => {
       if (request.schemaName === "post_class_feedback") await updateControl(db, { mode: "live" }, "owner@x.com");
-      return request.schemaName === "post_class_feedback" ? sol(writerJson) : glm(FAITHFUL_VERDICT);
+      return request.schemaName === "post_class_feedback" ? terra(writerJson) : glm(FAITHFUL_VERDICT);
     });
     expect(await processSession(deps(wise.ops, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "cron" }))
       .toMatchObject({ result: "retry", detail: "mode_switched_to_live" });
@@ -546,7 +546,7 @@ describe("runSweep (Postgres + fake Wise and models)", () => {
     const callModel = vi.fn(async (request: { schemaName: string }) => {
       calls.push(request.schemaName);
       if (calls.length === 1) await updateControl(db, { haltedAt: new Date(), haltReason: "other worker" }, "system");
-      return request.schemaName === "post_class_feedback" ? sol(writerJson) : glm(FAITHFUL_VERDICT);
+      return request.schemaName === "post_class_feedback" ? terra(writerJson) : glm(FAITHFUL_VERDICT);
     });
     const result = await runSweep(deps(wise.ops, { callModel: callModel as never }));
     expect(result.processed).toEqual({ not_claimed: 1 });
@@ -630,7 +630,7 @@ describe("runSweep: a lasting rate limit, and the order it starts its rows in (P
     expect(result.processed).toEqual({ infra: 3 });
     expect(result.infraErrors).toHaveLength(3);
     for (const [id, state] of [[FIRST, "transcribing"], [SECOND, "pending"], [THIRD, "transcribing"]] as const) {
-      expect(await readSessionRow(db, id), id).toMatchObject({ state, reason: `infra:sol:${RATE_LIMITED.error}`, retryCount: 1 });
+      expect(await readSessionRow(db, id), id).toMatchObject({ state, reason: `infra:terra:${RATE_LIMITED.error}`, retryCount: 1 });
     }
     const writes = (await db.select().from(schema.feedbackAutowriterCalls)).filter((call) => call.role === "writer");
     expect(writes.filter((call) => call.wiseSessionId === FIRST)).toHaveLength(4);
@@ -661,7 +661,7 @@ describe("runSweep: a lasting rate limit, and the order it starts its rows in (P
     const callModel = vi.fn(async (request: { schemaName: string }) => {
       if (request.schemaName !== "post_class_feedback") return glm(FAITHFUL_VERDICT);
       const id = wise.current();
-      if (limitedFor.has(id)) return sol(writerJson);
+      if (limitedFor.has(id)) return terra(writerJson);
       limitedFor.add(id);
       return RATE_LIMITED;
     });
@@ -720,7 +720,7 @@ describe("runSweep: a lasting rate limit, and the order it starts its rows in (P
     const log: string[] = [];
     const callModel = vi.fn(async (request: { schemaName: string }) => {
       log.push(`${request.schemaName === "post_class_feedback" ? "writer" : "judge"}:${wise.current().slice(-2)}`);
-      return request.schemaName === "post_class_feedback" ? sol(writerJson) : glm(FAITHFUL_VERDICT);
+      return request.schemaName === "post_class_feedback" ? terra(writerJson) : glm(FAITHFUL_VERDICT);
     });
     // The job has finished by now.
     const soniox = fakeSoniox();
@@ -795,7 +795,7 @@ describe("runSweep: a lasting rate limit, and the order it starts its rows in (P
       const id = wise.current();
       const writer = request.schemaName === "post_class_feedback";
       log.push(`${writer ? "writer" : `judge-${request.effort}`}:${id.slice(-2)}`);
-      if (writer) return id === THIRD ? sol(writerJson) : RATE_LIMITED;
+      if (writer) return id === THIRD ? terra(writerJson) : RATE_LIMITED;
       if (request.effort === "medium" && judgeLimited) {
         judgeLimited = false;
         return RATE_LIMITED;
@@ -811,7 +811,7 @@ describe("runSweep: a lasting rate limit, and the order it starts its rows in (P
     ]);
     expect(waits.filter((ms) => RETRY_WAITS.includes(ms))).toEqual(RETRY_WAITS);
     expect(result.processed).toEqual({ infra: 2, would_submit: 1 });
-    expect(await readSessionRow(db, THIRD)).toMatchObject({ state: "would_submit", arm: "sol" });
+    expect(await readSessionRow(db, THIRD)).toMatchObject({ state: "would_submit", arm: "terra" });
   });
 });
 
@@ -918,12 +918,12 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const unfaithful = vi.fn(async (request: { schemaName: string; model: string }) => {
       models.push(request.model);
       if (request.schemaName !== "post_class_feedback") return glm(JSON.stringify({ ...PASSING_VERDICT, faithful: false, unsupported: ["scored 95%"] }));
-      return request.model === "openai/gpt-6-luna" ? luna("not JSON") : sol("not JSON");
+      return request.model === "openai/gpt-6-luna" ? luna("not JSON") : terra("not JSON");
     });
     const held = await processSession(transcriptDeps(fakeWise().ops, fakeSoniox().client, { callModel: unfaithful as never }), { wiseSessionId: SESSION_ID, trigger: "cron" });
     expect(held).toMatchObject({ result: "awaiting_recording", detail: "summary_draft_held" });
-    // Both summary drafts were tried (Sol, then the Luna fallback), each judged at both levels, before the handover.
-    expect(models).toEqual(["openai/gpt-6.1-sol", "openai/gpt-6-luna"]);
+    // Both summary drafts were tried (Terra, then the Luna fallback), each judged at both levels, before the handover.
+    expect(models).toEqual(["openai/gpt-6.1-terra", "openai/gpt-6-luna"]);
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({ state: "awaiting_recording", evidence: "transcript" });
 
     await db.execute(sql`TRUNCATE TABLE feedback_autowriter_sessions`);
@@ -943,7 +943,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect((await readSessionRow(db, SESSION_ID))?.state).toBe("awaiting_recording");
   });
 
-  it("transcribes the recording, writes from it with Sol (GLM judge), posts, and deletes the Soniox job", async () => {
+  it("transcribes the recording, writes from it with Terra (GLM judge), posts, and deletes the Soniox job", async () => {
     await seedRow({ state: "awaiting_recording", evidence: "transcript" });
     const wise = fakeWise({ details: [sessionDetail(RECORDING)] });
     const soniox = fakeSoniox();
@@ -952,21 +952,21 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const callModel = vi.fn(async (request: { model: string; schemaName: string; messages: Array<{ content: string }> }) => {
       models.push(request.model);
       prompts.push(request.messages.map((message) => message.content).join("\n"));
-      return request.schemaName === "post_class_feedback" ? sol(writerJson) : glm(FAITHFUL_VERDICT);
+      return request.schemaName === "post_class_feedback" ? terra(writerJson) : glm(FAITHFUL_VERDICT);
     });
     const outcome = await processSession(transcriptDeps(wise.ops, soniox.client, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" });
     expect(outcome).toMatchObject({ result: "verified" });
     expect(soniox.created).toEqual([expect.objectContaining({ audioUrl: "https://files.wiseapp.live/rec.mp4" })]);
     expect(soniox.removed).toEqual([]); // kept for review (triage), at most 72 h
-    expect(models).toEqual(["openai/gpt-6.1-sol"]);
+    expect(models).toEqual(["openai/gpt-6.1-terra"]);
     expect(prompts[0]).toContain("Lesson transcript:");
     expect(prompts[0]).toContain("TUTOR: Today we add fractions");
     expect(prompts[0]).toContain("STUDENT: I got three quarters");
     expect(wise.posts).toHaveLength(1);
     const row = await readSessionRow(db, SESSION_ID);
-    expect(row).toMatchObject({ state: "verified", evidence: "transcript", arm: "sol", sonioxTranscriptionId: "job-1" });
+    expect(row).toMatchObject({ state: "verified", evidence: "transcript", arm: "terra", sonioxTranscriptionId: "job-1" });
     // Stamped with what produced it.
-    expect(row?.metadata).toMatchObject({ pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: null, qualityReview: "deferred", arm: "sol", evidence: "transcript" } });
+    expect(row?.metadata).toMatchObject({ pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: null, qualityReview: "deferred", arm: "terra", evidence: "transcript" } });
     expect(row?.metadata).toMatchObject({ transcript: { speakerMethod: "zoom_alignment", audioMinutes: 60 } });
     const hash = (row?.metadata.pipeline as { lessonEvidenceHash: string }).lessonEvidenceHash;
     const [retained] = await db.select().from(schema.feedbackIsebEvidence)
@@ -987,7 +987,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
         { wiseSessionId: SESSION_ID, trigger: "webhook" });
       expect(outcome, `${run}`).toMatchObject({ result: "infra" });
       const row = await readSessionRow(db, SESSION_ID);
-      expect(row, `${run}`).toMatchObject({ state: "transcribing", evidence: "transcript", reason: "infra:sol:Insufficient credits" });
+      expect(row, `${run}`).toMatchObject({ state: "transcribing", evidence: "transcript", reason: "infra:terra:Insufficient credits" });
       expect(Number(row?.metadata.writerErrors ?? 0), `${run}`).toBe(0);
     }
     expect(await db.select().from(schema.feedbackAutowriterIncidents)).toHaveLength(1);
@@ -1077,10 +1077,10 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       expect(wise.posts[0].answers.map((answer) => answer.answer).join("\n"), label).not.toContain("The older draft");
       // The older GLM draft is replaced by a current draft with quality review deferred.
       expect(await readSessionRow(db, SESSION_ID), label).toMatchObject({
-        arm: "sol",
+        arm: "terra",
         metadata: {
           judge: null,
-          pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: null, qualityReview: "deferred", arm: "sol", evidence: "transcript" },
+          pipeline: { promptVersion: PROMPT_VERSION, judgeVersion: null, qualityReview: "deferred", arm: "terra", evidence: "transcript" },
         },
       });
     }
@@ -1105,7 +1105,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const prompts: string[] = [];
     const callModel = vi.fn(async (request: { schemaName: string; messages: Array<{ content: string }> }) => {
       prompts.push(request.messages.map((message) => message.content).join("\n"));
-      return request.schemaName === "post_class_feedback" ? sol(writerJson) : glm(FAITHFUL_VERDICT);
+      return request.schemaName === "post_class_feedback" ? terra(writerJson) : glm(FAITHFUL_VERDICT);
     });
     const outcome = await processSession(
       transcriptDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox({ tokens: merged }).client,
@@ -1277,7 +1277,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       const prompts: string[] = [];
       const callModel = vi.fn(async (request: { schemaName: string; messages: Array<{ content: string }> }) => {
         prompts.push(request.messages.map((message) => message.content).join("\n"));
-        return request.schemaName === "post_class_feedback" ? sol(writerJson) : glm(FAITHFUL_VERDICT);
+        return request.schemaName === "post_class_feedback" ? terra(writerJson) : glm(FAITHFUL_VERDICT);
       });
       expect(await processSession(zoomDeps(wise.ops, soniox.client, { callModel: callModel as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
         .toMatchObject({ result: "verified" });
@@ -1360,7 +1360,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       await seedRow({ state: "awaiting_recording", evidence: "transcript" });
       const unfaithful = vi.fn(async (request: { schemaName: string; model: string }) => {
         if (request.schemaName !== "post_class_feedback") return glm(JSON.stringify({ ...PASSING_VERDICT, faithful: false, unsupported: ["scored 95%"] }));
-        return request.model === "openai/gpt-6-luna" ? luna("not JSON") : sol("not JSON");
+        return request.model === "openai/gpt-6-luna" ? luna("not JSON") : terra("not JSON");
       });
       const soniox = fakeSoniox();
       expect(await processSession(zoomDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, soniox.client, { callModel: unfaithful as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
@@ -1422,7 +1422,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       await seedRow({ state: "awaiting_recording", evidence: "transcript", metadata: { writerErrors: 1, judgeErrors: 2, judgeUnreached: 1 } });
       const unfaithful = vi.fn(async (request: { schemaName: string; model: string }) => {
         if (request.schemaName !== "post_class_feedback") return glm(JSON.stringify({ ...PASSING_VERDICT, faithful: false, unsupported: ["scored 95%"] }));
-        return request.model === "openai/gpt-6-luna" ? luna("not JSON") : sol("not JSON");
+        return request.model === "openai/gpt-6-luna" ? luna("not JSON") : terra("not JSON");
       });
       expect(await processSession(zoomDeps(fakeWise({ details: [sessionDetail(RECORDING)] }).ops, fakeSoniox().client, { callModel: unfaithful as never }), { wiseSessionId: SESSION_ID, trigger: "webhook" }))
         .toMatchObject({ result: "awaiting_recording", detail: "zoom_draft_held" });
@@ -1610,7 +1610,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
       state: "pending",
       evidence: "transcript",
-      arm: "sol",
+      arm: "terra",
       fields: expect.objectContaining({ topics: GOOD_FIELDS.topics }),
       metadata: { draftEvidence: "transcript", judge: null },
     });
@@ -1642,7 +1642,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     lateDeps.callModel = vi.fn(async (request: { schemaName: string }) => {
       calls.push(request.schemaName);
       lateDeps.deadlineMs = Date.now() + 200_000;
-      return sol(writerJson);
+      return terra(writerJson);
     }) as never;
     vi.stubEnv("VERCEL_GIT_COMMIT_SHA", "commit-that-wrote-it");
     try {
@@ -1659,12 +1659,12 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const kept = await readSessionRow(db, SESSION_ID);
     // Waiting for a fresh function, not for the recording: `pending`, with the judged draft and what wrote it.
     expect(kept).toMatchObject({
-      state: "pending", reason: "function_budget_too_small_for_post", evidence: "transcript", arm: "sol", retryCount: 1,
+      state: "pending", reason: "function_budget_too_small_for_post", evidence: "transcript", arm: "terra", retryCount: 1,
       sonioxTranscriptionId: "job-1", leaseToken: null,
       fields: expect.objectContaining({ topics: GOOD_FIELDS.topics }),
       metadata: {
         draftEvidence: "transcript", judge: null,
-        pipeline: { commitSha: "commit-that-wrote-it", promptVersion: PROMPT_VERSION, judgeVersion: null, qualityReview: "deferred", arm: "sol", evidence: "transcript" },
+        pipeline: { commitSha: "commit-that-wrote-it", promptVersion: PROMPT_VERSION, judgeVersion: null, qualityReview: "deferred", arm: "terra", evidence: "transcript" },
       },
     });
     expect(kept?.nextAttemptAt?.getTime() ?? 0).toBeGreaterThan(Date.now() + 9 * 60_000);
@@ -1684,7 +1684,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
     const judged = kept!.fields as Record<string, string>;
     expect(retry.posts[0].answers.map((answer) => answer.answer)).toEqual([judged.topics, judged.performance, judged.improvement, judged.homework]);
     expect(await readSessionRow(db, SESSION_ID)).toMatchObject({
-      state: "verified", evidence: "transcript", arm: "sol", metadata: { pipeline: { commitSha: "commit-that-wrote-it" } },
+      state: "verified", evidence: "transcript", arm: "terra", metadata: { pipeline: { commitSha: "commit-that-wrote-it" } },
     });
   });
 
@@ -1828,7 +1828,7 @@ describe("second pass: Soniox transcript (Postgres + fakes)", () => {
       vi.unstubAllEnvs();
     }
     expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({
-      pipeline: { commitSha: "abc123", promptVersion: PROMPT_VERSION, judgeVersion: null, qualityReview: "deferred", arm: "sol", evidence: "summary" },
+      pipeline: { commitSha: "abc123", promptVersion: PROMPT_VERSION, judgeVersion: null, qualityReview: "deferred", arm: "terra", evidence: "summary" },
     });
   });
 
@@ -2191,7 +2191,7 @@ describe("transcript first (Postgres + fakes)", () => {
     expect(outOfTime.model.seen).toEqual([]);
     expect(await attempt([failedCall("Insufficient credits", 402)]).run())
       .toMatchObject({ result: "infra", detail: `${arm}:Insufficient credits` });
-    const rateLimit = "openai/gpt-6.1-sol is temporarily rate-limited upstream.";
+    const rateLimit = "openai/gpt-6.1-terra is temporarily rate-limited upstream.";
     const waits: number[] = [];
     const rateLimited = attempt(Array<OpenRouterCallResult>(4).fill(failedCall(rateLimit, 429)), { sleep: async (ms) => { waits.push(ms); }, random: () => 0 });
     expect(await rateLimited.run()).toMatchObject({ result: "infra", detail: `${arm}:${rateLimit}` });
@@ -2405,7 +2405,7 @@ describe("Mimi style rollout (Postgres + fake Wise and models)", () => {
       await updateControl(db, { mode: "shadow" }, "t@x.com");
       const wise = fakeWise({ details: [mimiDetail()] });
       const fields = { ...JSON.parse(writerJson), topics: "1. Adding fractions\n2. Mixed numbers", improvement: "1. Check simplification", performance: JSON.parse(writerJson).performance + " We reviewed the errors together and practised checking each denominator before combining terms. The next step is to keep the same careful checking routine when working independently." };
-      const model = vi.fn(async (request: { schemaName: string }) => request.schemaName === "post_class_feedback" ? sol(JSON.stringify(fields)) : glm(FAITHFUL_VERDICT));
+      const model = vi.fn(async (request: { schemaName: string }) => request.schemaName === "post_class_feedback" ? terra(JSON.stringify(fields)) : glm(FAITHFUL_VERDICT));
       expect(await processSession(deps(wise.ops, { callModel: model as never }), { wiseSessionId: SESSION_ID, trigger: "cron" })).toMatchObject({ result: "would_submit" });
       expect(wise.posts).toHaveLength(0);
       expect((await readSessionRow(db, SESSION_ID))?.metadata).toMatchObject({ pipeline: { styleGuide: { id: "mimi", version: 1 } } });
@@ -2417,7 +2417,7 @@ describe("Mimi style rollout (Postgres + fake Wise and models)", () => {
     vi.stubEnv("FEEDBACK_AUTOWRITER_MIMI_STYLE_ENABLED", "true");
     try {
       const wise = fakeWise({ details: [mimiDetail()] });
-      const model = vi.fn(async (request: { model: string }) => request.model.includes("luna") ? luna(content) : sol(content));
+      const model = vi.fn(async (request: { model: string }) => request.model.includes("luna") ? luna(content) : terra(content));
       const result = await processSession(deps(wise.ops, { transcriptsEnabled: true, soniox: fakeSoniox().client, callModel: model as never }), { wiseSessionId: SESSION_ID, trigger: "cron" });
       expect(result).toMatchObject({ result: "held" });
       expect(model).toHaveBeenCalledTimes(2);
