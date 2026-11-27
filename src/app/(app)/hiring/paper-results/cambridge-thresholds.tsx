@@ -12,7 +12,7 @@ const routeId = (code: string, components: string) => "igcse-" + code + "-" + co
 export function CambridgeThresholds() {
   return <section aria-labelledby="cambridge-title" id="cambridge-thresholds" className="scroll-mt-4">
     <h2 id="cambridge-title" className="text-xl font-semibold">Cambridge IGCSE grade thresholds</h2>
-    <p className="mt-1 text-sm text-muted-foreground">June 2022–2026 · Bangkok, Zone 4 · English paper variant 2</p>
+    <p className="mt-1 text-sm text-muted-foreground">Five-year reference 2022–2026 · Written English history from 2011 · Bangkok, Zone 4 · English paper variant 2</p>
     <ThresholdChart />
     <details><summary className="cursor-pointer text-sm font-medium">How the Cambridge comparison works</summary>
     <p className="mt-2 text-sm">Bangkok is in Cambridge administrative Zone 4. First Language English (0500) and Literature in English (0475) use paper variant 2. Choose the row for the components on the school’s entry. <a className="underline" href={zoneLookup}>Bangkok zone lookup</a> · <a className="underline" href={zoneTimetable}>Zone 4 timetable</a></p>

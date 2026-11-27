@@ -69,8 +69,8 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
         {different && <span><span className="mr-1 inline-block w-4 align-middle border-t-2 border-[var(--chart-3)]" />Trial cutoff {cutoff}%</span>}
         <span>{sd > 0 ? "Fitted normal curve" : scores.length === 1 ? "One score available" : "All scores equal"}</span>
       </p>
-      {subject === "English" && <p className="mb-3 rounded-md border-l-2 border-[var(--chart-2)] bg-muted/50 px-3 py-2 text-xs leading-relaxed">One reading and writing test across EFL/ESL, English Language and English Literature. {maxima.length > 1 && <>Saved marking totals vary ({maxima.join(", ")} marks). The chart uses the recorded final percentages.</>}</p>}
-      {inspected !== null && <p className="mb-2 text-xs text-muted-foreground">{observations.filter(o => o.score === inspected).map(o => o.subject + " · marked out of " + o.maximum).join(" / ")}</p>}
+      {subject === "English Language" && <p className="mb-3 rounded-md border-l-2 border-[var(--chart-2)] bg-muted/50 px-3 py-2 text-xs leading-relaxed">Teachers applying for EFL/ESL, English Language or English Literature take the English Language paper. {maxima.length > 1 && <>Saved marking totals vary ({maxima.join(", ")} marks). The chart uses the recorded final percentages.</>}</p>}
+      {inspected !== null && <p className="mb-2 text-xs text-muted-foreground">{observations.filter(o => o.score === inspected).map(o => "Teaching subject: " + o.subject + " · marked out of " + o.maximum).join(" / ")}</p>}
       <details className="mb-4 text-xs"><summary className="cursor-pointer">Inspect individual scores</summary>
         <div className="mt-2 flex flex-wrap gap-2">{[...counts].map(([score, n]) => <button key={score} type="button" className="rounded border px-2 py-1" onClick={() => { setSelected(score); setHover(null); }}>{fmt(score)}%{n > 1 && " × " + n}</button>)}</div>
       </details>
@@ -99,7 +99,7 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
 }
 
 export function ScoreExplorer({ rows }: { rows: Row[] }) {
-  const [subject, setSubject] = useState(rows.find(row => row.subject === "English")?.subject ?? rows[0].subject);
+  const [subject, setSubject] = useState(rows.find(row => row.subject === "English Language")?.subject ?? rows[0].subject);
   const active = rows.find(row => row.subject === subject) ?? rows[0];
   return <section aria-labelledby="score-heading">
     <h2 id="score-heading" className="mb-3 text-xl font-semibold">Score distributions</h2>

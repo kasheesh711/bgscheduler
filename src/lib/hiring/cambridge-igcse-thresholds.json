@@ -1,6 +1,6 @@
 [
   {
-    "subject": "First Language English \u00b7 two papers",
+    "subject": "First Language English \u00b7 written papers only, no oral endorsement",
     "code": "0500",
     "years": [
       {"year": 2022, "components": "12, 22", "max": 160, "marks": [110, 97, 84, 72, 61, 50, 39, 28], "source": "https://www.cambridgeinternational.org/Images/661174-cambridge-igcse-english-first-language-0500-grade-threshold-table-june-2022.pdf"},
@@ -11,7 +11,7 @@
     ]
   },
   {
-    "subject": "First Language English \u00b7 coursework",
+    "subject": "First Language English \u00b7 coursework, no oral endorsement",
     "code": "0500",
     "years": [
       {"year": 2022, "components": "03, 12", "max": 160, "marks": [115, 101, 87, 73, 61, 50, 39, 28], "source": "https://www.cambridgeinternational.org/Images/661174-cambridge-igcse-english-first-language-0500-grade-threshold-table-june-2022.pdf"},
@@ -55,7 +55,7 @@
     ]
   },
   {
-    "subject": "EFL/ESL",
+    "subject": "English as a Second Language",
     "code": "0510",
     "years": [
       {"year": 2022, "components": "22, 42, 52", "max": 200, "marks": [184, 168, 148, 128, 108, 88, null, null], "source": "https://www.cambridgeinternational.org/Images/661181-cambridge-igcse-english-as-a-second-language-speaking-endorsement-0510-grade-threshold-table-june-2022.pdf"},
