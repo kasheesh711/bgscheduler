@@ -1059,7 +1059,7 @@ export function AssessmentScreen({
     .filter((row) => !head || row.headKey === head)
     .map((row) => {
       const ps = rowPapers(row).map((paper) => ({ paper, score: paperScore(paper, data.config, checkOf(paper, data.paperChecks)) }));
-      const lane = laneOf(row, papers.get(row.candidateId) ?? [], mocks.get(row.candidateId) ?? [], ps.map((p) => p.score.verdict), decided.has(row.candidateId), now);
+      const lane = laneOf(row, papers.get(row.candidateId) ?? [], mocks.get(row.candidateId) ?? [], ps.map((p) => p.score.verdict), decided.has(row.candidateId), now, !!names.get(row.candidateId)?.paperWaiver);
       return { row, ps, ms: rowMocks(row), lane };
     });
   const lanes = LANES.filter((lane): lane is Exclude<Lane, "upcoming" | "finished"> => lane !== "upcoming" && lane !== "finished")
@@ -1099,7 +1099,7 @@ export function AssessmentScreen({
     if (ps.some((p) => p.score.verdict === "marking")) return null;
     if (row.mockAt && row.mockAt > now) return <span className={a.quiet}>Mock {when(row.mockAt)}</span>;
     // After the mock, say what still stops the decision.
-    const blocker = hireBlockers(papers.get(row.candidateId) ?? [], mocks.get(row.candidateId) ?? [])[0];
+    const blocker = hireBlockers(papers.get(row.candidateId) ?? [], mocks.get(row.candidateId) ?? [], !!names.get(row.candidateId)?.paperWaiver)[0];
     return <span className={a.quiet}>{blocker ?? (row.mockAt ? "Nothing left to do" : "No mock booked")}</span>;
   };
 

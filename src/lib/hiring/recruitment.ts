@@ -143,11 +143,11 @@ export async function queueRecruitmentForm(db: Database, candidate: Pick<typeof 
 export async function queueRecruitmentInvitation(db: Database, job: Pick<typeof outbox.$inferSelect, "id" | "key" | "kind" | "payload" | "bookingId">,
   candidate: typeof candidates.$inferSelect, sentAt: Date) {
   // Kevin, 25 Nov 2026: no LINE notice for a paper test invite; the mock teaching invite keeps its notice.
-  if (job.kind !== "email" || job.bookingId || job.key.includes(":visit-reminder:") || job.payload.workflowStage !== "paper_passed") return;
+  if (job.kind !== "email" || job.bookingId || job.key.includes(":visit-reminder:") || !["paper_passed","mock_invited"].includes(String(job.payload.workflowStage))) return;
   const { config } = await settings(db);
   if (!config.recruitmentLineGroupId) return;
   await enqueueRecruitmentLine(db, `invite-sent:${job.id}`, config.recruitmentLineGroupId,
-    `✉️ Mock invite sent · ${lineWhen(sentAt)}\n${lineWho(candidate.name, candidate.paperPassedSubjects.join(", "))}\n${contactLine(candidate)}`, null, "invite_sent");
+    `✉️ Mock invite sent · ${lineWhen(sentAt)}\n${lineWho(candidate.name, candidate.paperWaiver?.subject ?? candidate.paperPassedSubjects.join(", "))}\n${contactLine(candidate)}`, null, "invite_sent");
 }
 
 export function recruitmentWeek(now: Date) {

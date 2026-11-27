@@ -60,7 +60,7 @@ export const RAW_TUTOR_CONTACTS: RawTutorContact[] = [
   { name: "Tavinie (Amy) Olarnsakul Online", email: "tavinie.olarnsakul@gmail.com" },
   { name: "Tavinie (Amy) Olarnsakul", phoneNumber: "66972400329", email: "amyx3ie@gmail.com" },
   { name: "Apivit (Ek) Sirithana Online", email: "apiwitake@hotmail.com" },
-  { name: "Apivit (Ek) Sirithana", phoneNumber: "66914361324", email: "apivit.s@hotmail.com" },
+  { name: "Apivit (Ek) Sirithana", phoneNumber: "66914361324", email: "apiwitake@hotmail.com" },
   { name: "Wanwisa (Gift) Montrikittiphant", phoneNumber: "66926451564", email: "m.giftwan@gmail.com" },
   { name: "Suphitsara (Muk) Manosamrit", phoneNumber: "66935144254", email: "suphitsaramanosamrit@gmail.com" },
   { name: "Panida (Petchy) Wiya", phoneNumber: "66827619421", email: "panida.wiya@gmail.com" },

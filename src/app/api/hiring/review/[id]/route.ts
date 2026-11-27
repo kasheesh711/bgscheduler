@@ -57,15 +57,19 @@ export async function GET(request: Request, { params }: Context) {
     if (draft && file !== "resume" && file !== "paper") throw new HiringError(404, "File unavailable.");
     const packet = draft ? await draftReviewPacket(db, id, actor) : saved;
     if (!packet) throw new HiringError(404, "This review is not submitted.");
-    const [paper] = await db.select().from(p).where(and(eq(p.id, packet.evidence.paper.id), eq(p.candidateId, id)));
-    if (!paper || paper.updatedAt.toISOString() !== packet.evidence.paper.updatedAt ||
+    const expectedPaper = packet.evidence.paper;
+    const [paper] = expectedPaper ? await db.select().from(p).where(and(eq(p.id, expectedPaper.id), eq(p.candidateId, id))) : [];
+    if ((expectedPaper && paper?.updatedAt.toISOString() !== expectedPaper.updatedAt) ||
       candidate.resumeSha256 !== packet.evidence.resumeSha256)
       throw new HiringError(409, "A source file changed. Ask Kevin to submit a new review packet.");
     if (file === "html") return new Response(await reviewDocument(packet, `/api/hiring/review/${id}?file=resume`, `/api/hiring/review/${id}?file=paper`), {
       headers: { ...headers, "Content-Type": "text/html; charset=utf-8",
         "Content-Security-Policy": csp },
     });
-    if (file === "paper") return await markedFile(paper, db);
+    if (file === "paper") {
+      if (!paper) throw new HiringError(404, "Paper assessment waived.");
+      return await markedFile(paper, db);
+    }
     if (file !== "resume" && file !== "zip") throw new HiringError(404, "File unavailable.");
     const resume = await resumeAttachment(id, db);
     if (!resume) throw new HiringError(404, "The original résumé could not be opened.");
@@ -75,7 +79,7 @@ export async function GET(request: Request, { params }: Context) {
     });
     const zip = new JSZip();
     zip.file(resumeName, resume.content);
-    zip.file("marked-exam.pdf", await (await markedFile(paper, db)).arrayBuffer());
+    if (paper) zip.file("marked-exam.pdf", await (await markedFile(paper, db)).arrayBuffer());
     zip.file("hiring-review.html", await reviewDocument(packet, resumeName, "marked-exam.pdf"));
     const stream = new PassThrough();
     const archive = zip.generateNodeStream({ streamFiles: true });

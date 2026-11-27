@@ -362,7 +362,8 @@ export async function inviteToMock(
     `/hiring/book/${token}`,
     process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
   ).toString();
-  const prep = mockPrep(candidate.paperPassedSubjects.join(", "));
+  const subjects = (candidate.paperWaiver ? [candidate.paperWaiver.subject] : candidate.paperPassedSubjects).join(", ");
+  const prep = mockPrep(subjects);
   await enqueue(db, {
     key,
     candidateId: candidate.id,
@@ -377,10 +378,10 @@ export async function inviteToMock(
         tone: "ink",
         name: candidate.name,
         paragraphs: [
-          `You have passed the recorded paper assessment for ${candidate.paperPassedSubjects.join(", ")}. Please book your onsite mock teaching session.`,
+          candidate.paperWaiver ? `Your paper assessment for ${subjects} has been waived. Please book your onsite mock teaching session.` : `You have passed the recorded paper assessment for ${subjects}. Please book your onsite mock teaching session.`,
         ],
         details: [
-          { label: "Subjects", value: candidate.paperPassedSubjects.join(", ") },
+          { label: "Subjects", value: subjects },
           { label: "Session", value: "1 hour for each subject" },
           { label: "Location", value: config.location },
         ],
@@ -388,7 +389,7 @@ export async function inviteToMock(
         after: prep.paragraphs,
         links: prep.links,
       }),
-      workflowStage: "paper_passed",
+      workflowStage: candidate.paperWaiver ? "mock_invited" : "paper_passed",
       ...(candidate.visitSubject ? { closeLoop: true } : {}),
     },
   });
@@ -793,7 +794,7 @@ function briefPaths(bookings: { id: string; kind: string; status: string; endTim
   }
 }
 
-async function approvedOffers(db: Database): Promise<OfferRow[] | null> {
+export async function approvedOffers(db: Database): Promise<OfferRow[] | null> {
   const d = s.hiringDecisions;
   const c = s.hiringCandidates;
   const o = s.hiringOutbox;
@@ -1189,17 +1190,18 @@ export async function bookingView(
   const candidate = await candidateById(db, cap.id);
   const { config } = await settings(db);
   const permitted =
-    cap.kind === "paper" ? candidate.subjects : candidate.paperPassedSubjects;
+    cap.kind === "paper" ? candidate.subjects : candidate.paperWaiver ? [candidate.paperWaiver.subject] : candidate.paperPassedSubjects;
   // The onsite link covers the paper. A separate mock link requires a recorded pass.
   if (
     candidate.stage === "stopped" ||
     isDecided(candidate.stage) ||
-    (candidate.visitSubject && (cap.kind !== "mock" || !candidate.paperPassedAt || !["paper_passed", "mock_booked"].includes(candidate.stage))) ||
+    (candidate.visitSubject && (cap.kind !== "mock" || (!candidate.paperPassedAt && !candidate.paperWaiver) || !["paper_passed", "mock_invited", "mock_booked"].includes(candidate.stage))) ||
     !candidate.inviteExpiresAt ||
     candidate.inviteExpiresAt.getTime() < cap.exp * 1000
   )
     throw new HiringError(404, "This booking link is no longer active.");
-  if (cap.kind === "mock" && !candidate.paperPassedAt)
+  if (!candidate.preScreen) throw new HiringError(409, "Complete the BeGifted pre-screen questionnaire first. " + PRE_SCREEN_URL);
+  if (cap.kind === "mock" && !candidate.paperPassedAt && !candidate.paperWaiver)
     throw new HiringError(409, "The paper result has not been confirmed.");
   if (
     cap.kind === "paper" &&
@@ -1208,7 +1210,7 @@ export async function bookingView(
     throw new HiringError(409, "This assessment is not ready to book.");
   if (cap.kind === "mock" && candidate.visitSubject) {
     if (!config.deliveryEnabled) throw new HiringError(503, "Mock booking is temporarily unavailable.");
-    await assertPassingPaper(db, candidate.id, candidate.visitSubject, config);
+    if (candidate.paperWaiver?.subject !== candidate.visitSubject) await assertPassingPaper(db, candidate.id, candidate.visitSubject, config);
   }
   const chosen = subjects ?? permitted.slice(0, 1);
   if (chosen.some((v) => !permitted.includes(v)) || !chosen.length)
@@ -1312,10 +1314,11 @@ export async function bookInterview(
       sql`select pg_advisory_xact_lock(hashtextextended(${slot.interviewerKey ? "sit-in:" + slot.interviewerKey : "hiring:paper"},0))`,
     );
     const candidate = await candidateById(tx, cap.id);
+    if (!candidate.preScreen) throw new HiringError(409, "Complete the BeGifted pre-screen questionnaire first. " + PRE_SCREEN_URL);
     if (
       candidate.stage === "stopped" ||
       isDecided(candidate.stage) ||
-      (candidate.visitSubject && (cap.kind !== "mock" || !candidate.paperPassedAt || !["paper_passed", "mock_booked"].includes(candidate.stage))) ||
+      (candidate.visitSubject && (cap.kind !== "mock" || (!candidate.paperPassedAt && !candidate.paperWaiver) || !["paper_passed", "mock_invited", "mock_booked"].includes(candidate.stage))) ||
       !candidate.inviteExpiresAt ||
       candidate.inviteExpiresAt.getTime() < cap.exp * 1000
     )
@@ -1346,9 +1349,9 @@ export async function bookInterview(
       throw new HiringError(409, "This subject already has an appointment.");
     if (
       cap.kind === "mock" &&
-      (!candidate.paperPassedAt ||
+      (!candidate.paperPassedAt && !candidate.paperWaiver ||
         input.subjects.some(
-          (subject) => !candidate.paperPassedSubjects.includes(subject),
+          (subject) => candidate.paperWaiver?.subject !== subject && !candidate.paperPassedSubjects.includes(subject),
         ))
     )
       throw new HiringError(409, "The paper result changed. Contact BeGifted.");
@@ -1361,7 +1364,7 @@ export async function bookInterview(
       throw new HiringError(503, "Booking has been paused.");
     if (cap.kind === "mock" && candidate.visitSubject) {
       if (!latest.config.deliveryEnabled) throw new HiringError(503, "Mock booking is temporarily unavailable.");
-      await assertPassingPaper(tx, candidate.id, candidate.visitSubject, latest.config);
+      if (candidate.paperWaiver?.subject !== candidate.visitSubject) await assertPassingPaper(tx, candidate.id, candidate.visitSubject, latest.config);
     }
     const fresh = (
       await availableSlots(
@@ -1472,11 +1475,11 @@ export async function bookInterview(
           payload: { to: interviewer.email, cc: [], ...hiringEmail({
             subject: `Mock teaching materials for ${candidate.name}`, preheader: bangkok(booking.startTime),
             title: "Prepare for mock teaching", name: interviewer.canonicalKey,
-            paragraphs: [`Review the graded paper and résumé before the mock teaching session with ${candidate.name}.`],
+            paragraphs: [candidate.paperWaiver ? `The paper was waived. Review the résumé before mock teaching with ${candidate.name}.` : `Review the graded paper and résumé before the mock teaching session with ${candidate.name}.`],
             details: [{ label: "Time", value: `${bangkok(booking.startTime)} (Bangkok)` }],
             action: { label: "Open candidate page", url: brief },
             links: [
-              { title: "Graded paper", description: "Marked exam PDF", url: `${files}/paper` },
+              ...(candidate.paperWaiver ? [] : [{ title: "Graded paper", description: "Marked exam PDF", url: `${files}/paper` }]),
               { title: "Résumé", description: "Original file", url: `${files}/resume` },
             ],
           }) },
@@ -1562,6 +1565,7 @@ export async function briefView(token: string, db: Database = getDb(), now = new
   const [candidate] = await db
     .select({
       name: s.hiringCandidates.name,
+      paperWaiver: s.hiringCandidates.paperWaiver,
       preScreen: s.hiringCandidates.preScreen,
       resumePath: s.hiringCandidates.resumePath,
       resumeType: s.hiringCandidates.resumeType,
@@ -1601,6 +1605,7 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     // Gift's Hire on her own mock that sent the offer, not an earlier recommendation of hers.
     offerSent: !!decided?.detail.offer,
     decision: (!decided?.detail.bookingId || decided.detail.bookingId === mock.id) && decided?.detail.decision === "hire" ? ("hire" as const) : decided?.detail.decision === "reject" ? ("reject" as const) : null,
+    paperWaived: !!candidate.paperWaiver,
     name: candidate.name,
     subject: mock.subjects.join(", "),
     gradedPaper: !!(await db.select({ id: s.hiringPaperResults.id }).from(s.hiringPaperResults).where(and(eq(s.hiringPaperResults.candidateId, mock.candidateId), eq(s.hiringPaperResults.subject, mock.subjects[0]), eq(s.hiringPaperResults.status, "done"), isNotNull(s.hiringPaperResults.fileId))).limit(1)).length,
@@ -1837,6 +1842,7 @@ async function openVisit(db: Database, cap: VisitLink, config: HiringConfig, now
   const candidate = await candidateById(db, cap.id);
   const rows = await visitRows(db, cap.id);
   const linked = candidate.inviteExpiresAt?.getTime() === cap.exp * 1000;
+  if (linked && !candidate.preScreen) throw new HiringError(409, ANSWERS_FIRST);
   let subject = candidate.visitSubject;
   let open = linked && !!subject;
   if (open && candidate.stage === "onsite_booked") {
@@ -2631,13 +2637,21 @@ export async function changePreScreenScore(
     await audit(tx, actor, "pre-screen-score", id, { score: input.score, before, reason });
   });
 }
+export class HiringEmailPreview extends Error {
+  constructor(readonly messagePreview: { to: string; subject: string; html: string }) { super("Email preview"); }
+}
+
 export async function reviewCandidate(
   id: string,
   input: {
     revision: number;
-    action: "advance" | "paper_pass" | "stop" | "invite_onsite" | "send_new_link" | "cancel_visit" | "mark_no_show" | "bring_back";
+    action: "advance" | "waive_paper" | "cancel_funnel_visit" | "paper_pass" | "stop" | "invite_onsite" | "send_new_link" | "cancel_visit" | "mark_no_show" | "bring_back";
     subjects: Subject[];
     reason: string;
+    visitBookingIds?: string[];
+    expectedRecipient?: string;
+    funnel?: boolean;
+    preview?: boolean;
   },
   actor: string,
   db: Database = getDb(),
@@ -2657,7 +2671,76 @@ export async function reviewCandidate(
     if (c.revision !== input.revision)
       throw new HiringError(409, "This candidate changed. Refresh the page.");
     let detail: Record<string, unknown> = {};
-    if (
+    let messageKey: string | undefined;
+    if (input.funnel && (!runtimeWritesAllowed() || !config.enabled || !config.deliveryEnabled))
+      throw new HiringError(409, "Hiring messages are paused. The candidate has not moved.");
+    if (input.funnel && !input.preview && input.expectedRecipient !== c.email) throw new HiringError(409, "The email address changed. Refresh and review the message.");
+    if (input.action === "waive_paper" || input.action === "cancel_funnel_visit") {
+      if (!c.email) throw new HiringError(409, "A candidate email address is required.");
+      const appointments = await tx.select().from(s.hiringBookings).where(and(eq(s.hiringBookings.candidateId, id),
+        eq(s.hiringBookings.status, "confirmed"), inArray(s.hiringBookings.kind, ["mock", "paper"]))).for("update");
+      const future = appointments.filter(b => b.startTime > now);
+      const ids = input.visitBookingIds ?? [];
+      if (input.action === "cancel_funnel_visit") {
+        const first = future.find(b => b.id === ids[0]);
+        const visit = first && future.filter(b => first.visitId ? b.visitId === first.visitId : b.id === first.id);
+        if (!visit?.length || ids.length !== visit.length || visit.some(b => !ids.includes(b.id)))
+          throw new HiringError(409, "The visit changed. Refresh and check its appointments.");
+        await endVisit(tx, visit, "cancelled", now);
+        for (const b of visit.filter(b => b.kind === "mock")) await enqueue(tx, headNotice(b, "cancelled"));
+        const other = future.find(b => !ids.includes(b.id));
+        const stage = other || isDecided(c.stage) || c.stage === "stopped" ? c.stage : "no_booking";
+        await tx.update(s.hiringCandidates).set({ stage, revision: c.revision + 1, updatedAt: now,
+          ...(other ? {} : { inviteExpiresAt: null }), reviewNote: input.reason }).where(eq(s.hiringCandidates.id, id));
+        messageKey = `${id}:visit-cancelled:${c.revision + 1}`;
+        await enqueue(tx, { key: messageKey, candidateId: id, kind: "email", payload: {
+          to: c.email, notice: "cancelled", closeLoop: true, ...hiringEmail({
+            name: c.name, title: "Your visit has been cancelled", subject: "BeGifted visit cancellation",
+            preheader: "Your cancelled appointments", paragraphs: ["We have cancelled the appointments below. Reply to this email if you would like to book another visit."],
+            details: visit.map(b => ({ label: b.kind === "mock" ? "Mock teaching" : "Paper assessment", value: bangkok(b.startTime) + " (Bangkok)" })),
+          }),
+        } });
+        detail = { appointments: ids };
+      } else {
+        if (!c.preScreen || !c.preScreenRepliedAt) throw new HiringError(409, "The candidate must complete pre-screen first.");
+        if (!["pre_screen","review","onsite_invited","onsite_booked","paper_invited","paper_booked"].includes(c.stage) || c.paperWaiver || c.paperPassedAt)
+          throw new HiringError(409, "A paper waiver is unavailable at this stage.");
+        const { stops } = hardStops(c.preScreen, c.workRightsAnswer, normalizeSubjects(c.preScreen.subjects), config);
+        if (stops.length) throw new HiringError(409, stops.join(" "));
+        const subject = visitSubject(c.preScreen, c.workRightsAnswer, config);
+        if (!subject || c.visitSubject && c.visitSubject !== subject) throw new HiringError(409, "Check the subject and assigned head first.");
+        if (!storedResume(id, c.resumePath, c.resumeType)) throw new HiringError(409, "Import the original résumé first.");
+        const [result] = await tx.select({ id: s.hiringPaperResults.id }).from(s.hiringPaperResults)
+          .where(and(eq(s.hiringPaperResults.candidateId, id), eq(s.hiringPaperResults.subject, subject), ne(s.hiringPaperResults.source, "tracker"))).limit(1);
+        if (result || appointments.some(b => b.kind === "paper" && b.startTime <= now))
+          throw new HiringError(409, "The paper has started or has a recorded result.");
+        if (ids.length !== future.length || future.some(b => !ids.includes(b.id) || !b.subjects.includes(subject)))
+          throw new HiringError(409, "The bookings changed. Refresh and review the appointments.");
+        const papers = future.filter(b => b.kind === "paper");
+        if (papers.length) await endVisit(tx, papers, "cancelled", now);
+        const mock = future.find(b => b.kind === "mock");
+        const [updated] = await tx.update(s.hiringCandidates).set({ stage: mock ? "mock_booked" : "mock_invited",
+          paperWaiver: { subject, at: now.toISOString(), by: actor, reason: input.reason }, visitSubject: subject,
+          reviewNote: input.reason, updatedAt: now, revision: c.revision + 1 }).where(eq(s.hiringCandidates.id, id)).returning();
+        messageKey = `${id}:mock-invite:${updated.revision}`;
+        if (!mock) await inviteToMock(tx, updated, config, messageKey);
+        else await enqueue(tx, { key: messageKey, kind: "email", candidateId: id, payload: {
+          to: c.email, workflowStage: "mock_booked", closeLoop: true, ...hiringEmail({
+            name: c.name, title: "Your mock teaching appointment", subject: "BeGifted mock teaching update",
+            preheader: "Your paper assessment has been waived.", paragraphs: ["Your paper assessment has been waived. Your mock teaching appointment is confirmed."],
+            details: [{ label: "Mock teaching", value: bangkok(mock.startTime) + " (Bangkok)" }, { label: "Subject", value: subject }],
+          }),
+        } });
+        detail = { subject, cancelled: papers.map(b => b.id), retained: mock?.id };
+      }
+    } else if (input.action === "send_new_link" && c.stage === "no_booking" && (c.paperWaiver || c.paperPassedAt)) {
+      if (!c.preScreen || !config.deliveryEnabled) throw new HiringError(409, "Complete pre-screen and enable messages before sending a mock link.");
+      if (c.visitSubject && c.paperWaiver?.subject !== c.visitSubject) await assertPassingPaper(tx,id,c.visitSubject,config);
+      const [updated] = await tx.update(s.hiringCandidates).set({stage:c.paperWaiver?"mock_invited":"paper_passed",
+        revision:c.revision+1,reviewNote:input.reason,updatedAt:now}).where(eq(s.hiringCandidates.id,id)).returning();
+      messageKey = `${id}:mock-invite:${updated.revision}`;
+      await inviteToMock(tx,updated,config,messageKey);
+    } else if (
       input.action === "invite_onsite" ||
       input.action === "send_new_link" ||
       (input.action === "advance" && c.preScreen)
@@ -2674,6 +2757,8 @@ export async function reviewCandidate(
       const unsent = earlier.length > 0 && earlier.every((r) => r.status === "cancelled");
       const key =
         input.action === "send_new_link" || unsent ? `${id}:visit-invite:${c.revision + 1}` : `${id}:visit-invite`;
+      messageKey = key;
+      if (input.funnel && (!c.preScreen || !c.preScreenRepliedAt)) throw new HiringError(409, ANSWERS_FIRST);
       const subject = await inviteToVisit(tx, c, config, key, now, resend);
       await tx.update(s.hiringCandidates).set({ reviewNote: input.reason }).where(eq(s.hiringCandidates.id, id));
       detail = { subject, score: c.preScreen && c.preScreenAssessment ? preScreenTotal(c, config) : null, passScore: config.preScreenThreshold };
@@ -2754,6 +2839,10 @@ export async function reviewCandidate(
       )
         throw new HiringError(400, "Select at least one distinct subject.");
       if (input.action === "paper_pass") {
+        if(input.funnel){
+          if(!c.preScreen || !c.preScreenRepliedAt) throw new HiringError(409, ANSWERS_FIRST);
+          for(const subject of input.subjects) await assertPassingPaper(tx,id,subject,config);
+        }
         if (
           ![
             "onsite_booked",
@@ -2806,12 +2895,8 @@ export async function reviewCandidate(
           })
           .where(eq(s.hiringCandidates.id, id))
           .returning();
-        await inviteToMock(
-          tx,
-          updated,
-          config,
-          `${id}:mock-invite:${updated.revision}`,
-        );
+        messageKey = `${id}:mock-invite:${updated.revision}`;
+        await inviteToMock(tx, updated, config, messageKey);
       } else {
         // The form. A response went to the visit branch above, so this path can never send a paper invitation.
         if (!["new", "review"].includes(c.stage))
@@ -2827,6 +2912,7 @@ export async function reviewCandidate(
         const limit = blockingLimit("pre_screen", subject, await readLimitUsage(tx, "pre_screen", now), config);
         if (limit)
           throw new HiringError(409, `The pre-screen limit "${LIMIT_TEXT[limit]}" is full. Raise the number to send more.`);
+        messageKey = `${id}:pre-screen`;
         if (!(await inviteToPreScreen(tx, c, now)))
           throw new HiringError(409, "A pre-screen form was already queued for this candidate. No new form can be sent.");
         // Kevin's rule: a click past the call queue counts as HR's good call.
@@ -2849,11 +2935,18 @@ export async function reviewCandidate(
           .where(eq(s.hiringCandidates.id, id));
       }
     }
+    if (input.preview && messageKey) {
+      const [message] = await tx.select({ payload: s.hiringOutbox.payload }).from(s.hiringOutbox).where(eq(s.hiringOutbox.key, messageKey));
+      if (!message?.payload.html || !message.payload.to) throw new HiringError(409, "The email is unavailable.");
+      // Roll back the same command used for confirmation, including every booking and outbox change.
+      throw new HiringEmailPreview({ to: String(message.payload.to), subject: String(message.payload.subject), html: String(message.payload.html) });
+    }
     await audit(tx, actor, input.action, id, {
       subjects: input.subjects,
       reason: input.reason,
       ...detail,
     });
+    return messageKey;
   });
 }
 // Postgres JSONB reorders keys; evidence hashes must survive that round trip.

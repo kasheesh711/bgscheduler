@@ -49,7 +49,7 @@ async function assertAllowed(tx: Database, candidate: Awaited<ReturnType<typeof 
   if (decision === "reject" && reason.trim().length < 5) throw new HiringError(400, "Write a reason of at least 5 characters.");
   if (decision === "hire") {
     const { papers, mocks } = await resultsOf(tx, candidate.id);
-    const blockers = hireBlockers(papers, mocks);
+    const blockers = hireBlockers(papers, mocks, !!candidate.paperWaiver && candidate.paperWaiver.subject === candidate.visitSubject);
     if (blockers.length) throw new HiringError(409, blockers.join(" "));
   }
   // Only a visit: an old-flow booking has no Cancel action, so Send ends it instead of stranding the candidate.
@@ -180,14 +180,15 @@ export async function saveBriefDecision(token: string, input: { decision: Decisi
     if (await callCalendarState(db, config, now) !== "readable")
       throw new HiringError(409, "Connect the signing calendar before sending an offer.");
     calendar = config.connectedEmail;
-  } else if (input.decision === "hire" && gift.key && gift.key === booking.interviewerKey)
-    // A tab from before 25 Nov 2026 would send her own Hire into the packet loop she no longer needs.
-    throw new HiringError(409, "This is your own mock. Reload the page, choose the offer letter, then use Hire, send offer.");
+  }
   return withDatabaseTransaction(db, async (tx) => {
     await tx.execute(sql`select id from hiring_candidates where id=${booking.candidateId} for update`);
     const mock = await briefMock(token, tx, now);
     if (now < mock.endTime) throw new HiringError(409, "Send your recommendation after the mock lesson ends.");
     const candidate = await candidateById(tx, mock.candidateId);
+    if(owner && candidate.paperWaiver) throw new HiringError(409, "Send this recommendation to final review after a paper waiver.");
+    if(!owner && !candidate.paperWaiver && input.decision === "hire" && gift.key === mock.interviewerKey)
+      throw new HiringError(409, "This is your own mock. Reload the page, choose the offer letter, then use Hire, send offer.");
     const result = await completedBriefResult(tx, mock);
     if (!result)
       throw new HiringError(409, "Send the completed rubric for this mock first.");

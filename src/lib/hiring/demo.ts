@@ -121,7 +121,7 @@ function person(now: Date, id: string, name: string, subject: Subject, patch: Re
     profileAssessment: assessment("Degree and subject match. Three years of IGCSE teaching.", subject),
     universityAssessment: { name: "Chulalongkorn University", country: "Thailand", fraction: 0.9, reason: "On the reference list", sources: [] },
     preScreen: null, preScreenHash: null, preScreenAssessment: null, preScreenRepliedAt: null, preScreenResubmitted: false, preScreenScore: null,
-    preScreenParts: null, preScreenOverride: null, paperPassedSubjects: [], paperPassedAt: null, paperRecordedBy: null, hasSourceText: true,
+    preScreenParts: null, preScreenOverride: null, paperWaiver: null, paperPassedSubjects: [], paperPassedAt: null, paperRecordedBy: null, hasSourceText: true,
     profileScore: 80, queueManual: false, callReview: null, callInvited: false, ...patch,
   };
 }

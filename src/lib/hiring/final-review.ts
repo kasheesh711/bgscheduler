@@ -34,9 +34,10 @@ async function evidence(db: Database, id: string, lock = true) {
   const mockQuery = db.select().from(s.hiringMockResults).where(and(eq(s.hiringMockResults.candidateId, id),
     eq(s.hiringMockResults.subject, subject), eq(s.hiringMockResults.status, "done")));
   const [mock] = await (lock ? mockQuery.for("share") : mockQuery);
-  if (!paper?.marks || !paper.fileId || !mock?.rubric || mock.source === "tracker" || !rubricTotals(mock.rubric).complete ||
+  const waiver = candidate.paperWaiver?.subject === subject ? candidate.paperWaiver : null;
+  if ((!waiver && (!paper?.marks || !paper.fileId)) || !mock?.rubric || mock.source === "tracker" || !rubricTotals(mock.rubric).complete ||
       (recommendation.detail.mockResultId && recommendation.detail.mockResultId !== mock.id))
-    throw new HiringError(409, "The graded paper and the completed mock rubric are required.");
+    throw new HiringError(409, waiver ? "Complete the mock teaching rubric before final review." : "The graded paper and the completed mock rubric are required.");
   const prestige = candidate.universityAssessment?.fraction ?? 0;
   const penalty = workRightsPenalty(candidate.workRightsAnswer, config);
   const school = highSchoolFraction(candidate.profileAssessment, config);
@@ -57,7 +58,8 @@ async function evidence(db: Database, id: string, lock = true) {
   return {
     name: candidate.name, email: candidate.email, subject, resumeSha256: candidate.resumeSha256,
     ats,
-    paper: { id: paper.id, fileId: paper.fileId, updatedAt: paper.updatedAt.toISOString(), ...computeSheet(paper.marks, passRulesFor(config, subject)) },
+    ...(waiver ? { paperWaiver: waiver } : {}),
+    paper: paper?.marks && paper.fileId ? { id: paper.id, fileId: paper.fileId, updatedAt: paper.updatedAt.toISOString(), ...computeSheet(paper.marks, passRulesFor(config, subject)) } : null,
     mock: { id: mock.id, rubric: mock.rubric, total: rubricTotals(mock.rubric).total },
     recommendation: { id: recommendation.id, head: String(recommendation.detail.head), reason: String(recommendation.detail.reason ?? "") },
     call: candidate.callReview?.good?.at ?? null,

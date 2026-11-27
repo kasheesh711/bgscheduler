@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { BookOpen, Check, CircleCheck, FileSignature, Info, MapPin, Video } from "lucide-react";
-import { mockCanFollow, phoneSchema, type Subject, type Slot } from "@/lib/hiring/model";
+import { PRE_SCREEN_URL, mockCanFollow, phoneSchema, type Subject, type Slot } from "@/lib/hiring/model";
 import type { bookingView, callView, contractView, visitView } from "@/lib/hiring/service";
 import { PreScreenQuestions } from "./questions";
 import c from "./booking.module.css";
@@ -37,6 +37,7 @@ const Help = () => (
 /** Server text is plain text. Only the known LINE address becomes a link, so no HTML comes through. */
 function Linked({ text }: { text: string }) {
   // "Contact BeGifted on LINE: <address>" reads better as one link with those words (Fable r1).
+  if(text.endsWith(PRE_SCREEN_URL)) return <>{text.slice(0,-PRE_SCREEN_URL.length)}<a href={PRE_SCREEN_URL}>Open questionnaire</a></>;
   const named = "Contact BeGifted on LINE: " + LINE_URL;
   const i = text.indexOf(named);
   if (i >= 0)
