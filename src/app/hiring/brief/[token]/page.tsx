@@ -27,7 +27,7 @@ async function Body({ params, searchParams }: Props) {
     return <>{embed !== "1" && <ScheduleLink />}<BriefGone /></>;
   }
   // Gift's own mock ends in her hiring decision and an offer, not a recommendation (Kevin, 25 Nov 2026).
-  const owner = !!brief.interviewer && brief.interviewer === await finalReviewerKey(getDb());
+  const owner = !brief.paperWaived && !!brief.interviewer && brief.interviewer === await finalReviewerKey(getDb());
   // The offer also needs her sign-in. From the LINE link she may have none, so the page links to sign-in first.
   const email = owner ? (await auth())?.user?.email?.trim().toLowerCase() : undefined;
   const signIn = owner && !(email && finalReviewAccess(email).gift) ? `/login?callbackUrl=${encodeURIComponent(`/hiring/brief/${token}`)}` : undefined;

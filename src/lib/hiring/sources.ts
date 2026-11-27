@@ -40,7 +40,7 @@ const OLD_FLOW_STAGES: Stage[] = ["paper_invited", "paper_booked", "paper_passed
  * them. A separate mock can use an older stage name after an app-booked onsite paper.
  */
 export const isNewFlow = (candidate: { stage: Stage; visitSubject?: string | null }, appFormSent: boolean) =>
-  NEW_FLOW_STAGES.includes(candidate.stage) ||
+  candidate.stage === "mock_invited" || NEW_FLOW_STAGES.includes(candidate.stage) ||
   (!!candidate.visitSubject && OLD_FLOW_STAGES.includes(candidate.stage)) ||
   (appFormSent && !OLD_FLOW_STAGES.includes(candidate.stage));
 

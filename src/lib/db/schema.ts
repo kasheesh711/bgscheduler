@@ -5,6 +5,7 @@ import type { CompletionEvidence, CoverageRevision, LeaveInterpretation, WorkStu
 import {
   pgTable,
   bigserial,
+  bigint,
   type AnyPgColumn,
   unique,
   primaryKey,
@@ -99,6 +100,7 @@ export const hiringCandidates = pgTable(
       .$type<Subject[]>()
       .notNull()
       .default([]),
+    paperWaiver: jsonb("paper_waiver").$type<{ subject: Subject; by: string; at: string; reason: string }>(),
     paperPassedAt: timestamp("paper_passed_at", { withTimezone: true }),
     paperRecordedBy: text("paper_recorded_by"),
     inviteExpiresAt: timestamp("invite_expires_at", { withTimezone: true }),
@@ -117,6 +119,13 @@ export const hiringCandidates = pgTable(
     uniqueIndex("hiring_applicant_unique").on(t.applicantId),
   ],
 );
+export const hiringStageEntries = pgTable("hiring_stage_entries", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  candidateId: uuid("candidate_id").notNull().references(() => hiringCandidates.id, { onDelete: "cascade" }),
+  stage: text("stage").notNull(),
+  enteredAt: timestamp("entered_at", { withTimezone: true }).defaultNow().notNull(),
+}, t => [index("hiring_stage_entries_candidate").on(t.candidateId, t.enteredAt)]);
+
 export const hiringBookings = pgTable(
   "hiring_bookings",
   {

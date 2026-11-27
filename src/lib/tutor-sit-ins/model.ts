@@ -32,7 +32,7 @@ export const SCOPE_INFO = [
     scope: "physics",
     department: "physics",
     label: "Physics",
-    observers: ["apivit.s@hotmail.com"],
+    observers: ["apiwitake@hotmail.com"],
   },
   {
     scope: "maths",
@@ -58,7 +58,7 @@ export const SCOPE_INFO = [
     label: "General Science",
     observers: [
       "kasidej.ju@gmail.com",
-      "apivit.s@hotmail.com",
+      "apiwitake@hotmail.com",
       "miieiiem@gmail.com",
     ],
   },
@@ -107,7 +107,7 @@ export function scopeLabel(row: {
   );
 }
 export const HEADS = [
-  { department: "physics", label: "Physics", email: "apivit.s@hotmail.com" },
+  { department: "physics", label: "Physics", email: "apiwitake@hotmail.com" },
   { department: "maths", label: "Maths", email: "kasidej.ju@gmail.com" },
   { department: "english", label: "English", email: "drxiox@gmail.com" },
   { department: "chemistry", label: "Chemistry", email: "miieiiem@gmail.com" },

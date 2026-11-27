@@ -24,6 +24,7 @@ export const HIRING_VIEWS = {
 };
 
 export const HIRING_REPORTS = {
+  "current-funnel": "Current funnel",
   "paper-results": "Paper analytics",
   "ats-outcomes": "ATS outcomes",
 } as const;

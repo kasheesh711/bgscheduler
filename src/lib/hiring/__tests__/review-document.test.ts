@@ -82,8 +82,8 @@ describe("review document", () => {
   });
 
   it("puts equal pass marks on the level charts only", async () => {
-    const paper = { ...packet.evidence.paper,
-      levels: packet.evidence.paper.levels.map((level) => ({ ...level, passPercent: 80 })) };
+    const paper = { ...packet.evidence.paper!,
+      levels: packet.evidence.paper!.levels.map((level) => ({ ...level, passPercent: 80 })) };
     const html = await reviewDocument({ ...packet, evidence: { ...packet.evidence, paper } }, "resume.pdf", "marked-exam.pdf");
     const summary = html.split("<h2>Assessment summary</h2>")[1].split("</section>")[0];
     const levels = html.split("<h2>Paper by level</h2>")[1].split("</section>")[0];

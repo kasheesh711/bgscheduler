@@ -1,3 +1,4 @@
+import { currentFunnel } from "../current-funnel";
 import {
   beforeAll,
   afterAll,
@@ -14,6 +15,7 @@ import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { configSchema, HiringError, type HiringConfig, type Slot } from "../model";
 import { bookingToken } from "../tokens";
+import { resumePath } from "../resume-files";
 import { submitOnboarding, onboardingView, linkOnboardingLine, updateOnboarding } from "../onboarding";
 import { deliverExpertsAlerts, recordExpertsEvent, updateExperts } from "../experts";
 import { handleLineWebhookPost } from "@/lib/line/webhook";
@@ -157,11 +159,29 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
 });
+const submittedPreScreen = {
+  sourceRow: 2,
+  submittedAt: "31/10/2026, 01:00:00",
+  degree: "Bachelor's",
+  field: "Mathematics",
+  subjects: "Mathematics",
+  curricula: "IGCSE",
+  yearGroups: "Year 10",
+  english: "Advanced (C1)",
+  englishEvidence: "",
+  experience: "5+ years",
+  portfolio: "",
+  availability: "Weekday Evening (17:00-21:00), Weekend Morning (before 12:00)",
+  weeklyHours: "20",
+  motivation: "Teaching",
+  teachingApproach: "Check understanding",
+};
 async function candidate(email = "candidate@example.com") {
   const [c] = await db
     .insert(s.hiringCandidates)
     .values({
       name: "Candidate",
+      preScreen: submittedPreScreen, preScreenRepliedAt: now,
       email,
       stage: "paper_passed",
       subjects: ["Mathematics"],
@@ -753,23 +773,7 @@ describe("hiring workflow persistence", () => {
     const base = configSchema.parse({ enabled: true, deliveryEnabled: true, preScreenThreshold: 50, interviewers: [peat] });
     const setVisit = async (patch: Partial<HiringConfig> = {}) =>
       db.update(s.hiringSettings).set({ config: { ...base, ...patch } }).where(eq(s.hiringSettings.id, "default"));
-    const pre = {
-      sourceRow: 2,
-      submittedAt: "31/10/2026, 01:00:00",
-      degree: "Bachelor's",
-      field: "Mathematics",
-      subjects: "Mathematics",
-      curricula: "IGCSE",
-      yearGroups: "Year 10",
-      english: "Advanced (C1)",
-      englishEvidence: "",
-      experience: "5+ years",
-      portfolio: "",
-      availability: "Weekday Evening (17:00-21:00), Weekend Morning (before 12:00)",
-      weeklyHours: "20",
-      motivation: "Teaching",
-      teachingApproach: "Check understanding",
-    };
+    const pre = submittedPreScreen;
     const six = {
       criteria: ["degree", "subject", "curriculum", "teaching", "english", "written"].map((id) => ({
         id,
@@ -1032,9 +1036,11 @@ describe("hiring workflow persistence", () => {
     });
     it("a near miss goes to the head for a check, the head's marks decide, and a clear fail gets the rejection email at once", async () => {
       await setVisit({ paperPassRules: [{ subject: "Mathematics", level: "IGCSE / GCSE", percent: 80 }] });
+      const real = await vi.importActual<typeof import("../availability")>("../availability");
+      vi.mocked(availableSlots).mockImplementation((...args) => real.availableSlots(...args));
       const graded = async (score: number) => {
-        const row = await invited();
-        await bookVisit(link(row), choice(), db);
+        const row = await invited({sourceIds: ["seek-paper-" + score]});
+        await bookVisit(bookingToken(row.id, "two-day", row.inviteExpiresAt!), choice(EXAM, { mockStart: "2026-11-03T04:00:00.000Z" }), db);
         const [result] = await db.insert(s.hiringPaperResults).values({ candidateId: row.id, subject: "Mathematics", source: "person", status: "done", updatedAt: now, marks: { comment: "", missingPages: null, questions: [
           { id: "1", level: "IGCSE / GCSE" as const, attempted: true, readable: true, marks: score, max: 10, reason: "Marked." },
         ] } }).returning();
@@ -1059,6 +1065,15 @@ describe("hiring workflow persistence", () => {
       expect(more).toHaveLength(0);
       expect(notice.groupId).toBe("group");
       expect(notice.message).toContain("AI score 75% · pass mark 80%");
+      // PostgreSQL timestamps the audit rows independently of the simulated booking clock.
+      const auditTime = async (action:string) => {
+        const [entry] = await db.select({at:s.hiringAudit.createdAt}).from(s.hiringAudit)
+          .where(and(eq(s.hiringAudit.candidateId,near.row.id),eq(s.hiringAudit.action,action)));
+        return entry.at;
+      };
+      const waiting = await currentFunnel(db, await auditTime("paper-check-requested"));
+      expect(waiting.rows.find(p=>p.id===near.row.id)?.stage).toBe("Human review");
+      expect(waiting.journeys.find(p=>p.id===near.row.id)?.reached).not.toContain("Interview");
       expect((await mockOf(near.row.id)).status).toBe("confirmed");
       expect(await rejection(near.row.id)).toBeUndefined();
       const token = notice.message.match(/\/hiring\/paper-check\/([\w.-]+)/)![1];
@@ -1069,6 +1084,10 @@ describe("hiring workflow persistence", () => {
       expect((await submitPaperCheck(token, { updatedAt: view.updatedAt, marks: { "1": 8 }, comment: "Fair." }, db)).outcome).toBe("passed");
       expect((await mockOf(near.row.id)).status).toBe("confirmed");
       expect((await read(near.row.id)).stage).toBe("onsite_booked");
+      const checked = await currentFunnel(db, await auditTime("paper-check-done"));
+      expect(checked.journeys.find(p=>p.id===near.row.id)).toMatchObject({
+        reached:expect.arrayContaining(["Test","Human review","Interview"]), reviews:[{initial:75,final:80,passed:true}],
+      });
       expect(await rejection(near.row.id)).toBeUndefined();
       expect((await paperCheckView(token, db)).done).toEqual({ passed: true, percent: 80, head: "Peat", override: null });
       await expect(submitPaperCheck(token, { updatedAt: view.updatedAt, marks: { "1": 8 }, comment: "" }, db)).rejects.toThrow(/already recorded/);
@@ -1918,6 +1937,49 @@ describe("hiring workflow persistence", () => {
       // The new link counts as a send.
       expect((await readLimitUsage(db, "onsite", new Date())).perWeek).toBe(2);
     });
+    it("rolls back the waiver preview and queues one mock invitation without recording a paper pass", async () => {
+      const row = await invited({sourceIds: ["seek-waiver"]});
+      await db.update(s.hiringCandidates).set({
+        resumePath: resumePath(row.id, "a".repeat(64), "pdf"), resumeType: "application/pdf",
+      }).where(eq(s.hiringCandidates.id, row.id));
+      const move = {
+        action: "waive_paper" as const, funnel: true, subjects: row.subjects,
+        revision: row.revision, reason: "Reviewed subject evidence", expectedRecipient: row.email!,
+      };
+      await expect(reviewCandidate(row.id, {...move,preview:true}, "owner", db, now))
+        .rejects.toMatchObject({messagePreview:{to:row.email, html:expect.stringContaining("waived")}});
+      expect((await read(row.id)).paperWaiver).toBeNull();
+      expect((await jobsOf(row.id)).filter(j=>j.key.includes("mock-invite"))).toHaveLength(0);
+      await reviewCandidate(row.id, move, "owner", db, now);
+      expect(await read(row.id)).toMatchObject({stage:"mock_invited",paperPassedAt:null,paperWaiver:{by:"owner",reason:move.reason}});
+      await expect(reviewCandidate(row.id, move, "owner", db, now)).rejects.toThrow(/changed/);
+      expect((await jobsOf(row.id)).filter(j=>j.key.includes("mock-invite"))).toHaveLength(1);
+      const report = await currentFunnel(db, now);
+      expect(report.journeys.find(j => j.id === row.id)).toMatchObject({
+        waived: true, reached: ["SEEK", "Subjects", "Prescreen", "Interview"],
+      });
+    });
+    it("counts each SEEK person once and keeps a returned scoring exit out of the current holds", async () => {
+      const [held, returned, tracker] = await db.insert(s.hiringCandidates).values([
+        {name: "Held", sourceIds: ["seek-1", "seek-2"], profileAssessment: six as never, stage: "soft_rejected" as const, softRejectedAt: now},
+        {name: "Returned", seekApplicationId: "seek-3", stage: "new" as const, softRejectedAt: now, broughtBackAt: now},
+        {name: "Tracker", stage: "new" as const},
+      ]).returning();
+      await db.insert(s.hiringAudit).values([held, returned].map((person) => ({
+        candidateId: person.id, actor: "hiring-queue", action: "soft-reject",
+        createdAt: now, detail: {score: 70, threshold: 75},
+      })));
+      const report = await currentFunnel(db, now);
+      expect(report.journeys.filter(j => j.id === held.id)).toHaveLength(1);
+      expect(report.journeys.find(j => j.id === held.id)).toMatchObject({
+        subjects: ["Mathematics"], reached: ["SEEK"], scoreExit: {score: 70, cutoff: 75, held: true, returned: false},
+      });
+      expect(report.journeys.find(j => j.id === returned.id)).toMatchObject({
+        reached: ["SEEK", "Subjects"], scoreExit: {score: 70, cutoff: 75, held: false, returned: true},
+      });
+      expect(report.journeys.some(j => j.id === tracker.id)).toBe(false);
+      expect(report.rows.some(r => r.id === tracker.id)).toBe(true);
+    });
     it("old paper and mock links still work for old-flow candidates", async () => {
       const paper = {
         ...slot,
@@ -1930,6 +1992,8 @@ describe("hiring workflow persistence", () => {
         .values({ name: "Old", email: "old@example.com", stage: "paper_invited", subjects: ["Mathematics"], inviteExpiresAt: LINK })
         .returning();
       const token = bookingToken(c.id, "paper", LINK);
+      await expect(bookingView(token, undefined, db)).rejects.toThrow(/questions|pre-screen/i);
+      await db.update(s.hiringCandidates).set({preScreen:submittedPreScreen,preScreenRepliedAt:now}).where(eq(s.hiringCandidates.id,c.id));
       expect((await bookingView(token, undefined, db)).kind).toBe("paper");
       await bookInterview(token, { ...input, interviewerKey: null }, db);
       expect((await read(c.id)).stage).toBe("paper_booked");
@@ -2216,6 +2280,7 @@ describe("hiring workflow persistence", () => {
       .insert(s.hiringCandidates)
       .values({
         name: "Flow candidate",
+        preScreen: submittedPreScreen, preScreenRepliedAt: now,
         email: "flow@example.com",
         stage: "paper_invited",
         subjects: ["Mathematics"],

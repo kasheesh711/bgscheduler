@@ -1,3 +1,4 @@
+import { measureStays } from "../current-funnel";
 import { describe, expect, it } from "vitest";
 import { buildFunnel, cohortWindow, isoWeek, percentile, roundTo, windowStart, type FunnelInput } from "../funnel";
 
@@ -15,6 +16,19 @@ const candidate = (id: string, stage: string, created: string, patch: Partial<Fu
 const empty: FunnelInput = { candidates: [], bookings: [], calls: [], inviteOutbox: [], decisions: [], funnelEvents: [] };
 
 describe("funnel helpers", () => {
+  it("measures a stay crossing the 12-week window once and leaves an undocumented current stage undated", () => {
+    const end = Date.parse("2026-11-27T00:00:00Z");
+    const day = 86400000;
+    expect(measureStays([
+      {stage:"Application screening",at:end-100*day},
+      {stage:"Application screening",at:end-95*day},
+      {stage:"Pre-screen",at:end-84*day},
+      {stage:null,at:end-80*day},
+    ],"Paper assessment",end)).toEqual({since:null,completed:[
+      {stage:"Application screening",days:16},{stage:"Pre-screen",days:4},
+    ]});
+  });
+
   it("matches Postgres percentile_cont and round", () => {
     expect(percentile([1, 2, 3, 4], 0.5)).toBe(2.5);
     expect(percentile([0, 10], 0.9)).toBe(9);

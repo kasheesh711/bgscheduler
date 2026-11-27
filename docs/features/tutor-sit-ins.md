@@ -8,7 +8,7 @@ Quarterly tutor quality assurance starts in **2026-Q4 (1 October–31 December, 
 
 | Department | Head |
 |---|---|
-| Physics | apivit.s@hotmail.com |
+| Physics | apiwitake@hotmail.com |
 | Maths | kasidej.ju@gmail.com |
 | English | drxiox@gmail.com |
 | Chemistry | miieiiem@gmail.com |
@@ -19,7 +19,7 @@ Quarterly tutor quality assurance starts in **2026-Q4 (1 October–31 December, 
 
 Migration `0089_tutor_sit_ins.sql` seeds these observer grants and the existing operations contacts (Petchy, Care, Palm, Aya and Muk). A head's canonical tutor identity is bound automatically only when an active tutor contact matches the exact email unambiguously. Otherwise an administrator must verify the binding in **Administration**. The linked `tutor_wise_accounts` must cover both onsite and online accounts in the current snapshot.
 
-Google or email-code sign-in retains existing account revocation. Ek can sign in directly as `apivit.s@hotmail.com` using a code from his inbox. Enrollment never re-enables a disabled account. Every feature request reads current grants. An explicit inactive sit-in grant denies feature access, including for an otherwise authorized administrator.
+Google or email-code sign-in retains existing account revocation. Ek can sign in directly as `apiwitake@hotmail.com` using a code from his inbox. Enrollment never re-enables a disabled account. Every feature request reads current grants. An explicit inactive sit-in grant denies feature access, including for an otherwise authorized administrator.
 
 - **Observer:** assignments and reports in their explicitly granted coverage scopes (including separate ISEB strands); only the assigned observer can write their report.
 - **Coordinator:** all scheduling and family communication, with no rubric, report text, score, or report audit access.

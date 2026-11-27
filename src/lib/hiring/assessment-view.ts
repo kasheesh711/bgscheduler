@@ -92,10 +92,10 @@ export function assessmentRows(bookings: Booking[], papers: TrackerRow[], mocks:
  * What stops the Hire button: one mock result, and every uploaded paper finished. A person must clear a result that needs a
  * check. A "pass mark missing" sheet counts, because its marks exist. Reject has its own rule.
  */
-export function hireBlockers(papers: Result[], mocks: Result[]) {
+export function hireBlockers(papers: Result[], mocks: Result[], paperWaived = false) {
   const blockers: string[] = [];
   // A past result from the tracker is not a result of this visit, and it may say Not Passed.
-  if (!papers.some((p) => p.source !== "tracker")) blockers.push("No paper result yet.");
+  if (!paperWaived && !papers.some((p) => p.source !== "tracker")) blockers.push("No paper result yet.");
   if (!mocks.some((m) => m.source !== "tracker")) blockers.push("No mock result yet.");
   if ([...papers, ...mocks].some((r) => r.status === "needs_check")) blockers.push("A result needs a person to check it.");
   if (papers.some((p) => p.status !== "done" && p.status !== "needs_check")) blockers.push("A paper is not finished.");
@@ -146,7 +146,7 @@ export function mockScore(rubric: MockRubric) {
 export const LANES = ["late_scan", "check", "rubric", "scan", "decide", "waiting", "upcoming", "finished"] as const;
 export type Lane = (typeof LANES)[number];
 
-export function laneOf(row: AssessmentRow, papers: Result[], mocks: Result[], verdicts: Verdict[], decided: boolean, now = new Date()): Lane {
+export function laneOf(row: AssessmentRow, papers: Result[], mocks: Result[], verdicts: Verdict[], decided: boolean, now = new Date(), paperWaived = false): Lane {
   if (row.history || decided || row.status === "cancelled" || row.status === "no_show") return "finished";
   const own = (r: Result) => r.source !== "tracker";
   const results = [...papers, ...mocks].filter(own);
@@ -154,12 +154,12 @@ export function laneOf(row: AssessmentRow, papers: Result[], mocks: Result[], ve
   if (results.some((r) => r.status === "needs_check" || r.status === "failed" || r.stuck)) return "check";
   if (!row.started) return "upcoming";
   // A scan before the mock still helps the head; after the mock (or with none booked) it is late.
-  if (row.kinds.includes("paper") && !papers.some(own)) return row.mockAt && row.mockAt > now ? "scan" : "late_scan";
+  if (!paperWaived && row.kinds.includes("paper") && !papers.some(own)) return row.mockAt && row.mockAt > now ? "scan" : "late_scan";
   if (verdicts.includes("checking") || results.some((r) => r.status === "marking" || r.status === "uploaded")) return "waiting";
   // A paper that did not pass is final: a person sends the rejection without waiting for the mock.
   if (verdicts.includes("fail") && !verdicts.includes("pass")) return "decide";
   if (row.mockAt && row.mockAt <= now && !mocks.some(own)) return "rubric";
-  if (!hireBlockers(papers, mocks).length) return "decide";
+  if (!hireBlockers(papers, mocks, paperWaived).length) return "decide";
   return "waiting";
 }
 

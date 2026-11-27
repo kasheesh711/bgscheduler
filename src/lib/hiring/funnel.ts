@@ -83,6 +83,7 @@ export const STUCK_RULES: { key: string; stage: string; label: string; days: num
   { key: "paper_invited", stage: "paper_invited", label: "Paper invited (old flow)", days: 14, why: "Old tracker row with no decision.", next: "Decide: invite to a visit or stop.", owner: "Kevin" },
   { key: "paper_booked", stage: "paper_booked", label: "Paper booked (old flow)", days: 14, why: "Old tracker row with no decision.", next: "Decide: invite to a visit or stop.", owner: "Kevin" },
   { key: "paper_passed", stage: "paper_passed", label: "Paper passed (old flow)", days: 14, why: "Old tracker row with no decision.", next: "Decide: Hire or Reject.", owner: "Kevin" },
+  { key: "mock_invited", stage: "mock_invited", label: "Mock teaching invited", days: 7, why: "Waiting for a booking.", next: "Check the mock invitation.", owner: "Hiring" },
   { key: "mock_booked", stage: "mock_booked", label: "Mock booked (old flow)", days: 14, why: "Old tracker row with no decision.", next: "Decide: Hire or Reject.", owner: "Kevin" },
   { key: "no_reply", stage: "no_reply", label: "No reply", days: null, why: "Parked.", next: "None. Parked.", owner: "Kevin" },
   { key: "no_booking", stage: "no_booking", label: "No booking", days: null, why: "Parked.", next: "None. Parked.", owner: "Kevin" },

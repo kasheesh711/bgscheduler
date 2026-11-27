@@ -112,6 +112,7 @@ export const stageSchema = z.enum([
   "paper_invited",
   "paper_booked",
   "paper_passed",
+  "mock_invited",
   "mock_booked",
   "onsite_invited",
   "onsite_booked",

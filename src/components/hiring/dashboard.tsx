@@ -76,7 +76,7 @@ const STEPS = ["prescreen", "assessment", "mock", "review", "offer"] as const;
 const WORKSPACE = ["overview", "capacity", "visitday"] as const;
 const MORE_TOOLS = ["setup", "admin", "heads"] as const;
 const TOOL_HINTS = { setup: "Scores, limits and messages", admin: "Prepare rooms and papers", heads: "Mock teaching and decisions" } as const;
-const REPORT_HINTS = { "paper-results": "Scores and cutoffs", "ats-outcomes": "Invitation scores and outcomes" } as const;
+const REPORT_HINTS = { "current-funnel": "Stage waits and follow-up", "paper-results": "Scores and cutoffs", "ats-outcomes": "Invitation scores and outcomes" } as const;
 
 function closeToolsMenu(menu: HTMLDetailsElement) {
   menu.open = false;
@@ -229,7 +229,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
       // As in remember().
     }
   }, [demo, param, hash, reviewLink, loaded, giftOnly, head, headParam]);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(search.get("candidate"));
   const [recordAttempt, setRecordAttempt] = useState(0);
   const [fetchedRecord, setFetchedRecord] = useState<{ id: string; data: HiringData; attempt: number; candidate: HiringCandidate | null } | null>(null);
   const [assessmentVisit, setAssessmentVisit] = useState<string | null>(null);
@@ -465,8 +465,8 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
   </div>;
   const reportLinks = (phone: boolean) => (
     <div className={`${nav.toolGroup} ${nav.reportGroup}`} role="group" aria-label="Reports">
-      <span className={nav.groupLabel}>Read-only reports</span>
-      {(["paper-results", "ats-outcomes"] as const).map((report) => {
+      <span className={nav.groupLabel}>Hiring reports</span>
+      {(["current-funnel", "paper-results", "ats-outcomes"] as const).map((report) => {
         const descriptionId = `hiring-${phone ? "phone" : "desktop"}-${report}-task`;
         return <Link key={report} href={hiringReportHref(report, reportFrom)} prefetch={false} scroll={false}
           aria-label={HIRING_REPORTS[report]} aria-describedby={descriptionId}

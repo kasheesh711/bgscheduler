@@ -121,7 +121,7 @@ function person(now: Date, id: string, name: string, subject: Subject, patch: Re
     profileAssessment: assessment("Degree and subject match. Three years of IGCSE teaching.", subject),
     universityAssessment: { name: "Chulalongkorn University", country: "Thailand", fraction: 0.9, reason: "On the reference list", sources: [] },
     preScreen: null, preScreenHash: null, preScreenAssessment: null, preScreenRepliedAt: null, preScreenResubmitted: false, preScreenScore: null,
-    preScreenParts: null, preScreenOverride: null, paperPassedSubjects: [], paperPassedAt: null, paperRecordedBy: null, hasSourceText: true,
+    preScreenParts: null, preScreenOverride: null, paperWaiver: null, paperPassedSubjects: [], paperPassedAt: null, paperRecordedBy: null, hasSourceText: true,
     profileScore: 80, queueManual: false, callReview: null, callInvited: false, ...patch,
   };
 }
@@ -303,7 +303,7 @@ export function demoBrief(now = new Date()) {
   const mockStart = new Date(paperStart.getTime() + 2.25 * HOUR);
   return {
     decision: state.step > 5 ? ("hire" as const) : null,
-    name: NAME, subject: SUBJECT, gradedPaper: true,
+    name: NAME, subject: SUBJECT, gradedPaper: true, paperWaived: false,
     exam: `${day}, ${clock(paperStart)}–${clock(new Date(paperStart.getTime() + 2 * HOUR))}`,
     mock: `${day}, ${clock(mockStart)}–${clock(new Date(mockStart.getTime() + HOUR))}`,
     interviewer: HEAD, location: "BeGifted Education", answers: { ...answers, sourceRow: 0, submittedAt: "" }, resume: "pdf" as const,
