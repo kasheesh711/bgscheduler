@@ -434,6 +434,17 @@ describe("headInOffice", () => {
     enrollments: [] as never[],
     ...extra,
   });
+  it("books Tito on his Hiring weekdays even when Attendance has Monday and a dated exception adds Wednesday", () => {
+    const calendar = ctx({
+      enrollments: [enrol("Tito")],
+      schedules: [schedule("Tito", week([1, 4, 5]), "2026-10-01")],
+      exceptions: [{ canonicalKey: "Tito", date: "2026-12-09", kind: "hours", start: "10:00", end: "16:00", revision: 1 }],
+    });
+    const dates = ["2026-12-07", "2026-12-08", "2026-12-09", "2026-12-10", "2026-12-11"];
+    expect(dates.map(date => headInOffice(head("Tito"), date, 600, 660, calendar)))
+      .toEqual([false, true, false, true, true]);
+  });
+
   it("does not apply a schedule version before its effective date", () => {
     const c = ctx({
       enrollments: [enrol("Ek")],

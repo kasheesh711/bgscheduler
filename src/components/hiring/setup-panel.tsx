@@ -549,9 +549,6 @@ export function SetupPanel({
           <p className={css.panelLede}>
             Visits need a head who is in the office for the mock hour. Tick the days, then save that head.
           </p>
-          <p className={css.warnWord}>
-            This also changes Tutor Attendance. For a head enrolled there, a saved change starts tomorrow.
-          </p>
           {config.interviewers
             .filter((head) => head.canonicalKey)
             .map((head) => {
@@ -573,6 +570,7 @@ export function SetupPanel({
                       {state?.state === "enrolled" || ended ? "Tutor Attendance schedule" : fromWise ? "Wise working hours" : "Hiring settings only"}
                     </span>
                   </div>
+                  {state?.state === "enrolled" && <p className={css.warnWord}>This also changes Tutor Attendance. A saved change starts tomorrow.</p>}
                   {fromWise ? (
                     <p className={css.railMeta}>
                       {HEAD_DAYS.flatMap((day, i) => {
@@ -683,7 +681,8 @@ export function SetupPanel({
               <label>
                 <input
                   type="checkbox"
-                  checked={!!interviewer.hoursFromWise}
+                  disabled={interviewer.canonicalKey === "Tito"}
+                  checked={!!interviewer.hoursFromWise && interviewer.canonicalKey !== "Tito"}
                   onChange={(e) => setInterviewer(i, { hoursFromWise: e.target.checked || undefined })}
                 />{" "}
                 Hours from Wise (heads not in Tutor Attendance)
