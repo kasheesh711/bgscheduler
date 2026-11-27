@@ -1,6 +1,7 @@
 import syllabuses from "@/lib/hiring/cambridge-igcse-thresholds.json";
 
-const grades = ["A*", "A", "B", "C", "D", "E", "F", "G"];
+import { ThresholdChart } from "./threshold-chart";
+import { grades } from "./grades";
 const benchmark = 80;
 const cell = "px-3 py-2 text-right whitespace-nowrap";
 
@@ -14,6 +15,7 @@ export function CambridgeThresholds() {
     <p className="mt-2 text-sm">Bangkok is in Cambridge administrative Zone 4. First Language English (0500) and Literature in English (0475) use paper variant 2. Choose the row for the components on the school’s entry. <a className="underline" href={zoneLookup}>Bangkok zone lookup</a> · <a className="underline" href={zoneTimetable}>Zone 4 timetable</a></p>
     <p className="my-2 text-sm text-muted-foreground">Five June exam series, 2022–2026. Each value is the average of five annual thresholds, expressed as a percentage of the maximum weighted mark for the stated combination of papers. We use variant 2 where available and the extended route for tiered subjects. Other combinations can have different thresholds.</p>
     <p className="mb-3 text-sm">Compare the 80% hiring benchmark with the minimum for each Cambridge grade. A positive gap means 80% is above the average A* threshold. Hiring papers assess different questions and levels, so this comparison cannot assign a Cambridge grade to a candidate.</p>
+    <ThresholdChart />
     <div className="overflow-x-auto rounded-lg border bg-card">
       <table className="w-full text-left text-sm tabular-nums">
         <caption className="sr-only">Five-year average threshold by syllabus and grade. Gap is 80% minus the A* threshold in percentage points.</caption>
