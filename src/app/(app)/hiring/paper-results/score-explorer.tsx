@@ -42,42 +42,12 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
       <h3 className="text-xl font-semibold">{subject}</h3>
       <span className="text-sm text-muted-foreground">{scores.length} final {scores.length === 1 ? "paper" : "papers"}</span>
     </header>
-    <div className="px-4 pt-4 sm:px-6">
+    <div className="px-4 pb-2 pt-4 sm:px-6">
       <dl className="grid grid-cols-3 divide-x text-sm">
         {([["Mean", fmt(mean) + "%"], ["Median", fmt(median) + "%"], ["Std. deviation", fmt(sd) + " pp"]] as const).map(([label, value]) =>
           <div key={label} className="pl-3 first:pl-0"><dt className="text-muted-foreground">{label}</dt><dd className="text-lg font-semibold tabular-nums sm:text-2xl">{value}</dd></div>)}
       </dl>
-      <div className="mx-3 mb-8 mt-7 relative h-32 border-b border-foreground/40 sm:h-48" aria-label="Scores from zero to one hundred percent"
-        onPointerMove={e => { if (e.pointerType === "mouse") setHover(nearestScore(e)); }}
-        onPointerLeave={() => setHover(null)}
-        onClick={e => { if (e.target instanceof Element && !e.target.closest("button")) setSelected(nearestScore(e)); }}>
-        {[0, 25, 50, 75, 100].map(tick => <div key={tick} className="pointer-events-none absolute inset-y-0 border-l border-border" style={{ left: tick + "%" }}>
-          <span className="absolute top-full mt-2 -translate-x-1/2 text-xs tabular-nums text-muted-foreground">{tick}%</span>
-        </div>)}
-        {sd > 0 && <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Fitted normal curve" role="img" className="absolute inset-0 h-full w-full text-primary">
-          <polygon points={`0,100 ${curve} 100,100`} fill="currentColor" opacity=".13" />
-          <polyline points={curve} fill="none" stroke="currentColor" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
-        </svg>}
-        {cutoffs.map(value => <div key={value} className="pointer-events-none absolute inset-y-0 border-l-2 border-dashed border-[var(--chart-2)]" style={{ left: value + "%" }} />)}
-        {showTrialLine && <div className="pointer-events-none absolute inset-y-0 border-l-2 border-[var(--chart-3)]" style={{ left: cutoff + "%" }} />}
-        {inspected !== null && <div className="pointer-events-none absolute inset-y-0 border-l border-dotted border-primary" style={{ left: inspected + "%" }}>
-          <span className="absolute top-0 rounded bg-primary px-1.5 py-0.5 text-xs font-semibold text-primary-foreground" style={{ transform: inspected > 85 ? "translateX(-100%)" : inspected < 15 ? "none" : "translateX(-50%)" }}>{fmt(inspected)}%</span>
-        </div>}
-        {[...counts].map(([score, n]) => <button key={score} type="button" aria-label={`Inspect ${fmt(score)} percent, ${n} ${n === 1 ? "paper" : "papers"}`}
-          aria-pressed={selected === score} className="absolute bottom-0 grid size-8 -translate-x-1/2 translate-y-1/2 cursor-pointer place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-primary"
-          style={{ left: score + "%" }} onPointerEnter={e => { if (e.pointerType === "mouse") setHover(score); }} onPointerLeave={() => setHover(null)}
-          onFocus={() => setHover(score)} onBlur={() => setHover(null)} onClick={() => setSelected(score)}>
-          <span className={`rounded-full border-2 border-card bg-primary ${inspected === score ? "ring-2 ring-primary" : ""}`} style={{ width: Math.min(20, 10 + 2 * n), height: Math.min(20, 10 + 2 * n) }} />
-        </button>)}
-      </div>
-      <p className="min-h-6 text-sm font-medium tabular-nums" role="status">{inspectText}</p>
-      <p className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <span><span className="mr-1 inline-block w-4 align-middle border-t-2 border-dashed border-[var(--chart-2)]" />Hiring pass line {cutoffs.length ? cutoffs.join("% / ") + "%" : "unconfigured"}</span>
-        {trialCutoff !== null && <span>{showTrialLine && <span className="mr-1 inline-block w-4 align-middle border-t-2 border-[var(--chart-3)]" />}Trial cutoff {cutoff}%</span>}
-        <span>{sd > 0 ? "Fitted normal curve" : scores.length === 1 ? "One score available" : "All scores equal"}</span>
-      </p>
-      {inspected !== null && <p className="mb-2 text-xs text-muted-foreground">{observations.filter(o => o.score === inspected).map(o => "Teaching subject: " + o.subject + " · marked out of " + o.maximum).join(" / ")}</p>}
-      <div className="mb-3 rounded-lg border bg-muted/30 px-3 py-2">
+      <div className="mt-4 rounded-lg border bg-muted/30 px-3 py-2">
         <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
           <output className="tabular-nums"><span className="capitalize">{cutoffName}</span> · <strong>{meets} of {scores.length}</strong> at or above {cutoff}%</output>
           <button type="button" aria-expanded={comparing} aria-controls="compare-cutoff" className="min-h-9 cursor-pointer rounded-sm px-1 font-medium text-primary hover:underline focus-visible:outline-2 focus-visible:outline-primary"
@@ -104,11 +74,44 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
           <button type="submit" className="cursor-pointer rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground">Apply trial cutoff</button>
         </form>}
       </div>
+      <div className="mx-3 mb-8 mt-7 relative h-32 border-b border-foreground/40 sm:h-48" aria-label="Scores from zero to one hundred percent"
+        onPointerMove={e => { if (e.pointerType === "mouse") setHover(nearestScore(e)); }}
+        onPointerLeave={() => setHover(null)}
+        onClick={e => { if (e.target instanceof Element && !e.target.closest("button")) setSelected(nearestScore(e)); }}>
+        {[0, 25, 50, 75, 100].map(tick => <div key={tick} className="pointer-events-none absolute inset-y-0 border-l border-border" style={{ left: tick + "%" }}>
+          <span className="absolute top-full mt-2 -translate-x-1/2 text-xs tabular-nums text-muted-foreground">{tick}%</span>
+        </div>)}
+        {sd > 0 && <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Fitted normal curve" role="img" className="absolute inset-0 h-full w-full text-primary">
+          <polygon points={`0,100 ${curve} 100,100`} fill="currentColor" opacity=".13" />
+          <polyline points={curve} fill="none" stroke="currentColor" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
+        </svg>}
+        {cutoffs.map(value => <div key={value} className="pointer-events-none absolute inset-y-0 border-l-2 border-dashed border-[var(--chart-2)]" style={{ left: value + "%" }} />)}
+        {showTrialLine && <div className="pointer-events-none absolute inset-y-0 border-l-2 border-[var(--chart-3)]" style={{ left: cutoff + "%" }} />}
+        {inspected !== null && <div className="pointer-events-none absolute inset-y-0 border-l border-dotted border-primary" style={{ left: inspected + "%" }}>
+          <span className="absolute top-0 rounded bg-primary px-1.5 py-0.5 text-xs font-semibold text-primary-foreground" style={{ transform: inspected > 85 ? "translateX(-100%)" : inspected < 15 ? "none" : "translateX(-50%)" }}>{fmt(inspected)}%</span>
+        </div>}
+        {[...counts].map(([score, n]) => <button key={score} type="button" aria-label={`Inspect ${fmt(score)} percent, ${n} ${n === 1 ? "paper" : "papers"}`}
+          aria-pressed={selected === score} className="absolute bottom-0 grid size-8 -translate-x-1/2 translate-y-1/2 cursor-pointer place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-primary"
+          style={{ left: score + "%" }} onPointerEnter={e => { if (e.pointerType === "mouse") setHover(score); }} onPointerLeave={() => setHover(null)}
+          onFocus={() => setHover(score)} onBlur={() => setHover(null)} onClick={() => setSelected(score)}>
+          <span className={`rounded-full border-2 border-card bg-primary ${inspected === score ? "ring-2 ring-primary" : ""}`} style={{ width: Math.min(20, 10 + 2 * n), height: Math.min(20, 10 + 2 * n) }} />
+        </button>)}
+      </div>
+      <label className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm font-medium">Inspect score
+        <select aria-label="Inspect score" className="min-h-10 max-w-full rounded-md border bg-background px-2 text-sm font-normal focus-visible:outline-2 focus-visible:outline-primary"
+          value={selected ?? ""} onChange={event => { setSelected(event.target.value === "" ? null : Number(event.target.value)); setHover(null); }}>
+          <option value="">Choose a score</option>
+          {[...counts].map(([score, n]) => <option key={score} value={score}>{fmt(score)}% · {n} {n === 1 ? "paper" : "papers"}</option>)}
+        </select>
+      </label>
+      <p className="min-h-6 text-sm font-medium tabular-nums" role="status">{inspectText}</p>
+      <p className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <span><span className="mr-1 inline-block w-4 align-middle border-t-2 border-dashed border-[var(--chart-2)]" />Hiring pass line {cutoffs.length ? cutoffs.join("% / ") + "%" : "unconfigured"}</span>
+        {trialCutoff !== null && <span>{showTrialLine && <span className="mr-1 inline-block w-4 align-middle border-t-2 border-[var(--chart-3)]" />}Trial cutoff {cutoff}%</span>}
+        <span>{sd > 0 ? "Fitted normal curve" : scores.length === 1 ? "One score available" : "All scores equal"}</span>
+      </p>
+      {inspected !== null && <p className="mb-2 text-xs text-muted-foreground">{observations.filter(o => o.score === inspected).map(o => "Teaching subject: " + o.subject + " · marked out of " + o.maximum).join(" / ")}</p>}
       {subject === "English Language" && <p className="mb-3 rounded-md border-l-2 border-[var(--chart-2)] bg-muted/50 px-3 py-2 text-xs leading-relaxed">Teachers applying for EFL/ESL, English Language or English Literature take the English Language paper. {maxima.length > 1 && <>Saved marking totals vary ({maxima.join(", ")} marks). The chart uses the recorded final percentages.</>}</p>}
-
-      <details className="mb-4 text-xs"><summary className="cursor-pointer">Inspect individual scores</summary>
-        <div className="mt-2 flex flex-wrap gap-2">{[...counts].map(([score, n]) => <button key={score} type="button" className="rounded border px-2 py-1" onClick={() => { setSelected(score); setHover(null); }}>{fmt(score)}%{n > 1 && " × " + n}</button>)}</div>
-      </details>
     </div>
   </article>;
 }

@@ -1411,6 +1411,7 @@ try {
     await page.getByRole("region", { name: "Mock and paper" }).getByRole("group", { name: "View" }).getByRole("button", { name: "List" }).click();
   });
   await check("settings hold the pass marks and the paper library", async () => {
+    await page.goto(`${origin}/?view=assessment`);
     await page.getByRole("navigation", { name: "Hiring tools" }).getByText("More tools", { exact: true }).click();
     await page.getByRole("button", { name: "Rules and setup" }).click();
     assert.equal(await page.getByLabel("Mathematics Key Stage 3 pass percentage").inputValue(), "50");

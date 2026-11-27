@@ -21,7 +21,7 @@ export async function OwnerSelections({ db }: { db: Database }) {
     .where(eq(hiringAudit.action, "owner-selection"))
     .orderBy(desc(sql`${hiringAudit.detail}->>'selectedDate'`), hiringCandidates.name);
 
-  return <section id="owner-selections" aria-labelledby="owner-selections-title" className="rounded-xl border bg-card p-4 sm:p-6">
+  return <section id="owner-selections" aria-labelledby="owner-selections-title" tabIndex={-1} className="rounded-xl border bg-card p-4 sm:p-6">
     <h2 id="owner-selections-title" className="text-lg font-semibold">Kevin’s candidate selections</h2>
     <p className="mt-1 text-sm text-muted-foreground">{picks.length} recorded decisions. Compare the latest intake score recorded before each pick with the cutoff in effect on the decision date. The dated snapshot preserves the score when the pick was logged.</p>
     {picks.length > 0 && <div className="mt-3">

@@ -25,10 +25,12 @@
   gap: 0 8px;
 }
 
+.toolGroup + .toolGroup { border-inline-start: 1px solid var(--line); padding-inline-start: 12px; }
+
 .groupLabel {
   margin-inline-end: 4px;
   color: var(--muted);
-  font-size: 0.85em;
+  font-size: 0.925em;
   font-weight: 650;
 }
 
@@ -102,7 +104,7 @@
   font-size: 0.875rem;
 }
 
-.reportNav a {
+.reportNav :is(a, [aria-current="page"]) {
   display: inline-flex;
   align-items: center;
   gap: 0.3em;
@@ -111,8 +113,9 @@
   text-underline-offset: 4px;
 }
 
-.reportNav a:hover, .reportNav a[aria-current="page"], .reportBack { text-decoration: underline; }
-.reportNav a[aria-current="page"] { font-weight: 650; }
+.reportNav a:hover, .reportNav [aria-current="page"], .reportBack { text-decoration: underline; }
+.reportNav [aria-current="page"] { font-weight: 650; }
+.backShort { display: none; }
 .reportNav a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
 .workflow {
@@ -183,7 +186,17 @@
   }
   .tools { display: block; padding-block-end: 4px; }
   .toolGroup { gap: 0 6px; }
-  .toolGroup + .toolGroup { margin-top: 2px; }
+  .toolGroup + .toolGroup { margin-top: 2px; border: 0; padding-inline-start: 0; }
+  .reportNav {
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    gap: 0 6px;
+    padding: 0;
+    font-size: 0.8125rem;
+    white-space: nowrap;
+  }
+  .backFull { display: none; }
+  .backShort { display: inline; }
   .groupLabel { flex-basis: 100%; padding: 3px 4px 0; }
   .tools .moreTools > summary { width: 100%; padding-inline: 4px; }
   .tools .moreTools > summary::after { margin-inline-start: auto; }

@@ -1,7 +1,6 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
-import { HiringReportNav } from "@/components/hiring/hiring-report-nav";
+import { HiringReportJump, HiringReportNav } from "@/components/hiring/hiring-report-nav";
 import { AtsOutcomes } from "@/components/hiring/ats-outcomes";
 import { OwnerSelections } from "@/components/hiring/owner-selections";
 import { getDb } from "@/lib/db";
@@ -10,6 +9,12 @@ import { atsOutcomes } from "@/lib/hiring/ats-outcomes";
 import { HiringError } from "@/lib/hiring/model";
 
 export const metadata = { title: "ATS outcomes | BeGifted Ops", robots: { index: false, follow: false } };
+
+const reportSections = [
+  { id: "ats-trial", label: "Trial" },
+  { id: "candidate-evidence", label: "Candidate evidence" },
+  { id: "owner-selections", label: "Owner selections" },
+];
 
 async function Body() {
   try {
@@ -29,11 +34,13 @@ async function Body() {
 export default function Page() {
   return <section aria-labelledby="ats-title" tabIndex={0} className="min-h-0 flex-1 overflow-y-auto scroll-pt-24 sm:scroll-pt-14">
     <div className="mx-auto grid max-w-5xl grid-cols-1 gap-5 px-1 py-3 sm:px-6 sm:py-6">
-    <Suspense><HiringReportNav active="ats-outcomes" fragment="owner-selections" /></Suspense>
+    <Suspense><HiringReportNav active="ats-outcomes" fragments={reportSections.map(({ id }) => id)} /></Suspense>
     <header>
       <h1 id="ats-title" className="mt-3 text-3xl font-semibold tracking-tight">ATS scoring review</h1>
       <p className="mt-2 text-muted-foreground">Check the invitation rule against subject papers, mock teaching and final hiring decisions.</p>
-      <Link prefetch={false} href="#owner-selections" className="mt-2 inline-block text-sm underline underline-offset-4">View Kevin’s candidate selections</Link>
+      <nav aria-label="ATS report sections" className="mt-2 flex flex-wrap gap-x-4 text-sm font-medium">
+        {reportSections.map(({ id, label }) => <HiringReportJump key={id} fragment={id} className="inline-flex min-h-11 items-center underline underline-offset-4">{label}</HiringReportJump>)}
+      </nav>
     </header>
     <Suspense fallback={<p role="status">Loading hiring outcomes…</p>}><Body /></Suspense>
   </div>

@@ -10,7 +10,7 @@ const zoneTimetable = "https://www.cambridgeinternational.org/Images/757649-nove
 const routeId = (code: string, components: string) => "igcse-" + code + "-" + components.toLowerCase().replace(/[, ]+/g, "-");
 
 export function CambridgeThresholds() {
-  return <section aria-labelledby="cambridge-title" id="cambridge-thresholds" className="scroll-mt-4">
+  return <section aria-labelledby="cambridge-title" id="cambridge-thresholds" tabIndex={-1} className="scroll-mt-4">
     <h2 id="cambridge-title" className="text-xl font-semibold">Cambridge IGCSE grade thresholds</h2>
     <p className="mt-1 text-sm text-muted-foreground">Five-year reference 2022–2026 · Written English history from 2011 · English Language includes all written paper variants</p>
     <p className="mt-2 text-sm">Cambridge grades apply to Cambridge exams. Hiring paper results show tutor assessment scores.</p>

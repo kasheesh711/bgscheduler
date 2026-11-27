@@ -81,7 +81,7 @@ export function AtsOutcomes({ report }: { report: Report }) {
       {criteriaCounts.length ? <table className={table + " [&_td]:px-1 [&_th]:px-1 sm:[&_td]:px-2 sm:[&_th]:px-2"}><thead><tr><th>Criterion</th><th>Paper pass</th><th>Paper fail</th><th>Hired</th><th>Rejected</th></tr></thead>
         <tbody>{criteriaCounts.map(p => <tr key={p.name}><th scope="row" className="font-normal">{p.name} <span className={small}>({p.max})</span></th><td>{passed.length ? p.pass + " / " + passed.length : "—"}</td><td>{failed.length ? p.fail + " / " + failed.length : "—"}</td><td>{accepted.scored ? p.hire + " / " + accepted.scored : "—"}</td><td>{rejected.scored ? p.reject + " / " + rejected.scored : "—"}</td></tr>)}</tbody></table> : <p>No scored assessments yet.</p>}
     </section>
-    <section className={panel}><h2 className={heading}>Candidate evidence</h2>
+    <section className={panel}><h2 id="candidate-evidence" tabIndex={-1} className={heading}>Candidate evidence</h2>
       <p className={small}>{accepted.total} confirmed hires · {rejected.total} confirmed rejections · {tested.length} scored candidates with settled paper results. Expand a name to check its scores.</p>
       {cases.map(c => <details key={c.id} className="border-b py-2"><summary className="min-h-11 cursor-pointer rounded-sm py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2"><strong>{c.name}</strong> · ATS {c.ats ? fmt.format(c.ats.score) : "unscored"} · {c.decision ?? "No confirmed final decision"}{c.paper ? " · Paper " + c.paper : ""}</summary>
         <div className="grid gap-1 py-2 pl-3 text-sm">
