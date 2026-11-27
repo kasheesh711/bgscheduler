@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import syllabuses from "@/lib/hiring/cambridge-igcse-thresholds.json";
+import { allWrittenYears, englishWrittenAverage, syllabuses, writtenPairs } from "@/lib/hiring/cambridge-thresholds";
 
 import writtenHistory from "@/lib/hiring/cambridge-0500-written-history.json";
 import { grades } from "./grades";
@@ -15,10 +15,11 @@ export function ThresholdChart() {
   const [pinned, setPinned] = useState(2026);
   const [hover, setHover] = useState<number | null>(null);
   const route = syllabuses[routeIndex];
-  const writtenEnglish = route.code === "0500" && route.years[0].components === "12, 22";
+  const aggregate = route === englishWrittenAverage;
+  const writtenEnglish = aggregate || route.code === "0500" && route.years[0].components === "12, 22";
   let years = route.years;
   if (writtenEnglish && period !== "recent") {
-    years = [...writtenHistory, ...years].filter(row =>
+    years = (aggregate ? allWrittenYears : [...writtenHistory, ...years]).filter(row =>
       period === "all" || (period === "current" ? row.year >= 2021 : row.year <= 2019));
   }
   const series = years.map(year => {
@@ -28,6 +29,7 @@ export function ThresholdChart() {
   const available = series.flatMap(y => y.percent === null ? [] : [y.percent]);
   const average = available.length === series.length ? available.reduce((sum, n) => sum + n, 0) / series.length : null;
   const year = series.find(row => row.year === (hover ?? pinned)) ?? series[series.length - 1];
+  const pairs = aggregate ? Object.entries(writtenPairs[year.year]).filter(([, marks]) => marks[gradeIndex] !== null) : [];
   return <div className="my-4 rounded-xl border bg-card shadow-sm">
     <div className="grid gap-3 border-b px-4 py-3 sm:grid-cols-[minmax(0,1fr)_6rem] sm:px-6">
       <label className="min-w-0 text-sm font-medium">Syllabus and entry route<select aria-label="Syllabus and entry route" className={selectStyle} value={routeIndex} onChange={e => setRouteIndex(Number(e.target.value))}>
@@ -49,7 +51,7 @@ export function ThresholdChart() {
         <span className="text-sm text-muted-foreground">{average === null ? "Published in " + available.length + " of " + series.length + " series" : average === benchmark ? "At the hiring benchmark" : Math.abs(average - benchmark).toFixed(1) + " points " + (average > benchmark ? "above" : "below") + " the hiring benchmark"}</span>
       </div>
       {route.code === "0500" && <p className="mt-2 text-sm text-muted-foreground">
-        {writtenEnglish && (period === "earlier" || period === "all") ? "The 2011–2019 written route used papers 22 and 32, worth 100 weighted marks. From 2021 the June exams used papers 12 and 22, worth 160." : route.years[0].components === "12, 22" ? "Paper 12 (Reading) and Paper 22 (Directed Writing and Composition)." : "Paper 12 (Reading) and Component 03 (Coursework Portfolio)."} The optional speaking test has a separate grade. <a className="underline underline-offset-4" href="https://www.cambridgeinternational.org/Images/635230-2024-2026-syllabus.pdf">0500 syllabus</a>
+        {aggregate ? "Each distinct pair of written exams counts once per June series. Before 2020, Core and Extended offered different grades. Only pairs that offered the selected grade count." : writtenEnglish && (period === "earlier" || period === "all") ? "The 2011–2019 written route used papers 22 and 32, worth 100 weighted marks. From 2021 the June exams used papers 12 and 22, worth 160." : route.years[0].components === "12, 22" ? "Paper 12 (Reading) and Paper 22 (Directed Writing and Composition)." : "Paper 12 (Reading) and Component 03 (Coursework Portfolio)."} The optional speaking test has a separate grade. <a className="underline underline-offset-4" href="https://www.cambridgeinternational.org/Images/635230-2024-2026-syllabus.pdf">0500 syllabus</a>
       </p>}
       {writtenEnglish && period === "all" && <p className="mt-1 text-xs text-muted-foreground">Each sitting has equal weight. Cambridge cancelled the <a className="underline" href="https://www.cambridgeinternational.org/news/news-details/view/update-from-cambridge-international-on-may-june-2020-exams-20200323/">June 2020 series</a>. The June 2010 table lists component thresholds only.</p>}
       <div className="overflow-x-auto">
@@ -70,9 +72,15 @@ export function ThresholdChart() {
       </div>
       </div>
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-sm">
-        <p role="status" className="tabular-nums"><strong>June {year.year}</strong> · {year.percent === null ? "Grade unavailable for this route" : `${year.mark}/${year.max} weighted marks · ${year.percent.toFixed(1)}%`} · Components {year.components}</p>
+        <p role="status" className="tabular-nums"><strong>June {year.year}</strong> · {aggregate && year.percent !== null ? `${year.percent.toFixed(1)}% average across ${pairs.length} paper pairs` : year.percent === null ? "Grade unavailable for this route" : `${year.mark}/${year.max} weighted marks · ${year.percent.toFixed(1)}%`}{!aggregate && ` · Components ${year.components}`}</p>
         <a className="text-sm text-primary underline underline-offset-4" href={year.source}>Open {year.year} Cambridge table</a>
       </div>
+      {aggregate && <ul aria-label={`June ${year.year} paper pairs for grade ${grades[gradeIndex]}`} className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+        {pairs.map(([components, marks]) => <li key={components} className="rounded-md border px-3 py-2">
+          <span className="block text-xs text-muted-foreground">Papers {components.replace(", ", " + ")}</span>
+          <strong className="tabular-nums">{marks[gradeIndex]}/{year.max}</strong>
+        </li>)}
+      </ul>}
     </div>
   </div>;
 }
