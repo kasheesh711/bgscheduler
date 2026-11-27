@@ -706,7 +706,18 @@ export function CurrentFunnelWorkspace({
                       ? date(j.signedAt)
                       : j.reviews
                           .filter((r) => r.passed === false)
-                          .map((r) => r.subject + " · " + (r.final === null ? "Checked" : r.final + "%"))
+                          .map((r) =>
+                            [
+                              r.subject,
+                              [r.initial, r.final]
+                                .filter((v) => v !== null)
+                                .map((v) => v + "%")
+                                .join(" → ") || "Checked",
+                              r.head,
+                            ]
+                              .filter(Boolean)
+                              .join(" · "),
+                          )
                           .join(", ")}
                   </p>
                 </div>

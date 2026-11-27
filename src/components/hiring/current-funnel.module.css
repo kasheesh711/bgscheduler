@@ -54,6 +54,7 @@
   --border: #494357;
   --card: #292536;
   --muted-foreground: #c5bfd3;
+  container-type:inline-size;
   --columns: minmax(145px, 2.5fr) repeat(2, minmax(53px, 0.85fr));
 }
 .panelTitle h2,
@@ -547,6 +548,12 @@
   border-radius: 10px;
   box-shadow: 0 5px 24px #0002;
 }
+@media (min-width:781px) {
+  @container (max-width:620px) {
+    .journeyHeaders button {width:10.2%;}
+    .journeyHeaders button span {display:flex; align-items:end; justify-content:center; min-height:2.3em; white-space:normal;}
+  }
+}
 @media (min-width: 1500px) {
   .split {
     grid-template-columns: minmax(470px, 1.85fr) minmax(0, 1fr);
@@ -619,7 +626,7 @@
     display: flex;
     gap: 4px;
     align-items: baseline;
-    font-size: 0.64rem;
+    font-size: clamp(0.66rem, 2.85vw, 0.75rem);
   }
   .journeyHeaders b {
     font-size: 0.75rem;

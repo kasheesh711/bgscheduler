@@ -130,16 +130,28 @@ export function FunnelChart({ stages, highlight, onHighlight, onSelect, onDrop }
   );
 }
 
-const subjectColors = [
-  "#a092ff",
-  "#f3929e",
-  "#7fa8ff",
-  "#efb87e",
-  "#cc93e5",
-  "#d5ce84",
-  "#c28de3",
-  "#8ba3df",
-];
+// Keep each subject's color when candidate counts reorder the subjects.
+const subjectColors: Record<string, string> = {
+  Mathematics: "#a092ff",
+  Physics: "#f3929e",
+  Chemistry: "#cc93e5",
+  Biology: "#efb87e",
+  "Computer Science": "#a9c5ff",
+  ICT: "#858bd9",
+  "EFL/ESL": "#d1b2ff",
+  "English Language": "#7fa8ff",
+  "English Literature": "#a5b9ed",
+  IELTS: "#ebabbf",
+  Economics: "#d5ce84",
+  "Business Studies": "#efac84",
+  Psychology: "#e7a6e0",
+  Geography: "#d3d8ab",
+  History: "#e7c1a4",
+  Thai: "#c3b3e8",
+  French: "#f5cab8",
+  "Art & Design Technology": "#f29fc6",
+  "Subject unknown": "#aaa4b6",
+};
 const dropStages: Partial<Record<Milestone, FunnelStage>> = {
   Prescreen: "Pre-screen",
   Test: "Paper assessment",
@@ -185,13 +197,13 @@ export function SubjectSankey({
   const x = milestones.map((_, i) => 17 + (i * 78) / (milestones.length - 1));
   const columns = milestones.map((label, i) => {
     const members = journeys.filter((j) => j.reached.includes(label));
-    const lanes = subjects.map((s, colorIndex) => {
+    const lanes = subjects.map((s) => {
       const people = s.members.filter((j) => matchesJourney(j, { subject: s.name, to: label }));
       return {
         subject: s.name,
         people,
         weight: people.reduce((sum, j) => sum + 1 / j.subjects.length, 0),
-        color: subjectColors[colorIndex % subjectColors.length],
+        color: subjectColors[s.name] ?? "#aaa4b6",
         y: 0,
         incoming: 0,
         outgoing: 0,
@@ -262,9 +274,9 @@ export function SubjectSankey({
       <defs>
         {subjects.map((s, i) => (
           <linearGradient key={s.name} id={orientation + "-strand-" + i} x1="0" x2="1" y1="0" y2="0">
-            <stop offset="0" stopColor={subjectColors[i % subjectColors.length]} stopOpacity=".96" />
-            <stop offset=".48" stopColor={subjectColors[i % subjectColors.length]} stopOpacity=".68" />
-            <stop offset="1" stopColor={subjectColors[i % subjectColors.length]} stopOpacity=".94" />
+            <stop offset="0" stopColor={subjectColors[s.name] ?? "#aaa4b6"} stopOpacity=".96" />
+            <stop offset=".48" stopColor={subjectColors[s.name] ?? "#aaa4b6"} stopOpacity=".68" />
+            <stop offset="1" stopColor={subjectColors[s.name] ?? "#aaa4b6"} stopOpacity=".94" />
           </linearGradient>
         ))}
       </defs>
@@ -428,11 +440,7 @@ export function SubjectSankey({
       </div>
       <select
         style={{
-          borderInlineStart:
-            "4px solid " +
-            (subjects.findIndex((s) => s.name === selection?.subject) >= 0
-              ? subjectColors[subjects.findIndex((s) => s.name === selection?.subject) % subjectColors.length]
-              : "#9a96a8"),
+          borderInlineStart: "4px solid " + (subjectColors[selection?.subject ?? ""] ?? "#9a96a8"),
         }}
         className={styles.mobileSubject}
         aria-label="Filter hiring journey by subject"
