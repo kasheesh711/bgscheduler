@@ -86,7 +86,7 @@ import {
 } from "./queue";
 import { profileGate } from "./insights";
 import { FUNNEL_AUDIT_ACTIONS, windowStart } from "./funnel";
-import { headDayState, weekWith } from "./rules";
+import { headDayState, hiringMockWeek, weekWith } from "./rules";
 import { attendanceAccessForEmail } from "@/lib/tutor-attendance/access";
 import { attendanceConfig } from "@/lib/tutor-attendance/data";
 import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
@@ -219,7 +219,7 @@ async function countVisits(count: () => Promise<number>): Promise<number | null>
 /**
  * Saves one head's Monday to Friday days. `days[0]` is Monday. `revision` is the Hiring settings revision the screen
  * loaded, and a stale one gets a 409 on both paths.
- * An enrolled head goes through Tutor Attendance as a new schedule version from the next Bangkok day, with the actor in
+ * Tito uses Hiring hours. Any other enrolled head goes through Tutor Attendance as a new schedule version from the next Bangkok day, with the actor in
  * its audit; that needs attendance admin. The new week is the version in force on that day, and a later version is
  * refused, because it would undo this change. Any other head gets a fallback week in Hiring settings and is not enrolled.
  * `affectedVisits` counts booked visits that now fall on a removed day. The app does not move them. It is null when the count failed.
@@ -244,16 +244,20 @@ export async function saveHeadDays(
     .from(s.tutorAttendanceEnrollments)
     .where(eq(s.tutorAttendanceEnrollments.canonicalKey, key));
 
-  if (!enrollment && target.hoursFromWise)
+  const mockWeek = hiringMockWeek(target);
+  if (mockWeek && enrollment && (!enrollment.active || (enrollment.endDate && enrollment.endDate < localDate(now))))
+    throw new HiringError(409, "This head’s Tutor Attendance enrollment has ended.");
+  if (!enrollment && !mockWeek && target.hoursFromWise)
     throw new HiringError(409, "This head's hours come from Wise. Change them in Wise, or untick Hours from Wise first.");
-  if (!enrollment) {
+  if (!enrollment || mockWeek) {
     const saved = await withDatabaseTransaction(db, async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-settings'))`);
       const fresh = await settings(tx);
       if (!fresh.row || fresh.row.revision !== revision) throw stale();
       const head = fresh.config.interviewers.find((i) => i.canonicalKey === key);
       if (!head) throw new HiringError(404, "Head not found.");
-      const fallbackWeek = weekSchema.parse(weekWith(days, head.fallbackWeek));
+      const before = hiringMockWeek(head) ?? head.fallbackWeek ?? null;
+      const fallbackWeek = weekSchema.parse(weekWith(days, before));
       const config = {
         ...fresh.config,
         interviewers: fresh.config.interviewers.map((i) => (i.canonicalKey === key ? { ...i, fallbackWeek } : i)),
@@ -263,7 +267,7 @@ export async function saveHeadDays(
         .set({ config, revision: revision + 1, updatedBy: actor, updatedAt: new Date() })
         .where(eq(s.hiringSettings.id, "default"));
       await audit(tx, actor, "head-days", null, { key, days, via: "hiring-settings", revision: revision + 1 });
-      return { revision: revision + 1, fallbackWeek, before: head.fallbackWeek ?? null };
+      return { revision: revision + 1, fallbackWeek, before };
     });
     // After the commit: a failed read inside the transaction would have aborted it. A fallback week applies at once,
     // so every visit from now is checked.
