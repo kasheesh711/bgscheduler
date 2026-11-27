@@ -39,7 +39,7 @@ async function Report() {
     db.select({
       id: sql<string | null>`${papers.id}`, subject: papers.subject, status: papers.status, source: papers.source,
       marks: papers.marks,
-      updatedAt: sql<Date | null>`${papers.updatedAt}`.mapWith((value: string): Date | null => papers.updatedAt.mapFromDriverValue(value)),
+      updatedAt: sql<Date | null>`${papers.updatedAt}`.mapWith((value: string | Date | null) => typeof value === "string" ? new Date(value) : value),
       records: sql<number>`1`.mapWith(Number),
     }).from(papers).where(markedAndDone).unionAll(excluded),
     paperChecks(db, new Date()),

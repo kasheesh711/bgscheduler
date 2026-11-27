@@ -162,7 +162,7 @@ export function HiringReportJump({ fragment, children, className, id }: { fragme
   const link = useRef<HTMLAnchorElement>(null);
   return <Link ref={link} id={id} className={className} href={`#${fragment}`} prefetch={false} scroll={false} onNavigate={() => {
     const pane = link.current?.closest("section[tabindex='0']");
-    if (!pane) return;
+    if (!(pane instanceof HTMLElement)) return;
     const bookmark: JumpBookmark = { href: currentHref(), fragment, top: pane.scrollTop, openerId: id };
     window.history.replaceState({ ...window.history.state, [JUMP_KEY]: bookmark }, "");
     restoreHiringScroll(window.location.pathname + window.location.search, pane, fragment, true);

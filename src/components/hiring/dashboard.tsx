@@ -460,20 +460,21 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
   const reportLinks = (phone: boolean) => (
     <div className={`${nav.toolGroup} ${nav.reportGroup}`} role="group" aria-label="Reports">
       <span className={nav.groupLabel}>Read-only reports</span>
-      {(["paper-results", "ats-outcomes"] as const).map((report) => (
-        <Link key={report} href={hiringReportHref(report, reportFrom)} prefetch={false} scroll={false}
-          aria-label={HIRING_REPORTS[report]} aria-description={REPORT_HINTS[report]}
+      {(["paper-results", "ats-outcomes"] as const).map((report) => {
+        const descriptionId = `hiring-${phone ? "phone" : "desktop"}-${report}-task`;
+        return <Link key={report} href={hiringReportHref(report, reportFrom)} prefetch={false} scroll={false}
+          aria-label={HIRING_REPORTS[report]} aria-describedby={descriptionId}
           onNavigate={() => saveHiringScroll(scrollKey, surface.current)}>
-          <span>{HIRING_REPORTS[report]}{!phone && <small>{REPORT_HINTS[report]}</small>}</span>
-        </Link>
-      ))}
+          <span>{HIRING_REPORTS[report]}<small id={descriptionId} className={phone ? "sr-only" : undefined}>{REPORT_HINTS[report]}</small></span>
+        </Link>;
+      })}
     </div>
   );
-  const staffTools = <>
+  const staffTools = (phone: boolean) => <>
     {MORE_TOOLS.map((name) => workspaceLink(name, name === "heads" && personalHead ? "My list" : VIEWS[name], name === "heads" && personalHead ? "Your mock teaching and decisions" : TOOL_HINTS[name]))}
     {!demo && <a href="/hiring?demo=1" target="_blank" rel="noopener" className={nav.practice}
-      aria-label="Practice demo, opens in a new tab" aria-description="Uses sample data">
-      <span>Practice demo <span aria-hidden="true">↗</span><small>Sample data</small></span>
+      aria-label="Practice demo, opens in a new tab" aria-describedby={phone ? "hiring-phone-practice-data" : "hiring-desktop-practice-data"}>
+      <span>Practice demo <span aria-hidden="true">↗</span><small id={phone ? "hiring-phone-practice-data" : "hiring-desktop-practice-data"}>Sample data</small></span>
     </a>}
   </>;
   const tools = (
@@ -482,7 +483,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
       {!demo && reportLinks(false)}
       <ToolsMenu className={nav.moreTools} panelClass={nav.moreItems}
         label={view === "setup" ? <>More tools <span className={nav.activeTool}>· {VIEWS.setup}</span></> : "More tools"}>
-        {staffTools}
+        {staffTools(false)}
       </ToolsMenu>
     </nav>
   );
@@ -566,7 +567,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
               {workspace}
               <div className={nav.phoneStaff} role="group" aria-label="More tools">
                 <span className={nav.groupLabel} aria-hidden="true">More tools</span>
-                {staffTools}
+                {staffTools(true)}
               </div>
             </nav>
             {workflow}
