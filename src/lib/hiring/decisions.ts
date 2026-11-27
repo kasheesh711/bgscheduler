@@ -1,15 +1,15 @@
-import { and, desc, eq, gt, inArray, isNotNull, isNull, like, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull, isNull, like, ne, notInArray, sql } from "drizzle-orm";
 import { type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
 import { hireBlockers } from "./assessment-view";
-import { HiringError, runtimeWritesAllowed, type HiringConfig } from "./model";
-import { checkRubric, rubricNeedsCheck } from "./marking-sheet";
+import { contractTestAllowed, HiringError, instant, localDate, runtimeWritesAllowed, type HiringConfig } from "./model";
+import { OFFER_LETTERS, type OfferType } from "./offer-letters";
 import { hiringEmailHtmlFromText } from "./email";
 import { bookingToken } from "./tokens";
 import { hiringOrigin, onboardingEnabled } from "./onboarding-config";
 import { queueRecruitmentHeadDecision } from "./recruitment";
-import { audit, briefMock, candidateById, endVisit, enqueue, settings } from "./service";
+import { audit, briefMock, callCalendarState, candidateById, completedBriefResult, endVisit, enqueue, settings } from "./service";
 
 export type Decision = "hire" | "reject";
 const d = s.hiringDecisions;
@@ -44,7 +44,7 @@ async function resultsOf(tx: Database, candidateId: string) {
   return { papers, mocks };
 }
 
-async function assertAllowed(tx: Database, candidate: Awaited<ReturnType<typeof candidateById>>, decision: Decision, reason: string) {
+async function assertAllowed(tx: Database, candidate: Awaited<ReturnType<typeof candidateById>>, decision: Decision, reason: string, ignore: string[] = []) {
   if (!candidate.email) throw new HiringError(409, "This candidate has no email address, so a result email cannot go. Use Stop in the full record.");
   if (decision === "reject" && reason.trim().length < 5) throw new HiringError(400, "Write a reason of at least 5 characters.");
   if (decision === "hire") {
@@ -56,7 +56,8 @@ async function assertAllowed(tx: Database, candidate: Awaited<ReturnType<typeof 
   const [ahead] = await tx
     .select({ id: s.hiringBookings.id })
     .from(s.hiringBookings)
-    .where(and(eq(s.hiringBookings.candidateId, candidate.id), eq(s.hiringBookings.status, "confirmed"), isNotNull(s.hiringBookings.visitId), gt(s.hiringBookings.endTime, new Date())))
+    .where(and(eq(s.hiringBookings.candidateId, candidate.id), eq(s.hiringBookings.status, "confirmed"), isNotNull(s.hiringBookings.visitId), gt(s.hiringBookings.endTime, new Date()),
+      ignore.length ? notInArray(s.hiringBookings.id, ignore) : undefined))
     .limit(1);
   if (ahead) throw new HiringError(409, "This candidate has a visit ahead. Cancel the visit first.");
   // A stale tab must not send the same result twice. A send that failed can go again.
@@ -96,23 +97,37 @@ export async function headRecommendation(db: Database, candidateId: string) {
   return row;
 }
 
-/** The caller holds the candidate row lock. */
+/** A rejection waits until 18:00 Bangkok on the same day; after 18:00 it goes at once (Kevin, 26 Nov 2026). */
+export function rejectionSendAt(now: Date): Date | null {
+  const six = instant(localDate(now), 18 * 60);
+  return six > now ? six : null;
+}
+
+/**
+ * The caller holds the candidate row lock. `styled` replaces the plain Reject text. `ignore` names bookings that may
+ * still be open: the paper test that has just been marked.
+ */
 export async function queueFinalResult(tx: Database, candidate: Awaited<ReturnType<typeof candidateById>>,
-  decision: Decision, reason: string, actor: string, offer: string | null, now: Date) {
+  decision: Decision, reason: string, actor: string, offer: string | null, now: Date,
+  options: { styled?: { subject: string; text: string; html: string }; ignore?: string[] } = {}) {
   if (["stopped", "hired", "rejected"].includes(candidate.stage))
     throw new HiringError(409, "This application is closed.");
-  await assertAllowed(tx, candidate, decision, reason);
+  const ignore = options.ignore ?? [];
+  await assertAllowed(tx, candidate, decision, reason, ignore);
   const [future] = await tx.select({ id: s.hiringBookings.id }).from(s.hiringBookings).where(and(
     eq(s.hiringBookings.candidateId, candidate.id), eq(s.hiringBookings.status, "confirmed"), gt(s.hiringBookings.endTime, now),
+    ignore.length ? notInArray(s.hiringBookings.id, ignore) : undefined,
   )).limit(1);
   if (future) throw new HiringError(409, "Cancel the future appointment first.");
-  const message = resultEmail(decision, candidate.name, candidate.visitSubject ?? candidate.subjects[0] ?? null);
+  const message = decision === "reject" && options.styled
+    ? { subject: options.styled.subject, body: options.styled.text }
+    : resultEmail(decision, candidate.name, candidate.visitSubject ?? candidate.subjects[0] ?? null);
   const [row] = await tx.insert(d).values({
     candidateId: candidate.id, decision, reason, decidedBy: actor, status: "sent",
     emailSubject: message.subject, emailBody: message.body, sentAt: now,
   }).returning({ id: d.id });
   const outboxKey = `${candidate.id}:result:${row.id}`;
-  let html: string | undefined;
+  let html: string | undefined = decision === "reject" ? options.styled?.html : undefined;
   let archivedBody: string | undefined;
   if (decision === "hire") {
     if (!offer) throw new HiringError(409, "Add the offer letter first.");
@@ -122,7 +137,7 @@ export async function queueFinalResult(tx: Database, candidate: Awaited<ReturnTy
       ? new URL(`/hiring/onboarding/${bookingToken(row.id, "onboarding", expires)}`, hiringOrigin()).toString()
       : null;
     message.subject = "Your BeGifted offer letter";
-    const invitation = `${offer}\n\nBook a 30-minute onsite appointment with HR to sign your contract.`;
+    const invitation = `${offer}\n\nBook a 30-minute onsite appointment to sign your contract.`;
     const setup = "Complete the tutor onboarding form before your appointment.";
     archivedBody = `${invitation}\n${link}`;
     // The dashboard reads the archived body. Keep the intake link in the outbox only.
@@ -135,6 +150,7 @@ export async function queueFinalResult(tx: Database, candidate: Awaited<ReturnTy
   const stage = STAGE[decision];
   await tx.update(d).set({ status: "replaced" }).where(and(eq(d.candidateId, candidate.id), eq(d.status, "draft")));
   await enqueue(tx, { key: outboxKey, candidateId: candidate.id, kind: "email", createdAt: now,
+    nextAttemptAt: decision === "reject" ? rejectionSendAt(now) : null,
     payload: { to: candidate.email!, subject: message.subject, text: message.body, html, closeLoop: true, workflowStage: stage } });
   await tx.update(d).set({ outboxKey, emailSubject: message.subject, emailBody: archivedBody ?? message.body }).where(eq(d.id, row.id));
   await tx.update(s.hiringCandidates).set({ stage, inviteExpiresAt: null, revision: candidate.revision + 1, updatedAt: now })
@@ -143,33 +159,61 @@ export async function queueFinalResult(tx: Database, candidate: Awaited<ReturnTy
   return outboxKey;
 }
 
-export async function saveBriefDecision(token: string, input: { decision: Decision; reason: string }, db: Database, now = new Date()) {
+/**
+ * Gift owns the school, so on her own mock a Hire needs no recommendation and no review packet: it sends the offer
+ * letter and the contract-signing link at once (Kevin, 25 Nov 2026). The route gives her head key (`key`, null when the
+ * lookup fails) and, with `offer`, her checked sign-in.
+ */
+export type GiftOffer = { key: string | null; offer?: { actor: string; offerType: OfferType } };
+
+export async function saveBriefDecision(token: string, input: { decision: Decision; reason: string }, db: Database, now = new Date(), gift: GiftOffer = { key: null }) {
+  const owner = gift.offer;
   if (!runtimeWritesAllowed()) throw new HiringError(503, "A recommendation can be saved only on the live site.");
   const booking = await briefMock(token, db, now);
   const reason = input.reason.trim();
   if (input.decision === "reject" && reason.length < 5) throw new HiringError(400, "Write a reason of at least 5 characters.");
+  let calendar: string | null = null;
+  if (owner) {
+    if (input.decision !== "hire") throw new HiringError(400, "An offer goes only with Hire.");
+    if (!gift.key || gift.key !== booking.interviewerKey) throw new HiringError(403, "Only Gift’s own mock goes straight to an offer.");
+    const { config } = await settings(db);
+    if (await callCalendarState(db, config, now) !== "readable")
+      throw new HiringError(409, "Connect the signing calendar before sending an offer.");
+    calendar = config.connectedEmail;
+  } else if (input.decision === "hire" && gift.key && gift.key === booking.interviewerKey)
+    // A tab from before 25 Nov 2026 would send her own Hire into the packet loop she no longer needs.
+    throw new HiringError(409, "This is your own mock. Reload the page, choose the offer letter, then use Hire, send offer.");
   return withDatabaseTransaction(db, async (tx) => {
     await tx.execute(sql`select id from hiring_candidates where id=${booking.candidateId} for update`);
     const mock = await briefMock(token, tx, now);
     if (now < mock.endTime) throw new HiringError(409, "Send your recommendation after the mock lesson ends.");
     const candidate = await candidateById(tx, mock.candidateId);
-    const [result] = await tx.select().from(s.hiringMockResults).where(and(eq(s.hiringMockResults.candidateId, candidate.id),
-      eq(s.hiringMockResults.bookingId, mock.id), eq(s.hiringMockResults.status, "done")));
-    if (!result?.rubric || checkRubric(result.rubric).length || rubricNeedsCheck(result.rubric))
+    const result = await completedBriefResult(tx, mock);
+    if (!result)
       throw new HiringError(409, "Send the completed rubric for this mock first.");
     const last = await headRecommendation(tx, candidate.id);
     if (last?.detail.bookingId === mock.id) {
       if (last.detail.decision === input.decision && last.detail.reason === reason) return { queued: null };
-      throw new HiringError(409, "Your recommendation is already recorded. Contact HR if it needs a correction.");
+      throw new HiringError(409, "Your recommendation is already recorded. Contact Kevin if it needs a correction.");
     }
     const head = mock.interviewerKey ?? "Interviewer";
     const actor = `interviewer:${head}`;
+    let queued: string | null = null;
+    if (owner) {
+      const { config } = await settings(tx);
+      if (config.connectedEmail !== calendar) throw new HiringError(409, "The signing calendar changed. Reload and try again.");
+      const refusal = contractTestAllowed(config, candidate.id) ? null : sendRefusal(config);
+      if (refusal) throw new HiringError(409, refusal);
+      const offer = OFFER_LETTERS[owner.offerType].text(candidate.name, candidate.visitSubject ?? candidate.subjects[0]);
+      queued = await queueFinalResult(tx, candidate, "hire", reason, owner.actor, offer, now);
+    }
     const [row] = await tx.insert(s.hiringAudit).values({ actor, action: HEAD_DECISION, candidateId: candidate.id,
-      detail: { decision: input.decision, reason, head, bookingId: mock.id, mockResultId: result.id },
+      detail: { decision: input.decision, reason, head, bookingId: mock.id, mockResultId: result.id,
+        ...(owner && queued ? { offer: owner.offerType, decisionId: queued.split(":").at(-1) } : {}) },
     }).returning({ id: s.hiringAudit.id });
-    const queued = input.decision === "reject" ? await queueFinalResult(tx, candidate, "reject", reason, actor, null, now) : null;
+    if (input.decision === "reject") queued = await queueFinalResult(tx, candidate, "reject", reason, actor, null, now);
     await queueRecruitmentHeadDecision(tx, candidate, { decision: input.decision, reason, head,
-      subject: mock.subjects[0] ?? null, key: row.id });
+      subject: mock.subjects[0] ?? null, key: row.id, offerSent: !!owner });
     return { queued };
   });
 }
@@ -238,8 +282,10 @@ export async function sendDecision(id: string, input: { emailSubject: string; em
       candidateId: candidate.id,
       kind: "email",
       createdAt: now,
+      nextAttemptAt: draft.decision === "reject" ? rejectionSendAt(now) : null,
       // A later change of decision moves the stage, and delivery then cancels this row if it has not left.
-      payload: { to: candidate.email!, subject: emailSubject, text: emailBody, workflowStage: stage },
+      // closeLoop lets the delivery cron send a held rejection at 18:00 without the Mac worker.
+      payload: { to: candidate.email!, subject: emailSubject, text: emailBody, workflowStage: stage, closeLoop: true },
     });
     if (!queued) throw new HiringError(409, "This email was already queued.");
     await tx

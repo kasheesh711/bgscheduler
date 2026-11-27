@@ -19,6 +19,13 @@ const nextConfig: NextConfig = {
     "/api/internal/progress-tests/process": ["./public/brand/progress-tests/**/*", "./node_modules/@sparticuz/chromium/bin/**/*", "./node_modules/jszip/dist/jszip.min.js", "./node_modules/docx-preview/dist/docx-preview.min.js", "./node_modules/katex/dist/**/*", "./node_modules/pdfjs-dist/{legacy/build,standard_fonts,cmaps,wasm}/**/*"],
     "/api/progress-tests/workspace/pdf-runtime/*": ["./node_modules/pdfjs-dist/build/pdf.worker.min.mjs", "./node_modules/pdfjs-dist/{standard_fonts,cmaps,wasm}/**/*"],
     "/api/hiring/pdf-runtime/*": ["./node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs", "./node_modules/pdfjs-dist/{standard_fonts,cmaps,wasm}/**/*"],
+    "/api/hiring/brief/*/pdf-runtime/*": ["./node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs", "./node_modules/pdfjs-dist/{standard_fonts,cmaps,wasm}/**/*"],
+    "/api/hiring/print/*/covers": [
+      "./node_modules/@sparticuz/chromium/bin/**/*",
+      "./node_modules/@fontsource/sarabun/files/sarabun-thai-400-normal.woff2",
+      "./public/brand/hiring-print/*.woff2",
+      "./public/brand/logo-horizontal.png",
+    ],
     "/api/onsite-foot-traffic/reports/*/html": [
       "./node_modules/@fontsource/sarabun/files/*.woff2",
       "./node_modules/@fontsource/cormorant-garamond/files/*.woff2",

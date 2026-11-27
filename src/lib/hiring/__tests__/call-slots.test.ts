@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { callSlots } from "../availability";
+import { callSlots, r1Slots } from "../availability";
 import { businessDates, CALL_MINUTES, callBookingSchema, CONTRACT_MINUTES, phoneSchema } from "../model";
 
 // Wednesday 12:00 in Bangkok.
@@ -7,14 +7,16 @@ const now = new Date("2026-11-04T05:00:00Z");
 const range = (start: string, end: string) => ({ start: new Date(start), end: new Date(end) });
 
 describe("callSlots", () => {
-  it("offers quarter hours from 09:00 to 17:45 outside lunch on a free day", () => {
+  it("offers 30-minute R1 times on every quarter hour from 09:00 to 17:30 outside lunch on a free day", () => {
     const slots = callSlots(["2026-11-05"], [], now);
-    expect(slots).toHaveLength(31);
-    expect(slots[0]).toEqual({ date: "2026-11-05", start: "2026-11-05T02:00:00.000Z", end: "2026-11-05T02:15:00.000Z" });
-    expect(slots.at(-1)).toEqual({ date: "2026-11-05", start: "2026-11-05T10:45:00.000Z", end: "2026-11-05T11:00:00.000Z" });
+    expect(CALL_MINUTES).toBe(30);
+    expect(slots).toHaveLength(29);
+    expect(slots[0]).toEqual({ date: "2026-11-05", start: "2026-11-05T02:00:00.000Z", end: "2026-11-05T02:30:00.000Z" });
+    expect(slots[1].start).toBe("2026-11-05T02:15:00.000Z");
+    expect(slots.at(-1)).toEqual({ date: "2026-11-05", start: "2026-11-05T10:30:00.000Z", end: "2026-11-05T11:00:00.000Z" });
   });
 
-  it.each([[CALL_MINUTES, "04:45"], [CONTRACT_MINUTES, "04:30"]])(
+  it.each([[15, "04:45"], [CALL_MINUTES, "04:30"], [CONTRACT_MINUTES, "04:30"]])(
     "keeps appointments of %i minutes clear of lunch and allows both edges",
     (minutes, lastStart) => {
       const slots = callSlots(["2026-11-05"], [], now, minutes);
@@ -25,12 +27,14 @@ describe("callSlots", () => {
   );
 
   it("drops every time that a busy block touches, and keeps a time that only meets its edge", () => {
-    // 10:00–10:20 in Bangkok takes 10:00 and 10:15. 09:45 ends at 10:00 and 10:30 starts after it, so both stay.
+    // 10:00–10:20 in Bangkok takes 09:45, 10:00 and 10:15 (each runs 30 minutes). 09:30 ends at 10:00 and 10:30 starts
+    // after it, so both stay.
     const starts = callSlots(["2026-11-05"], [range("2026-11-05T03:00:00Z", "2026-11-05T03:20:00Z")], now).map((slot) => slot.start);
-    expect(starts).toHaveLength(29);
+    expect(starts).toHaveLength(26);
+    expect(starts).not.toContain("2026-11-05T02:45:00.000Z");
     expect(starts).not.toContain("2026-11-05T03:00:00.000Z");
     expect(starts).not.toContain("2026-11-05T03:15:00.000Z");
-    expect(starts).toContain("2026-11-05T02:45:00.000Z");
+    expect(starts).toContain("2026-11-05T02:30:00.000Z");
     expect(starts).toContain("2026-11-05T03:30:00.000Z");
     // A whole-day block leaves nothing.
     expect(callSlots(["2026-11-05"], [range("2026-11-04T17:00:00Z", "2026-11-05T17:00:00Z")], now)).toEqual([]);
@@ -43,9 +47,18 @@ describe("callSlots", () => {
   });
 
   it("gets its dates from the business calendar: no weekend, no closed date, not today", () => {
-    const dates = businessDates(now, ["2026-11-06"]);
+    const dates = businessDates(now, ["2026-11-06"], 5);
     expect(dates).toEqual(["2026-11-05", "2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12"]);
     expect(new Set(callSlots(dates, [], now).map((slot) => slot.date))).toEqual(new Set(dates));
+  });
+});
+
+describe("r1Slots", () => {
+  it("offers R1 times only from 13:15 to 17:30", () => {
+    const slots = r1Slots(["2026-11-05"], [], now);
+    expect(slots).toHaveLength(18);
+    expect(slots[0].start).toBe("2026-11-05T06:15:00.000Z");
+    expect(slots.at(-1)!.start).toBe("2026-11-05T10:30:00.000Z");
   });
 });
 

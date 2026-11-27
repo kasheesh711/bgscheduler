@@ -12,8 +12,8 @@ import {
 import { NextResponse } from "next/server";
 
 function isPublicHiringOnboarding(pathname: string) {
-  return /^\/hiring\/onboarding\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(pathname)
-    || /^\/api\/hiring\/onboarding\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\/line)?$/.test(pathname)
+  return /^\/hiring\/onboarding\/[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?$/.test(pathname)
+    || /^\/api\/hiring\/onboarding\/[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?(?:\/line)?$/.test(pathname)
     || pathname === "/api/hiring/onboarding/line-callback";
 }
 
@@ -50,10 +50,18 @@ function isPublicRoute(pathname: string) {
     // (briefView in src/lib/hiring/service.ts).
     /^\/hiring\/brief\/[^/]+$/.test(pathname) ||
     /^\/api\/hiring\/brief\/[^/]+\/(?:resume|paper)$/.test(pathname) ||
+    // The pdf.js files that draw those two files on the brief page. The route checks the same token.
+    /^\/api\/hiring\/brief\/[^/]+\/pdf-runtime\/[^/]+$/.test(pathname) ||
     // The interviewer's score form posts here; the same token is the access check (saveBriefRubric).
     /^\/api\/hiring\/brief\/[^/]+\/rubric$/.test(pathname) ||
     // The head's decision from the same link. It records the decision and tells HR. No email leaves.
     /^\/api\/hiring\/brief\/[^/]+\/decision$/.test(pathname) ||
+    // The head's check of a near-miss paper, from a LINE link: the token in the path is the access check (paperCheckView).
+    /^\/hiring\/paper-check\/[^/]+$/.test(pathname) ||
+    /^\/api\/hiring\/paper-check\/[^/]+(?:\/paper|\/runtime\/[^/]+)?$/.test(pathname) ||
+    // Aya's print page from the 08:30 LINE message: the token in the path is the access check (readPrintToken).
+    /^\/hiring\/print\/[^/]+$/.test(pathname) ||
+    /^\/api\/hiring\/print\/[^/]+\/(?:covers|paper\/[^/]+)$/.test(pathname) ||
     /^\/room\/[^/]+$/.test(pathname) ||
     pathname === "/api/room/availability" ||
     pathname === "/api/room/reservations" ||
@@ -145,10 +153,14 @@ export default edgeAuth(async (req) => {
 
   if (isPublicRoute(pathname)) {
     const response = NextResponse.next();
-    if (isPublicHiringOnboarding(pathname) || pathname.startsWith("/room/") || pathname.startsWith("/api/room/") || pathname.startsWith("/hiring/book/") || pathname.startsWith("/api/hiring/book/") || pathname.startsWith("/hiring/brief/") || pathname.startsWith("/api/hiring/brief/")) {
+    if (isPublicHiringOnboarding(pathname) || pathname.startsWith("/room/") || pathname.startsWith("/api/room/") || pathname.startsWith("/hiring/book/") || pathname.startsWith("/api/hiring/book/") || pathname.startsWith("/hiring/brief/") || pathname.startsWith("/api/hiring/brief/") || pathname.startsWith("/hiring/paper-check/") || pathname.startsWith("/api/hiring/paper-check/") || pathname.startsWith("/hiring/print/") || pathname.startsWith("/api/hiring/print/")) {
       response.headers.set("Cache-Control", "private, no-store");
       response.headers.set("Referrer-Policy", "no-referrer");
       response.headers.set("X-Robots-Tag", "noindex, nofollow");
+      // The Hiring screen frames the brief and the paper check pages itself; no other site may. Pages only: a file route
+      // keeps its own stricter Content-Security-Policy, which a proxy header would replace.
+      if (pathname.startsWith("/hiring/brief/") || pathname.startsWith("/hiring/paper-check/"))
+        response.headers.set("Content-Security-Policy", "frame-ancestors 'self'");
     }
     return response;
   }

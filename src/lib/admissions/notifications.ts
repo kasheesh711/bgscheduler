@@ -17,17 +17,20 @@
 // status='running'; stale rows failed after 30 minutes).
 
 import { randomUUID } from "node:crypto";
-import { and, count, eq, gte, inArray, isNull, lt, lte } from "drizzle-orm";
+import { and, count, eq, gte, inArray, isNull, lt, lte, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
+import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { createResendSender } from "@/lib/email/resend";
 import {
   admissionsCaseMembers,
   admissionsCases,
   admissionsCaseTasks,
+  admissionsCounselors,
   admissionsNotificationLog,
   admissionsNotificationRuns,
   admissionsSelfReportSections,
   admissionsStudents,
+  adminUsers,
 } from "@/lib/db/schema";
 import { BANGKOK_TIME_ZONE } from "@/lib/bangkok-time";
 import {
@@ -252,8 +255,23 @@ export function deriveStudentFirstName(student: {
 
 // ── Transport (CM-110) ──────────────────────────────────────────────────
 
+/** True when the address belongs to an enabled admin user, an active counselor, or an active counselor member. */
+async function isAdmissionsStaff(email: string, db: Database): Promise<boolean> {
+  // admin_users rows are not stored normalised, so match the way the sign-in checks do.
+  const [admin] = await db.select({ id: adminUsers.id }).from(adminUsers)
+    .where(and(sql`lower(btrim(${adminUsers.email})) = ${email}`, eq(adminUsers.disabled, false))).limit(1);
+  if (admin) return true;
+  const [counselor] = await db.select({ id: admissionsCounselors.id }).from(admissionsCounselors)
+    .where(and(eq(admissionsCounselors.email, email), eq(admissionsCounselors.active, true))).limit(1);
+  if (counselor) return true;
+  const [member] = await db.select({ id: admissionsCaseMembers.id }).from(admissionsCaseMembers)
+    .where(and(eq(admissionsCaseMembers.email, email), eq(admissionsCaseMembers.role, "counselor"),
+      eq(admissionsCaseMembers.status, "active"))).limit(1);
+  return Boolean(member);
+}
+
 /**
- * Sends one email through Resend and records it in
+ * Sends one email (staff through admin@ Gmail, everyone else through Resend) and records it in
  * admissions_notification_log.
  *
  * 1. Dedupe short-circuit: when `dedupeKey` is set and a log row already
@@ -288,17 +306,21 @@ export async function sendAdmissionsEmail(
     }
   }
 
-  const sender = createResendSender(process.env, {
-    from: process.env.ADMISSIONS_EMAIL_FROM?.trim() || undefined,
-    replyTo: process.env.ADMISSIONS_EMAIL_REPLY_TO?.trim() || DEFAULT_REPLY_TO,
-  });
-  // Resend remembers the key for 24h, so a crashed run that retries the same
-  // dedupe key cannot double-send; unkeyed sends get a fresh one.
+  // Staff (an admin user or an active counselor) hear from admin@ like all staff mail; students and parents keep Resend.
+  const staff = await isAdmissionsStaff(to, db);
+  const sender = staff
+    ? createOutboundEmailSender("primary", { strictOutcome: true, audience: "staff" })
+    : createResendSender(process.env, {
+      from: process.env.ADMISSIONS_EMAIL_FROM?.trim() || undefined,
+      replyTo: process.env.ADMISSIONS_EMAIL_REPLY_TO?.trim() || DEFAULT_REPLY_TO,
+    });
+  // Resend remembers the key for 24h, so a crashed run that retries the same dedupe key cannot double-send.
+  // Gmail (staff) has no such memory; its fixed Message-ID is the only guard (accepted risk, 26 Nov 2026).
   const { id } = await sender.sendEmail({
     to,
     subject: input.subject,
     html: input.html,
-    text: "",
+    text: staff ? input.html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "",
     idempotencyKey: `admissions:${dedupeKey ?? randomUUID()}`,
   });
   const resendEmailId = id;

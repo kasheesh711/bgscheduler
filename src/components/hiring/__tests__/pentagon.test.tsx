@@ -6,7 +6,7 @@ import { CandidateInspector } from "../candidate-inspector";
 import type { HiringCandidate } from "../dashboard";
 import { Pentagon } from "../pentagon";
 import { NO_FILTER } from "../dashboard";
-import { AveragePentagon, CRITERION_LABELS, KpiStrip, SubjectChart, type Insights } from "../pipeline-charts";
+import { CRITERION_LABELS, SubjectChart, type Insights } from "../pipeline-charts";
 
 vi.mock("next/font/google", () => ({ Instrument_Serif: () => ({ variable: "" }) }));
 
@@ -43,7 +43,7 @@ const inspect = (profileAssessment: Assessment, preScreenAssessment: PreScreenAs
         } as unknown as HiringCandidate
       }
       seekJobId="1"
-      weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0 }}
+      weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0, school: 0 }}
       busy={false}
       error=""
       notice=""
@@ -104,27 +104,6 @@ describe("averageValues", () => {
     partial.criteria[1].result = "partial";
     expect(averageValues([{ profileAssessment: assessment() }, { profileAssessment: partial }, { profileAssessment: null }])).toEqual([0.5, 0.75, 1, 1, 1]);
     expect(averageValues([])).toEqual([0, 0, 0, 0, 0]);
-  });
-});
-
-describe("AveragePentagon", () => {
-  it("shows a percentage at each corner", () => {
-    const html = renderToStaticMarkup(<AveragePentagon candidates={[{ profileAssessment: assessment() }]} />);
-    expect(html).toContain("Degree: 100%");
-    expect(html).toContain("Average DSCTE pentagon for 1 scored candidate in this filter");
-    expect(html).toContain("1 scored candidate in this filter");
-  });
-  it("uses the plural for several candidates", () => {
-    const html = renderToStaticMarkup(
-      <AveragePentagon candidates={[{ profileAssessment: assessment() }, { profileAssessment: assessment() }]} />,
-    );
-    expect(html).toContain("2 scored candidates in this filter");
-  });
-  it("shows a message, not a chart at 0%, when no candidate in the filter is scored", () => {
-    const html = renderToStaticMarkup(<AveragePentagon candidates={[{ profileAssessment: null }]} />);
-    expect(html).toContain("No scored candidates in this filter");
-    expect(html).not.toContain("<svg");
-    expect(html).not.toContain("0%");
   });
 });
 
@@ -212,7 +191,7 @@ describe("CandidateInspector evidence", () => {
             { id: "c1", name: "Sam", stage: "review", email: "s@example.com", subjects: [], sourceIds: [], paperPassedSubjects: [], profileScore: null, profileAssessment: null, preScreenAssessment: null, universityAssessment: null, preScreen: {}, preScreenHash: "h", ...extra } as unknown as HiringCandidate
           }
           seekJobId="1"
-          weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0 }}
+          weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0, school: 0 }}
           busy={false}
           error=""
           notice=""
@@ -244,7 +223,7 @@ describe("CandidateInspector evidence", () => {
           } as unknown as HiringCandidate
         }
         seekJobId="1"
-        weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0 }}
+        weights={{ degree: 20, subject: 20, curriculum: 20, teaching: 20, english: 20, prestige: 0, school: 0 }}
         busy={false}
         error=""
         notice=""
@@ -255,29 +234,5 @@ describe("CandidateInspector evidence", () => {
     expect(html).toContain("DSCTE pentagon for the Pre-screen");
     expect(html).toContain("Degree: Met");
     expect(html).not.toContain("Profile (grey)");
-  });
-});
-
-describe("the Scored tile", () => {
-  it("counts people with source text only, and says how many have none", () => {
-    const html = renderToStaticMarkup(
-      <KpiStrip
-        insights={{ total: 10, active: 10, parked: 0, scored: 4, scorable: 5, ready: 0, median: null, aboveThreshold: 0, pastReview: 0, appointmentsThisWeek: 0, messages: { sent: 0, waiting: 0, problems: 0 } } as unknown as Insights}
-        threshold={60}
-        onShowReady={() => {}}
-      />,
-    );
-    expect(html).toContain("80%");
-    expect(html).toContain("4 of 5, 5 with no source text");
-  });
-  it("gives the next-7-days count a daily rate beside it", () => {
-    const html = renderToStaticMarkup(
-      <KpiStrip
-        insights={{ total: 10, active: 10, parked: 0, scored: 4, scorable: 5, ready: 0, median: null, aboveThreshold: 0, pastReview: 0, appointmentsThisWeek: 7, bookedWithoutAppointment: 2, messages: { sent: 0, waiting: 0, problems: 0 } } as unknown as Insights}
-        threshold={60}
-        onShowReady={() => {}}
-      />,
-    );
-    expect(html).toContain("1 a day · 2 not held here");
   });
 });

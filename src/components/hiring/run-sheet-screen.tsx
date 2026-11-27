@@ -104,7 +104,7 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
     r.subject ?? review(NO_SUBJECT),
     head(r),
     <Paper key="p" row={r} />,
-    review(r.roomReason),
+    (r.room ?? review(r.roomReason)),
   ];
   const sheetColumns = ["Time", "Candidate", "Subject", "Head", "Paper to print", "Room"];
 
@@ -124,8 +124,8 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
       {tab === "sheet" && (
         <>
           <FirstUseHint id="hr-run-sheet">
-            HR: this list shows every visit from today, first visit first. Old visits show under the list. &quot;Needs review&quot; tells you what is missing: tell
-            Kevin. Full steps: the printed HR job aid.
+            This list shows every visit from today, first visit first. Old visits show under the list. &quot;Needs review&quot; tells you what is missing: tell
+            Kevin. Full steps: the printed job aid.
           </FirstUseHint>
           {unrecorded.length > 0 && (
             <>
@@ -180,7 +180,7 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
                 head={["Time", "Candidate", "Subject", "Head", "Paper", "Room"]}
                 rows={recent
                   .filter((r) => r.date === recent[0].date)
-                  .map((r) => [times(r), r.candidateName, r.subject ?? review(NO_SUBJECT), head(r), <Paper key="p" row={r} />, review(r.roomReason)])}
+                  .map((r) => [times(r), r.candidateName, r.subject ?? review(NO_SUBJECT), head(r), <Paper key="p" row={r} />, (r.room ?? review(r.roomReason))])}
                 empty="No visits."
               />
             </div>
@@ -194,7 +194,7 @@ export function RunSheetScreen({ data, now, initialTab = "sheet" }: { data: Omit
                 head={["Time", "Candidate", "Subject", "Head", "Paper", "Room"]}
                 rows={coming
                   .filter((r) => r.date === date)
-                  .map((r) => [times(r), r.candidateName, r.subject ?? review(NO_SUBJECT), head(r), <Paper key="p" row={r} />, review(r.roomReason)])}
+                  .map((r) => [times(r), r.candidateName, r.subject ?? review(NO_SUBJECT), head(r), <Paper key="p" row={r} />, (r.room ?? review(r.roomReason))])}
                 empty="No visits."
               />
             </div>

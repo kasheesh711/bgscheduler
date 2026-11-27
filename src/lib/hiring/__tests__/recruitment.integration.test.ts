@@ -4,13 +4,15 @@ import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { configSchema } from "../model";
-import { deliverRecruitment, queueRecruitmentDailyCalls, queueRecruitmentForm, queueRecruitmentMock, queueRecruitmentWeekly, receiveRecruitmentSetup } from "../recruitment";
+import { deliverRecruitment, queueRecruitmentDailyCalls, queueRecruitmentMockClashes, queueRecruitmentForm, queueRecruitmentMock, queueRecruitmentWeekly, receiveRecruitmentSetup } from "../recruitment";
 import { fetchLineGroupSummary, pushLineTextMessage, replyLineMessage } from "@/lib/line/client";
 import { deliverOutbox } from "../worker";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { queueRecruitmentInvitation } from "../recruitment";
 import { endVisit } from "../service";
 
+vi.mock("../head-schedule", async (load) => ({ ...(await load<typeof import("../head-schedule")>()), visitClashes: vi.fn() }));
+import { visitClashes } from "../head-schedule";
 vi.mock("@/lib/email/outbound", () => ({ createOutboundEmailSender: vi.fn() }));
 vi.mock("@/lib/line/client", () => ({
   fetchLineGroupSummary: vi.fn(), pushLineTextMessage: vi.fn(), replyLineMessage: vi.fn(),
@@ -59,7 +61,7 @@ it("queues each mock notice once and suppresses a cancelled booking's old notice
   await queueRecruitmentMock(db, b, "booked"); await queueRecruitmentMock(db, b, "booked");
   expect(await deliverRecruitment(db)).toBe(1);
   expect(await deliverRecruitment(db)).toBe(0);
-  expect(pushLineTextMessage).toHaveBeenCalledWith(expect.objectContaining({ to: groupId, tutorBot: true, text: expect.stringContaining("Candidate: Candidate\nEmail: candidate@example.com\nPhone: not recorded\nSubject") }));
+  expect(pushLineTextMessage).toHaveBeenCalledWith(expect.objectContaining({ to: groupId, tutorBot: true, text: "🧑‍🏫 Mock teaching booked\nCandidate · Mathematics\nTue 17 Nov, 10:00–11:00 · Head: Peat\ncandidate@example.com" }));
   await queueRecruitmentMock(db, b, "moved", new Date("2026-11-16T10:00:00+07:00"));
   await endVisit(db, [b], "cancelled", now);
   expect(await deliverRecruitment(db)).toBe(1);
@@ -94,7 +96,7 @@ it("reports only initial sent invitations in the prior week and confirmed mocks 
   await mock();
   expect(await queueRecruitmentWeekly(db, now)).toBe(true); expect(await queueRecruitmentWeekly(db, now)).toBe(false);
   const [row] = await db.select().from(s.hiringRecruitmentDeliveries);
-  expect(row.message).toContain("Included — Mathematics"); expect(row.message).toContain("Mocks this week (1)");
+  expect(row.message).toContain("• Included · Mathematics"); expect(row.message).toContain("Mocks this week (1)");
   for (const excluded of ["Reminder", "Failed", "Uncertain", "Too late"]) expect(row.message).not.toContain(excluded);
 });
 it("queues one Bangkok morning digest with only confirmed calls that day", async () => {
@@ -136,9 +138,9 @@ it("shows None for empty sections and sends nothing when paused or the group cha
 
 it("announces an invitation only after Gmail accepts it, once across delivery retries", async () => {
   const c = await candidate();
-  await db.update(s.hiringCandidates).set({ stage: "onsite_invited", visitSubject: "Mathematics" }).where(eq(s.hiringCandidates.id, c.id));
-  await db.insert(s.hiringOutbox).values({ candidateId: c.id, key: `${c.id}:visit-invite`, kind: "email",
-    payload: { workflowStage: "onsite_invited", to: "candidate@example.com", subject: "Onsite invite", text: "Book your visit" } });
+  await db.update(s.hiringCandidates).set({ stage: "paper_passed", paperPassedSubjects: ["Mathematics"] }).where(eq(s.hiringCandidates.id, c.id));
+  await db.insert(s.hiringOutbox).values({ candidateId: c.id, key: `${c.id}:mock-invite`, kind: "email",
+    payload: { workflowStage: "paper_passed", to: "candidate@example.com", subject: "Mock invite", text: "Book your mock teaching" } });
   const send = vi.fn().mockRejectedValueOnce(new Error("Connection lost"));
   vi.mocked(createOutboundEmailSender).mockReturnValue({ sendEmail: send });
   await deliverOutbox(db, config);
@@ -152,8 +154,8 @@ it("announces an invitation only after Gmail accepts it, once across delivery re
   await deliverOutbox(db, config);
   const notices = await db.select().from(s.hiringRecruitmentDeliveries);
   expect(notices).toHaveLength(1);
-  expect(notices[0]).toMatchObject({ notice: "invite_sent", message: expect.stringContaining("Paper assessment invite sent") });
-  expect(notices[0].message).toContain("Email: candidate@example.com");
+  expect(notices[0]).toMatchObject({ notice: "invite_sent", message: expect.stringContaining("✉️ Mock invite sent") });
+  expect(notices[0].message).toContain("\ncandidate@example.com");
   expect((await db.select().from(s.hiringOutbox))[0].status).toBe("sent");
   expect(send).toHaveBeenCalledTimes(2);
 });
@@ -162,14 +164,15 @@ it("puts the email and the phone in the form notice, or says that none is record
   await queueRecruitmentForm(db, { ...withPhone, phone: "+66812345678" }, now);
   await queueRecruitmentForm(db, await candidate("Without", null), now);
   const messages = (await db.select().from(s.hiringRecruitmentDeliveries)).map(row => row.message);
-  expect(messages).toContainEqual(expect.stringContaining("Form completed\nWith — Mathematics\nEmail: with@example.com\nPhone: +66812345678\n"));
-  expect(messages).toContainEqual(expect.stringContaining("Without — Mathematics\nEmail: not recorded\nPhone: not recorded\n"));
+  expect(messages).toContainEqual(expect.stringMatching(/^📝 Form completed · .+\nWith · Mathematics\nwith@example\.com · \+66812345678$/));
+  expect(messages).toContainEqual(expect.stringContaining("Without · Mathematics\nNo email or phone recorded"));
 });
-it("recognizes old mock invitations but excludes reminders and booking confirmations", async () => {
+it("announces mock invitations only: no paper test invite, reminder or booking confirmation", async () => {
   const c = await candidate();
   c.paperPassedSubjects = ["Mathematics"];
   for (const [key, workflowStage, bookingId] of [
     ["tracker-mock:hash", "paper_passed", null],
+    ["visit-invite", "onsite_invited", null],
     ["visit-reminder:1", "onsite_invited", null],
     ["booking-confirmation", undefined, "00000000-0000-4000-8000-000000000001"],
     ["pre-screen", "pre_screen", null],
@@ -179,4 +182,32 @@ it("recognizes old mock invitations but excludes reminders and booking confirmat
   const notices = await db.select().from(s.hiringRecruitmentDeliveries);
   expect(notices).toHaveLength(1);
   expect(notices[0].message).toContain("Mathematics");
+});
+
+it("queues one morning clash warning only when a booked mock clashes or cannot be checked", async () => {
+  const clashing = await mock();
+  vi.mocked(visitClashes).mockResolvedValue({ candidateIds: [], bookingIds: [], stale: false });
+  expect(await queueRecruitmentMockClashes(db, now)).toBe(false);
+  expect(await db.select().from(s.hiringRecruitmentDeliveries)).toHaveLength(0);
+  vi.mocked(visitClashes).mockResolvedValue({ candidateIds: [clashing.candidateId], bookingIds: [clashing.id], stale: false });
+  expect(await queueRecruitmentMockClashes(db, new Date("2026-11-16T01:58:59Z"))).toBe(false);
+  expect(await queueRecruitmentMockClashes(db, now)).toBe(true);
+  expect(await queueRecruitmentMockClashes(db, now)).toBe(false);
+  expect(vi.mocked(visitClashes).mock.calls[0][1]).toEqual([expect.objectContaining({ candidateId: clashing.candidateId, kind: "mock" })]);
+  const [row] = await db.select().from(s.hiringRecruitmentDeliveries);
+  expect(row).toMatchObject({ groupId, notice: "mock-clashes", key: "mock-clashes:2026-11-16:0000" });
+  expect(row.message).toContain("Mock teaching clashes with Wise (1)\n• Tue 17 Nov, 10:00–11:00 · Candidate · Mathematics · Head: Peat");
+  expect(row.message).not.toContain("could not be checked");
+  // A stale check with no clash still warns, so a missed clash is never silent.
+  await db.execute(sql`truncate hiring_recruitment_deliveries`);
+  vi.mocked(visitClashes).mockResolvedValue({ candidateIds: [], bookingIds: [], stale: true });
+  expect(await queueRecruitmentMockClashes(db, now)).toBe(true);
+  const [stale] = await db.select().from(s.hiringRecruitmentDeliveries);
+  expect(stale.message).toContain("could not be checked");
+  expect(stale.message).not.toContain("clashes with Wise");
+  // Yesterday's warning is not sent late. The row is due now (the database default is the real clock).
+  await db.update(s.hiringRecruitmentDeliveries).set({ nextAttemptAt: now }).where(eq(s.hiringRecruitmentDeliveries.id, stale.id));
+  expect(await deliverRecruitment(db, new Date("2026-11-17T09:00:00+07:00"))).toBe(0);
+  expect(pushLineTextMessage).not.toHaveBeenCalled();
+  expect((await db.select().from(s.hiringRecruitmentDeliveries))[0]).toMatchObject({ status: "cancelled", error: expect.stringContaining("clash warning") });
 });

@@ -1,4 +1,5 @@
-import { formatInTimeZone } from "date-fns-tz";
+import { parseISO } from "date-fns";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { profileGate } from "./insights";
 import type { LimitName, QueueHold } from "./limits";
 import { ZONE, type HiringConfig, type PreScreen, type Stage } from "./model";
@@ -60,13 +61,19 @@ export function preScreenStatus(
   return { status, sentAt, remindedAt, repliedAt };
 }
 
-/** The GMT tracker returns either a Sheets date serial or `d/m/yyyy, H:mm:ss`. */
+/** The booking page uses ISO timestamps. The GMT tracker uses Sheets serials or `d/m/yyyy, H:mm:ss`. */
 export function parseFormTimestamp(value: string) {
-  if (/^\d+(?:\.\d+)?$/.test(value.trim())) {
+  const timestamp = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}T/.test(timestamp)) {
+    const date = /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(timestamp)
+      ? parseISO(timestamp) : fromZonedTime(timestamp, "UTC");
+    return Number.isFinite(date.getTime()) ? date : null;
+  }
+  if (/^\d+(?:\.\d+)?$/.test(timestamp)) {
     const date = new Date(Date.UTC(1899, 11, 30) + Math.round(Number(value) * 86400000));
     return Number(value) > 0 && Number.isFinite(date.getTime()) ? date : null;
   }
-  const m = value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  const m = timestamp.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
   if (!m) return null;
   const [day, month, year, hour, minute, second] = m.slice(1).map(Number);
   const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second || 0));
@@ -169,10 +176,11 @@ const LIMIT_WORDS: Record<LimitName, string> = {
   perSubject: "subject limit",
 };
 function limitText(hold: QueueHold, config: HiringConfig) {
-  const limit = hold.limit!;
-  const max = (hold.funnel === "pre_screen" ? config.preScreenLimits : config.onsiteLimits)[limit as "perWeek"];
+  const limit = hold.limit;
+  const limits = hold.funnel === "pre_screen" ? config.preScreenLimits : config.onsiteLimits;
+  const max = limit ? limits[limit as keyof typeof limits] : undefined;
   // The subject limit names its subject, so the cell tells which of the 18 is full.
-  return { words: limit === "perSubject" ? `${hold.subject} limit` : LIMIT_WORDS[limit], max };
+  return { words: limit === "perSubject" ? `${hold.subject} limit` : limit ? LIMIT_WORDS[limit] : "limit", max };
 }
 
 type HoldCandidate = Parameters<typeof profileGate>[0] & {
@@ -202,13 +210,15 @@ export function holdNote(
     const { words, max } = limitText(hold, config);
     const prefix = hold.funnel === "pre_screen" ? "Queue" : "Onsite queue";
     return {
-      short: `${prefix} ${hold.position} · ${words} ${max}`,
+      short: `${prefix} ${hold.position} · ${words}${max == null ? "" : ` ${max}`}`,
       long: [
-        `Position ${hold.position} in the ${hold.funnel === "pre_screen" ? "pre-screen" : "onsite"} queue.`,
-        `Held by the ${words} (${max}). To send more, raise the number in Rules and setup.`,
+        `Position ${hold.position} in the ${hold.funnel === "pre_screen" ? "pre-screen" : "onsite"} queue.${max == null ? "" : ` Limit ${max}.`}`,
+        `Raise the ${words} in Rules and setup.`,
       ],
     };
   }
+  if (candidate.stage === "soft_rejected")
+    return { short: "Soft rejected", long: ["Under the pass score and never emailed. Bring back puts them where they were."] };
   if (candidate.stage === "new" && !candidate.preScreen) {
     const gate = profileGate(candidate, config);
     if (gate.eligible) return null;
@@ -225,8 +235,8 @@ export function holdNote(
         long: ["No pass score is set, so no automatic onsite invitation can run. A click can still invite."],
       };
     // The queue's reply check waits here, because a setting can cure it.
-    const supported = supportedVisitSubjects(pre, answer, assessment, config);
-    if (supported.length && !visitSubject(pre, answer, assessment, config))
+    const supported = supportedVisitSubjects(pre, answer, config);
+    if (supported.length && !visitSubject(pre, answer, config))
       return topHiringSubject(supported, config.subjectPriority)
         ? {
             short: "No head for this subject",

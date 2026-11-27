@@ -125,16 +125,43 @@ export const RUBRIC = [
       ["feedback", "Feedback Quality"],
     ],
   },
+  {
+    part: "Professional Conduct",
+    items: [
+      ["hygiene", "Personal Hygiene"],
+      ["stress", "Stress Test"],
+      ["safeguarding", "Safeguarding and Student Security"],
+      ["curiosity", "Nurture Curiosity"],
+    ],
+  },
 ] as const;
 export const RUBRIC_ITEMS = RUBRIC.flatMap((part) => part.items.map(([id]) => id));
 export type RubricItem = (typeof RUBRIC_ITEMS)[number];
 export const ITEM_MAX = 10;
-/** A blank item could not be read. */
-export type MockRubric = { items: Record<RubricItem, number | null>; comments: string };
+/** The 10 items of the form used before 20 November 2026 (out of 100). A stored result with only these stays valid. */
+export const LEGACY_RUBRIC_ITEMS = RUBRIC_ITEMS.slice(0, 10);
+/** The Stress Test sub-rubric: (A) listens and acknowledges, (B) explains without blaming, (C) gives a concrete plan. */
+export type StressTicks = { listens: boolean; explains: boolean; plan: boolean };
+/**
+ * A blank item could not be read. A legacy result has no Professional Conduct items and no ticks.
+ * `checksDone` is the school's required-checks answer on results from 20–25 Nov 2026. Kevin removed the question
+ * on 25 Nov 2026, so nothing reads it.
+ */
+type LegacyItem = Exclude<RubricItem, "hygiene" | "stress" | "safeguarding" | "curiosity">;
+export type MockRubric = {
+  items: Record<LegacyItem, number | null> & Partial<Record<RubricItem, number | null>>;
+  comments: string;
+  stressTest?: StressTicks;
+  checksDone?: boolean | null;
+};
+
+const isLegacy = (rubric: MockRubric) => !("hygiene" in rubric.items);
+/** The items this result was scored on. */
+export const rubricItems = (rubric: MockRubric): readonly RubricItem[] => (isLegacy(rubric) ? LEGACY_RUBRIC_ITEMS : RUBRIC_ITEMS);
 
 export function checkRubric(rubric: MockRubric) {
   const problems: string[] = [];
-  for (const id of RUBRIC_ITEMS) {
+  for (const id of rubricItems(rubric)) {
     const score = rubric.items[id];
     if (score === undefined) problems.push(`${id} is missing.`);
     // Heads can write a score between the printed bands, so any whole number on the scale is kept.
@@ -142,12 +169,17 @@ export function checkRubric(rubric: MockRubric) {
   }
   return problems;
 }
-export const rubricNeedsCheck = (rubric: MockRubric) => RUBRIC_ITEMS.some((id) => rubric.items[id] === null);
+export const rubricNeedsCheck = (rubric: MockRubric) => rubricItems(rubric).some((id) => rubric.items[id] === null);
 export function rubricTotals(rubric: MockRubric) {
-  const parts = RUBRIC.map(({ part, items }) => ({
+  const used = new Set<string>(rubricItems(rubric));
+  const parts = RUBRIC.filter(({ items }) => items.some(([id]) => used.has(id))).map(({ part, items }) => ({
     part,
     scored: items.reduce((sum, [id]) => sum + (rubric.items[id] ?? 0), 0),
     max: items.length * ITEM_MAX,
   }));
-  return { parts, total: parts.reduce((sum, part) => sum + part.scored, 0), complete: !rubricNeedsCheck(rubric) };
+  const total = parts.reduce((sum, part) => sum + part.scored, 0);
+  const max = parts.reduce((sum, part) => sum + part.max, 0);
+  return { parts, total, max, percent: Math.round((total / max) * 100), complete: !rubricNeedsCheck(rubric) };
 }
+/** The score the tick count suggests (interviewer guide). The head still chooses the score. */
+export const stressSuggestion = (ticks?: StressTicks) => [1, 4, 7, 10][ticks ? [ticks.listens, ticks.explains, ticks.plan].filter(Boolean).length : 0];

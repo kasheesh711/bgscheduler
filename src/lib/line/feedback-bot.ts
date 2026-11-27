@@ -43,6 +43,7 @@
 // ----------------------------------------------------------------------------
 
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { openShortToken, sealShortToken } from "@/lib/short-token";
 
 import { and, desc, eq, ilike, inArray, isNull, lte, or } from "drizzle-orm";
 
@@ -175,8 +176,10 @@ export function feedbackLinkToken(
 ): string | null {
   if (!secret) return null;
   const exp = Math.floor(now.getTime() / 1000) + LINK_HOURS * 3600;
-  const payload = Buffer.from(JSON.stringify({ c: code, s: subject, exp })).toString("base64url");
-  return `${payload}.${sign(payload, secret).toString("base64url")}`;
+  // Body: expiry seconds (4 bytes) + "code\0subject".
+  const body = Buffer.concat([Buffer.alloc(4), Buffer.from(`${code}\0${subject}`)]);
+  body.writeUInt32BE(exp);
+  return sealShortToken("feedback-link", body, secret);
 }
 
 /** Null for every failure (malformed, wrong signature, expired), so the page gives one answer. */
@@ -187,6 +190,13 @@ export function readFeedbackLinkToken(
 ): { code: string; subject: string; expiresAt: Date } | null {
   try {
     if (!secret || token.length > 600) return null;
+    if (!token.includes(".")) {
+      const body = openShortToken("feedback-link", token, secret);
+      const parts = body && body.length > 4 ? body.subarray(4).toString().split("\0") : [];
+      if (parts.length !== 2 || !body || body.readUInt32BE(0) <= now.getTime() / 1000) return null;
+      return { code: parts[0], subject: parts[1], expiresAt: new Date(body.readUInt32BE(0) * 1000) };
+    }
+    // Older `payload.signature` links (24 h life) stay valid until they expire.
     const [payload, signature, extra] = token.split(".");
     const expected = sign(payload, secret);
     const actual = Buffer.from(signature ?? "", "base64url");

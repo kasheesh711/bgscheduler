@@ -6,8 +6,9 @@ import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { hiringBookings as b, hiringPaperResults as p } from "@/lib/db/schema";
 import { requireHiringAdmin } from "@/lib/hiring/access";
-import { finalReviewAccess, latestReviewPacket, reviewPacketValid, signOffReview, submitReview } from "@/lib/hiring/final-review";
+import { draftReviewPacket, finalReviewAccess, latestReviewPacket, reviewPacketValid, signOffReview, submitReview } from "@/lib/hiring/final-review";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
+import { OFFER_TYPES } from "@/lib/hiring/offer-letters";
 import { markedFile } from "@/lib/hiring/marked-file";
 import { HiringError } from "@/lib/hiring/model";
 import { resumeAttachment } from "@/lib/hiring/resume-files";
@@ -23,8 +24,11 @@ const headers = {
   "X-Robots-Tag": "noindex, nofollow",
   "Referrer-Policy": "no-referrer",
 };
+const draft = { behavioral: z.string().trim().min(10).max(10000), offerType: z.enum(OFFER_TYPES) };
+const csp = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const input = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("submit"), behavioral: z.string().trim().min(10).max(10000), offer: z.string().trim().min(10).max(10000) }).strict(),
+  z.object({ action: z.literal("submit"), ...draft }).strict(),
+  z.object({ action: z.literal("preview"), ...draft }).strict(),
   z.object({ action: z.literal("sign"), packetId: z.uuid(), decision: z.enum(["hire", "reject"]), reason: z.string().trim().max(2000) }).strict(),
 ]);
 
@@ -32,11 +36,11 @@ export async function GET(request: Request, { params }: Context) {
   try {
     const actor = await requireHiringAdmin();
     const access = finalReviewAccess(actor);
-    if (!access.hr && !access.gift) throw new HiringError(403, "This review is for HR and Gift.");
+    if (!access.hr && !access.gift) throw new HiringError(403, "This review is for the sender and Gift.");
     const id = z.uuid().parse((await params).id);
     const db = getDb();
     const candidate = await candidateById(db, id);
-    const packet = await latestReviewPacket(db, id);
+    const saved = await latestReviewPacket(db, id);
     const file = new URL(request.url).searchParams.get("file");
     if (!file) {
       const [appointment] = candidate.stage === "hired"
@@ -44,18 +48,22 @@ export async function GET(request: Request, { params }: Context) {
         : [];
       return NextResponse.json({
         access, stage: candidate.stage, callNotes: access.hr ? candidate.callReview?.notes?.text ?? "" : "", appointment: appointment?.start ?? null,
-        packet: packet && { id: packet.id, behavioral: packet.behavioral, offer: packet.offer },
-        packetValid: await reviewPacketValid(db, id, packet),
+        packet: saved && { id: saved.id, behavioral: saved.behavioral, offer: saved.offer, offerType: saved.offerType ?? null },
+        packetValid: await reviewPacketValid(db, id, saved),
       }, { headers });
     }
-    if (!packet) throw new HiringError(404, "HR has not submitted this review.");
+    // The file links in HR's preview: the current evidence, not the last sent packet.
+    const draft = new URL(request.url).searchParams.has("draft");
+    if (draft && file !== "resume" && file !== "paper") throw new HiringError(404, "File unavailable.");
+    const packet = draft ? await draftReviewPacket(db, id, actor) : saved;
+    if (!packet) throw new HiringError(404, "This review is not submitted.");
     const [paper] = await db.select().from(p).where(and(eq(p.id, packet.evidence.paper.id), eq(p.candidateId, id)));
     if (!paper || paper.updatedAt.toISOString() !== packet.evidence.paper.updatedAt ||
       candidate.resumeSha256 !== packet.evidence.resumeSha256)
-      throw new HiringError(409, "A source file changed. Ask HR to submit a new review packet.");
+      throw new HiringError(409, "A source file changed. Ask Kevin to submit a new review packet.");
     if (file === "html") return new Response(await reviewDocument(packet, `/api/hiring/review/${id}?file=resume`, `/api/hiring/review/${id}?file=paper`), {
       headers: { ...headers, "Content-Type": "text/html; charset=utf-8",
-        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" },
+        "Content-Security-Policy": csp },
     });
     if (file === "paper") return await markedFile(paper, db);
     if (file !== "resume" && file !== "zip") throw new HiringError(404, "File unavailable.");
@@ -87,8 +95,14 @@ export async function POST(request: Request, { params }: Context) {
     const id = z.uuid().parse((await params).id);
     const value = input.parse(await request.json());
     const db = getDb();
+    if (value.action === "preview") {
+      const file = `/api/hiring/review/${id}?draft=1&file=`;
+      return new Response(await reviewDocument(await draftReviewPacket(db, id, actor, value), `${file}resume`, `${file}paper`), {
+        headers: { ...headers, "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": csp },
+      });
+    }
     const key = value.action === "submit"
-      ? await submitReview(db, id, actor, { behavioral: value.behavioral, offer: value.offer })
+      ? await submitReview(db, id, actor, { behavioral: value.behavioral, offerType: value.offerType })
       : await signOffReview(db, id, value.packetId, actor, value.decision, value.reason);
     after(async () => {
       const { config } = await settings(db);

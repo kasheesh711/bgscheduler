@@ -4,7 +4,7 @@ import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import { adminUsers, admissionsCaseMembers, authEmailChallenges, authEmailRateLimits } from "@/lib/db/schema";
 import { resolveUserAccess } from "@/lib/auth-access";
-import { createOutboundEmailSender, outboundEmailTransport } from "@/lib/email/outbound";
+import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { renderTeacherEmail } from "@/lib/teacher-emails/render";
 import { teacherEmailLogoUrl } from "@/lib/teacher-emails/brand";
 import { teacherEmailPublicBaseUrl } from "@/lib/teacher-emails/config";
@@ -39,12 +39,8 @@ async function takeLimit(tx: Database, key: string, limit: number, now: Date) {
 }
 
 export function emailCodeSenderKeys(): Array<"primary" | "backup"> {
-  // Workspace Gmail and Resend fall back down their own chain, and "backup" is that same chain, so a second attempt would only repeat it.
-  if (outboundEmailTransport() !== "apps_script") return ["primary"];
-  const keys: Array<"primary" | "backup"> = [];
-  if (process.env.SCHEDULE_EMAIL_APPS_SCRIPT_URL?.trim() && process.env.SCHEDULE_EMAIL_APPS_SCRIPT_SECRET?.trim()) keys.push("primary");
-  if (process.env.SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_URL?.trim() && process.env.SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_SECRET?.trim()) keys.push("backup");
-  return keys;
+  // Staff mail has one sender (admin@ through Workspace Gmail): a second key would only resend through it.
+  return ["primary"];
 }
 
 export async function sendEmailCode(email: string, code: string, challengeId: string) {

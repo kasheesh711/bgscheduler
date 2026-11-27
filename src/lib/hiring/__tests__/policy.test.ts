@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
@@ -17,6 +18,7 @@ import {
   degreeEligible,
   englishLevel,
   hardStops,
+  visitSubject,
   preScreenAssessmentSchema,
   preScreenPoints,
   profileScore,
@@ -178,6 +180,7 @@ describe("hiring decision boundaries", () => {
   it("new assessments need briefs; stored rows without them still parse", () => {
     const ids = ["degree", "subject", "curriculum", "teaching", "english"];
     const briefed = {
+      schools: [],
       ...assessment,
       briefSummary: "The tutor holds a maths degree.",
       criteria: assessment.criteria.map((c) => ({ ...c, brief: "Short line." })),
@@ -314,8 +317,16 @@ describe("hiring decision boundaries", () => {
     expect(englishLevel("Native", "")).toBe(5);
     expect(englishLevel("Native", "CEFR C2")).toBe(5);
   });
-  it("returns the next five whole Bangkok business days and respects closures", () => {
-    expect(businessDates(new Date("2026-10-30T23:00:00Z"))).toEqual([
+  it("adds the weekend days for the test, and they do not use up the five business dates", () => {
+    // Saturday 31 Oct 2026, 06:00 Bangkok.
+    const dates = businessDates(new Date("2026-10-30T23:00:00Z"), ["2026-11-03"], 5, true);
+    expect(dates).toEqual(["2026-11-01", "2026-11-02", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08", "2026-11-09"]);
+  });
+  it("returns the next whole Bangkok business days (four weeks by default) and respects closures", () => {
+    const all = businessDates(new Date("2026-10-30T23:00:00Z"));
+    expect(all).toHaveLength(20);
+    expect(all.at(-1)).toBe("2026-11-27");
+    expect(businessDates(new Date("2026-10-30T23:00:00Z"), [], 5)).toEqual([
       "2026-11-02",
       "2026-11-03",
       "2026-11-04",
@@ -323,7 +334,7 @@ describe("hiring decision boundaries", () => {
       "2026-11-06",
     ]);
     expect(
-      businessDates(new Date("2026-10-30T23:00:00Z"), ["2026-11-03"]),
+      businessDates(new Date("2026-10-30T23:00:00Z"), ["2026-11-03"], 5),
     ).toEqual([
       "2026-11-02",
       "2026-11-04",
@@ -341,7 +352,21 @@ describe("hiring decision boundaries", () => {
       expiry,
       "test-secret",
     );
-    expect(readBookingToken(token, now, "test-secret").kind).toBe("mock");
+    expect(token).toHaveLength(50);
+    expect(() => bookingToken("not-a-uuid", "mock", expiry, "test-secret")).toThrow();
+    // Short links store the kind's position, so links already sent need this order (append only).
+    expect(tokenKindSchema.options).toEqual(["paper", "mock", "visit", "paper-visit", "two-day", "brief", "call", "contract", "onboarding", "paper-check"]);
+    expect(readBookingToken(token, now, "test-secret")).toEqual({
+      id: "00000000-0000-4000-8000-000000000001", kind: "mock", exp: expiry.getTime() / 1000,
+    });
+    expect(readBookingToken(bookingToken("00000000-0000-4000-8000-000000000001", "paper-check", expiry, "test-secret"), now, "test-secret").kind).toBe("paper-check");
+    const flipped = token.slice(0, 5) + (token[5] === "A" ? "B" : "A") + token.slice(6);
+    expect(() => readBookingToken(flipped, now, "test-secret")).toThrow();
+    // A link sent before 25 Nov 2026 (payload.signature) still opens until it expires.
+    const payload = Buffer.from(JSON.stringify({ id: "00000000-0000-4000-8000-000000000001", kind: "brief", exp: expiry.getTime() / 1000 })).toString("base64url");
+    const old = `${payload}.${createHmac("sha256", "test-secret").update(payload).digest("base64url")}`;
+    expect(readBookingToken(old, now, "test-secret").kind).toBe("brief");
+    expect(() => readBookingToken(old, expiry, "test-secret")).toThrow();
     expect(() => readBookingToken(token + "x", now, "test-secret")).toThrow();
     expect(() => readBookingToken(token, expiry, "test-secret")).toThrow();
     expect(() => readBookingToken(token, now, "wrong-secret")).toThrow();
@@ -512,6 +537,20 @@ describe("pre-screen scoring", () => {
     expect(degreeEligible("Below Bachelor's")).toBe(false);
     expect(hardStops(form({ degree: "Below Bachelor's" }), answer, ["Biology"], config).stops).toHaveLength(1);
   });
+  it("keeps every subject the candidate ticked, whatever the AI's subject check says", () => {
+    // Joei, 22 Nov 2026: ticked EFL/ESL and History; the AI marked EFL/ESL not relevant and the visit went to History.
+    const heads = configSchema.parse({
+      callThreshold: null,
+      interviewers: [{ canonicalKey: "Tito", email: "tito@example.com", subjects: ["EFL/ESL", "History"] }],
+      subjectPriority: [
+        { subject: "EFL/ESL", hiring: true },
+        { subject: "History", hiring: true },
+      ],
+    });
+    expect(visitSubject(form({ subjects: "EFL/ ESL, History", english: "Native" }), answer, heads)).toBe("EFL/ESL");
+    // The English level hard stop still removes an English subject.
+    expect(visitSubject(form({ subjects: "EFL/ ESL, History", english: "Upper-Intermediate (B2)" }), answer, heads)).toBe("History");
+  });
   it("scores each real weekly-hours band", () => {
     const only = (weeklyHours: string) => availabilityFraction(form({ weeklyHours })) - 0.5;
     expect(only("1-10") / 0.5).toBeCloseTo(0.2);
@@ -610,7 +649,7 @@ describe("pre-screen scoring", () => {
     const json = JSON.stringify(z.toJSONSchema(preScreenOutputSchema, { target: "draft-07" }));
     expect(json).toMatch(/briefSummary/);
     expect(preScreenOutputSchema.safeParse(six).success).toBe(false);
-    expect(preScreenOutputSchema.safeParse({ ...six, briefSummary: "Short.", criteria: six.criteria.map((c) => ({ ...c, brief: "Short." })) }).success).toBe(true);
+    expect(preScreenOutputSchema.safeParse({ ...six, schools: [], briefSummary: "Short.", criteria: six.criteria.map((c) => ({ ...c, brief: "Short." })) }).success).toBe(true);
   });
   it("checks written evidence against the two written answers only", () => {
     const source = "motivation: I like teaching\nteachingApproach: Ask what went wrong first\n\nApplication education and experience:\nTaught at Springfield School for ten years";
@@ -730,4 +769,15 @@ it("keeps LINE Login bound to the candidate browser and rejects a mismatched LIN
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   }
+});
+
+it("lets the mock teaching follow the test on the same day after the grading gap, or on a later day", async () => {
+  const { mockCanFollow } = await import("../model");
+  const examEnd = "2026-11-30T05:00:00.000Z"; // 12:00 Bangkok
+  expect(mockCanFollow(examEnd, "2026-11-30T04:00:00.000Z")).toBe(false); // during the test
+  expect(mockCanFollow(examEnd, "2026-11-30T05:00:00.000Z")).toBe(false); // no time to grade
+  expect(mockCanFollow(examEnd, "2026-11-30T05:15:00.000Z")).toBe(true);
+  expect(mockCanFollow(examEnd, "2026-11-30T06:00:00.000Z")).toBe(true); // 13:00 the same day
+  expect(mockCanFollow(examEnd, "2026-12-01T03:00:00.000Z")).toBe(true); // a later day
+  expect(mockCanFollow(examEnd, "2026-11-27T06:00:00.000Z")).toBe(false); // an earlier day
 });

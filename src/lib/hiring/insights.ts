@@ -1,5 +1,5 @@
 import { isDecided, SUBJECTS, type HiringConfig, type Stage, type Subject } from "./model";
-import { profileScore, topHiringSubject, workRightsAccepted, workRightsPenalty, type Assessment } from "./scoring";
+import { highSchoolFraction, profileScore, topHiringSubject, workRightsAccepted, workRightsPenalty, type Assessment } from "./scoring";
 import type { CallReview } from "./limits";
 
 export const STAGE_LABELS: Record<Stage, string> = {
@@ -17,6 +17,7 @@ export const STAGE_LABELS: Record<Stage, string> = {
   stopped: "Stopped",
   hired: "Hired",
   rejected: "Rejected",
+  soft_rejected: "Soft rejected",
 };
 export const ACTIVE_STAGES: Stage[] = [
   "new",
@@ -96,7 +97,7 @@ type InsightCandidate = {
 type GateConfig = Pick<
   HiringConfig,
   "profileThreshold" | "profileWeights" | "acceptedWorkRights" | "workRightsPenalties" | "subjectPriority" | "callThreshold"
->;
+> & Partial<Pick<HiringConfig, "highSchools">>;
 type InsightInput = {
   config: GateConfig & Pick<HiringConfig, "interviewers">;
   candidates: InsightCandidate[];
@@ -124,7 +125,15 @@ export function profileGate(
   candidate: Pick<
     InsightCandidate,
     "email" | "previouslyContacted" | "workRightsAnswer" | "profileAssessment" | "universityAssessment"
-  > & { callReview?: CallReview | null; /** The app's call booking link reached the candidate. */ callInvited?: boolean },
+  > & {
+    callReview?: CallReview | null;
+    /** The app's call booking link reached the candidate. */
+    callInvited?: boolean;
+    /** A confirmed HR call exists, ahead or started with no result yet. */
+    callBooked?: boolean;
+    /** Brought back from soft rejected (Kevin, 25 Nov 2026): the pass score no longer holds them. */
+    broughtBackAt?: Date | string | null;
+  },
   config: GateConfig,
 ): {
   eligible: boolean;
@@ -132,7 +141,7 @@ export function profileGate(
   short: string[];
   review: string[];
   subject: Subject | null;
-  /** The score is at or above the call score and HR has not recorded a good call. */
+  /** HR has not recorded a good call, and the score is at or above the call score or a call is booked. */
   awaitingCall: boolean;
 } {
   const reasons: string[] = [];
@@ -154,9 +163,12 @@ export function profileGate(
   let awaitingCall = false;
   if (!assessment) add("The profile is not scored.", "Not scored");
   else {
-    const score = profileScore(assessment, config.profileWeights, candidate.universityAssessment?.fraction ?? 0, workRightsPenalty(candidate.workRightsAnswer, config));
-    if (score < config.profileThreshold) add("The profile score is below the threshold.", "Below profile threshold");
-    awaitingCall = config.callThreshold !== null && score >= config.callThreshold && !called;
+    const score = profileScore(assessment, config.profileWeights, candidate.universityAssessment?.fraction ?? 0, workRightsPenalty(candidate.workRightsAnswer, config), highSchoolFraction(assessment, config));
+    // Kevin, 24 Nov 2026: a raised score does not undo a call that is booked or done. The booked call stays on the Calls
+    // tab, and a good call still sends the form. A blank call score turns calls off and ends a booked call, as before.
+    const booked = !!candidate.callBooked && config.callThreshold !== null;
+    if (score < config.profileThreshold && !called && !booked && !candidate.broughtBackAt) add("The profile score is below the threshold.", "Below profile threshold");
+    awaitingCall = !called && ((config.callThreshold !== null && score >= config.callThreshold) || booked);
     if (assessment.criteria.some((c) => c.id === "degree" && c.result === "not_met"))
       final("The degree criterion is not met.", "Degree not met");
     if (!relevant.length) final("The profile supports no subject.", "No supported subject");
@@ -185,7 +197,11 @@ export function readyToInvite(
   );
 }
 
-export function buildInsights(input: InsightInput, now = new Date()) {
+export function buildInsights(
+  input: InsightInput,
+  now = new Date(),
+  ready = input.candidates.filter((c) => readyToInvite(c, input.config)).length,
+) {
   const { candidates, config } = input;
   const threshold = config.profileThreshold;
   // No reply and No booking stay in `active`: a late reply is scored and a click sends a new link. `parked` says how many they are.
@@ -245,6 +261,7 @@ export function buildInsights(input: InsightInput, now = new Date()) {
   const status = (name: string) => input.outbox.filter((j) => j.status === name).length;
 
   return {
+    observedAt: now.toISOString(),
     total: candidates.length,
     active: active.length,
     parked: PARKED.reduce((n, stage) => n + byStage[stage], 0),
@@ -259,14 +276,14 @@ export function buildInsights(input: InsightInput, now = new Date()) {
       : sorted.length % 2
         ? sorted[mid]
         : (sorted[mid - 1] + sorted[mid]) / 2,
-    ready: candidates.filter((c) => readyToInvite(c, config)).length,
+    ready,
     pastReview: stages.find((s) => s.stage === "pre_screen")?.reached ?? 0,
     stages,
     histogram,
     evidence,
-    weakest: scores.length
-      ? evidence.reduce((low, row) => (row.metShare < low.metShare ? row : low))
-      : null,
+    weakest: evidence.reduce<(typeof evidence)[number] | null>(
+      (low, row) => row.total && (!low || row.metShare < low.metShare) ? row : low, null,
+    ),
     subjects,
     uncoveredSubjects: subjects.filter((s) => !s.interviewers.length).length,
     appointmentsThisWeek: appointments.size,

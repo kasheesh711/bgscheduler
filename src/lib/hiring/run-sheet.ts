@@ -13,6 +13,8 @@ export interface RunSheetBooking {
   startTime: Date | string;
   status: string;
   visitId: string | null;
+  /** Set by the server for a weekend paper test (rooms.ts): the room, or null when every hiring room is taken. */
+  room?: string | null;
 }
 export interface RunSheetInput {
   bookings: RunSheetBooking[];
@@ -46,8 +48,9 @@ export interface RunSheetRow {
   hodReason: string | null;
   paper: { id: string; name: string; markScheme: boolean } | null;
   paperReason: string | null;
-  room: null;
-  roomReason: string;
+  room: string | null;
+  /** Null when a room is given. */
+  roomReason: string | null;
   status: string;
   /** Roster heads who take the subject. A paper-only visit shows to each of them. */
   subjectHeads: string[];
@@ -55,10 +58,11 @@ export interface RunSheetRow {
 }
 
 export const NO_ROOM = "Needs review: no room is booked for this visit";
+export const NO_HIRING_ROOM = "Needs review: I learned, Hope and the HR room are all taken at this time";
 export const NO_SUBJECT = "Needs review: no subject";
 export const NO_MARK_SCHEME = "No mark scheme: marking cannot run";
 export const NO_PASS_MARK = "No pass mark";
-export const UNRECORDED_OWNER = "HR — record the visit or move the stage";
+export const UNRECORDED_OWNER = "Kevin — record the visit or move the stage";
 /** Stages that say a visit is booked (the old flow's paper_booked and mock_booked included). */
 const VISIT_BOOKED_STAGES = ["onsite_booked", "paper_booked", "mock_booked"];
 export const MOCK_ONLY = "Mock only: no paper sitting is booked";
@@ -79,13 +83,16 @@ export function buildRunSheet({ bookings, candidates, config, library, tutors }:
   const visits = new Map<string, RunSheetBooking[]>();
   for (const b of bookings) {
     if (b.kind !== "paper" && b.kind !== "mock") continue;
-    const id = b.visitId ?? b.id;
+    // A two-day visit (Kevin, 24 Nov 2026) has its test and its mock on two dates: one row for each day, so the head and
+    // the office see the mock on its own day. The key ends with the date; a visit id holds no "|".
+    const id = `${b.visitId ?? b.id}|${localDate(at(b.startTime))}`;
     visits.set(id, [...(visits.get(id) ?? []), b]);
   }
   const ready = (kind: string, subject: string) =>
     library.find((f) => f.kind === kind && f.subject === subject && f.status === "ready");
   const rows: RunSheetRow[] = [];
-  for (const [visitId, all] of visits) {
+  for (const [key, all] of visits) {
+    const visitId = key.split("|")[0];
     // A visit with any confirmed part is confirmed; its cancelled parts are history.
     const confirmed = all.filter((b) => b.status === "confirmed");
     const parts = (confirmed.length ? confirmed : all).sort((a, b) => at(a.startTime).getTime() - at(b.startTime).getTime());
@@ -99,9 +106,11 @@ export function buildRunSheet({ bookings, candidates, config, library, tutors }:
 
     let hod: RunSheetHead | null = null;
     let hodReason: string | null = null;
-    if (mockRow?.interviewerKey) {
-      const key = mockRow.interviewerKey;
-      const email = config.interviewers.find((h) => h.canonicalKey === key)?.email ?? mockRow.interviewerEmail ?? null;
+    // The test day of a two-day visit names the head who is booked for its mock, also when the mock is on a later day.
+    const headRow = mockRow ?? bookings.find((b) => b.kind === "mock" && b.status === "confirmed" && !!b.visitId && b.visitId === visitId);
+    if (headRow?.interviewerKey) {
+      const key = headRow.interviewerKey;
+      const email = config.interviewers.find((h) => h.canonicalKey === key)?.email ?? headRow.interviewerEmail ?? null;
       hod = { key, name: headName(key, tutors), email, source: "booked" };
     } else if (mockRow) hodReason = "Needs review: no head is booked for this mock";
     else if (!subject) hodReason = NO_SUBJECT;
@@ -141,9 +150,9 @@ export function buildRunSheet({ bookings, candidates, config, library, tutors }:
       hodReason,
       paper,
       paperReason,
-      // No room is stored for a hiring visit today (no column, no reservation link).
-      room: null,
-      roomReason: NO_ROOM,
+      // Only a weekend test gets a room (rooms.ts); a weekday visit still has none.
+      room: paperRow?.room ?? null,
+      roomReason: paperRow?.room ? null : paperRow?.room === null ? NO_HIRING_ROOM : NO_ROOM,
       status: confirmed.length ? "confirmed" : first.status,
       subjectHeads,
       issues,
@@ -229,7 +238,7 @@ export function adminPrintListMessage(rows: RunSheetRow[], date: string) {
     `Print list for ${dayName(date)}: ${day.length} visit${day.length === 1 ? "" : "s"}, ${review} need review.`,
     ...day.map(
       (r, i) =>
-        `${i + 1}. ${timeText(r)}. ${r.candidateName}. ${r.subject ?? NO_SUBJECT}. Paper: ${r.paper?.name ?? r.paperReason}. Room: ${r.roomReason}.`,
+        `${i + 1}. ${timeText(r)}. ${r.candidateName}. ${r.subject ?? NO_SUBJECT}. Paper: ${r.paper?.name ?? r.paperReason}. Room: ${r.room ?? r.roomReason}.`,
     ),
   ].join("\n");
 }
@@ -251,12 +260,13 @@ export function headUpcomingMessage(rows: RunSheetRow[], headKey: string, from: 
 /** Who must act to close each gap. */
 export function gapOwner(reason: string) {
   if (reason === NO_ROOM) return "Kevin: decide where hiring visit rooms are stored";
-  if (reason === NO_SUBJECT) return "HR: set the visit subject on the candidate";
+  if (reason === NO_HIRING_ROOM) return "Kevin: move the test or free I learned, Hope or the HR room";
+  if (reason === NO_SUBJECT) return "Kevin: set the visit subject on the candidate";
   if (reason.includes("question paper") || reason === NO_MARK_SCHEME) return "Kevin: add the file in Rules and setup, Paper library";
   if (reason === NO_PASS_MARK) return "Kevin: set the pass mark in Rules and setup, Paper pass marks";
-  if (reason.includes(" subjects (")) return "HR: book one subject per visit";
+  if (reason.includes(" subjects (")) return "Kevin: book one subject per visit";
   if (reason.includes("head")) return "Kevin: set the heads in Rules and setup";
-  return "HR: open the candidate record";
+  return "Kevin: open the candidate record";
 }
 
 /** Replay counts: how many visits the run sheet can fully staff, and every gap by reason. */

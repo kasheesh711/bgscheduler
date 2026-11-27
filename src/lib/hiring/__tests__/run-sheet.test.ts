@@ -11,6 +11,7 @@ import {
   UNRECORDED_OWNER,
   unrecordedVisits,
   NO_ROOM,
+  NO_HIRING_ROOM,
   pastVisits,
   printDays,
   staffGap,
@@ -58,6 +59,20 @@ const base: RunSheetInput = {
 };
 
 describe("buildRunSheet", () => {
+  it("gives a two-day visit one row on the test day and one on the mock day", () => {
+    // Kevin, 24 Nov 2026: the test on Sunday, the mock teaching on Monday. The head must see the mock on Monday.
+    const rows = buildRunSheet({
+      ...base,
+      bookings: [
+        booking({ id: "p", visitId: "v1", startTime: "2026-11-15T03:00:00.000Z" }),
+        booking({ id: "m", kind: "mock", visitId: "v1", interviewerKey: "Peat", startTime: "2026-11-16T04:00:00.000Z" }),
+      ],
+    });
+    expect(rows.map((row) => [row.visitId, row.date, row.paperStart, row.mockStart, row.hod?.key])).toEqual([
+      ["v1", "2026-11-15", "10:00", null, "Peat"],
+      ["v1", "2026-11-16", null, "11:00", "Peat"],
+    ]);
+  });
   it("groups a paper and mock into one visit and takes the booked head", () => {
     const rows = buildRunSheet({
       ...base,
@@ -201,7 +216,7 @@ describe("review fixes", () => {
     const [row] = buildRunSheet({ ...base, bookings: [booking({ subjects: ["Mathematics", "Physics"] })] });
     expect(row.subject).toBe("Mathematics");
     expect(row.issues).toContain("Needs review: 2 subjects (Mathematics, Physics), only Mathematics is shown");
-    expect(replayRunSheet([row]).owners[row.issues[0]]).toBe("HR: book one subject per visit");
+    expect(replayRunSheet([row]).owners[row.issues[0]]).toBe("Kevin: book one subject per visit");
   });
 
   it("shows a mock-only visit with no paper to print and no paper gap", () => {
@@ -270,5 +285,23 @@ describe("booked-stage candidates with no booking row", () => {
     expect(unrecordedVisits({ ...stageIn("onsite_booked"), bookings: [booking({})] })).toHaveLength(0);
     expect(unrecordedVisits(stageIn("invited"))).toHaveLength(0);
     expect(unrecordedVisits(stageIn("onsite_booked", "2026-08-01T00:00:00Z"))).toHaveLength(0);
+  });
+});
+
+describe("weekend test rooms on the run sheet", () => {
+  it("shows the given room, flags a full weekend, and keeps weekday visits at no room", () => {
+    const rows = buildRunSheet({
+      ...base,
+      bookings: [
+        booking({ id: "w1", candidateId: "c1", room: "Hope (online)" }),
+        booking({ id: "w2", candidateId: "c2", room: null, subjects: ["English Language"] }),
+        booking({ id: "w3", candidateId: "c3" }),
+      ],
+    });
+    expect(rows.map((r) => [r.room, r.roomReason])).toEqual([
+      ["Hope (online)", null],
+      [null, NO_HIRING_ROOM],
+      [null, NO_ROOM],
+    ]);
   });
 });

@@ -98,6 +98,10 @@
     {
       "path": "/api/internal/hiring-recruitment",
       "schedule": "0 2 * * 1"
+    },
+    {
+      "path": "/api/internal/hiring-print-pack",
+      "schedule": "29 1 * * *"
     }
   ]
 }

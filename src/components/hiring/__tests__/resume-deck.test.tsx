@@ -94,7 +94,7 @@ describe("ResumeDeck", () => {
   });
   it("shows the application text when no file is stored", () => {
     const html = deck([candidate({ resumeState: "none", resumeType: null })]);
-    expect(html).toContain("No original file is stored yet");
+    expect(html).toContain("Original résumé unavailable.");
     expect(html).toContain("Loading source text");
   });
   it("says so when nobody waits for a call", () => {

@@ -1,19 +1,32 @@
 import { and, asc, eq, gte, lt, lte, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
-import { hiringBookings as bookings, hiringCandidates as candidates, hiringOutbox as outbox, hiringRecruitmentDeliveries as deliveries, hiringSettings } from "@/lib/db/schema";
+import { hiringBookings as bookings, hiringCandidates as candidates, hiringOutbox as outbox, hiringRecruitmentDeliveries as deliveries, hiringSettings, progressLineGroups } from "@/lib/db/schema";
+import { progressUsesTutorBot } from "@/lib/line/progress-reminders";
 import { fetchLineGroupSummary, pushLineTextMessage, replyLineMessage, LinePushError } from "@/lib/line/client";
 import { isScheduleBotAdmin } from "@/lib/line/schedule-bot";
 import { mentionedTheaText } from "@/lib/line/thea-query";
+import { visitClashes } from "./head-schedule";
 import { localDate, runtimeWritesAllowed, shiftDate, ZONE } from "./model";
 import { storedResume } from "./resume-files";
 import { audit, callResumeLink, settings } from "./service";
 
 const GROUP_NAME = "BeGifted Recruitment";
-const when = (date: Date) => date.toLocaleString("en-GB", { timeZone: ZONE, dateStyle: "medium", timeStyle: "short" });
-/** The contact lines of a LINE notice about one candidate. */
-export const contactLines = (candidate: { email: string | null; phone: string | null }) =>
-  `Email: ${candidate.email ?? "not recorded"}\nPhone: ${candidate.phone ?? "not recorded"}`;
+// LINE notices go to staff in Bangkok, so times carry no zone label.
+const hm = (date: Date) => date.toLocaleTimeString("en-GB", { timeZone: ZONE, hour: "2-digit", minute: "2-digit" });
+/** "Thu 5 Nov, 09:00" in Bangkok time. */
+export const lineWhen = (date: Date) =>
+  `${date.toLocaleDateString("en-GB", { timeZone: ZONE, weekday: "short", day: "numeric", month: "short" })}, ${hm(date)}`;
+/** "Thu 5 Nov, 09:00–09:30". */
+export const lineSlot = (start: Date, end: Date) => `${lineWhen(start)}–${hm(end)}`;
+/** "Jane Doe · Mathematics", the first line after a notice's title. */
+export const lineWho = (name: string, subjects: string) => `${name} · ${subjects || "Subject not recorded"}`;
+/** One contact line: "jane@example.com · +66812345678". */
+export const contactLine = (candidate: { email: string | null; phone: string | null }) =>
+  [candidate.email, candidate.phone].filter(Boolean).join(" · ") || "No email or phone recorded";
+
+/** LINE textV2 reads `{name}` as a placeholder: double every other brace (for example in a name), keep `{person}`. */
+export const taggedText = (message: string) => message.replace(/[{}]/g, (c) => c + c).replaceAll("{{person}}", "{person}");
 
 /** LINE limits each text message to 5,000 UTF-16 units. Leave space for the part number. */
 export function recruitmentParts(text: string): string[] {
@@ -27,8 +40,35 @@ export function recruitmentParts(text: string): string[] {
   return parts.map((value, index) => parts.length > 1 ? `(${index + 1}/${parts.length})\n${value}` : value);
 }
 
+/**
+ * "@Thea print setup": the sender becomes the person Thea tags in the 08:30 print message. Only in the connected
+ * recruitment group, which holds staff only, so any member may take it over.
+ */
+async function receivePrintSetup(db: Database, raw: unknown) {
+  const event = raw as { source?: { type?: string; groupId?: string; userId?: string }; replyToken?: string };
+  const userId = event.source?.userId ?? "";
+  if (event.source?.type !== "group" || !/^U[0-9a-f]{32}$/.test(userId) || !runtimeWritesAllowed()) return;
+  const saved = await withDatabaseTransaction(db, async tx => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-settings'))`);
+    const current = await settings(tx);
+    if (!current.row || !current.config.recruitmentLineGroupId || current.config.recruitmentLineGroupId !== event.source!.groupId) return false;
+    if (current.config.printLineUserId === userId) return true;
+    await tx.update(hiringSettings).set({
+      config: { ...current.config, printLineUserId: userId },
+      revision: current.row.revision + 1, updatedBy: `line:${userId}`, updatedAt: new Date(),
+    }).where(eq(hiringSettings.id, "default"));
+    await audit(tx, `line:${userId}`, "recruitment-print-person", null, { userId });
+    return true;
+  });
+  if (event.replyToken) await replyLineMessage({ tutorBot: true, replyToken: event.replyToken,
+    text: saved ? "Done. At 08:30 on each day with paper tests, Thea will tag you here with one link to print all the papers."
+      : `Use this command in ${GROUP_NAME} after it is connected.` });
+}
+
 export async function receiveRecruitmentSetup(db: Database, raw: unknown): Promise<boolean> {
-  if (mentionedTheaText(raw)?.toLowerCase() !== "recruitment setup") return false;
+  const command = mentionedTheaText(raw)?.toLowerCase();
+  if (command === "print setup") { await receivePrintSetup(db, raw); return true; }
+  if (command !== "recruitment setup") return false;
   const event = raw as { source?: { type?: string; groupId?: string; userId?: string }; replyToken?: string };
   if (event.source?.type !== "group" || !/^C[0-9a-f]{32}$/.test(event.source.groupId ?? "")
     || !isScheduleBotAdmin(event.source.userId ?? "") || !runtimeWritesAllowed()) return true;
@@ -49,11 +89,11 @@ export async function receiveRecruitmentSetup(db: Database, raw: unknown): Promi
     await audit(tx, `line:${event.source!.userId}`, "recruitment-group", null, group);
   });
   if (event.replyToken) await replyLineMessage({ tutorBot: true, replyToken: event.replyToken,
-    text: "Thea recruitment notices are connected. Mock bookings, changes and cancellations, and HR call bookings and moves, will appear here. The weekly summary is sent on Mondays at 09:00 Bangkok." });
+    text: "Connected. Thea will post hiring updates here: bookings, moves, cancellations and results. A summary comes every Monday at 09:00." });
   return true;
 }
 
-async function enqueue(db: Database, key: string, groupId: string, text: string, bookingId: string | null, notice: string) {
+export async function enqueueRecruitmentLine(db: Database, key: string, groupId: string, text: string, bookingId: string | null, notice: string) {
   await db.insert(deliveries).values(recruitmentParts(text).map((message, index) => ({
     key: `${key}:${String(index).padStart(4, "0")}`, groupId, message, bookingId, notice,
   }))).onConflictDoNothing({ target: deliveries.key });
@@ -68,24 +108,26 @@ export async function queueRecruitmentMock(db: Database, booking: typeof booking
   const [candidate] = await db.select({ name: candidates.name, email: candidates.email, phone: candidates.phone,
     resumePath: candidates.resumePath, resumeType: candidates.resumeType }).from(candidates).where(eq(candidates.id, booking.candidateId));
   if (!candidate) throw new Error(`The ${booking.kind} candidate is missing.`);
-  const time = `${when(booking.startTime)}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: ZONE, hour: "2-digit", minute: "2-digit" })} (Bangkok)`;
+  const time = lineSlot(booking.startTime, booking.endTime);
+  const was = movedFrom ? `\nOld time (cancelled): ${lineWhen(movedFrom)}` : "";
+  const who = lineWho(candidate.name, booking.subjects.join(", "));
   if (booking.kind === "call") {
-    await enqueue(db, `call:${booking.id}:${notice}`, config.recruitmentLineGroupId,
-      `HR pre-screen call ${notice}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nTime: ${time}${movedFrom ? `\nPrevious time: ${when(movedFrom)} (cancelled)` : ""}\nRésumé: ${
-        storedResume(booking.candidateId, candidate.resumePath, candidate.resumeType) ? callResumeLink(booking) : "No file stored. See the Hiring page."}`,
+    await enqueueRecruitmentLine(db, `call:${booking.id}:${notice}`, config.recruitmentLineGroupId,
+      `${notice === "cancelled" ? "❌" : "📞"} HR call ${notice}\n${who}\n${time} · Google Meet${was}\n${contactLine(candidate)}\nRésumé: ${
+        storedResume(booking.candidateId, candidate.resumePath, candidate.resumeType) ? callResumeLink(booking) : "no file. See the Hiring page."}`,
       booking.id, notice);
     return;
   }
-  const text = `Mock teaching ${notice}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nInterviewer: ${booking.interviewerKey ?? "To be confirmed"}\nTime: ${time}\nPlace: ${config.location}${movedFrom ? `\nPrevious time: ${when(movedFrom)} (cancelled)` : ""}`;
-  await enqueue(db, `mock:${booking.id}:${notice}`, config.recruitmentLineGroupId, text, booking.id, notice);
+  const text = `${notice === "cancelled" ? "❌" : "🧑‍🏫"} Mock teaching ${notice}\n${who}\n${time} · Head: ${booking.interviewerKey ?? "to be confirmed"}${was}\n${contactLine(candidate)}`;
+  await enqueueRecruitmentLine(db, `mock:${booking.id}:${notice}`, config.recruitmentLineGroupId, text, booking.id, notice);
 }
 
 /** A head's decision after a mock. HR prepares the review for a Yes recommendation. One notice for each recorded decision. */
-export async function queueRecruitmentHeadDecision(db: Database, candidate: { id: string; name: string }, input: { decision: "hire" | "reject"; reason: string; head: string; subject: string | null; key: string }) {
+export async function queueRecruitmentHeadDecision(db: Database, candidate: { id: string; name: string }, input: { decision: "hire" | "reject"; reason: string; head: string; subject: string | null; key: string; offerSent?: boolean }) {
   const { config } = await settings(db);
   if (!config.recruitmentLineGroupId) return;
-  await enqueue(db, `head-decision:${input.key}`, config.recruitmentLineGroupId,
-    `Head decision: ${input.decision === "hire" ? "HIRE" : "DO NOT HIRE"}\nCandidate: ${candidate.name} — ${input.subject ?? "Subject not recorded"}\nHead: ${input.head}\nReason: ${input.reason || "None given"}\n${input.decision === "hire" ? "HR: add the pre-screen call assessment and send the packet to Gift." : "The rejection email is queued."}`,
+  await enqueueRecruitmentLine(db, `head-decision:${input.key}`, config.recruitmentLineGroupId,
+    `${input.decision === "hire" ? "✅ HIRE" : "❌ DO NOT HIRE"} · ${input.head}\n${lineWho(candidate.name, input.subject ?? "")}${input.reason ? `\nReason: ${input.reason}` : ""}\nNext: ${input.offerSent ? "the offer letter and contract-signing link are emailed." : input.decision === "hire" ? "Kevin adds the assessment and sends the packet to Gift." : "the rejection email is queued."}`,
     null, "head_decision");
 }
 
@@ -93,21 +135,19 @@ export async function queueRecruitmentHeadDecision(db: Database, candidate: { id
 export async function queueRecruitmentForm(db: Database, candidate: Pick<typeof candidates.$inferSelect, "id" | "name" | "email" | "phone" | "subjects">, submittedAt: Date) {
   const { config } = await settings(db);
   if (!config.recruitmentLineGroupId) return;
-  await enqueue(db, `form-completed:${candidate.id}`, config.recruitmentLineGroupId,
-    `Form completed\n${candidate.name} — ${candidate.subjects.join(", ") || "Subject not recorded"}\n${contactLines(candidate)}\n${when(submittedAt)} (Bangkok)`, null, "form_completed");
+  await enqueueRecruitmentLine(db, `form-completed:${candidate.id}`, config.recruitmentLineGroupId,
+    `📝 Form completed · ${lineWhen(submittedAt)}\n${lineWho(candidate.name, candidate.subjects.join(", "))}\n${contactLine(candidate)}`, null, "form_completed");
 }
 
 /** Called with the email's sent receipt in the same database transaction. */
 export async function queueRecruitmentInvitation(db: Database, job: Pick<typeof outbox.$inferSelect, "id" | "key" | "kind" | "payload" | "bookingId">,
   candidate: typeof candidates.$inferSelect, sentAt: Date) {
-  if (job.kind !== "email" || job.bookingId || job.key.includes(":visit-reminder:")
-    || !["onsite_invited", "paper_passed"].includes(String(job.payload.workflowStage))) return;
+  // Kevin, 25 Nov 2026: no LINE notice for a paper test invite; the mock teaching invite keeps its notice.
+  if (job.kind !== "email" || job.bookingId || job.key.includes(":visit-reminder:") || job.payload.workflowStage !== "paper_passed") return;
   const { config } = await settings(db);
   if (!config.recruitmentLineGroupId) return;
-  const subject = job.payload.workflowStage === "paper_passed" ? candidate.paperPassedSubjects.join(", ")
-    : candidate.visitSubject ?? candidate.subjects.join(", ");
-  await enqueue(db, `invite-sent:${job.id}`, config.recruitmentLineGroupId,
-    `${job.payload.workflowStage === "paper_passed" ? "Mock teaching invite sent" : "Paper assessment invite sent"}\n${candidate.name} — ${subject || "Subject not recorded"}\n${contactLines(candidate)}\n${when(sentAt)} (Bangkok)`, null, "invite_sent");
+  await enqueueRecruitmentLine(db, `invite-sent:${job.id}`, config.recruitmentLineGroupId,
+    `✉️ Mock invite sent · ${lineWhen(sentAt)}\n${lineWho(candidate.name, candidate.paperPassedSubjects.join(", "))}\n${contactLine(candidate)}`, null, "invite_sent");
 }
 
 export function recruitmentWeek(now: Date) {
@@ -137,10 +177,10 @@ export async function queueRecruitmentWeekly(db: Database, now = new Date()) {
       .orderBy(asc(bookings.startTime));
     const seen = new Set<string>();
     const sentLines = sent.filter(row => { if (seen.has(row.id)) return false; seen.add(row.id); return true; })
-      .map(row => `${row.name} — ${row.subjects[0] ?? "Subject not recorded"} — sent ${when(row.sentAt!)}`);
-    const mockLines = mocks.map(({ name, booking: b }) => `${name} — ${b.subjects.join(", ")} — ${b.interviewerKey ?? "To be confirmed"} — ${when(b.startTime)}–${b.endTime.toLocaleTimeString("en-GB", { timeZone: ZONE, hour: "2-digit", minute: "2-digit" })}`);
-    await enqueue(tx, key, config.recruitmentLineGroupId,
-      `Recruitment summary — week of ${week.date} (Bangkok)\n\nPre-screen invitations sent in the previous week (${sentLines.length})\n${sentLines.join("\n") || "None"}\n\nMocks this week (${mockLines.length})\n${mockLines.join("\n") || "None"}`, null, "weekly");
+      .map(row => `• ${lineWho(row.name, row.subjects[0] ?? "")}`);
+    const mockLines = mocks.map(({ name, booking: b }) => `• ${lineWhen(b.startTime)} · ${lineWho(name, b.subjects.join(", "))} · ${b.interviewerKey ?? "head to be confirmed"}`);
+    await enqueueRecruitmentLine(tx, key, config.recruitmentLineGroupId,
+      `📅 Hiring week of ${lineWhen(week.start).split(",")[0]}\n\nMocks this week (${mockLines.length})\n${mockLines.join("\n") || "None"}\n\nPre-screen invites sent last week (${sentLines.length})\n${sentLines.join("\n") || "None"}`, null, "weekly");
     return true;
   });
 }
@@ -166,10 +206,48 @@ export async function queueRecruitmentDailyCalls(db: Database, now = new Date())
         gte(bookings.startTime, start), lt(bookings.startTime, end), sql`${bookings.endTime} > ${now.toISOString()}::timestamptz`))
       .orderBy(asc(bookings.startTime), asc(candidates.name));
     if (!calls.length) return false;
-    const lines = calls.map((call) => `${call.start.toLocaleTimeString("en-GB", { timeZone: ZONE, hour: "2-digit", minute: "2-digit" })} ${call.name}`);
+    const lines = calls.map((call) => `${hm(call.start)} ${call.name}`);
     const url = new URL("/hiring?view=hr", process.env.APP_BASE_URL || "https://bgscheduler.vercel.app");
-    await enqueue(tx, key, config.recruitmentLineGroupId,
-      `Today’s HR calls · ${date} (Bangkok)\n\n${lines.join("\n")}\n\nOpen today’s calls\n${url}`, null, "daily-calls");
+    await enqueueRecruitmentLine(tx, key, config.recruitmentLineGroupId,
+      `📞 HR calls today (${lines.length})\n${lines.join("\n")}\n\nOpen: ${url}`, null, "daily-calls");
+    return true;
+  });
+}
+
+/**
+ * Once a day in the morning tick, warns the recruitment group about booked mocks that now overlap the head's Wise
+ * class, leave or sit-in (the dashboard's clash rule), or that could not be checked. Nothing is queued on a clean day.
+ */
+export async function queueRecruitmentMockClashes(db: Database, now = new Date()) {
+  if (!runtimeWritesAllowed()) return false;
+  const date = localDate(now);
+  const minute = (now.getTime() - new Date(`${date}T00:00:00+07:00`).getTime()) / 60000;
+  if (minute < 8 * 60 + 59 || minute >= 9 * 60 + 50) return false;
+  const { config } = await settings(db);
+  if (!config.enabled || !config.deliveryEnabled || !config.recruitmentLineGroupId) return false;
+  const key = `mock-clashes:${date}`;
+  const [done] = await db.select({ id: deliveries.id }).from(deliveries).where(eq(deliveries.key, `${key}:0000`));
+  if (done) return false;
+  const mocks = await db.select({ name: candidates.name, booking: bookings }).from(bookings)
+    .innerJoin(candidates, eq(bookings.candidateId, candidates.id))
+    .where(and(eq(bookings.kind, "mock"), eq(bookings.status, "confirmed"), sql`${bookings.endTime} > ${now.toISOString()}::timestamptz`))
+    .orderBy(asc(bookings.startTime), asc(candidates.name));
+  // The Wise read runs outside the transaction: it can build the search index, which must not hold the lock.
+  const check = await visitClashes(db, mocks.map((m) => ({ ...m.booking, kind: "mock" as const })), now);
+  const ids = new Set(check.bookingIds);
+  const lines = mocks.filter((m) => ids.has(m.booking.id)).map(({ name, booking: b }) =>
+    `• ${lineSlot(b.startTime, b.endTime)} · ${lineWho(name, b.subjects.join(", "))} · Head: ${b.interviewerKey}`);
+  if (!lines.length && !check.stale) return false;
+  const url = new URL("/hiring?view=heads", process.env.APP_BASE_URL || "https://bgscheduler.vercel.app");
+  const text = [
+    lines.length ? `⚠️ Mock teaching clashes with Wise (${lines.length})\n${lines.join("\n")}\n\nMove the mock or the Wise class.` : "",
+    check.stale ? "⚠️ Some mocks could not be checked against Wise today (old Wise data or a head not found). Check the head calendar." : "",
+  ].filter(Boolean).join("\n\n");
+  return withDatabaseTransaction(db, async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-recruitment-mock-clashes'))`);
+    const [exists] = await tx.select({ id: deliveries.id }).from(deliveries).where(eq(deliveries.key, `${key}:0000`));
+    if (exists) return false;
+    await enqueueRecruitmentLine(tx, key, config.recruitmentLineGroupId!, `${text}\n\nOpen: ${url}`, null, "mock-clashes");
     return true;
   });
 }
@@ -177,7 +255,8 @@ export async function queueRecruitmentDailyCalls(db: Database, now = new Date())
 export async function deliverRecruitment(db: Database, now = new Date()) {
   if (!runtimeWritesAllowed()) return 0;
   const { config } = await settings(db);
-  if (!config.enabled || !config.deliveryEnabled || !config.recruitmentLineGroupId) return 0;
+  // No recruitment group is not a stop: a paper check goes to the head's own group.
+  if (!config.enabled || !config.deliveryEnabled) return 0;
   // Expired leases retain their retry key. LINE only remembers retry keys for 24 hours.
   await db.update(deliveries).set({ status: "retry", leaseUntil: null })
     .where(and(eq(deliveries.status, "sending"), lte(deliveries.leaseUntil, now)));
@@ -195,15 +274,29 @@ export async function deliverRecruitment(db: Database, now = new Date()) {
         break;
       }
       const [booking] = row.bookingId ? await db.select().from(bookings).where(eq(bookings.id, row.bookingId)) : [];
-      const expiredDigest = row.notice === "daily-calls" && !row.key.startsWith(`daily-calls:${localDate(now)}:`);
-      const obsolete = expiredDigest || row.groupId !== latest.recruitmentLineGroupId || (row.bookingId && (!booking ||
+      const expiredDigest = (row.notice === "daily-calls" || row.notice === "print-pack" || row.notice === "mock-clashes") && !row.key.startsWith(`${row.notice}:${localDate(now)}:`);
+      // A paper check goes to the head's own tutor group, so only a group switched off makes it obsolete.
+      const [headGroup] = row.notice === "paper_check"
+        ? await db.select().from(progressLineGroups).where(and(eq(progressLineGroups.groupId, row.groupId), eq(progressLineGroups.enabled, true)))
+        : [];
+      const wrongGroup = row.notice === "paper_check" ? !headGroup : row.groupId !== latest.recruitmentLineGroupId;
+      const obsolete = expiredDigest || wrongGroup || (row.bookingId && (!booking ||
         (row.notice !== "cancelled" && (booking.status !== "confirmed" || booking.endTime <= now))));
       if (obsolete || (row.firstAttemptAt && now.getTime() - row.firstAttemptAt.getTime() >= 23 * 3600000)) {
         await db.update(deliveries).set({ status: obsolete && !(expiredDigest && row.firstAttemptAt) ? "cancelled" : "uncertain", leaseUntil: null,
-          error: expiredDigest ? "The date of the call digest passed." : obsolete ? "The booking or recruitment group changed." : "Retry window expired. Check delivery before resending." }).where(eq(deliveries.id, row.id));
+          error: expiredDigest ? `The date of the ${row.notice === "print-pack" ? "print message" : row.notice === "mock-clashes" ? "clash warning" : "call digest"} passed.` : obsolete ? "The booking or recruitment group changed." : "Retry window expired. Check delivery before resending." }).where(eq(deliveries.id, row.id));
         continue;
       }
-      const receipt = await pushLineTextMessage({ to: row.groupId, text: row.message, retryKey: row.id, tutorBot: true, signal: AbortSignal.timeout(20000) });
+      // The print message tags the saved person. Without one, or when LINE refuses the tag (the person left the
+      // group), it names Aya in plain text. textV2 reads other braces as placeholders, so they are doubled.
+      const tag = row.notice === "print-pack" ? latest.printLineUserId : null;
+      const plain = row.notice === "print-pack" ? row.message.replaceAll("{person}", "@Aya") : row.message;
+      const tagged = taggedText(row.message);
+      const tutorBot = headGroup ? progressUsesTutorBot(headGroup.canonicalKey, headGroup.tutorBot) : true;
+      const push = (text: string, mentionUserId?: string) => pushLineTextMessage({ to: row.groupId, text, mentionUserId, retryKey: row.id, tutorBot, signal: AbortSignal.timeout(20000) });
+      const receipt = tag
+        ? await push(tagged, tag).catch((error) => { if (error instanceof LinePushError && error.status === 400) return push(plain); throw error; })
+        : await push(plain);
       await db.update(deliveries).set({ status: "sent", receipt: { ...receipt }, sentAt: new Date(), leaseUntil: null, error: null }).where(eq(deliveries.id, row.id));
       sent++;
     } catch (error) {

@@ -84,6 +84,13 @@ export const hiringCandidates = pgTable(
     preScreenAssessment: jsonb("pre_screen_assessment").$type<PreScreenAssessment>(),
     /** Set when a person drags this candidate in the pre-screen queue. Null keeps the automatic rank. */
     queueManual: jsonb("queue_manual").$type<import("@/lib/hiring/limits").ManualPlace>(),
+    /** When the worker set this candidate aside as soft rejected (under the pass score, never emailed). */
+    softRejectedAt: timestamp("soft_rejected_at", { withTimezone: true }),
+    /** When a person or the worker brought a soft-rejected candidate back: the pass score no longer holds them. */
+    broughtBackAt: timestamp("brought_back_at", { withTimezone: true }),
+    /** The stage a soft-rejected row came from (new or review) and its note then: a restore returns it there as it was. */
+    softRejectedFrom: text("soft_rejected_from").$type<"new" | "review">(),
+    softRejectedNote: text("soft_rejected_note"),
     callReview: jsonb("call_review").$type<import("@/lib/hiring/limits").CallReview>(),
     /** A person's pre-screen score. The AI assessment stays unchanged. */
     preScreenOverride: jsonb("pre_screen_override").$type<import("@/lib/hiring/limits").ScoreOverride>(),

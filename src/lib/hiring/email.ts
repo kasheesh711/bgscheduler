@@ -1,15 +1,16 @@
 import {
   renderCompanyEmail,
   type CompanyBlock,
+  type CompanySection,
   type EmailAction,
   type EmailDetail,
   type EmailResource,
 } from "@/lib/company-emails/render";
-import { teacherEmailLogoUrl } from "@/lib/teacher-emails/brand";
+import { hiringEmailAssetUrl, teacherEmailLogoUrl, type HIRING_EMAIL_ASSET_FILES } from "@/lib/teacher-emails/brand";
 import { teacherEmailPublicBaseUrl } from "@/lib/teacher-emails/config";
 import type { Subject } from "./model";
 
-export const HIRING_LINE_URL = "https://lin.ee/OjMHF41";
+export const HIRING_LINE_URL = "https://line.me/R/ti/p/@699fovgg";
 
 const CAMBRIDGE = "https://www.cambridgeinternational.org/programmes-and-qualifications/";
 const syllabus = (title: string, slug: string): EmailResource => ({
@@ -109,6 +110,56 @@ export function mockPrep(subject: string): { paragraphs: string[]; links: EmailR
   };
 }
 
+export const VISIT_LENGTH = "A 2-hour test (Monday to Sunday). If you pass, a 1-hour final-round mock teaching interview on the same day or a later day (Monday to Friday)";
+/** A "two-day" visit (Kevin, 24 Nov 2026): the test first, then the final-round mock teaching on the same day (after grading) or a later day. Both are booked together. */
+export const TWO_DAY_STEPS: CompanySection[] = [
+  { heading: "The test", paragraphs: ["Please arrive 10 minutes early. The test is on paper and takes 2 hours. It is closed book: no notes and no phone."] },
+  { heading: "We grade your test", paragraphs: ["We tell you the result before your mock teaching."] },
+  { heading: "If you pass: final round mock teaching", paragraphs: ["A 1-hour mock teaching interview with the head of your subject, on the same day or a later day. Prepare your lesson before your test day. If you do not pass the test, we cancel this booking."] },
+];
+/** The visit day, in order (Kevin, 22 Nov 2026). The mock takes place only after a pass, on the same day. */
+export const VISIT_STEPS: CompanySection[] = [
+  { heading: "Arrive at your booked time", paragraphs: ["Please arrive 10 minutes early."] },
+  { heading: "Complete the test", paragraphs: ["The test is on paper and takes 2 hours. It is closed book: no notes and no phone."] },
+  { heading: "We grade your test", paragraphs: ["Grading takes 5 to 10 minutes. Please wait at the office."] },
+  { heading: "We tell you the result", paragraphs: ["We tell you before you leave if you passed."] },
+  { heading: "If you pass: mock teaching interview", paragraphs: ["The 1-hour mock teaching interview follows immediately, on the same day. Prepare your lesson before the visit."] },
+];
+export const VISIT_BRING = { heading: "What to bring", bullets: ["Photo ID (passport or ID card)", "Pens", "A calculator, if your subject uses one"] };
+
+const asset = (file: (typeof HIRING_EMAIL_ASSET_FILES)[number]) => hiringEmailAssetUrl(file, teacherEmailPublicBaseUrl());
+
+/** BeGifted's hiring process, in order (Kevin, 22 Nov 2026). The candidate emails show it so each person knows what comes next. */
+export const HIRING_PROCESS: CompanySection[] = [
+  { heading: "R1: HR Interview", paragraphs: ["A 30-minute Google Meet video call with our HR team."] },
+  {
+    heading: "Pre-screening questions and visit booking",
+    paragraphs: ["If R1 goes well, we send you a short questionnaire and a link to book your onsite visit. Answer the questions first, then book your visit."],
+  },
+  { heading: "Onsite visit: the test", paragraphs: ["A 2-hour paper test at BeGifted."] },
+  { heading: "R2: Final round mock teaching", paragraphs: ["If you pass the test, a 1-hour mock teaching interview follows on the same day."] },
+  { heading: "Offer", paragraphs: ["We send the offer letter by email. Then you book your contract-signing day at BeGifted (onsite)."] },
+];
+const PROCESS_ICONS = ["step-r1-interview.png", "step-form-booking.png", "step-exam.png", "step-mock-teaching.png", "step-offer.png"] as const;
+/** The five steps with their icons. `current` (1 to 5) marks the reader's step; earlier steps show as done. */
+export const processSteps = (current?: number): CompanySection[] =>
+  HIRING_PROCESS.map((step, i) => ({
+    ...step,
+    icon: asset(PROCESS_ICONS[i]),
+    ...(current && i + 1 < current ? { state: "done" as const } : current === i + 1 ? { state: "current" as const } : {}),
+  }));
+/** The icon for a step in an email's own list, matched to the process step it belongs to. */
+export const stepIcon = (step: 1 | 2 | 3 | 4 | 5) => asset(PROCESS_ICONS[step - 1]);
+
+/** BeGifted's own photographs (website set, no credit line needed), one for each part of the process. */
+const HEROES = {
+  r1: { file: "hero-r1.jpg", alt: "A BeGifted tutoring room with a yellow table and a wide window view of Bangkok" },
+  next: { file: "hero-next-steps.jpg", alt: "A BeGifted classroom with a blue table, orange chairs and a chalkboard wall of equations" },
+  visit: { file: "hero-visit.jpg", alt: "The orange and grey corridor to the tutoring rooms at BeGifted" },
+  offer: { file: "hero-offer.jpg", alt: "The wood-panelled BeGifted lounge with orange leather armchairs" },
+} as const;
+export type HiringHero = keyof typeof HEROES;
+
 /** One candidate email. The plain-text and HTML parts come from these same fields. */
 export interface HiringEmail {
   subject: string;
@@ -121,13 +172,24 @@ export interface HiringEmail {
   paragraphs: string[];
   details?: EmailDetail[];
   action?: EmailAction;
-  /** Paragraphs after the button. */
+  /** A heading above the steps. */
+  stepsHeading?: string;
+  /** Numbered steps after the button. */
+  steps?: CompanySection[];
+  /** A photo under the logo, for candidate emails only. */
+  hero?: HiringHero;
+  /** Shows BeGifted's five steps at the end, with this step (1 to 5) marked "You are here". */
+  process?: 1 | 2 | 3 | 4 | 5;
+  /** A short bullet list after the steps. */
+  list?: { heading: string; bullets: string[] };
+  /** Paragraphs after those. */
   after?: string[];
   /** A list of links after those paragraphs. */
   links?: EmailResource[];
 }
 
 const SIGN_OFF = "BeGifted Education";
+const PROCESS_HEADING = "How our process works";
 const FOOTER = {
   note: "Questions? Reply to this email, or message us on LINE.",
   preferences: { label: "Message us on LINE", url: HIRING_LINE_URL },
@@ -141,6 +203,7 @@ function render(email: HiringEmail, blocks: CompanyBlock[]): string {
     category: "Tutor hiring",
     tone: email.tone === "ink" ? "navy" : "white",
     logoUrl: teacherEmailLogoUrl(teacherEmailPublicBaseUrl()),
+    ...(email.hero ? { hero: { url: asset(HEROES[email.hero].file), alt: HEROES[email.hero].alt } } : {}),
     blocks,
     footer: FOOTER,
   }).html;
@@ -152,15 +215,27 @@ export function hiringEmail(email: HiringEmail): { subject: string; text: string
   const blocks: CompanyBlock[] = [{ kind: "copy", paragraphs: [greeting, ...email.paragraphs] }];
   if (email.details?.length) blocks.push({ kind: "details", entries: email.details });
   if (email.action) blocks.push({ kind: "action", action: email.action });
+  if (email.steps?.length) blocks.push({ kind: "steps", heading: email.stepsHeading, entries: email.steps });
+  if (email.list) blocks.push({ kind: "copy", heading: email.list.heading, paragraphs: [], bullets: email.list.bullets });
   if (email.after?.length) blocks.push({ kind: "copy", paragraphs: email.after });
   if (email.links?.length) blocks.push({ kind: "resources", entries: email.links });
+  const process = email.process ? processSteps(email.process) : null;
+  if (process) blocks.push({ kind: "steps", heading: PROCESS_HEADING, entries: process });
   const text = [
     greeting,
     ...email.paragraphs,
     email.details?.map((d) => `${d.label}: ${d.value}`).join("\n"),
     email.action && `${email.action.label}:\n${email.action.url}`,
+    email.steps?.length && email.stepsHeading,
+    email.steps
+      ?.map((step, i) =>
+        [`${i + 1}. ${step.heading}`, ...(step.paragraphs ?? []), step.action && `${step.action.label}:\n${step.action.url}`].filter(Boolean).join("\n"),
+      )
+      .join("\n\n"),
+    email.list && [`${email.list.heading}:`, ...email.list.bullets.map((b) => `• ${b}`)].join("\n"),
     ...(email.after ?? []),
     ...(email.links ?? []).map((link) => `${link.title}:\n${link.url}`),
+    process && [PROCESS_HEADING, ...process.map((step, n) => [`${n + 1}. ${step.heading}${step.state === "current" ? " (You are here)" : step.state === "done" ? " (Done)" : ""}`, ...(step.paragraphs ?? [])].join("\n"))].join("\n\n"),
     `${FOOTER.note} ${HIRING_LINE_URL}`,
     SIGN_OFF,
   ].filter(Boolean).join("\n\n");
@@ -179,4 +254,21 @@ export function hiringEmailHtmlFromText(subject: string, text: string, ...action
     { subject, preheader, title: subject, name: "", paragraphs: [] },
     [{ kind: "copy", paragraphs: paragraphs.flatMap((p) => p.split("\n")) }, ...actions.map((action) => ({ kind: "action" as const, action }))],
   );
+}
+
+/** Kevin, 24 Nov 2026: a paper below the pass mark gets this result email at once, with no person's Send. */
+export function paperResultEmail(input: { name: string; subject: string; checkedByHead: boolean; mockCancelled: boolean }) {
+  return hiringEmail({
+    subject: "Your BeGifted test result",
+    preheader: `The result of your ${input.subject} test at BeGifted.`,
+    title: "Your test result",
+    hero: "visit",
+    name: input.name,
+    paragraphs: [
+      `Thank you for taking the BeGifted ${input.subject} test.`,
+      `We marked your paper carefully${input.checkedByHead ? ", and the head of the subject checked it a second time" : ""}. Your score did not reach our pass mark, so we will not continue with your application at this time.`,
+      ...(input.mockCancelled ? ["We cancelled your mock teaching booking. You do not need to come back for it."] : []),
+      "Thank you for the time you gave to your application. We wish you every success.",
+    ],
+  });
 }

@@ -17,12 +17,13 @@ import { ScheduleEmailRejection } from "@/lib/classrooms/schedule-email";
 import { pushLineTextMessage, LinePushError } from "@/lib/line/client";
 import { progressUsesTutorBot } from "@/lib/line/progress-reminders";
 import {
-  contractTestAllowed, HR_CALENDAR, isDecided, runtimeWritesAllowed, type HiringConfig } from "./model";
+  contractTestAllowed, HR_CALENDAR, isDecided, runtimeWritesAllowed, type HiringConfig, type Stage } from "./model";
 import {
   askForBriefs,
   assessWithEvidence,
   availabilityFraction,
   preScreenPoints,
+  highSchoolFraction,
   profileScore,
   workRightsPenalty,
   validateAssessment,
@@ -33,10 +34,10 @@ import {
   type PreScreenAssessment,
 } from "./scoring";
 import { AWAITING_CALL, profileGate } from "./insights";
-import { audit, briefLink, candidateById, RESUME_ATTACHED, RESUME_NOT_ATTACHED, prestigeCatalogHash, settings, sourceHash } from "./service";
-import { callInviteSentAt, cancelOrphanCalls, formSentAt, releaseCallInvites, releaseQueues, replyCheck, runFollowUps } from "./queue";
-import { contactLines, deliverRecruitment, queueRecruitmentInvitation } from "./recruitment";
-import { deliverCalendar } from "./google";
+import { audit, briefLink, candidateById, hasBookedCall, RESUME_ATTACHED, RESUME_NOT_ATTACHED, prestigeCatalogHash, settings, sourceHash } from "./service";
+import { callInviteSentAt, cancelOrphanCalls, formSentAt, releaseCallInvites, releaseQueues, remindCallInvites, replyCheck, runFollowUps } from "./queue";
+import { contactLine, deliverRecruitment, lineSlot, lineWhen, lineWho, queueRecruitmentInvitation } from "./recruitment";
+import { deliverCalendar, type VisitHead } from "./google";
 import { hiringEmailHtmlFromText } from "./email";
 import { resumeAttachment } from "./resume-files";
 import { syncTracker, mirrorTracker } from "./sources";
@@ -68,6 +69,7 @@ const preScreenSource = (c: typeof s.hiringCandidates.$inferSelect) =>
   "\n\nApplication education and experience:\n" +
   c.profileText;
 
+const SELF_SERVED: Stage[] = ["onsite_invited", "onsite_booked"];
 export async function assessCandidates(
   db: Database,
   config: HiringConfig,
@@ -84,7 +86,20 @@ export async function assessCandidates(
   const rows = await db
     .select()
     .from(s.hiringCandidates)
-    .where(scoreOnly ? (candidateId ? eq(s.hiringCandidates.id, candidateId) : undefined) : inArray(s.hiringCandidates.stage, ["new", "review", "pre_screen", "no_reply"]))
+    .where(
+      scoreOnly
+        ? (candidateId ? eq(s.hiringCandidates.id, candidateId) : undefined)
+        : or(
+            // Soft rejected is scored again too, so a new résumé can restore it (Kevin, 25 Nov 2026).
+            inArray(s.hiringCandidates.stage, ["new", "review", "pre_screen", "no_reply", "soft_rejected"]),
+            // Answers from the booking page can open booking before the AI reads them. They are scored once, for staff.
+            and(
+              inArray(s.hiringCandidates.stage, SELF_SERVED),
+              isNotNull(s.hiringCandidates.preScreen),
+              isNull(s.hiringCandidates.preScreenHash),
+            ),
+          ),
+    )
     .orderBy(asc(s.hiringCandidates.createdAt));
   let calls = 0;
   for (const candidate of rows) {
@@ -132,13 +147,16 @@ export async function assessCandidates(
           const [held] = await tx
             .update(s.hiringCandidates)
             .set({
-              ...(scoreOnly ? {} : { stage: "review" as const }),
+              // An invited or booked candidate keeps the visit: the score is for staff to read, not a gate.
+              ...(scoreOnly || SELF_SERVED.includes(candidate.stage) || candidate.stage === "soft_rejected" ? {} : { stage: "review" as const }),
               ...(phase === "pre"
                 ? { preScreenHash: hash, preScreenAssessment: null }
                 : { profileHash: hash, profileAssessment: null }),
-              reviewNote:
-                "AI evidence could not be verified. Review this application before advancing it.",
-              revision: candidate.revision + 1,
+              // A row already in review keeps its note (a hard stop from the booking page, for example).
+              ...(SELF_SERVED.includes(candidate.stage) || candidate.stage === "soft_rejected" || (candidate.stage === "review" && candidate.reviewNote) ? {} : { reviewNote:
+                "AI evidence could not be verified. Review this application before advancing it." }),
+              // The visit reminder is tied to the row's revision, so an invited row keeps it.
+              revision: candidate.revision + (SELF_SERVED.includes(candidate.stage) ? 0 : 1),
               updatedAt: new Date(),
             })
             .where(
@@ -237,6 +255,8 @@ export async function assessCandidates(
             universityAssessment: prestige,
             // A candidate who holds the app's call link stays on the Calls tab when HR writes to them on SEEK.
             callInvited: !!(await callInviteSentAt(tx, candidate.id)),
+            // The note must agree with the Calls tab while a booked call keeps the candidate there.
+            callBooked: await hasBookedCall(tx, candidate.id),
           },
           current.config,
         );
@@ -265,6 +285,7 @@ export async function assessCandidates(
                     current.config.profileWeights,
                     prestige.fraction,
                     workRightsPenalty(fresh.workRightsAnswer, current.config),
+                    highSchoolFraction(assessment, current.config),
                   ),
             university: prestige,
           },
@@ -673,13 +694,15 @@ export async function deliverOutbox(
               "The interviewer group registration changed. Review delivery.",
             );
           const movedFrom = job.payload.movedFrom as string | undefined;
-          const title =
-            notice === "moved"
-              ? `Mock teaching moved. The old time ${movedFrom ? `${new Date(movedFrom).toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok) ` : ""}is cancelled. The new time is below.`
-              : notice === "cancelled"
-                ? "Mock teaching cancelled"
-                : "Mock teaching interview";
-          const message = `${title}\nCandidate: ${candidate.name}\n${contactLines(candidate)}\nSubject: ${booking.subjects.join(", ")}\nTime: ${booking.startTime.toLocaleString("en-GB", { timeZone: "Asia/Bangkok" })}–${booking.endTime.toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok" })} (Bangkok)\nPlace: ${current.config.location}\nInterviewer: ${booking.interviewerKey}${booking.kind === "mock" && notice !== "cancelled" ? `\nCandidate page (answers and résumé): ${briefLink(booking)}` : ""}`;
+          const title = notice === "cancelled" ? "❌ Mock teaching cancelled" : `🧑‍🏫 Mock teaching ${notice === "moved" ? "moved" : "booked"}`;
+          const message = [
+            title,
+            lineWho(candidate.name, booking.subjects.join(", ")),
+            `${lineSlot(booking.startTime, booking.endTime)} · ${current.config.location} · Head: ${booking.interviewerKey}`,
+            ...(notice === "moved" && movedFrom ? [`Old time (cancelled): ${lineWhen(new Date(movedFrom))}`] : []),
+            contactLine(candidate),
+            ...(booking.kind === "mock" && notice !== "cancelled" ? [`\nCandidate page (answers, résumé):\n${briefLink(booking)}`] : []),
+          ].join("\n");
           receipt = {
             ...(await pushLineTextMessage({
               to: booking.lineGroupId,
@@ -695,6 +718,7 @@ export async function deliverOutbox(
             current.config.location,
             db,
             job.kind === "calendar_cancel",
+            await visitHead(db, booking, current.config.interviewers),
           );
           // Another delivery can run the cancel while this event is being created, and find nothing to cancel yet.
           if (job.kind === "calendar") {
@@ -741,6 +765,32 @@ export async function deliverOutbox(
   return sent;
 }
 
+/**
+ * The head named on a visit's events (Kevin, 23 Nov 2026: only the relevant head; 25 Nov: a guest on the mock only). A paired
+ * visit names its mock's head. A test-only visit has no head yet, so it goes to the roster heads of its subject. A mock
+ * names its own head (already its guest), for the title and the color.
+ */
+/** Google event colors, most different first: Tomato, Basil, Banana, Grape, Tangerine, Flamingo, Sage, Lavender, Peacock, Blueberry. No Graphite (looks like a declined event). */
+export const HEAD_COLORS = ["11", "10", "5", "3", "6", "4", "2", "1", "7", "9"];
+export async function visitHead(
+  db: Database,
+  booking: typeof s.hiringBookings.$inferSelect,
+  interviewers: { canonicalKey: string; email: string; subjects: string[] }[],
+): Promise<VisitHead[]> {
+  const head = (key: string | null, email: string): VisitHead => {
+    const at = interviewers.findIndex((h) => h.canonicalKey === key);
+    // Kevin, 25 Nov 2026: each head has their own color, given in roster order.
+    // shortcut: a head's color moves if the roster is reordered or a head before them is removed; add a color setting then.
+    return { key, email, ...(at >= 0 && { colorId: HEAD_COLORS[at % HEAD_COLORS.length] }) };
+  };
+  if (booking.kind === "mock") return booking.interviewerEmail ? [head(booking.interviewerKey, booking.interviewerEmail)] : [];
+  if (booking.kind !== "paper" || !booking.visitId) return [];
+  const [mock] = await db.select({ key: s.hiringBookings.interviewerKey, email: s.hiringBookings.interviewerEmail }).from(s.hiringBookings)
+    .where(and(eq(s.hiringBookings.visitId, booking.visitId), eq(s.hiringBookings.kind, "mock")));
+  if (mock?.email) return [head(mock.key, mock.email)];
+  return interviewers.filter((h) => booking.subjects.some((subject) => h.subjects.includes(subject))).map((h) => head(h.canonicalKey, h.email));
+}
+
 /** Booking and final review messages can leave without the Mac. The cron retries failures. */
 export async function deliverBookingMessages(db: Database = getDb()) {
   try {
@@ -779,12 +829,13 @@ export async function runHiringCycle(db: Database, assess: Assess) {
     const released = await releaseQueues(db);
     await cancelOrphanCalls(db);
     const callInvites = await releaseCallInvites(db);
+    const callReminders = await remindCallInvites(db);
     await mirrorTracker(db, config);
     await db
       .update(s.hiringSettings)
       .set({ workerAt: new Date(), workerError: null })
       .where(eq(s.hiringSettings.id, "default"));
-    return { ...imported, calls, ...followUps, ...released, callInvites };
+    return { ...imported, calls, ...followUps, ...released, callInvites, callReminders };
   } catch (error) {
     await db
       .update(s.hiringSettings)

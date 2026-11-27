@@ -8,7 +8,7 @@ import {
   it,
   vi,
 } from "vitest";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { startTestDb, stopTestDb } from "@/tests/integration/db-helper";
 import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
@@ -20,20 +20,26 @@ import { handleLineWebhookPost } from "@/lib/line/webhook";
 import { handleProgressGroupCommand } from "@/lib/line/progress-reminders";
 import { createHmac } from "node:crypto";
 import { saveBriefDecision } from "../decisions";
+import { clearResultCheck, submitPaperCheck } from "../marking";
+import { afterPaperCounted, paperCheckView } from "../paper-check";
 import {
   bookInterview,
   bookContract,
   contractView,
   bookingView,
   bookVisit,
+  cancelMockAfterFail,
+  endVisit,
   briefCandidateId,
   saveBriefRubric,
   briefView,
   changePreScreenScore,
   dashboard,
+  hiringCandidateRecord,
   reviewCandidate,
   saveHeadDays,
   saveSettings,
+  searchHiringCandidates,
   settings,
   sourceHash,
   prestigeCatalogHash,
@@ -44,12 +50,14 @@ import { importApplication, observeSeekState } from "../sources";
 import { assessCandidates, deliverBookingMessages, deliverOutbox, rewriteBriefs, scorePreScreens, type Rewrite } from "../worker";
 import { readLimitUsage, releaseQueues, runFollowUps } from "../queue";
 import { availableSlots, verifyLiveSlot } from "../availability";
-import { latestReviewPacket, signOffReview, submitReview } from "../final-review";
+import { draftReviewPacket, latestReviewPacket, signOffReview, submitReview } from "../final-review";
 import { deliverCalendar, googleConnectionStatus, readHrBusy } from "../google";
 import { ensureIndex } from "@/lib/search/index";
 import { createOutboundEmailSender } from "@/lib/email/outbound";
 import { fetchLineGroupMember, fetchLineGroupRoster, fetchLineGroupSummary, pushLineTextMessage, replyLineMessage } from "@/lib/line/client";
 import { RUBRIC_ITEMS, type MockRubric } from "../marking-sheet";
+
+const TICKS = { listens: true, explains: true, plan: true };
 
 // The visit tests use the real availableVisitSlots against this database. Only the Wise index and the live read are fake.
 vi.mock("../availability", async (actual) => ({
@@ -226,6 +234,40 @@ describe("hiring workflow persistence", () => {
     expect(outbox[0]).toMatchObject({ key: `${row.id}:pre-screen`, workflowStage: "pre_screen" });
     expect(outbox[0]).not.toHaveProperty("payload");
     expect(JSON.stringify(outbox)).not.toContain("SECRET BODY");
+  });
+  it("keeps booked papers and old results beyond the dashboard's general limits", async () => {
+    const [booked, graded, applicant] = await db.insert(s.hiringCandidates).values([
+      { name: "Booked Tutor", stage: "onsite_booked", updatedAt: now },
+      { name: "Graded Tutor", stage: "rejected", updatedAt: now },
+      { name: "Senior Tutor", email: "retained@example.com", profileText: "Private source", updatedAt: now },
+    ]).returning();
+    const [booking] = await db.insert(s.hiringBookings).values({
+      candidateId: booked.id, kind: "paper", subjects: ["Mathematics"],
+      calendarOwner: "owner@example.com", startTime: new Date(slot.start), endTime: new Date(slot.end), evidence: {},
+    }).returning();
+    const [gradedPaper] = await db.insert(s.hiringPaperResults).values({ candidateId: graded.id, subject: "Mathematics", source: "person", status: "done" }).returning();
+    await db.execute(sql`insert into hiring_candidates (name, updated_at)
+      select 'New applicant ' || n, '2026-11-03T00:00:00Z'::timestamptz from generate_series(1, 2000) n`);
+    await db.execute(sql`insert into hiring_bookings
+      (candidate_id, kind, subjects, interviewer_key, interviewer_email, calendar_owner, start_time, end_time, status, evidence)
+      select ${booked.id}::uuid, 'call', '["Mathematics"]'::jsonb, 'hr-call', 'hr@example.com', 'owner@example.com',
+        '2026-11-03T03:00:00Z'::timestamptz, '2026-11-03T03:30:00Z'::timestamptz, 'cancelled', '{}'::jsonb
+      from generate_series(1, 2000)`);
+
+    const data = await dashboard(db);
+    expect(data.bookings).toEqual([]);
+    expect(data.assessmentBookings).toMatchObject([{ id: booking.id, candidateId: booked.id, startTime: new Date(slot.start) }]);
+    expect(data.papers).toMatchObject([{ id: gradedPaper.id, candidateId: graded.id }]);
+    expect(data.assessmentCandidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "Booked Tutor" }),
+      expect.objectContaining({ name: "Graded Tutor", stage: "rejected" }),
+    ]));
+    expect([...data.candidates, ...data.assessmentCandidates].some((c) => c.id === applicant.id)).toBe(false);
+    expect(await searchHiringCandidates(db, "TAINED@EXAMPLE")).toEqual([{ id: applicant.id, name: "Senior Tutor", email: "retained@example.com", visitSubject: null }]);
+    expect(await searchHiringCandidates(db, "%")).toEqual([]);
+    const record = await hiringCandidateRecord(db, applicant.id);
+    expect(record).toMatchObject({ id: applicant.id, name: "Senior Tutor", hasSourceText: true });
+    expect(record).not.toHaveProperty("profileText");
   });
   it("recovers a citation-format failure in the normal worker and logs the failed answer", async () => {
     const source = "degree subject curriculum teaching english Mathematics";
@@ -698,11 +740,12 @@ describe("hiring workflow persistence", () => {
     });
   });
   describe("one-visit booking", () => {
-    const LINE = "https://lin.ee/OjMHF41";
+    const LINE = "https://line.me/R/ti/p/@699fovgg";
     const LINK = new Date("2026-11-30T00:00:00Z");
     const EXAM = "2026-11-02T03:00:00.000Z";
-    const MOCK = "2026-11-02T05:00:00.000Z";
-    const MOCK_END = "2026-11-02T06:00:00.000Z";
+    // The mock starts 15 minutes after the exam ends (VISIT_GAP_MINUTES).
+    const MOCK = "2026-11-02T05:15:00.000Z";
+    const MOCK_END = "2026-11-02T06:15:00.000Z";
     const EXAM_TUE = "2026-11-03T03:00:00.000Z";
     const week = [null, ...Array.from({ length: 5 }, () => ({ start: "10:00", end: "16:00" })), null];
     const peat = { canonicalKey: "Peat", email: "peat@example.com", subjects: ["Mathematics", "Physics"], fallbackWeek: week };
@@ -845,7 +888,7 @@ describe("hiring workflow persistence", () => {
       const row = await invited();
       await bookVisit(link(row), choice(), db);
       const [exam, mock] = await rowsOf(row.id);
-      expect([exam.kind, exam.startTime.toISOString(), exam.endTime.toISOString(), exam.interviewerKey]).toEqual(["paper", EXAM, MOCK, null]);
+      expect([exam.kind, exam.startTime.toISOString(), exam.endTime.toISOString(), exam.interviewerKey]).toEqual(["paper", EXAM, "2026-11-02T05:00:00.000Z", null]);
       expect([mock.kind, mock.startTime.toISOString(), mock.endTime.toISOString(), mock.interviewerKey]).toEqual(["mock", MOCK, MOCK_END, "Peat"]);
       expect(exam.visitId).toBeTruthy();
       expect(mock.visitId).toBe(exam.visitId);
@@ -861,6 +904,231 @@ describe("hiring workflow persistence", () => {
       expect(notices).toHaveLength(1);
       expect(notices[0].notice).toBe("booked");
     });
+    it("a Next steps link asks for the answers first, then books whatever they say, also after a hard stop moved the candidate to review (Kevin, 24 Nov 2026)", async () => {
+      // Kevin: the answers never gate booking, but the candidate answers first. The subject comes from the answers, else from the CV.
+      const real = await vi.importActual<typeof import("../availability")>("../availability");
+      vi.mocked(availableSlots).mockImplementation((...args) => real.availableSlots(...args));
+      await setVisit();
+      const unanswered = await invited({ stage: "pre_screen", visitSubject: null, preScreen: null, preScreenAssessment: null, preScreenRepliedAt: null });
+      const morningsOnly = { ...pre, availability: "Weekday Morning (before 12:00), Weekend Morning (before 12:00)" };
+      const stopped = await invited({ stage: "review", visitSubject: null, preScreen: morningsOnly, reviewNote: "Needs a weekend day and a weekday after 15:00." });
+      // Before any answer the page asks the questions, and a booking is refused with the same words.
+      const early = bookingToken(unanswered.id, "two-day", unanswered.inviteExpiresAt!);
+      expect(await visitView(early, db)).toMatchObject({ waiting: "answers", slots: [] });
+      await expect(bookVisit(early, choice("2026-11-07T03:00:00.000Z", { mockStart: "2026-11-09T03:00:00.000Z" }), db))
+        .rejects.toMatchObject({ status: 409, message: expect.stringMatching(/answer the questions on this page first/) });
+      // Answers that name no usable subject: the CV subject is used.
+      await db.update(s.hiringCandidates).set({ preScreen: { ...pre, subjects: "", testSubject: undefined } }).where(eq(s.hiringCandidates.id, unanswered.id));
+      for (const row of [unanswered, stopped]) {
+        const token = bookingToken(row.id, "two-day", row.inviteExpiresAt!);
+        const view = await visitView(token, db);
+        expect(view).toMatchObject({ waiting: null, subject: "Mathematics", enabled: true });
+        // The first test time, and the first mock hour on a later day.
+        const test = view.slots[0];
+        const mock = view.mockSlots.find((slot) => slot.date > test.examStart.slice(0, 10))!;
+        await bookVisit(token, choice(test.examStart, { mockStart: mock.start }), db);
+        expect(await read(row.id)).toMatchObject({ stage: "onsite_booked", visitSubject: "Mathematics" });
+        // The booked visit shows on the same link, as for any invited candidate.
+        expect((await visitView(token, db)).visit).not.toBeNull();
+      }
+      // After a cancel, staff can send a new link with no passing answers: it keeps the visit's subject.
+      await click(unanswered.id, "cancel_visit");
+      expect((await read(unanswered.id)).stage).toBe("no_booking");
+      await click(unanswered.id, "send_new_link");
+      expect(await read(unanswered.id)).toMatchObject({ stage: "onsite_invited", visitSubject: "Mathematics" });
+      // A paper-only link is not a Next steps link: it still needs a person's invitation.
+      const other = await invited({ stage: "pre_screen", visitSubject: null });
+      await expect(visitView(bookingToken(other.id, "paper-visit", other.inviteExpiresAt!), db)).rejects.toMatchObject({ status: 404 });
+    });
+    it("a two-day link books the test (a Sunday too) and the mock teaching on a later weekday, and a counted fail cancels that mock", async () => {
+      // Kevin, 24 Nov 2026: the test, Monday to Sunday, then the final-round mock teaching, Monday to Friday, booked together.
+      const real = await vi.importActual<typeof import("../availability")>("../availability");
+      vi.mocked(availableSlots).mockImplementation((...args) => real.availableSlots(...args));
+      const sunday = { weekday: 0, startMinute: 540, endMinute: 1080, lastArrivalMinute: 959 };
+      await setVisit({ paperOfficeHours: [...base.paperOfficeHours, sunday] });
+      const row = await invited();
+      const twoDay = bookingToken(row.id, "two-day", row.inviteExpiresAt!);
+      const TEST_SUN = "2026-11-01T03:00:00.000Z";
+      const MOCK_MON = "2026-11-02T04:00:00.000Z";
+      const view = await visitView(twoDay, db);
+      expect(view.twoDay).toBe(true);
+      expect(view.slots.map((slot) => slot.examStart)).toContain(TEST_SUN);
+      // The mock teaching is on weekdays only, and the page gets no head's name.
+      expect(view.mockSlots.map((slot) => slot.start)).toContain(MOCK_MON);
+      expect(view.mockSlots.every((slot) => ![0, 6].includes(new Date(`${slot.date}T12:00:00Z`).getUTCDay()))).toBe(true);
+      expect(view.mockSlots[0]).not.toHaveProperty("interviewerKey");
+      await expect(bookVisit(twoDay, choice(TEST_SUN), db)).rejects.toThrow(/mock teaching time/);
+      // The mock teaching must start after the test ends and the grading gap (this one starts during the test).
+      await expect(bookVisit(twoDay, choice(EXAM, { mockStart: MOCK_MON }), db)).rejects.toThrow(/no longer available/);
+      await bookVisit(twoDay, choice(TEST_SUN, { mockStart: MOCK_MON }), db);
+      const [exam, mock] = await rowsOf(row.id);
+      expect([exam.kind, exam.startTime.toISOString(), exam.interviewerKey]).toEqual(["paper", TEST_SUN, null]);
+      expect([mock.kind, mock.startTime.toISOString(), mock.endTime.toISOString(), mock.interviewerKey]).toEqual(["mock", MOCK_MON, "2026-11-02T05:00:00.000Z", "Peat"]);
+      expect(mock.visitId).toBe(exam.visitId);
+      expect((await read(row.id)).stage).toBe("onsite_booked");
+      const email = (await jobsOf(row.id)).find((job) => job.key === `booking:${exam.id}:email`)!;
+      expect(String(email.payload.text)).toContain("Final round: mock teaching, if you pass");
+      expect(String(email.payload.text)).toContain("on the same day or a later day");
+      // A retry returns the same visit.
+      await bookVisit(twoDay, choice(TEST_SUN, { mockStart: MOCK_MON }), db);
+      expect(await rowsOf(row.id)).toHaveLength(2);
+      // The test is marked on Sunday afternoon: a counted fail cancels Monday's mock.
+      vi.setSystemTime(new Date("2026-11-01T08:00:00Z"));
+      await setVisit({ paperOfficeHours: [...base.paperOfficeHours, sunday], paperPassRules: [{ subject: "Mathematics", level: "IGCSE / GCSE", percent: 70 }] });
+      await db.insert(s.hiringPaperResults).values({ candidateId: row.id, subject: "Mathematics", source: "person", status: "done", marks: { comment: "", missingPages: null, questions: [
+        { id: "1", level: "IGCSE / GCSE" as const, attempted: true, readable: true, marks: 2, max: 10, reason: "Marked." },
+      ] } });
+      expect(await cancelMockAfterFail(db, row.id, "Mathematics", "staff@example.com")).toBe(true);
+      expect((await rowsOf(row.id)).map((b) => b.status)).toEqual(["confirmed", "cancelled"]);
+      vi.setSystemTime(now);
+    });
+    it("a counted fail in the grading gap cancels the mock and tells the head; a pass, a missing pass mark, an unchecked result and an older result do not", async () => {
+      const marks = (score: number) => ({ comment: "", missingPages: null, questions: [
+        { id: "1", level: "IGCSE / GCSE" as const, attempted: true, readable: true, marks: score, max: 10, reason: "Marked." },
+      ] });
+      const graded = async (score: number, status: "done" | "needs_check" = "done") => {
+        const row = await invited();
+        await bookVisit(link(row), choice(), db);
+        await db.insert(s.hiringPaperResults).values({ candidateId: row.id, subject: "Mathematics", source: "person", status, marks: marks(score) });
+        return row;
+      };
+      // Grading time: the exam has ended and the mock has not started.
+      const inGap = async (id: string) => {
+        vi.setSystemTime(new Date("2026-11-02T05:05:00Z"));
+        const cancelled = await cancelMockAfterFail(db, id, "Mathematics", "staff");
+        vi.setSystemTime(now);
+        return cancelled;
+      };
+      const mockOf = async (id: string) => (await db.select().from(s.hiringBookings).where(and(eq(s.hiringBookings.candidateId, id), eq(s.hiringBookings.kind, "mock"))))[0];
+      // No pass mark saved: the result is unknown, so the mock stays.
+      const unknown = await graded(2);
+      expect(await inGap(unknown.id)).toBe(false);
+      expect((await mockOf(unknown.id)).status).toBe("confirmed");
+      await endVisit(db, (await rowsOf(unknown.id)).filter((b) => b.status === "confirmed"), "cancelled", new Date(), false);
+      await setVisit({ paperPassRules: [{ subject: "Mathematics", level: "IGCSE / GCSE", percent: 70 }] });
+      const passed = await graded(9);
+      expect(await inGap(passed.id)).toBe(false);
+      expect((await mockOf(passed.id)).status).toBe("confirmed");
+      await endVisit(db, (await rowsOf(passed.id)).filter((b) => b.status === "confirmed"), "cancelled", new Date(), false);
+      // A fail that a person has not checked yet does not count.
+      const unchecked = await graded(2, "needs_check");
+      expect(await inGap(unchecked.id)).toBe(false);
+      expect((await mockOf(unchecked.id)).status).toBe("confirmed");
+      // The person's check makes it count: the mock goes, the exam row and the stage stay.
+      const [result] = await db.select().from(s.hiringPaperResults).where(eq(s.hiringPaperResults.candidateId, unchecked.id));
+      await clearResultCheck("paper", result.id, "staff", db);
+      // Before the exam starts, a counted fail is an older result, so the mock stays.
+      expect((await mockOf(unchecked.id)).status).toBe("confirmed");
+      expect(await inGap(unchecked.id)).toBe(true);
+      const mock = await mockOf(unchecked.id);
+      expect(mock.status).toBe("cancelled");
+      expect((await rowsOf(unchecked.id)).filter((b) => b.status === "confirmed").map((b) => b.kind)).toEqual(["paper"]);
+      expect((await read(unchecked.id)).stage).toBe("onsite_booked");
+      const jobs = (await jobsOf(unchecked.id)).filter((j) => j.bookingId === mock.id && j.status === "pending");
+      expect(jobs.map((j) => j.kind).sort()).toEqual(["calendar_cancel", "line"]);
+      expect(jobs.find((j) => j.kind === "line")!.payload).toEqual({ notice: "cancelled" });
+      // A second call finds no mock.
+      expect(await inGap(unchecked.id)).toBe(false);
+    });
+    it("a near miss goes to the head for a check, the head's marks decide, and a clear fail gets the rejection email at once", async () => {
+      await setVisit({ paperPassRules: [{ subject: "Mathematics", level: "IGCSE / GCSE", percent: 80 }] });
+      const graded = async (score: number) => {
+        const row = await invited();
+        await bookVisit(link(row), choice(), db);
+        const [result] = await db.insert(s.hiringPaperResults).values({ candidateId: row.id, subject: "Mathematics", source: "person", status: "done", updatedAt: now, marks: { comment: "", missingPages: null, questions: [
+          { id: "1", level: "IGCSE / GCSE" as const, attempted: true, readable: true, marks: score, max: 10, reason: "Marked." },
+        ] } }).returning();
+        return { row, result };
+      };
+      const mockOf = async (id: string) => (await db.select().from(s.hiringBookings).where(and(eq(s.hiringBookings.candidateId, id), eq(s.hiringBookings.kind, "mock"))))[0];
+      const notices = (resultId: string) => db.select().from(s.hiringRecruitmentDeliveries).where(eq(s.hiringRecruitmentDeliveries.key, `paper-check:${resultId}:0000`));
+      const rejection = async (id: string) => (await jobsOf(id)).find((job) => job.payload.workflowStage === "rejected");
+      const gap = () => vi.setSystemTime(new Date("2026-11-02T05:05:00Z"));
+      // One visit slot: each case frees it before the next books.
+      const free = async (id: string) => {
+        vi.setSystemTime(now);
+        const open = (await rowsOf(id)).filter((b) => b.status === "confirmed");
+        if (open.length) await endVisit(db, open, "cancelled", new Date(), false);
+      };
+      const near = await graded(7.5);
+      gap();
+      // 75%: the head checks first. The mock stays, and nothing goes to the candidate.
+      expect((await afterPaperCounted(db, near.row.id, "Mathematics", "ai")).outcome).toBe("check");
+      expect((await afterPaperCounted(db, near.row.id, "Mathematics", "ai")).outcome).toBe("check");
+      const [notice, ...more] = await notices(near.result.id);
+      expect(more).toHaveLength(0);
+      expect(notice.groupId).toBe("group");
+      expect(notice.message).toContain("AI score 75% · pass mark 80%");
+      expect((await mockOf(near.row.id)).status).toBe("confirmed");
+      expect(await rejection(near.row.id)).toBeUndefined();
+      const token = notice.message.match(/\/hiring\/paper-check\/([\w.-]+)/)![1];
+      const view = await paperCheckView(token, db);
+      expect(view).toMatchObject({ open: true, head: "Peat", aiPercent: 75, passMark: 80, done: null });
+      await expect(submitPaperCheck(token, { updatedAt: view.updatedAt, marks: {}, comment: "" }, db)).rejects.toThrow(/question 1/);
+      // The head's 80% is a pass: on to mock teaching.
+      expect((await submitPaperCheck(token, { updatedAt: view.updatedAt, marks: { "1": 8 }, comment: "Fair." }, db)).outcome).toBe("passed");
+      expect((await mockOf(near.row.id)).status).toBe("confirmed");
+      expect((await read(near.row.id)).stage).toBe("onsite_booked");
+      expect(await rejection(near.row.id)).toBeUndefined();
+      expect((await paperCheckView(token, db)).done).toEqual({ passed: true, percent: 80, head: "Peat", override: null });
+      await expect(submitPaperCheck(token, { updatedAt: view.updatedAt, marks: { "1": 8 }, comment: "" }, db)).rejects.toThrow(/already recorded/);
+      await free(near.row.id);
+      const confirmed = await graded(7.2);
+      gap();
+      // 72%: the head keeps it below the pass mark, so the mock goes and the styled email is queued.
+      await afterPaperCounted(db, confirmed.row.id, "Mathematics", "ai");
+      const [second] = await notices(confirmed.result.id);
+      const token2 = second.message.match(/\/hiring\/paper-check\/([\w.-]+)/)![1];
+      const view2 = await paperCheckView(token2, db);
+      expect((await submitPaperCheck(token2, { updatedAt: view2.updatedAt, marks: { "1": 7 }, comment: "" }, db)).outcome).toBe("rejected");
+      expect((await mockOf(confirmed.row.id)).status).toBe("cancelled");
+      expect((await read(confirmed.row.id)).stage).toBe("rejected");
+      const email = await rejection(confirmed.row.id);
+      expect(email!.payload.subject).toBe("Your BeGifted test result");
+      expect(String(email!.payload.text)).toContain("checked it a second time");
+      expect(String(email!.payload.html)).toContain("Your test result");
+      await free(confirmed.row.id);
+      // 70%: the head passes it anyway with a reason (Kevin, 25 Nov 2026). The mock stays; a later run does not reject.
+      const kept = await graded(7.5);
+      gap();
+      await afterPaperCounted(db, kept.row.id, "Mathematics", "ai");
+      const token3 = (await notices(kept.result.id))[0].message.match(/\/hiring\/paper-check\/([\w.-]+)/)![1];
+      const view3 = await paperCheckView(token3, db);
+      await expect(submitPaperCheck(token3, { updatedAt: view3.updatedAt, marks: { "1": 7 }, comment: "", override: "Great." }, db)).rejects.toThrow(/at least 20/);
+      await expect(submitPaperCheck(token3, { updatedAt: view3.updatedAt, marks: { "1": 6.5 }, comment: "", override: "Clean algorithms and pseudocode." }, db)).rejects.toThrow(/only from 70%/);
+      await expect(submitPaperCheck(token3, { updatedAt: view3.updatedAt, marks: { "1": 8 }, comment: "", override: "Clean algorithms and pseudocode." }, db)).rejects.toThrow(/only from 70%/);
+      expect((await submitPaperCheck(token3, { updatedAt: view3.updatedAt, marks: { "1": 7 }, comment: "", override: "Clean algorithms and pseudocode." }, db)).outcome).toBe("passed");
+      expect((await paperCheckView(token3, db)).done).toEqual({ passed: true, percent: 70, head: "Peat", override: "Clean algorithms and pseudocode." });
+      expect((await mockOf(kept.row.id)).status).toBe("confirmed");
+      expect((await afterPaperCounted(db, kept.row.id, "Mathematics", "ai")).outcome).toBe("none");
+      expect((await read(kept.row.id)).stage).toBe("onsite_booked");
+      expect(await rejection(kept.row.id)).toBeUndefined();
+      await free(kept.row.id);
+      const low = await graded(5);
+      gap();
+      // 50%: no check. Rejected at once.
+      expect((await afterPaperCounted(db, low.row.id, "Mathematics", "ai")).outcome).toBe("rejected");
+      expect(await notices(low.result.id)).toHaveLength(0);
+      expect((await mockOf(low.row.id)).status).toBe("cancelled");
+      const lowEmail = String((await rejection(low.row.id))!.payload.text);
+      expect(lowEmail).not.toContain("second time");
+      expect(lowEmail).toContain("We cancelled your mock teaching booking");
+      // A second run does not send the email again.
+      expect((await afterPaperCounted(db, low.row.id, "Mathematics", "ai")).outcome).toBe("none");
+      expect((await jobsOf(low.row.id)).filter((job) => job.payload.workflowStage === "rejected")).toHaveLength(1);
+      // A clear fail in one subject does not reject while another subject waits for its head's check.
+      await free(low.row.id);
+      await setVisit({ paperPassRules: ["Mathematics", "Physics"].map((subject) => ({ subject, level: "IGCSE / GCSE", percent: 80 })) as never });
+      const two = await graded(4);
+      await db.insert(s.hiringPaperResults).values({ candidateId: two.row.id, subject: "Physics", source: "person", status: "done", updatedAt: now, marks: { comment: "", missingPages: null, questions: [
+        { id: "1", level: "IGCSE / GCSE" as const, attempted: true, readable: true, marks: 7.5, max: 10, reason: "Marked." },
+      ] } });
+      gap();
+      expect((await afterPaperCounted(db, two.row.id, "Physics", "ai")).outcome).toBe("check");
+      expect((await afterPaperCounted(db, two.row.id, "Mathematics", "ai")).outcome).toBe("held");
+      expect(await rejection(two.row.id)).toBeUndefined();
+      vi.setSystemTime(now);
+    });
     it("sends one email holding both times", async () => {
       const row = await invited();
       await bookVisit(link(row), choice(), db);
@@ -868,8 +1136,11 @@ describe("hiring workflow persistence", () => {
       expect(jobs.map((j) => j.kind).sort()).toEqual(["calendar", "calendar", "email", "line"]);
       const text = String(jobs.find((j) => j.kind === "email")!.payload.text);
       expect(text).toContain("10:00");
-      expect(text).toContain("12:00");
-      expect(text).toContain("13:00");
+      expect(text).toContain("12:15");
+      expect(text).toContain("13:15");
+      expect(text).toContain("Mock teaching, if you pass:");
+      expect(text).toContain("3. We grade your test");
+      expect(text).toContain("What to bring:");
       expect(text).toContain(LINE);
       // The confirmation repeats what to prepare, with the syllabus links.
       expect(text).toMatch(/prepare one lesson in \w+/);
@@ -880,28 +1151,34 @@ describe("hiring workflow persistence", () => {
       expect(vi.mocked(deliverCalendar)).toHaveBeenCalledTimes(2);
       expect(vi.mocked(pushLineTextMessage)).toHaveBeenCalledTimes(1);
       // The head's notice carries the candidate's contact line.
-      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\nCandidate: .+\nEmail: \S+@example\.com\nPhone: not recorded\nSubject: /);
+      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\n.+ · .+\n.+ · Head: \S+\n\S+@example\.com(\n|$)/);
     });
-    it("saves the head's scores from the link after the mock ends, and keeps what a resend replaced", async () => {
+    it("saves the head's scores from the link before, during and after the mock, and keeps what a resend replaced", async () => {
       const row = await invited();
       await bookVisit(link(row), choice(), db);
       await deliverOutbox(db, base);
       const token = vi.mocked(pushLineTextMessage).mock.calls[0][0].text.match(/\/hiring\/brief\/([\w.-]+)/)![1];
       const [, mock] = await rowsOf(row.id);
-      const rubric = (score: number | null) => ({ items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, score])), comments: "Clear lesson." }) as MockRubric;
+      const rubric = (score: number | null) => ({ items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, score])), comments: "Clear lesson.", stressTest: TICKS }) as MockRubric;
       const queued = (await db.select().from(s.hiringOutbox)).length;
       const before = new Date(mock.startTime.getTime() - 1);
-      expect(await briefView(token, db, before)).toMatchObject({ form: "wait", rubric: null });
-      await expect(saveBriefRubric(token, rubric(7), db, before)).rejects.toMatchObject({ status: 409 });
-      const during = mock.endTime;
-      for (const bad of [rubric(null), rubric(11), rubric(7.5), { ...rubric(7), items: { ...rubric(7).items, accuracy: 0 } }])
-        await expect(saveBriefRubric(token, bad, db, during)).rejects.toMatchObject({ status: 400 });
+      expect(await briefView(token, db, before)).toMatchObject({ form: "wait", rubric: null, recommendationReady: false });
+      // Heads fill the sheet in while they watch: the form takes scores before the lesson ends.
+      expect(await saveBriefRubric(token, rubric(7), db, before)).toBe(98);
+      expect(await briefView(token, db, before)).toMatchObject({ form: "wait", rubric: rubric(7), recommendationReady: false });
+      await db.delete(s.hiringAudit).where(eq(s.hiringAudit.action, "mock-rubric-submitted"));
+      await db.delete(s.hiringMockResults);
+      const ended = mock.endTime;
+      // The head's form is always the 14-item form with the checks answer.
+      const legacy = { ...rubric(7), items: Object.fromEntries(Object.entries(rubric(7).items).slice(0, 10)) } as MockRubric;
+      for (const bad of [rubric(null), rubric(11), rubric(7.5), { ...rubric(7), items: { ...rubric(7).items, accuracy: 0 } }, legacy])
+        await expect(saveBriefRubric(token, bad, db, ended)).rejects.toMatchObject({ status: 400 });
       expect(await db.select().from(s.hiringMockResults)).toHaveLength(0);
-      expect(await saveBriefRubric(token, rubric(7), db, during)).toBe(70);
+      expect(await saveBriefRubric(token, rubric(7), db, ended)).toBe(98);
       const [saved] = await db.select().from(s.hiringMockResults);
       expect(saved).toMatchObject({ candidateId: row.id, subject: "Mathematics", source: "person", status: "done", bookingId: mock.id, fileId: null, rubric: rubric(7) });
-      expect(await briefView(token, db, during)).toMatchObject({ form: "open", rubric: rubric(7) });
-      expect(await saveBriefRubric(token, rubric(10), db, during)).toBe(100);
+      expect(await briefView(token, db, ended)).toMatchObject({ form: "open", rubric: rubric(7) });
+      expect(await saveBriefRubric(token, rubric(10), db, ended)).toBe(140);
       expect(await db.select().from(s.hiringMockResults)).toHaveLength(1);
       const audits = await db.select().from(s.hiringAudit).where(eq(s.hiringAudit.action, "mock-rubric-submitted")).orderBy(s.hiringAudit.createdAt);
       expect(audits.map((a) => a.actor)).toEqual(["interviewer:Peat", "interviewer:Peat"]);
@@ -910,32 +1187,41 @@ describe("hiring workflow persistence", () => {
       expect(await db.select().from(s.hiringOutbox)).toHaveLength(queued);
       expect((await db.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, row.id)))[0].stage).toBe("onsite_booked");
       // The page never carries the row it would replace.
-      expect(Object.keys(await briefView(token, db, during))).not.toContain("replaced");
+      expect(Object.keys(await briefView(token, db, ended))).not.toContain("replaced");
       // A change or a confirmation by a person with Hiring access, an upload, or a drafted decision closes the form:
       // the page then shows no scores, and a send changes nothing.
-      const closed = async () => {
-        expect((await briefView(token, db, during)).form).toBe("closed");
-        await expect(saveBriefRubric(token, rubric(1), db, during)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/already recorded/) });
+      const closed = async (recommendationReady: boolean) => {
+        expect(await briefView(token, db, ended)).toMatchObject({ form: "closed", recommendationReady });
+        await expect(saveBriefRubric(token, rubric(1), db, ended)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/already recorded/) });
         expect((await db.select().from(s.hiringMockResults))[0].rubric).toEqual(rubric(10));
       };
-      for (const patch of [{ changedBy: "owner" }, { checkedBy: "owner" }, { source: "ai" as const }, { bookingId: null }]) {
-        await db.update(s.hiringMockResults).set({ source: "person", bookingId: mock.id, changedBy: null, checkedBy: null, ...patch });
-        await closed();
+      const ownResult = { source: "person", status: "done", bookingId: mock.id, changedBy: null, checkedBy: null } as const;
+      for (const [patch, ready] of [
+        [{ changedBy: "owner" }, true],
+        [{ checkedBy: "owner" }, true],
+        [{ source: "ai" }, true],
+        [{ source: "ai", status: "marking" }, false],
+        [{ bookingId: null }, false],
+      ] as const) {
+        await db.update(s.hiringMockResults).set({ ...ownResult, ...patch });
+        await closed(ready);
         // Scores that are no longer the head's own are not shown.
-        expect((await briefView(token, db, during)).rubric).toBeNull();
+        expect((await briefView(token, db, ended)).rubric).toBeNull();
       }
-      await db.update(s.hiringMockResults).set({ source: "person", bookingId: mock.id, changedBy: null, checkedBy: null });
-      expect((await briefView(token, db, during)).form).toBe("open");
+      await db.update(s.hiringMockResults).set({ ...ownResult, source: "ai", rubric: { ...rubric(10), items: { ...rubric(10).items, accuracy: null } } });
+      expect(await briefView(token, db, ended)).toMatchObject({ form: "closed", recommendationReady: false });
+      await db.update(s.hiringMockResults).set({ ...ownResult, rubric: rubric(10) });
+      expect((await briefView(token, db, ended)).form).toBe("open");
       await db.insert(s.hiringDecisions).values({ candidateId: row.id, decision: "hire", status: "draft", reason: "r", emailSubject: "s", emailBody: "b", decidedBy: "owner" });
-      await closed();
+      await closed(true);
       await db.delete(s.hiringDecisions);
       // A past tracker result is replaced, as an upload replaces it.
       await db.update(s.hiringMockResults).set({ source: "tracker", bookingId: null, rubric: null });
-      expect((await briefView(token, db, during)).form).toBe("open");
-      expect(await saveBriefRubric(token, rubric(4), db, during)).toBe(40);
+      expect((await briefView(token, db, ended)).form).toBe("open");
+      expect(await saveBriefRubric(token, rubric(4), db, ended)).toBe(56);
       // A sent result ends the link for scores too.
       await db.update(s.hiringCandidates).set({ stage: "rejected" }).where(eq(s.hiringCandidates.id, row.id));
-      await expect(saveBriefRubric(token, rubric(7), db, during)).rejects.toMatchObject({ status: 404 });
+      await expect(saveBriefRubric(token, rubric(7), db, ended)).rejects.toMatchObject({ status: 404 });
     });
     it("records one recommendation after the mock with the rubric from that booking", async () => {
       const row = await invited();
@@ -943,7 +1229,7 @@ describe("hiring workflow persistence", () => {
       const [, mock] = await rowsOf(row.id);
       const token = bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + 86400000));
       const yes = { decision: "hire" as const, reason: "" };
-      const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 7])), comments: "" } as MockRubric;
+      const rubric = { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 7])), comments: "", stressTest: TICKS } as MockRubric;
       await expect(saveBriefDecision(token, yes, db, mock.startTime)).rejects.toMatchObject({ status: 409 });
       await expect(saveBriefDecision(token, yes, db, mock.endTime)).rejects.toThrow(/completed rubric/);
       await saveBriefRubric(token, rubric, db, mock.endTime);
@@ -961,7 +1247,7 @@ describe("hiring workflow persistence", () => {
       const [, mock] = await rowsOf(row.id);
       const token = bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + 86400000));
       vi.setSystemTime(mock.endTime);
-      await saveBriefRubric(token, { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 4])), comments: "" } as MockRubric, db);
+      await saveBriefRubric(token, { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 4])), comments: "", stressTest: TICKS } as MockRubric, db);
       const no = { decision: "reject" as const, reason: "Weak subject knowledge." };
       const { queued } = await saveBriefDecision(token, no, db);
       await expect(saveBriefDecision(token, no, db)).rejects.toMatchObject({ status: 404 });
@@ -969,6 +1255,49 @@ describe("hiring workflow persistence", () => {
       expect(await deliverOutbox(db, (await settings(db)).config, 20, true)).toBe(1);
       expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: row.email }));
       expect((await read(row.id)).stage).toBe("rejected");
+    });
+    it("sends the offer at once on Gift's own mock, with no recommendation or review packet", async () => {
+      const row = await invited();
+      await bookVisit(link(row), choice(), db);
+      const [paper, mock] = await rowsOf(row.id);
+      const token = bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + 86400000));
+      vi.setSystemTime(mock.endTime);
+      await saveBriefRubric(token, { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 8])), comments: "", stressTest: TICKS } as MockRubric, db);
+      const hire = { decision: "hire" as const, reason: "" };
+      const owner = { key: mock.interviewerKey!, offer: { actor: "gift@example.com", offerType: "part_time" as const } };
+      vi.mocked(googleConnectionStatus).mockResolvedValue({ connected: true, freeBusy: true, email: "", lastError: null });
+      vi.mocked(readHrBusy).mockResolvedValue([]);
+      await expect(saveBriefDecision(token, hire, db, mock.endTime, { ...owner, key: "Someone else" })).rejects.toMatchObject({ status: 403 });
+      // A plain recommendation on her own mock is refused, so it cannot start the packet loop.
+      await expect(saveBriefDecision(token, hire, db, mock.endTime, { key: mock.interviewerKey! })).rejects.toThrow(/your own mock/);
+      await expect(saveBriefDecision(token, { decision: "reject", reason: "Not this time." }, db, mock.endTime, owner)).rejects.toMatchObject({ status: 400 });
+      // The usual hire rules still hold: here, the paper has no result yet. Nothing is recorded.
+      await expect(saveBriefDecision(token, hire, db, mock.endTime, owner)).rejects.toThrow(/No paper result/);
+      expect((await dashboard(db)).headDecisions.filter((rec) => rec.candidateId === row.id)).toEqual([]);
+      const [file] = await db.insert(s.hiringAssessmentFiles).values({ candidateId: row.id, subject: "Mathematics",
+        kind: "paper_scan", name: "exam.pdf", path: "sample-exam.pdf", size: 100, status: "ready", uploadedBy: "staff" }).returning();
+      await db.insert(s.hiringPaperResults).values({ candidateId: row.id, subject: "Mathematics", fileId: file.id, bookingId: paper.id,
+        source: "person", status: "done", marks: { comment: "", missingPages: null, questions: [
+          { id: "1", level: "IGCSE / GCSE", attempted: true, readable: true, marks: 9, max: 10, reason: "Correct working." },
+        ] } });
+      // Messages off: refused, and nothing is recorded.
+      const { config: on } = await settings(db);
+      await db.update(s.hiringSettings).set({ config: { ...on, deliveryEnabled: false } });
+      await expect(saveBriefDecision(token, hire, db, mock.endTime, owner)).rejects.toThrow(/Automation and Messages/);
+      await db.update(s.hiringSettings).set({ config: on });
+      // A signing calendar that cannot be read: refused before anything is written.
+      vi.mocked(googleConnectionStatus).mockResolvedValueOnce({ connected: true, freeBusy: false, email: "", lastError: null });
+      await expect(saveBriefDecision(token, hire, db, mock.endTime, owner)).rejects.toThrow(/signing calendar/);
+      expect((await dashboard(db)).headDecisions.filter((rec) => rec.candidateId === row.id)).toEqual([]);
+      const { queued } = await saveBriefDecision(token, hire, db, mock.endTime, owner);
+      const mail = (await jobsOf(row.id)).find((job) => job.key === queued)!;
+      expect(mail.payload).toMatchObject({ to: row.email, subject: "Your BeGifted offer letter", workflowStage: "hired" });
+      expect(String(mail.payload.text)).toMatch(/part-time Mathematics tutor[\s\S]+\/hiring\/book\//);
+      expect((await read(row.id)).stage).toBe("hired");
+      expect(await latestReviewPacket(db, row.id)).toBeNull();
+      // A decided candidate closes the link, as after a rejection.
+      await expect(briefView(token, db, mock.endTime)).rejects.toMatchObject({ status: 404 });
+      expect((await dashboard(db)).headDecisions.filter((rec) => rec.candidateId === row.id)).toMatchObject([{ decision: "hire" }]);
     });
     it("separates paper and mock, requires Gift’s latest review, and books half an hour with HR", async () => {
       vi.stubEnv("HIRING_FINAL_REVIEWER_EMAIL", "gift@example.com");
@@ -984,6 +1313,9 @@ describe("hiring workflow persistence", () => {
       expect((await visitView(paperToken, db)).slots[0].mockStart).toBeNull();
       const paper = await bookVisit(paperToken, choice(), db);
       expect((await rowsOf(row.id)).map((booking) => booking.kind)).toEqual(["paper"]);
+      // A paper-only booking keeps a paper-only Move link, though new invitations use the paired kind.
+      const moveToken = String((await jobsOf(row.id)).find((j) => j.kind === "email" && j.bookingId)!.payload.text).match(/\/hiring\/book\/([\w.-]+)/)![1];
+      expect(JSON.parse(Buffer.from(moveToken.split(".")[0], "base64url").toString()).kind).toBe("paper-visit");
       vi.setSystemTime(paper.endTime);
       await expect(click(row.id, "paper_pass")).rejects.toThrow(/passing paper/);
       const [file] = await db.insert(s.hiringAssessmentFiles).values({ candidateId: row.id, subject: "Mathematics",
@@ -1006,19 +1338,24 @@ describe("hiring workflow persistence", () => {
       });
       vi.setSystemTime(mock.endTime);
       const brief = bookingToken(mock.id, "brief", new Date(mock.endTime.getTime() + 86400000));
-      await saveBriefRubric(brief, { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 8])), comments: "Clear examples." } as MockRubric, db);
+      await saveBriefRubric(brief, { items: Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 8])), comments: "Clear examples.", stressTest: TICKS } as MockRubric, db);
       await saveBriefDecision(brief, { decision: "hire", reason: "Clear examples." }, db);
-      const offer = "We offer you the Mathematics tutor position on the agreed terms.";
-      await expect(submitReview(db, row.id, "other@example.com", { behavioral: "Uses specific examples.", offer })).rejects.toMatchObject({ status: 403 });
-      await submitReview(db, row.id, "hr@example.com", { behavioral: "Uses specific examples.", offer });
+      const offerType = "part_time";
+      const offer = `Dear ${row.name},\n\nWe are pleased to offer you the position of part-time Mathematics tutor`;
+      // The preview has the letter and saves nothing.
+      expect(await draftReviewPacket(db, row.id, "hr@example.com", { behavioral: "Uses specific examples.", offerType })).toMatchObject({ id: "draft", offer: expect.stringContaining(offer) });
+      await expect(draftReviewPacket(db, row.id, "gift@example.com")).rejects.toMatchObject({ status: 403 });
+      expect(await latestReviewPacket(db, row.id)).toBeNull();
+      await expect(submitReview(db, row.id, "other@example.com", { behavioral: "Uses specific examples.", offerType })).rejects.toMatchObject({ status: 403 });
+      await submitReview(db, row.id, "hr@example.com", { behavioral: "Uses specific examples.", offerType });
       const packet = (await latestReviewPacket(db, row.id))!;
-      expect(packet).toMatchObject({ behavioral: "Uses specific examples.", evidence: { paper: { total: 9 }, mock: { total: 80 } } });
+      expect(packet).toMatchObject({ behavioral: "Uses specific examples.", offerType, offer: expect.stringContaining(offer), evidence: { paper: { total: 9 }, mock: { total: 112 } } });
       vi.mocked(googleConnectionStatus).mockResolvedValue({ connected: true, freeBusy: true, email: "", lastError: null });
       vi.mocked(readHrBusy).mockResolvedValue([]);
       await expect(signOffReview(db, row.id, packet.id, "hr@example.com", "hire", "")).rejects.toMatchObject({ status: 403 });
       await db.update(s.hiringMockResults).set({ rubric: { ...packet.evidence.mock.rubric, comments: "A reviewed correction." } }).where(eq(s.hiringMockResults.candidateId, row.id));
       await expect(signOffReview(db, row.id, packet.id, "gift@example.com", "hire", "")).rejects.toThrow(/evidence changed/);
-      await submitReview(db, row.id, "hr@example.com", { behavioral: "Uses specific examples.", offer });
+      await submitReview(db, row.id, "hr@example.com", { behavioral: "Uses specific examples.", offerType });
       const latest = (await latestReviewPacket(db, row.id))!;
       vi.setSystemTime(new Date(mock.endTime.getTime() + 1000));
       const { config: active } = await settings(db);
@@ -1147,7 +1484,7 @@ describe("hiring workflow persistence", () => {
       await bookVisit(link(row), choice(), db);
       await deliverOutbox(db, base);
       // The number the candidate gave at the HR call booking reaches the head with the email.
-      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\nEmail: \S+@example\.com\nPhone: \+66812345678\nSubject: /);
+      expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].text).toMatch(/\n\S+@example\.com · \+66812345678(\n|$)/);
       const token = vi.mocked(pushLineTextMessage).mock.calls[0][0].text.match(/\/hiring\/brief\/([\w.-]+)/)![1];
       const [exam, mock] = await rowsOf(row.id);
       expect([exam.kind, mock.kind]).toEqual(["paper", "mock"]);
@@ -1229,11 +1566,11 @@ describe("hiring workflow persistence", () => {
       expect((await read(row.id)).stage).toBe("onsite_booked");
       await deliverOutbox(db, base);
       expect(sendEmail).toHaveBeenCalledTimes(1);
-      // The head can tell which of two mocks moved: it prints the old 12:00 and the new time.
+      // The head can tell which of two mocks moved: it prints the old 12:15 and the new time.
       const moved = vi.mocked(pushLineTextMessage).mock.calls[0][0].text;
       expect(moved).toMatch(/moved/i);
-      expect(moved).toContain("02/11/2026, 12:00");
-      expect(moved).toContain("03/11/2026, 12:00");
+      expect(moved).toContain("Old time (cancelled): Mon 2 Nov, 12:15");
+      expect(moved).toContain("\nTue 3 Nov, 12:15–");
       expect(vi.mocked(deliverCalendar).mock.calls.filter((c) => c[4] === true)).toHaveLength(2);
       // The moved notice carries a new candidate page link, and the old one has ended.
       expect(briefOf(moved)).not.toBe(oldBrief);
@@ -1568,10 +1905,14 @@ describe("hiring workflow persistence", () => {
       await setVisit({ onsiteLimits: { perWeek: 10, unbooked: 2, perHeadPerWeek: 2, perSubject: 2 } });
       vi.setSystemTime(new Date(now.getTime() + 3600000));
       await click(row.id, "send_new_link", [], "Candidate can come next week");
+      // A new link is a two-day link: the test, and the mock teaching on a later day.
+      const real = await vi.importActual<typeof import("../availability")>("../availability");
+      vi.mocked(availableSlots).mockImplementation((...args) => real.availableSlots(...args));
       const fresh = await newestLink(row.id);
-      await bookVisit(fresh, choice(), db);
+      await bookVisit(fresh, choice(EXAM, { mockStart: "2026-11-03T04:00:00.000Z" }), db);
       expect((await visitView(fresh, db)).canMove).toBe(true);
-      await bookVisit(fresh, choice(EXAM_TUE, { move: true }), db);
+      // The move changes the test and keeps a later mock.
+      await bookVisit(fresh, choice(EXAM_TUE, { move: true, mockStart: "2026-11-04T04:00:00.000Z" }), db);
       expect((await visitView(fresh, db)).canMove).toBe(false);
       expect((await db.select().from(s.hiringAudit)).find((a) => a.action === "send_new_link")!.detail).toMatchObject({ reason: "Candidate can come next week" });
       // The new link counts as a send.
@@ -2495,6 +2836,14 @@ describe("hiring workflow persistence", () => {
       // A head with no saved week had no days to remove.
       await setHeads();
       expect((await saveHeadDays("Gift", [true, false, false, false, false], 4, ADMIN, db)).affectedVisits).toBe(0);
+    });
+
+    it("refuses head days for a head whose hours come from Wise", async () => {
+      await setHeads({ interviewers: [peat, { ...gift, hoursFromWise: true }] });
+      const error = await saveHeadDays("Gift", ALL, 4, ADMIN, db).catch((e) => e);
+      expect(error).toBeInstanceOf(HiringError);
+      expect(error.status).toBe(409);
+      expect(await hiringRevision()).toBe(4);
     });
 
     it("treats an attendance enrollment whose end date has passed as ended", async () => {

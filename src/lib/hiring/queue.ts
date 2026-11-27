@@ -16,22 +16,25 @@ import {
   normalizeSubjects,
   runtimeWritesAllowed,
   type HiringConfig,
+  type Stage,
   type Subject,
 } from "./model";
 import {
   availabilityFraction,
   hardStops,
   preScreenPoints,
+  highSchoolFraction,
   profileScore,
   workRightsPenalty,
-  supportedVisitSubjects,
   visitSubject,
 } from "./scoring";
 import {
   audit,
   callCalendarState,
+  cancelCallReminder,
   cancelComingCall,
   enqueue,
+  hasBookedCall,
   inviteToCall,
   inviteToPreScreen,
   inviteToVisit,
@@ -49,6 +52,7 @@ const c = s.hiringCandidates,
 const DAY = 86400000;
 const isForm = sql`${o.key} = ${o.candidateId}::text || ':pre-screen'`;
 const isCallInvite = sql`${o.key} = ${o.candidateId}::text || ':call-invite'`;
+const isCallReminder = sql`${o.key} = ${o.candidateId}::text || ':call-invite-reminder'`;
 // A reminder carries the same stage so that a stage change cancels it, but it is not a new invitation.
 const isOnsiteInvite = sql`${o.payload}->>'workflowStage' = 'onsite_invited' and ${o.key} not like '%:visit-reminder:%'`;
 /** Every release, click and follow-up takes this one lock, so they cannot share out the same place. */
@@ -152,7 +156,10 @@ export const inviteRows = (db: Database, candidateId: string) =>
     .from(o)
     .where(and(eq(o.candidateId, candidateId), isOnsiteInvite));
 
-/** The newest invitation's send time. A row not yet sent has no time, so no follow-up clock runs. */
+/**
+ * The newest live invitation: null when there is none (every row cancelled, for example by a hold), else its send time.
+ * A row not yet sent has no time, so no follow-up clock runs.
+ */
 export async function linkSentAt(db: Database, candidateId: string) {
   const [link] = await db
     .select({ status: o.status, sentAt: o.sentAt })
@@ -160,7 +167,7 @@ export async function linkSentAt(db: Database, candidateId: string) {
     .where(and(eq(o.candidateId, candidateId), isOnsiteInvite, ne(o.status, "cancelled")))
     .orderBy(desc(o.createdAt))
     .limit(1);
-  return link?.status === "sent" ? link.sentAt : null;
+  return link ? { sentAt: link.status === "sent" ? link.sentAt : null } : null;
 }
 
 /** The columns `replyCheck` and the onsite queue read. Never the profile text or the profile assessment. */
@@ -206,8 +213,6 @@ export function replyCheck(
   if (candidate.preScreenOverride) return hold("A person changed this score. A person decides.");
   const { stops } = hardStops(pre, answer, normalizeSubjects(pre.subjects), config);
   if (stops.length) return hold(stops.join(" "));
-  if (!supportedVisitSubjects(pre, answer, assessment, config).length)
-    return hold("No named subject is supported by the assessment.");
   if (!sentAt) return hold("This response has no matching form send. A person decides.");
   if (!candidate.email) return hold("There is no usable email.");
   // HR's good call is the contact, as in `profileGate`.
@@ -222,7 +227,7 @@ export function replyCheck(
   if (score < config.preScreenThreshold)
     return hold(`The pre-screen score ${score} is below the pass score ${config.preScreenThreshold}.`);
   // Opening the subject or adding a head cures this.
-  const subject = visitSubject(pre, answer, assessment, config);
+  const subject = visitSubject(pre, answer, config);
   return subject ? { kind: "ready", subject, score } : { kind: "wait" };
 }
 
@@ -234,10 +239,13 @@ export const autoInviteEligible = (candidate: Candidate, sentAt: Date | null, co
  * Reads only the columns the gate and the score use, because profile text and the other large fields are not needed to rank.
  * A release locks and reads the full row before it sends anything.
  */
-export const formCandidates = (db: Database, id?: string) =>
+export const formCandidates = (db: Database, id?: string, stages: Stage[] = ["new"]) =>
   db
     .select({
       id: c.id,
+      stage: c.stage,
+      broughtBackAt: c.broughtBackAt,
+      softRejectedFrom: c.softRejectedFrom,
       createdAt: c.createdAt,
       email: c.email,
       previouslyContacted: c.previouslyContacted,
@@ -252,12 +260,19 @@ export const formCandidates = (db: Database, id?: string) =>
           .from(o)
           .where(and(eq(o.candidateId, c.id), isCallInvite, eq(o.status, "sent"))),
       )}`,
+      // No time test: a call that has started stays here until HR records its result.
+      callBooked: sql<boolean>`${exists(
+        db
+          .select({ id: b.id })
+          .from(b)
+          .where(and(eq(b.candidateId, c.id), eq(b.kind, "call"), eq(b.status, "confirmed"))),
+      )}`,
     })
     .from(c)
     .where(
       and(
         id ? eq(c.id, id) : undefined,
-        eq(c.stage, "new"),
+        inArray(c.stage, stages),
         isNull(c.preScreen),
         notExists(db.select({ id: o.id }).from(o).where(and(eq(o.candidateId, c.id), isForm))),
       ),
@@ -278,13 +293,107 @@ export function preScreenEntries(rows: FormCandidate[], config: HiringConfig): Q
           {
             id: row.id,
             subject,
-            score: profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0, workRightsPenalty(row.workRightsAnswer, config)),
+            score: profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0, workRightsPenalty(row.workRightsAnswer, config), highSchoolFraction(row.profileAssessment, config)),
             createdAt: row.createdAt,
             manual: row.queueManual,
           },
         ]
       : [];
   });
+}
+
+/**
+ * Soft reject and bring back (Kevin, 25 Nov 2026), from rows already read. Pure, so the rules are unit tested.
+ * - Soft reject: a never-emailed row at `new` or `review`, not brought back before, that the pass score holds
+ *   (the gate's own "Below profile threshold" reason, so a good call or a booked call still exempts it).
+ * - Restore: a soft-rejected row whose gate now passes (the pass score was lowered) goes back where it came from, as
+ *   it was. One from `review` goes back to review: only a person ever emails a review row.
+ * - Bring back: for each subject still hiring that has nobody in the form queue, the best soft-rejected row from `new`
+ *   at or above `bringBackFloor` whose gate passes once the pass score no longer holds it. One a subject per cycle,
+ *   so the queue limits pace them. Ties go to the earlier application. A blank floor turns this off.
+ * - A row that got the old HR call link was emailed, so it is never soft rejected.
+ */
+export function softRejectPlan(
+  open: FormCandidate[],
+  softRejected: FormCandidate[],
+  config: HiringConfig,
+): { reject: { id: string; score: number }[]; restore: string[]; bringBack: { id: string; subject: Subject; score: number }[] } {
+  const score = (row: FormCandidate) =>
+    profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0, workRightsPenalty(row.workRightsAnswer, config), highSchoolFraction(row.profileAssessment, config));
+  const reject = open
+    .filter((row) => row.profileAssessment && !row.broughtBackAt && !row.callInvited && profileGate(row, config).short.includes("Below profile threshold"))
+    .map((row) => ({ id: row.id, score: score(row) }));
+  const rejected = new Set(reject.map((r) => r.id));
+  const restore = softRejected.filter((row) => row.profileAssessment && profileGate(row, config).eligible).map((row) => row.id);
+  const restored = new Set(restore);
+  const queued = new Set(
+    preScreenEntries(
+      [...open.filter((row) => row.stage === "new" && !rejected.has(row.id)), ...softRejected.filter((row) => restored.has(row.id) && row.softRejectedFrom !== "review")],
+      config,
+    ).map((e) => e.subject),
+  );
+  const best = new Map<Subject, { id: string; subject: Subject; score: number }>();
+  for (const row of softRejected) {
+    if (!row.profileAssessment || restored.has(row.id) || row.softRejectedFrom === "review" || config.bringBackFloor === null || score(row) < config.bringBackFloor) continue;
+    const gate = profileGate({ ...row, broughtBackAt: new Date(0) }, config);
+    if (!gate.eligible || !gate.subject || queued.has(gate.subject)) continue;
+    const pick = { id: row.id, subject: gate.subject, score: score(row) };
+    const held = best.get(gate.subject);
+    if (!held || pick.score > held.score || (pick.score === held.score && row.createdAt < softRejected.find((r) => r.id === held.id)!.createdAt))
+      best.set(gate.subject, pick);
+  }
+  return { reject, restore, bringBack: [...best.values()] };
+}
+
+/** Back where a soft-rejected row came from, with its note then. Shared by the restore and the Bring back click. */
+export const unsoftReject = (row: { softRejectedFrom: "new" | "review" | null; softRejectedNote: string | null }) => ({
+  stage: row.softRejectedFrom ?? ("new" as const),
+  reviewNote: row.softRejectedNote,
+  softRejectedFrom: null,
+  softRejectedNote: null,
+});
+
+/** Runs the plan inside the queue lock: rows move between `new`/`review` and `soft_rejected`. No email either way. */
+async function softRejectAndBringBack(tx: Database, config: HiringConfig, now: Date) {
+  const plan = softRejectPlan(await formCandidates(tx, undefined, ["new", "review"]), await formCandidates(tx, undefined, ["soft_rejected"]), config);
+  // One statement, not a round trip a row: the first run moves hundreds, and a long transaction under the queue lock
+  // lost its connection (25 Nov 2026). SET reads the old stage and note, so each row remembers its own.
+  if (plan.reject.length) {
+    const score = new Map(plan.reject.map((r) => [r.id, r.score]));
+    const moved = await tx
+      .update(c)
+      .set({
+        stage: "soft_rejected",
+        softRejectedAt: now,
+        softRejectedFrom: sql<"new" | "review">`${c.stage}`,
+        softRejectedNote: sql<string | null>`${c.reviewNote}`,
+        reviewNote: `Soft rejected: the profile score is under ${config.profileThreshold}.`,
+        revision: sql<number>`${c.revision} + 1`,
+        updatedAt: now,
+      })
+      .where(and(inArray(c.id, [...score.keys()]), inArray(c.stage, ["new", "review"])))
+      .returning({ id: c.id });
+    if (moved.length)
+      await tx.insert(s.hiringAudit).values(
+        moved.map(({ id }) => ({ actor: "hiring-queue", action: "soft-reject", candidateId: id, detail: { score: score.get(id), threshold: config.profileThreshold } })),
+      );
+  }
+  for (const id of plan.restore) {
+    const row = await lockCandidate(tx, id);
+    if (row.stage !== "soft_rejected") continue;
+    await tx.update(c).set({ ...unsoftReject(row), revision: row.revision + 1, updatedAt: now }).where(eq(c.id, id));
+    await audit(tx, "hiring-queue", "soft-reject-restore", id, { threshold: config.profileThreshold });
+  }
+  for (const { id, subject, score } of plan.bringBack) {
+    const row = await lockCandidate(tx, id);
+    if (row.stage !== "soft_rejected") continue;
+    await tx
+      .update(c)
+      .set({ stage: "new", broughtBackAt: now, softRejectedFrom: null, softRejectedNote: null, reviewNote: `Brought back: no candidate at the pass score was left for ${subject}.`, revision: row.revision + 1, updatedAt: now })
+      .where(eq(c.id, id));
+    await audit(tx, "hiring-queue", "bring-back", id, { subject, score, auto: true });
+  }
+  return { softRejected: plan.reject.length, broughtBack: plan.bringBack.length + plan.restore.length };
 }
 
 /**
@@ -306,7 +415,7 @@ export function callEntries(rows: FormCandidate[], config: HiringConfig): QueueE
             {
               id: row.id,
               subject: gate.subject,
-              score: profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0, workRightsPenalty(row.workRightsAnswer, config)),
+              score: profileScore(row.profileAssessment!, config.profileWeights, row.universityAssessment?.fraction ?? 0, workRightsPenalty(row.workRightsAnswer, config), highSchoolFraction(row.profileAssessment, config)),
               createdAt: row.createdAt,
             },
           ]
@@ -340,8 +449,10 @@ export async function recordCall(
     const review = row.callReview ?? { good: null, tries: [] };
     // After a good call HR will not make a call that is still ahead. A no answer closes the call that has started, and
     // the candidate's link then lets them book again.
-    if (result === "good") await cancelComingCall(tx, id, now);
-    else await missStartedCall(tx, id, now);
+    if (result === "good") {
+      await cancelComingCall(tx, id, now);
+      await cancelCallReminder(tx, id);
+    } else await missStartedCall(tx, id, now);
     await tx
       .update(c)
       .set({
@@ -396,6 +507,49 @@ export async function releaseCallInvites(db: Database, now = new Date()) {
       if (!(await callQueue(tx, config, entry.id)).length) continue;
       if (!(await inviteToCall(tx, row, now))) continue;
       await audit(tx, "hiring-queue", "call-invite-release", row.id, { subject: entry.subject, score: entry.score });
+      room--;
+      sent++;
+    }
+    return sent;
+  });
+}
+
+/**
+ * One reminder for a call link that brought no booking (Kevin, 24 Nov 2026). It goes `preScreenFollowUp.remindDays` after
+ * the link was sent, only while the candidate is still on the Calls tab and has never held a call booking of any status:
+ * a candidate who missed a call can book again on the link they have. The day's number is the pre-screen per-day limit,
+ * counted apart from the first links. Like the first link, nothing goes unless HR's calendar can be read now.
+ */
+export async function remindCallInvites(db: Database, now = new Date()) {
+  const before = await settings(db);
+  if (!allowed(before.config) || (await callCalendarState(db, before.config, now)) !== "readable") return 0;
+  return withDatabaseTransaction(db, async (tx) => {
+    await lockQueue(tx);
+    const { config } = await settings(tx);
+    if (!allowed(config)) return 0;
+    const links = await tx.select({ candidateId: o.candidateId, sentAt: o.sentAt }).from(o).where(and(isCallInvite, eq(o.status, "sent")));
+    const due = new Set(
+      links
+        .filter((row) => row.sentAt && now.getTime() - row.sentAt.getTime() >= config.preScreenFollowUp.remindDays * DAY)
+        .map((row) => row.candidateId),
+    );
+    // One reminder per candidate, ever: any earlier row, even a cancelled one, keeps a candidate out.
+    const earlier = await tx.select({ candidateId: o.candidateId, status: o.status, createdAt: o.createdAt }).from(o).where(isCallReminder);
+    const reminded = new Set(earlier.map((row) => row.candidateId));
+    const booked = new Set((await tx.select({ candidateId: b.candidateId }).from(b).where(eq(b.kind, "call"))).map((row) => row.candidateId));
+    const dayStart = bangkokDayStart(now);
+    let room = config.preScreenLimits.perDay - earlier.filter((row) => row.status !== "cancelled" && row.createdAt >= dayStart).length;
+    let sent = 0;
+    for (const entry of await callQueue(tx, config)) {
+      if (room <= 0) break;
+      if (!due.has(entry.id) || reminded.has(entry.id) || booked.has(entry.id)) continue;
+      const row = await lockCandidate(tx, entry.id);
+      // A person, a SEEK read or a booking can act between the queue read and this row lock.
+      if (!(await callQueue(tx, config, entry.id)).length) continue;
+      const [call] = await tx.select({ id: b.id }).from(b).where(and(eq(b.candidateId, entry.id), eq(b.kind, "call"))).limit(1);
+      if (call) continue;
+      if (!(await inviteToCall(tx, row, now, true))) continue;
+      await audit(tx, "hiring-follow-up", "call-invite-reminder", row.id, { subject: entry.subject, score: entry.score });
       room--;
       sent++;
     }
@@ -499,7 +653,8 @@ export async function releaseQueues(db: Database, now = new Date()) {
   return withDatabaseTransaction(db, async (tx) => {
     await lockQueue(tx);
     const { config } = await settings(tx);
-    if (!allowed(config)) return { preScreen: 0, onsite: 0 };
+    if (!allowed(config)) return { preScreen: 0, onsite: 0, softRejected: 0, broughtBack: 0 };
+    const sorted = await softRejectAndBringBack(tx, config, now);
     let preScreen = 0,
       onsite = 0;
     const forms = releaseQueue(
@@ -511,7 +666,7 @@ export async function releaseQueues(db: Database, now = new Date()) {
     for (const entry of forms.release) {
       const row = await lockCandidate(tx, entry.id);
       // A person can act between the queue read and this row lock.
-      if (row.stage !== "new" || row.preScreen || !profileGate(row, config).eligible) continue;
+      if (row.stage !== "new" || row.preScreen || !profileGate({ ...row, callBooked: await hasBookedCall(tx, row.id) }, config).eligible) continue;
       if (!(await inviteToPreScreen(tx, row, now))) continue;
       const subjects = row.profileAssessment!.subjects.filter((v) => v.relevant).map((v) => v.subject);
       await tx
@@ -540,7 +695,7 @@ export async function releaseQueues(db: Database, now = new Date()) {
       await audit(tx, "hiring-queue", "onsite-release", row.id, { subject, score: entry.score });
       onsite++;
     }
-    return { preScreen, onsite };
+    return { preScreen, onsite, ...sorted };
   });
 }
 
@@ -587,7 +742,7 @@ export async function runFollowUps(db: Database, now = new Date()) {
           payload: {
             to: row.email,
             workflowStage: "pre_screen",
-            ...preScreenEmail(row.name, row.email, true),
+            ...preScreenEmail(row.name, row.email, true, row.inviteExpiresAt ? visitLink(id, row.inviteExpiresAt) : undefined),
           },
         }))
       ) {

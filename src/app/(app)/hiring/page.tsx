@@ -1,18 +1,40 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { requireHiringAdmin } from "@/lib/hiring/access";
+import { auth } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { headKeyFor, requireHiringAdmin } from "@/lib/hiring/access";
 import { HiringError } from "@/lib/hiring/model";
+import { headKeys } from "@/lib/hiring/role-views";
+import { settings } from "@/lib/hiring/service";
 import { HiringDashboard } from "@/components/hiring/dashboard";
 export const metadata = { title: "Tutor Hiring | BeGifted Ops" };
 async function Body() {
+  let email: string;
   try {
-    await requireHiringAdmin();
+    email = await requireHiringAdmin();
   } catch (error) {
+    // Next's own signal that the render was abandoned is passed on, never turned into a message (code review, round 25).
+    if (typeof error === "object" && error !== null && (error as { digest?: unknown }).digest === "HANGING_PROMISE_REJECTION") throw error;
     if (error instanceof HiringError && error.status === 401)
       redirect("/login?callbackUrl=%2Fhiring");
     return <p className="p-6">Hiring access is required.</p>;
   }
-  return <HiringDashboard />;
+  // A head sees their own screen while the data loads, not the full dashboard (Kevin, 24 Nov 2026). This is a
+  // shortcut only: if the settings cannot be read here, the dashboard still opens and reports the problem itself.
+  // A head with no page limit (Kevin, owner and a head) keeps the way to the full dashboard (25 Nov 2026).
+  let head: string | null = null;
+  let fullAccess = false;
+  try {
+    // First, so a settings failure below cannot strand a full-access head; null only for a full-access admin.
+    fullAccess = (await auth())?.user?.allowedPages === null;
+    const { config } = await settings(getDb());
+    head = await headKeyFor(email, headKeys(config));
+  } catch (error) {
+    // Next's own signal that the render was abandoned is passed on, never swallowed (code review, round 20).
+    if (typeof error === "object" && error !== null && (error as { digest?: unknown }).digest === "HANGING_PROMISE_REJECTION") throw error;
+    console.error("[hiring] head shortcut skipped", error instanceof Error ? error.name : "UnknownError");
+  }
+  return <HiringDashboard head={head} fullAccess={fullAccess} />;
 }
 export default function Page() {
   return (

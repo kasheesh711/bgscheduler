@@ -2,6 +2,8 @@ import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { z } from "zod";
 import { weekSchema } from "@/lib/tutor-attendance/model";
 import { UNIVERSITY_CATALOG, THAI_UNIVERSITIES } from "./university-catalog";
+import { BANGKOK_INTERNATIONAL_SCHOOLS, TOP_THAI_SCHOOLS } from "./high-school-catalog";
+import { weekHoursSchema, weekHoursText } from "./week-hours";
 
 export const ZONE = "Asia/Bangkok";
 export const GOOGLE_SCOPES = [
@@ -11,15 +13,18 @@ export const GOOGLE_SCOPES = [
 // Reads free and busy time on calendars the connected account can see. It is not in GOOGLE_SCOPES: visit calendar
 // delivery must keep working before the owner connects Google again. Only the HR call needs it.
 export const GOOGLE_FREEBUSY_SCOPE = "https://www.googleapis.com/auth/calendar.events.freebusy";
-// The HR pre-screen call (Kevin's decisions, 12 Nov 2026): the people@ calendar, Monday to Friday, 09:00–18:00 Bangkok,
-// 15 minutes. Fixed in code, so an older worker never meets an unknown settings key.
+// R1: HR Interview (Kevin's decisions, 12 and 22 Nov 2026): the people@ calendar, Monday to Friday, 13:15–18:00 Bangkok (R1_DAY_START),
+// 30 minutes on Google Meet, starting on any quarter hour. Fixed in code, so an older worker never meets an unknown settings key.
 export const HR_CALENDAR = "people@begiftededucation.com";
 /** The `interviewer_key` of every call row, so the booking overlap trigger gives HR one call at a time. */
 export const HR_CALL_KEY = "hr-call";
-export const CALL_MINUTES = 15;
+export const CALL_MINUTES = 30;
+export const CALL_STEP_MINUTES = 15;
 export const CONTRACT_MINUTES = 30;
 export const CALL_DAY_START = 9 * 60;
 export const CALL_DAY_END = 18 * 60;
+// Kevin, 23 Nov 2026: HR takes R1 interviews only after lunch. Contract signings keep the whole day.
+export const R1_DAY_START = 13 * 60 + 15;
 export const CALL_LINK_DAYS = 14;
 export const subscriptionAuthSchema = z.object({
   loggedIn: z.literal(true),
@@ -93,7 +98,10 @@ export type Subject = z.infer<typeof subjectSchema>;
 export type InterviewKind = "paper" | "mock";
 // `brief` is the interviewer's page for one mock booking: its id is a booking id, not a candidate id.
 // `call` is the candidate's link to book the HR pre-screen call.
-export const tokenKindSchema = z.enum(["paper", "mock", "visit", "paper-visit", "brief", "call", "contract", "onboarding"]);
+// `two-day` (Kevin, 24 Nov 2026) books the test (Monday to Sunday) and the final-round mock teaching on the same day or a later day
+// (Monday to Friday) together. `visit` (both on one day) and `paper-visit` (test only) are links sent before that.
+// Append only: a short link stores the index of its kind (src/lib/hiring/tokens.ts).
+export const tokenKindSchema = z.enum(["paper", "mock", "visit", "paper-visit", "two-day", "brief", "call", "contract", "onboarding", "paper-check"]);
 /** A booking of the visit flows. A row of kind `call` belongs to the HR call list only. */
 export const isVisitBooking = <T extends { kind: string }>(row: T): row is T & { kind: InterviewKind } =>
   row.kind === "paper" || row.kind === "mock";
@@ -112,6 +120,8 @@ export const stageSchema = z.enum([
   "stopped",
   "hired",
   "rejected",
+  // Under the pass score and never emailed (Kevin, 25 Nov 2026). Not stuck; comes back by a click or an empty subject.
+  "soft_rejected",
 ]);
 /** A person sent the result. No import, queue or automatic pass may move this stage. */
 export const DECIDED_STAGES = ["hired", "rejected"] as const;
@@ -157,6 +167,8 @@ export const profileWeightsSchema = z
     teaching: z.number().int().min(0).max(100),
     english: z.number().int().min(0).max(100),
     prestige: z.number().int().min(0).max(100),
+    /** The candidate's own high school. 0 for a config saved before this part existed, so its total stays 100. */
+    school: z.number().int().min(0).max(100).default(0),
   })
   .strict()
   .refine(
@@ -166,10 +178,12 @@ export const profileWeightsSchema = z
 export const DEFAULT_WEIGHTS = {
   degree: 10,
   subject: 10,
-  curriculum: 20,
+  curriculum: 15,
   teaching: 20,
   english: 20,
-  prestige: 20,
+  prestige: 15,
+  // Kevin, 24 Nov 2026: 10 points for the high school, 5 taken from university and 5 from curriculum.
+  school: 10,
 };
 export const preScreenWeightsSchema = z
   .object({
@@ -199,6 +213,14 @@ export const DEFAULT_PRE_SCREEN_WEIGHTS = {
 };
 /** A visit link lives this long. Tokens and the onsite expiry rule both read it. */
 export const VISIT_LINK_DAYS = 30;
+/** Staff grade the paper between the exam and the mock (Kevin, 22 Nov 2026: grading takes 5 to 10 minutes). */
+export const VISIT_GAP_MINUTES = 15;
+/**
+ * A mock teaching time can follow a test when it starts after the test ends and the grading gap: on the same day or on a
+ * later day (Kevin, 24 Nov 2026, the same day he first asked for a later day only).
+ */
+export const mockCanFollow = (examEnd: string | Date, mockStart: string | Date) =>
+  new Date(mockStart).getTime() >= new Date(examEnd).getTime() + VISIT_GAP_MINUTES * 60000;
 const limit = z.number().int().min(0).max(1000);
 const followUpSchema = z
   .object({
@@ -224,6 +246,8 @@ export const baseConfigSchema = z
     enabled: z.boolean().default(false),
     deliveryEnabled: z.boolean().default(false),
     recruitmentLineGroupId: z.string().regex(/^C[0-9a-f]{32}$/).nullable().default(null),
+    /** The person Thea tags in the 08:30 print message; saved by "@Thea print setup" in the recruitment group. */
+    printLineUserId: z.string().regex(/^U[0-9a-f]{32}$/).nullable().default(null),
     /** Only this candidate may test visit booking while Automation is paused. Messages stay gated. */
     bookingTestCandidateId: z.uuid().nullable().default(null),
     rubricApproved: z.boolean().default(true),
@@ -239,6 +263,11 @@ export const baseConfigSchema = z
       .max(5)
       .default([{ jobId: LEGACY_SEEK_JOB_ID, label: "Tutor ad 2026", active: true }]),
     profileThreshold: z.number().int().min(0).max(100).default(60),
+    /**
+     * Soft reject (Kevin, 25 Nov 2026): when a subject has nobody left at the pass score, the worker brings back its best
+     * soft-rejected candidate at or above this profile score. Null turns the automatic bring-back off.
+     */
+    bringBackFloor: z.number().int().min(0).max(100).nullable().default(null),
     /** A gate pass at or above this profile score waits for HR's good call before the form can go. Null turns calls off. */
     callThreshold: z.number().int().min(0).max(100).nullable().default(80),
     profileWeights: profileWeightsSchema.default(DEFAULT_WEIGHTS),
@@ -257,6 +286,19 @@ export const baseConfigSchema = z
       )
       .max(3000)
       .default([...UNIVERSITY_CATALOG, ...THAI_UNIVERSITIES]),
+    /** The high schools that earn points: tier 1 gets the full weight, tier 2 half. A school not listed gets none. */
+    highSchools: z
+      .array(
+        z
+          .object({
+            name: z.string().trim().min(1).max(300),
+            aliases: z.array(z.string().trim().min(1).max(300)).max(20),
+            tier: z.union([z.literal(1), z.literal(2)]),
+          })
+          .strict(),
+      )
+      .max(500)
+      .default([...BANGKOK_INTERNATIONAL_SCHOOLS, ...TOP_THAI_SCHOOLS]),
     requireWeekendAndWeekday: z.literal(true).default(true),
     holidays: z.array(z.iso.date()).max(366).default([]),
     interviewers: z
@@ -267,6 +309,8 @@ export const baseConfigSchema = z
             subjects: z.array(subjectSchema).min(1),
             email: emailSchema,
             fallbackWeek: weekSchema.optional(),
+            /** Kevin, 24 Nov 2026: this head's hours are their onsite Wise working hours, read at each check. */
+            hoursFromWise: z.boolean().optional(),
           })
           .strict(),
       )
@@ -335,6 +379,15 @@ export const baseConfigSchema = z
     visitStartMinute: z.number().int().min(0).max(1439).default(600),
     visitEndMinute: z.number().int().min(1).max(1440).default(960),
     resumeRetentionMonths: z.number().int().min(1).max(120).default(12),
+    /**
+     * The head who checks a near-miss paper (PAPER_CHECK_FROM_PERCENT up to the pass mark) in each subject. A subject
+     * with no row goes to its first mock interviewer. Optional with no default, for the same reason as
+     * `workRightsPenalties`; `DEFAULT_PAPER_CHECKERS` applies until a person saves a change.
+     */
+    paperCheckers: z
+      .array(z.object({ subject: subjectSchema, canonicalKey: z.string().min(1).max(200) }).strict())
+      .max(SUBJECTS.length)
+      .optional(),
     /** The pass percentage for each subject and level of the paper. A pair with no row has no pass mark yet. */
     paperPassRules: z
       .array(z.object({ subject: subjectSchema, level: z.enum(PAPER_LEVELS), percent: z.number().min(0).max(100) }).strict())
@@ -349,6 +402,17 @@ export const baseConfigSchema = z
   })
   .strict();
 export type HiringConfig = z.infer<typeof baseConfigSchema>;
+/** Kevin, 24 Nov 2026: a failed paper at or above this best-level percent goes to the subject's head for a check first. */
+export const PAPER_CHECK_FROM_PERCENT = 70;
+/** The shortest reason a head may give for passing a near miss (Kevin, 25 Nov 2026). */
+export const OVERRIDE_REASON_MIN = 20;
+/** Kevin, 24 Nov 2026: Tito checks the English papers. Other subjects go to their mock interviewer. */
+export const DEFAULT_PAPER_CHECKERS: NonNullable<HiringConfig["paperCheckers"]> = (["EFL/ESL", "English Language", "English Literature", "IELTS"] as const)
+  .map((subject) => ({ subject, canonicalKey: "Tito" }));
+/** The head who checks a near-miss paper in this subject, or null when nobody covers it. */
+export const paperCheckerFor = (config: Pick<HiringConfig, "paperCheckers" | "interviewers">, subject: Subject) =>
+  (config.paperCheckers ?? DEFAULT_PAPER_CHECKERS).find((row) => row.subject === subject)?.canonicalKey
+  ?? config.interviewers.find((head) => head.subjects.includes(subject))?.canonicalKey ?? null;
 
 /** Rules that link two settings. Plain English, because Kevin reads them on the Rules screen. */
 export function configRuleErrors(
@@ -398,7 +462,8 @@ export const configSchema = baseConfigSchema.superRefine((value, ctx) => {
 
 export const preScreenSchema = z
   .object({
-    sourceRow: z.number().int().positive(),
+    // The sheet row of a Google Form answer. 0 is an answer given on the booking page (`answersSchema`).
+    sourceRow: z.number().int().nonnegative(),
     submittedAt: z.string().max(100),
     degree: z.string().max(500),
     field: z.string().max(2000),
@@ -413,14 +478,85 @@ export const preScreenSchema = z
     weeklyHours: z.string().max(500),
     motivation: z.string().max(10000),
     teachingApproach: z.string().max(10000),
+    // The subject the candidate chooses to be tested on at the visit (Kevin, 22 Nov 2026). Older answers have none.
+    testSubject: z.string().max(500).optional(),
   })
   .strict();
 export type PreScreen = z.infer<typeof preScreenSchema>;
+/** The form question that sets the visit subject. The sheet column is found by this header, not by its position. */
+export const TEST_SUBJECT_QUESTION = "Which subject do you want to be tested on at your onsite visit?";
+/**
+ * The questions on the booking page (Kevin, 24 Nov 2026: the questions and the booking are one page). The choices are
+ * the Google Form's own texts, because `hardStops` and `availabilityFraction` read these words. The subject list is
+ * ours, so every tick is a subject the app knows.
+ */
+export const ANSWER_CHOICES = {
+  degree: ["Below Bachelor's", "Bachelor's", "Master's", "PhD"],
+  curricula: ["IB (MYP/ DP)", "British (IGCSE/ GCSE/ A-level)", "American (US High School/ AP)", "Thai National Curriculum"],
+  yearGroups: ["Year 2-6 (Primary)", "Year 7-9 (Lower Secondary)", "Year 10-11 (IGCSE Level)", "Year 12-13 (A-level/ IB DP)"],
+  english: ["Native", "Advanced (C1)", "Upper-Intermediate (B2)", "Intermediate (B1)"],
+  experience: ["Less than 1 year", "1-3 years", "3-5 years", "5+ years"],
+  availability: [
+    "Weekday Morning (before 12:00)",
+    "Weekday Afternoon (12:00-17:00)",
+    "Weekday Evening (17:00-21:00)",
+    "Weekend Morning (before 12:00)",
+    "Weekend Afternoon (12:00-17:00)",
+    "Weekend Evening (17:00-21:00)",
+  ],
+  weeklyHours: ["1-10", "11-20", "20-40", "40+"],
+} as const;
+/** The Art & Design portfolio file of the booking page: one PDF or picture in private storage (`portfolio.ts`). */
+export const PORTFOLIO_TYPES = ["application/pdf", "image/jpeg", "image/png"] as const;
+export const MAX_PORTFOLIO_BYTES = 25 * 1024 * 1024;
+export const portfolioPath = (candidateId: string) => `hiring-portfolios/${candidateId}`;
+const ticks = <T extends readonly [string, ...string[]]>(choices: T, message: string) =>
+  z.array(z.enum(choices)).min(1, message).max(choices.length);
+// No minimum length (Kevin, 24 Nov 2026). An answer is still needed.
+const written = (question: string) => z.string().trim().min(1, `Answer the question "${question}".`).max(5000);
+export const answersSchema = z
+  .object({
+    // One choice: "Below Bachelor's" with a higher degree would read as no degree.
+    degree: z.enum(ANSWER_CHOICES.degree),
+    field: z.string().trim().min(1, "Write your field of study.").max(200),
+    subjects: z.array(subjectSchema).min(1, "Choose at least one subject.").max(SUBJECTS.length),
+    testSubject: subjectSchema,
+    curricula: ticks(ANSWER_CHOICES.curricula, "Choose at least one curriculum."),
+    yearGroups: ticks(ANSWER_CHOICES.yearGroups, "Choose at least one year group."),
+    english: z.enum(ANSWER_CHOICES.english),
+    englishEvidence: z.string().trim().max(500),
+    experience: z.enum(ANSWER_CHOICES.experience),
+    // An optional link. The file upload is checked on the server (`answerPreScreen`).
+    portfolio: z.string().trim().max(500),
+    // The week grid (Kevin, 24 Nov 2026). Stored as text, so every later check reads one format.
+    availability: weekHoursSchema,
+    weeklyHours: z.enum(ANSWER_CHOICES.weeklyHours),
+    motivation: written("Why do you want to tutor with BeGifted?"),
+    teachingApproach: written("How would you approach it?"),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.subjects.includes(value.testSubject))
+      ctx.addIssue({ code: "custom", path: ["testSubject"], message: "Choose a test subject from the subjects you can teach." });
+  });
+export type Answers = z.infer<typeof answersSchema>;
+/** Page answers in the stored shape of a Google Form answer, so every later check reads one format. */
+export const answersToPreScreen = (answers: Answers, now: Date, portfolioFile = ""): PreScreen => ({
+  ...answers,
+  portfolio: [answers.portfolio, portfolioFile].filter(Boolean).join(" · "),
+  sourceRow: 0,
+  submittedAt: now.toISOString(),
+  subjects: answers.subjects.join(", "),
+  curricula: answers.curricula.join(", "),
+  yearGroups: answers.yearGroups.join(", "),
+  availability: weekHoursText(answers.availability),
+});
 /** The form answers in reading order, for the admin panel and the interviewer's page. */
 export const ANSWER_LABELS: [Exclude<keyof PreScreen, "sourceRow" | "submittedAt">, string][] = [
   ["degree", "Degree"],
   ["field", "Field of study"],
   ["subjects", "Subjects"],
+  ["testSubject", "Subject to be tested on"],
   ["curricula", "Curricula"],
   ["yearGroups", "Year groups"],
   ["english", "English level"],
@@ -485,23 +621,28 @@ export function normalizeSubjects(value: string): Subject[] {
   ];
 }
 
+// Kevin, 24 Nov 2026: candidates said no times were free, so booking opens four weeks (20 business days), not five days.
+export const BOOKING_BUSINESS_DAYS = 20;
+
 export function businessDates(
   now: Date,
   holidays: string[] = [],
-  count = 5,
+  count = BOOKING_BUSINESS_DAYS,
+  // The test (Kevin, 24 Nov 2026): a candidate with a full-time job can sit it on a Saturday or Sunday. The weekend
+  // days between the business dates are added; they do not use up the count.
+  weekends = false,
 ): string[] {
   const dates: string[] = [];
-  // Today is excluded. Every candidate receives five complete future business dates.
+  // Today is excluded. Every candidate receives `count` complete future business dates.
   const cursor = new Date(`${localDate(now)}T12:00:00Z`);
-  for (let i = 0; dates.length < count && i < 400; i++) {
+  for (let i = 0, business = 0; business < count && i < 400; i++) {
     cursor.setUTCDate(cursor.getUTCDate() + 1);
     const date = cursor.toISOString().slice(0, 10);
-    if (
-      cursor.getUTCDay() !== 0 &&
-      cursor.getUTCDay() !== 6 &&
-      !holidays.includes(date)
-    )
-      dates.push(date);
+    if (holidays.includes(date)) continue;
+    const weekend = cursor.getUTCDay() === 0 || cursor.getUTCDay() === 6;
+    if (weekend && !weekends) continue;
+    dates.push(date);
+    if (!weekend) business++;
   }
   return dates;
 }
@@ -516,6 +657,7 @@ export type Slot = {
 export type VisitSlot = {
   date: string;
   examStart: string;
+  examEnd: string;
   mockStart: string;
   mockEnd: string;
   interviewerKey: string;
@@ -535,6 +677,8 @@ export const bookingSchema = z
 export const visitBookingSchema = z
   .object({
     start: z.iso.datetime(),
+    /** A "two-day" link: the mock teaching time, after the test at `start` (the same day or a later day). */
+    mockStart: z.iso.datetime().optional(),
     subject: subjectSchema,
     onsiteConfirmed: z.literal(true),
     teachingCommitmentConfirmed: z.literal(true),

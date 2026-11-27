@@ -1,7 +1,7 @@
 "use client";
 
 import { startTransition, useEffect, useState } from "react";
-import { HR_CALENDAR, localDate, SUBJECTS, type HiringConfig } from "@/lib/hiring/model";
+import { DEFAULT_PAPER_CHECKERS, HR_CALENDAR, localDate, PAPER_CHECK_FROM_PERCENT, SUBJECTS, type HiringConfig } from "@/lib/hiring/model";
 import {
   daysOf,
   fullPriority,
@@ -116,6 +116,8 @@ export function SetupPanel({
       ...config,
       universities: config.universities.map((u, i) => (i === index ? { ...u, ...patch } : u)),
     });
+  const setHighSchool = (index: number, patch: Partial<HiringConfig["highSchools"][number]>) =>
+    setConfig({ ...config, highSchools: config.highSchools.map((h, i) => (i === index ? { ...h, ...patch } : h)) });
   const setInterviewer = (index: number, patch: Partial<Interviewer>) =>
     setConfig({
       ...config,
@@ -202,6 +204,17 @@ export function SetupPanel({
               max={100}
               value={config.profileThreshold}
               onChange={(e) => setConfig({ ...config, profileThreshold: Number(e.target.value) })}
+            />
+          </label>
+          <label className={css.weightRow}>
+            Auto bring-back minimum score (blank: off)
+            <input
+              className={css.numberInput}
+              type="number"
+              min={0}
+              max={100}
+              value={config.bringBackFloor ?? ""}
+              onChange={(e) => setConfig({ ...config, bringBackFloor: e.target.value === "" ? null : Number(e.target.value) })}
             />
           </label>
           <label className={css.weightRow}>
@@ -550,16 +563,25 @@ export function SetupPanel({
               const dirty = ticks.some((on, i) => on !== saved[i]);
               const name = data.tutors.find((t) => t.canonicalKey === key)?.name ?? key;
               const ended = state?.state === "ended";
+              const fromWise = state?.state === "wise";
               return (
                 <div key={key} className={css.headDayRow}>
                   <div>
                     <strong>{name}</strong>
                     <span className={css.railMeta}>
                       {" "}
-                      {state?.state === "enrolled" || ended ? "Tutor Attendance schedule" : "Hiring settings only"}
+                      {state?.state === "enrolled" || ended ? "Tutor Attendance schedule" : fromWise ? "Wise working hours" : "Hiring settings only"}
                     </span>
                   </div>
-                  {inSaved && !ended ? (
+                  {fromWise ? (
+                    <p className={css.railMeta}>
+                      {HEAD_DAYS.flatMap((day, i) => {
+                        const w = state.week?.[i + 1];
+                        return w ? [`${day} ${w.start}–${w.end}`] : [];
+                      }).join(" · ") || "No onsite hours on a weekday in Wise."}{" "}
+                      Change them in Wise. Mocks run 10:00 to 16:00.
+                    </p>
+                  ) : inSaved && !ended ? (
                     <div className={css.dayChecks}>
                       {HEAD_DAYS.map((day, i) => (
                         <label key={day}>
@@ -592,7 +614,7 @@ export function SetupPanel({
                     </p>
                   )}
                   {inSaved && !ended && !hasSavedHours(state?.week) && (
-                    <p className={css.warnWord}>No saved hours: this head gets no visit times.</p>
+                    <p className={css.warnWord}>{fromWise ? "No onsite Wise hours" : "No saved hours"}: this head gets no visit times.</p>
                   )}
                   {state?.from && state.from > today && (
                     <p className={css.railMeta}>The saved change starts {dayText(state.from)}.</p>
@@ -658,6 +680,14 @@ export function SetupPanel({
               >
                 Remove
               </button>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={!!interviewer.hoursFromWise}
+                  onChange={(e) => setInterviewer(i, { hoursFromWise: e.target.checked || undefined })}
+                />{" "}
+                Hours from Wise (heads not in Tutor Attendance)
+              </label>
               <div className={css.subjectChecks}>
                 {SUBJECTS.map((subject) => (
                   <label key={subject}>
@@ -690,6 +720,44 @@ export function SetupPanel({
           >
             Add interviewer
           </button>
+        </section>
+
+        <section className={`${css.setupSection} ${css.setupWide}`}>
+          <h2 className={css.panelTitle}>Paper checks</h2>
+          <p className={css.panelLede}>
+            A failed paper at {PAPER_CHECK_FROM_PERCENT}% or more goes to this head for a check before the candidate gets a result. The head gets a link in their own LINE group.
+          </p>
+          <div className={css.subjectChecks}>
+            {SUBJECTS.map((subject) => {
+              const rows = config.paperCheckers ?? DEFAULT_PAPER_CHECKERS;
+              return (
+                <label key={subject}>
+                  {subject}{" "}
+                  <select
+                    className={css.input}
+                    value={rows.find((row) => row.subject === subject)?.canonicalKey ?? ""}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        paperCheckers: [
+                          ...rows.filter((row) => row.subject !== subject),
+                          ...(e.target.value ? [{ subject, canonicalKey: e.target.value }] : []),
+                        ],
+                      })
+                    }
+                  >
+                    <option value="">Mock interviewer</option>
+                    {data.tutors.map((tutor) => (
+                      <option key={tutor.canonicalKey} value={tutor.canonicalKey}>
+                        {tutor.name}
+                        {tutor.lineReady ? "" : " — LINE needs setup"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              );
+            })}
+          </div>
         </section>
 
         <section className={`${css.setupSection} ${css.setupFull}`}>
@@ -810,6 +878,76 @@ export function SetupPanel({
             }
           >
             Add verified university
+          </button>
+        </section>
+        <section className={`${css.setupSection} ${css.setupFull}`}>
+          <h2 className={css.panelTitle}>High school list</h2>
+          <p className={css.panelLede}>
+            The candidate&apos;s own high school earns the High school weight. A top-tier school gets all the points. A listed school gets half. A school that is not in this list gets none. The name on the CV must be the school name or one of its other names.
+          </p>
+          <div className={css.universityScroll}>
+            <table className={css.universityTable}>
+              <thead>
+                <tr>
+                  <th>School</th>
+                  <th>Tier</th>
+                  <th>Other names (separate with semicolons)</th>
+                  <th><span className="sr-only">Remove</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {config.highSchools.map((h, i) => (
+                  <tr key={i}>
+                    <td>
+                      <input
+                        className={css.input}
+                        aria-label={`High school ${i + 1} name`}
+                        value={h.name}
+                        onChange={(e) => setHighSchool(i, { name: e.target.value })}
+                      />
+                    </td>
+                    <td>
+                      <select
+                        className={css.input}
+                        aria-label={`High school ${i + 1} tier`}
+                        value={h.tier}
+                        onChange={(e) => setHighSchool(i, { tier: e.target.value === "1" ? 1 : 2 })}
+                      >
+                        <option value={1}>Top tier (all points)</option>
+                        <option value={2}>Listed (half)</option>
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        className={css.input}
+                        aria-label={`High school ${i + 1} other names`}
+                        value={h.aliases.join("; ")}
+                        onChange={(e) =>
+                          setHighSchool(i, { aliases: e.target.value.split(";").map((a) => a.trim()).filter(Boolean) })
+                        }
+                      />
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className={css.inlineLink}
+                        aria-label={`Remove high school ${i + 1}`}
+                        onClick={() => setConfig({ ...config, highSchools: config.highSchools.filter((_, j) => j !== i) })}
+                      >
+                        Remove school
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button
+            type="button"
+            className={css.secondary}
+            onClick={() => setConfig({ ...config, highSchools: [...config.highSchools, { name: "", tier: 2, aliases: [] }] })}
+          >
+            Add high school
           </button>
         </section>
         <PassRules config={config} setConfig={setConfig} />

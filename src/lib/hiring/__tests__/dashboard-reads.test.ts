@@ -1,11 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import * as schema from "@/lib/db/schema";
 import type { Database } from "@/lib/db";
-import { DEFAULT_WEIGHTS, type HiringConfig } from "../model";
+import { type HiringConfig } from "../model";
 import type { Assessment } from "../scoring";
 import { callEntries, callQueue, preScreenEntries, preScreenQueue, type FormCandidate } from "../queue";
-import { dashboard, NOT_BLANK_PATTERN } from "../service";
+import { RUBRIC_ITEMS } from "../marking-sheet";
+import { briefView, dashboard, NOT_BLANK_PATTERN } from "../service";
+import { bookingToken } from "../tokens";
+// The weights before the high-school part (24 Nov 2026). These tests pin scores made with them.
+const DEFAULT_WEIGHTS = { degree: 10, subject: 10, curriculum: 20, teaching: 20, english: 20, prestige: 20, school: 0 };
 
 const assessment = (result: "met" | "partial"): Assessment => ({
   criteria: (["degree", "subject", "curriculum", "teaching", "english"] as const).map((id) => ({
@@ -20,6 +25,9 @@ const assessment = (result: "met" | "partial"): Assessment => ({
 });
 const row = (id: string, a: Assessment | null, createdAt: string): FormCandidate => ({
   id,
+  stage: "new",
+  broughtBackAt: null,
+  softRejectedFrom: null,
   createdAt: new Date(createdAt),
   email: `${id}@example.com`,
   previouslyContacted: false,
@@ -29,6 +37,7 @@ const row = (id: string, a: Assessment | null, createdAt: string): FormCandidate
   queueManual: null,
   callReview: null,
   callInvited: false,
+  callBooked: false,
 });
 const config = {
   callThreshold: 80,
@@ -67,6 +76,9 @@ function fakeDb(answer: unknown[][] = []) {
 }
 const driverRows = rows.map((r) => [
   r.id,
+  r.stage,
+  r.broughtBackAt,
+  r.softRejectedFrom,
   r.createdAt.toISOString().replace("T", " ").replace("Z", "+00"),
   r.email,
   r.previouslyContacted,
@@ -108,9 +120,51 @@ describe("dashboard reads", () => {
     expect(onsite).toBeDefined();
     expect(onsite).not.toMatch(/"profile_text"|"profile_assessment"/);
     // Only people first seen in the funnel window count, so older audit rows are not read.
-    expect(log.find((q) => q.includes('from "hiring_audit" where') && q.includes('"action" in'))).toMatch(/"created_at" >= \$\d+/);
+    expect(log.some((q) => q.includes('from "hiring_audit" where') && q.includes('"action" in') && /"created_at" >= \$\d+/.test(q))).toBe(true);
+    // Gift's list needs only who has a final review packet, never the packet.
+    const packets = log.find((q) => q.startsWith('select "candidate_id" from "hiring_audit"'));
+    expect(packets).toBeDefined();
+    expect(packets).not.toMatch(/"detail"/);
     // Wave 1 holds every read; visitClashes may add one more. Before the change it was about 17.
     expect(waves()).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("brief score status", () => {
+  it.each([
+    ["uploaded", false, "checking"],
+    ["marking", false, "checking"],
+    ["needs_check", false, "admin"],
+    ["failed", false, "admin"],
+    ["done", false, "admin"],
+    ["done", true, null],
+  ] as const)("reports %s with complete checks %s as %s", async (status, complete, recommendationBlock) => {
+    const id = "00000000-0000-4000-8000-000000000001";
+    const start = "2026-11-22T05:00:00Z";
+    const end = "2026-11-22T06:00:00Z";
+    const booking = { id, candidateId: id, subjects: ["Mathematics"], startTime: start, endTime: end };
+    const rubric = { items: { ...Object.fromEntries(RUBRIC_ITEMS.map((key) => [key, 8])), ...(complete ? {} : { accuracy: null }) } };
+    const result = { id, bookingId: id, source: "ai", status, rubric };
+    const driverRow = (table: typeof schema.hiringBookings | typeof schema.hiringMockResults, values: Record<string, unknown>) =>
+      Object.keys(getTableColumns(table)).map((key) => values[key] ?? null);
+    const db = drizzle(async (sql, params) => {
+      if (sql.includes('from "hiring_bookings"')) return { rows: [[...driverRow(schema.hiringBookings, booking), "mock_booked"]] };
+      if (sql.includes('from "hiring_candidates"')) return { rows: [["Sample Tutor", null, null, null]] };
+      if (sql.includes('from "hiring_mock_results"')) return {
+        rows: params.includes("done") ? (status === "done" ? [[id, rubric]] : []) : [driverRow(schema.hiringMockResults, result)],
+      };
+      return { rows: [] };
+    }, { schema }) as unknown as Database;
+
+    vi.stubEnv("AUTH_SECRET", "brief-unit-test");
+    try {
+      const token = bookingToken(id, "brief", new Date("2026-11-23T06:00:00Z"));
+      expect(await briefView(token, db, new Date(end))).toMatchObject({
+        form: "closed", recommendationReady: complete, recommendationBlock, rubric: null,
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

@@ -1,7 +1,10 @@
+import { trialScore, summarizeScores } from "../ats-trial";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_WEIGHTS, type Stage } from "../model";
+import { type Stage } from "../model";
 import { buildInsights, criterionValues, profileGate, readyToInvite } from "../insights";
 import type { Assessment } from "../scoring";
+// The weights before the high-school part (24 Nov 2026). These tests pin scores made with them.
+const DEFAULT_WEIGHTS = { degree: 10, subject: 10, curriculum: 20, teaching: 20, english: 20, prestige: 20, school: 0 };
 
 const assessment = (
   result: Assessment["criteria"][number]["result"],
@@ -88,6 +91,17 @@ describe("profileGate with the call score", () => {
   it("keeps a no-answer try in the call queue", () => {
     const tried = { good: null, tries: [{ at: "2026-11-04T03:00:00.000Z", by: "hr@example.com" }] };
     expect(profileGate(candidate("a", "new", { ...at80, callReview: tried }), calls).awaitingCall).toBe(true);
+  });
+  it("keeps a booked call and a good call when the scores go up after it", () => {
+    // Kevin, 24 Nov 2026: the candidate scores 80 and both scores are now 90.
+    const raised = { ...config, profileThreshold: 90, callThreshold: 90 };
+    expect(profileGate(candidate("a", "new", at80), raised).short).toEqual(["Below profile threshold"]);
+    const booked = profileGate({ ...candidate("a", "new", at80), callBooked: true }, raised);
+    expect(booked).toMatchObject({ eligible: false, awaitingCall: true, review: [] });
+    expect(booked.short).toEqual(["Waiting for a call"]);
+    expect(profileGate(candidate("a", "new", { ...at80, callReview: good }), raised)).toMatchObject({ eligible: true, awaitingCall: false });
+    // A blank call score turns calls off, so a booked call no longer holds the candidate.
+    expect(profileGate({ ...candidate("a", "new", at80), callBooked: true }, { ...raised, callThreshold: null }).short).toEqual(["Below profile threshold"]);
   });
   it("needs no call when the call score is blank", () => {
     expect(profileGate(candidate("a", "new", at80), { ...config, callThreshold: null })).toMatchObject({ eligible: true, awaitingCall: false });
@@ -290,5 +304,23 @@ describe("buildInsights with the visit stages", () => {
     expect(result.appointmentsThisWeek).toBe(4);
     // The head is on the mock row only.
     expect(result.upcomingByInterviewer.Peat).toBe(4);
+  });
+});
+
+describe("ATS outcomes", () => {
+  it("reapplies the work rights deduction before flooring a simulated score", () => {
+    const ats = { score: 0, penalty: 12, parts: [
+      { name: "Teaching", max: 20, earned: 10 }, { name: "Curriculum", max: 15, earned: 0 },
+    ] };
+    expect(trialScore(ats, "Curriculum", "Teaching")).toBe(0.5);
+    expect(trialScore(ats, "Teaching", "")).toBe(0);
+  });
+
+  it("keeps a missing score out of the median and counts an exact cutoff as meeting it", () => {
+    const score = (value: number) => ({ score: value, parts: [{ name: "Degree", max: 10, earned: 5 }], penalty: 0 });
+    expect(summarizeScores([null, score(59.5), score(60)], 60)).toMatchObject({
+      total: 3, scored: 2, median: 59.75, atOrAbove: 1, bands: [0, 0, 1, 1, 0],
+    });
+    expect(summarizeScores([], 60)).toMatchObject({ total: 0, median: null, meanPenalty: null });
   });
 });

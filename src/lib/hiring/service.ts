@@ -1,13 +1,15 @@
 import { z } from "zod";
-import { queueRecruitmentMock } from "./recruitment";
+import { queueRecruitmentForm, queueRecruitmentMock } from "./recruitment";
 import { PRESTIGE_RULES } from "./prestige";
 import { createHash, randomUUID } from "node:crypto";
 import { fromZonedTime } from "date-fns-tz";
-import { and, asc, desc, eq, getTableColumns, gte, inArray, isNotNull, like, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gte, ilike, inArray, isNotNull, like, ne, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { getDb, type Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as s from "@/lib/db/schema";
-import { availableSlots, availableVisitSlots, callSlots, readLiveBusy, verifyLiveSlot, type LiveBusy } from "./availability";
+import { weekendTestRooms } from "./rooms";
+import { availableSlots, availableVisitSlots, callSlots, r1Slots, readLiveBusy, readWiseWindows, verifyLiveSlot, type LiveBusy } from "./availability";
 import {
   baseConfigSchema,
   withSeekJobs,
@@ -27,6 +29,10 @@ import {
   instant,
   isVisitBooking,
   PRE_SCREEN_URL,
+  SUBJECTS,
+  portfolioPath,
+  answersSchema,
+  answersToPreScreen,
   normalizeSubjects,
   overlap,
   runtimeWritesAllowed,
@@ -39,23 +45,32 @@ import {
   type HiringConfig,
   type Stage,
   type Subject,
+  mockCanFollow,
 } from "./model";
 import {
   availabilityFraction,
   hardStops,
   preScreenPoints,
+  highSchoolFraction,
+  highSchoolMatch,
+  profileParts,
   profileScore,
   workRightsPenalty,
   supportedVisitSubjects,
   topHiringSubject,
+  meetsTimeRule,
+  visitSubject,
   workRightsAccepted,
 } from "./scoring";
 import { googleConnectionStatus, readHrBusy } from "./google";
 import { visitClashes } from "./head-schedule";
 import { bookingToken, readBookingToken, VISIT_LINK_DAYS } from "./tokens";
 import { storedResume } from "./resume-files";
+import { portfolioUploaded } from "./portfolio";
 import { blockingLimit, headWeekMocks, releaseQueue, type Funnel, type LimitName, type QueueHold } from "./limits";
 import {
+  callInviteSentAt,
+  formSentAt,
   inviteRows,
   linkSentAt,
   lockQueue,
@@ -67,6 +82,7 @@ import {
   preScreenEntries,
   preScreenTotal,
   readLimitUsage,
+  unsoftReject,
 } from "./queue";
 import { profileGate } from "./insights";
 import { FUNNEL_AUDIT_ACTIONS, windowStart } from "./funnel";
@@ -75,9 +91,14 @@ import { attendanceAccessForEmail } from "@/lib/tutor-attendance/access";
 import { attendanceConfig } from "@/lib/tutor-attendance/data";
 import { saveAttendanceSettings } from "@/lib/tutor-attendance/service";
 import { applicableSchedule, AttendanceError, weekSchema, type Week } from "@/lib/tutor-attendance/model";
-import { checkRubric, computeSheet, passRulesFor, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
+import { headOverride, paperChecks } from "./paper-check";
+import { checkRubric, computeSheet, passRulesFor, RUBRIC_ITEMS, rubricNeedsCheck, rubricTotals, type MockRubric } from "./marking-sheet";
 import { formatInTimeZone } from "date-fns-tz";
-import { HIRING_LINE_URL, hiringEmail, mockPrep } from "./email";
+import { HIRING_LINE_URL, hiringEmail, mockPrep, TWO_DAY_STEPS, VISIT_BRING, VISIT_LENGTH, VISIT_STEPS } from "./email";
+import { profileDegree, type KnownDegree } from "./profile-degree";
+import { parseWeekHours } from "./week-hours";
+import { OFFER_TYPES, type OfferType } from "./offer-letters";
+import type { OfferRow } from "./offer-rows";
 
 export type Candidate = typeof s.hiringCandidates.$inferSelect;
 export async function settings(db: Database = getDb()) {
@@ -215,13 +236,16 @@ export async function saveHeadDays(
   const current = await settings(db);
   const stale = () => new HiringError(409, "Settings changed. Refresh this page.");
   if (!current.row) throw new HiringError(409, "Save the rules and setup once before you change head days.");
-  if (!current.config.interviewers.some((i) => i.canonicalKey === key)) throw new HiringError(404, "Head not found.");
+  const target = current.config.interviewers.find((i) => i.canonicalKey === key);
+  if (!target) throw new HiringError(404, "Head not found.");
   if (current.row.revision !== revision) throw stale();
   const [enrollment] = await db
     .select()
     .from(s.tutorAttendanceEnrollments)
     .where(eq(s.tutorAttendanceEnrollments.canonicalKey, key));
 
+  if (!enrollment && target.hoursFromWise)
+    throw new HiringError(409, "This head's hours come from Wise. Change them in Wise, or untick Hours from Wise first.");
   if (!enrollment) {
     const saved = await withDatabaseTransaction(db, async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('hiring-settings'))`);
@@ -343,6 +367,7 @@ export async function inviteToMock(
       to: candidate.email,
       ...hiringEmail({
         subject: "BeGifted mock teaching invitation",
+        hero: "visit",
         preheader: "Book your onsite mock teaching session.",
         title: "Book your mock teaching session",
         tone: "ink",
@@ -368,10 +393,16 @@ export async function inviteToMock(
     .set({ inviteExpiresAt: expiry, updatedAt: new Date() })
     .where(eq(s.hiringCandidates.id, candidate.id));
 }
+/**
+ * The "Next steps" email (Kevin, 22 Nov 2026): the form and the visit link together. The visit link books at once;
+ * the answers never gate it (Kevin, 24 Nov 2026). `inviteExpiresAt` holds the link's second, and `inviteToVisit`
+ * keeps it, so a later onsite invitation sends this same link.
+ */
 export async function inviteToPreScreen(db: Database, candidate: Candidate, now = new Date()) {
   if (!candidate.email)
     throw new HiringError(409, "A verified application email is required.");
-  return enqueue(db, {
+  const expires = new Date((Math.floor(now.getTime() / 1000) + VISIT_LINK_DAYS * 86400) * 1000);
+  const queued = await enqueue(db, {
     key: `${candidate.id}:pre-screen`,
     candidateId: candidate.id,
     kind: "email",
@@ -380,11 +411,21 @@ export async function inviteToPreScreen(db: Database, candidate: Candidate, now 
     payload: {
       to: candidate.email,
       workflowStage: "pre_screen",
-      ...preScreenEmail(candidate.name, candidate.email, false),
+      ...preScreenEmail(candidate.name, candidate.email, false, visitLink(candidate.id, expires),
+        // Not for a candidate whose HR interview took place and went well: for them the sentence would be false.
+        !candidate.callReview?.good && !!(await callInviteSentAt(db, candidate.id))),
     },
   });
+  if (queued)
+    await db.update(s.hiringCandidates).set({ inviteExpiresAt: expires }).where(eq(s.hiringCandidates.id, candidate.id));
+  return queued;
 }
-export const visitLink = (id: string, expires: Date, kind: "visit" | "paper-visit" = "paper-visit") =>
+/**
+ * New links are "two-day" (Kevin, 24 Nov 2026): the test, Monday to Sunday, and the final-round mock teaching on a later
+ * day, Monday to Friday, booked together. A "visit" link sent earlier still books both on one day, and a "paper-visit"
+ * the test only.
+ */
+export const visitLink = (id: string, expires: Date, kind: VisitLink["kind"] = "two-day") =>
   new URL(
     `/hiring/book/${bookingToken(id, kind, expires)}`,
     process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
@@ -394,34 +435,48 @@ export const callLink = (id: string, expires: Date) =>
     `/hiring/book/${bookingToken(id, "call", expires)}`,
     process.env.APP_BASE_URL || "https://bgscheduler.vercel.app",
   ).toString();
-/** The invitation to book the HR call. It holds no times: the page reads HR's calendar when it opens. */
-export const callInviteEmail = (input: { name: string; url: string }) =>
+/**
+ * The invitation to book R1: HR Interview (Kevin, 22 Nov 2026: thank and congratulate the candidate, and show the
+ * process). It holds no times: the page reads HR's calendar when it opens.
+ */
+export const callInviteEmail = (input: { name: string; url: string; reminder?: boolean }) =>
   hiringEmail({
-    subject: "BeGifted tutor application: book your call",
-    preheader: `Choose a time for a ${CALL_MINUTES}-minute phone call with our team.`,
-    title: "Book your call with BeGifted",
+    subject: input.reminder ? "Reminder: book your R1: HR Interview with BeGifted" : "Congratulations! Book your R1: HR Interview with BeGifted",
+    preheader: input.reminder
+      ? `Your R1 interview is still open to book: a ${CALL_MINUTES}-minute Google Meet with our HR team.`
+      : `You are through to R1: a ${CALL_MINUTES}-minute Google Meet with our HR team. Choose a time.`,
+    title: input.reminder ? "Your R1 interview is still open to book" : "Congratulations! You are through to R1",
     name: input.name,
     paragraphs: [
-      "Thank you for your application to BeGifted. The next step is a short phone call with our HR team. Please choose a time.",
+      input.reminder
+        ? "We invited you to R1: HR Interview for the BeGifted tutor role, and we do not have a booking from you yet. Your place is still open."
+        : "Thank you for your application to become a BeGifted tutor. Congratulations: your application stood out, and we invite you to R1: HR Interview.",
+      `R1 is a ${CALL_MINUTES}-minute video call on Google Meet with our HR team. Please choose a time that suits you.`,
     ],
     details: [
-      { label: "Call", value: `${CALL_MINUTES} minutes, by phone` },
-      { label: "Times", value: "Monday to Friday, 09:00–18:00 (Bangkok time)" },
+      { label: "Interview", value: "R1: HR Interview" },
+      { label: "Format", value: `${CALL_MINUTES} minutes, Google Meet video call` },
+      { label: "Times", value: "Monday to Friday, 13:15–18:00 (Bangkok time)" },
       { label: "Link closes", value: `${CALL_LINK_DAYS} days after this email` },
     ],
-    action: { label: "Book your call", url: input.url },
-    after: ["The booking page asks for your phone number. We call that number at the time that you choose."],
+    action: { label: "Book your R1 interview", url: input.url },
+    hero: "r1",
+    process: 1,
+    after: [
+      "After you book, Google Calendar sends you an invitation with the Google Meet link. The booking page also asks for a phone number, which we use only if the video call fails.",
+    ],
   });
 /**
  * Queues the call booking link, once per candidate. `workflowStage` cancels it if the candidate leaves `new` before it
  * is sent, and a SEEK contact or a stop cancels it while it waits, like any other invitation.
  */
-export async function inviteToCall(db: Database, candidate: Candidate, now = new Date()) {
+export async function inviteToCall(db: Database, candidate: Candidate, now = new Date(), reminder = false) {
   if (!candidate.email)
     throw new HiringError(409, "A verified application email is required.");
+  // The reminder holds a new link with a full life. The first link stays valid until its own end.
   const expires = new Date((Math.floor(now.getTime() / 1000) + CALL_LINK_DAYS * 86400) * 1000);
   return enqueue(db, {
-    key: `${candidate.id}:call-invite`,
+    key: `${candidate.id}:call-invite${reminder ? "-reminder" : ""}`,
     candidateId: candidate.id,
     kind: "email",
     // The day limit reads this time, so it comes from the same clock as the limit check.
@@ -429,50 +484,92 @@ export async function inviteToCall(db: Database, candidate: Candidate, now = new
     payload: {
       to: candidate.email,
       workflowStage: "new",
-      ...callInviteEmail({ name: candidate.name, url: callLink(candidate.id, expires) }),
+      ...callInviteEmail({ name: candidate.name, url: callLink(candidate.id, expires), reminder }),
     },
   });
 }
-/** The form invitation and its reminder. */
-export const preScreenEmail = (name: string, email: string, reminder: boolean) =>
-  hiringEmail({
-    subject: reminder ? "Reminder: BeGifted tutor pre-screening questionnaire" : "BeGifted tutor pre-screening questionnaire",
-    preheader: "A short questionnaire, about 5–7 minutes.",
-    title: reminder ? "Your questionnaire is still open" : "Your pre-screening questionnaire",
-    name,
-    paragraphs: [
-      reminder
-        ? "We have not yet received your pre-screening questionnaire. If you are still interested in joining BeGifted, please complete it."
-        : "Thank you for your interest in joining BeGifted. Please complete our short pre-screening questionnaire.",
-    ],
-    details: [
-      { label: "Use this email", value: email },
-      { label: "Time needed", value: "About 5–7 minutes" },
-    ],
-    action: { label: "Open the questionnaire", url: PRE_SCREEN_URL },
-    after: reminder ? [] : ["We will contact you after reviewing your response."],
-  });
+/**
+ * The form invitation and its reminder. With a visit link it is the "Next steps" email: answer the questions, then book
+ * the test and the mock teaching on that link. A form sent before 22 Nov 2026 has no visit link.
+ * `hrLeft` is for a candidate who got a link to the old R1: HR Interview (Kevin, 24 Nov 2026: say that the HRBP is no
+ * longer available, thank the candidate for their patience and apologise).
+ */
+export const preScreenEmail = (name: string, email: string, reminder: boolean, visitUrl?: string, hrLeft = false) =>
+  visitUrl
+    ? hiringEmail({
+        subject: reminder
+          ? "Reminder: answer your BeGifted pre-screening questions"
+          : "Next steps: your BeGifted pre-screening questions and onsite visit",
+        preheader: "Answer a few questions, then book your test and your mock teaching on one page.",
+        title: reminder ? "Your questions are still open" : "Here are your next steps",
+        hero: "next",
+        name,
+        paragraphs: reminder
+          ? [
+              "We have not received your answers yet. If you still want to join BeGifted, please open your page and answer the questions. They take about 5–7 minutes.",
+              "After the last question, you choose your test time and your mock teaching time on the same page.",
+            ]
+          : hrLeft
+            ? [
+                "Thank you for your interest in joining BeGifted, and for your patience.",
+                "Our HR Business Partner is no longer available because of emergency circumstances, so there is no HR interview. Your link to book the HR interview is closed. We sincerely apologise for the inconvenience.",
+                "The good news is that you go directly to the next steps: a subject test and a final-round mock teaching interview at BeGifted.",
+              ]
+            : ["Thank you for your interest in joining BeGifted. We invite you to the next steps."],
+        details: [
+          { label: "Questions", value: "About 5–7 minutes" },
+          { label: "Onsite visits", value: VISIT_LENGTH },
+        ],
+        // One page holds the questions and the booking (Kevin, 24 Nov 2026), so the email has one button.
+        action: { label: "Answer the questions and book", url: visitUrl },
+        after: [
+          "The link opens one page. First you answer the questions. One question asks which subject you want to be tested on.",
+          "Then you choose your two times on the same page: the test first, and the mock teaching on the same day or a later day.",
+        ],
+      })
+    : hiringEmail({
+        subject: reminder ? "Reminder: BeGifted tutor pre-screening questionnaire" : "BeGifted tutor pre-screening questionnaire",
+        preheader: "A short questionnaire, about 5–7 minutes.",
+        title: reminder ? "Your questionnaire is still open" : "Your pre-screening questionnaire",
+        name,
+        paragraphs: [
+          reminder
+            ? "We have not yet received your pre-screening questionnaire. If you are still interested in joining BeGifted, please complete it."
+            : "Thank you for your interest in joining BeGifted. Please complete our short pre-screening questionnaire.",
+        ],
+        details: [
+          { label: "Use this email", value: email },
+          { label: "Time needed", value: "About 5–7 minutes" },
+        ],
+        action: { label: "Open the questionnaire", url: PRE_SCREEN_URL },
+        after: reminder ? [] : ["We will contact you after reviewing your response."],
+      });
 /** The onsite visit invitation and its reminder. */
 export const visitInviteEmail = (input: { name: string; subject: string; url: string; location: string; expireDays?: number }) =>
   hiringEmail({
     subject: input.expireDays === undefined ? "Reminder: book your BeGifted onsite visit" : "BeGifted onsite visit invitation",
-    preheader: `Book one onsite visit for ${input.subject}.`,
-    title: input.expireDays === undefined ? "Your visit is not booked yet" : "Book your onsite visit",
+    hero: "visit",
+    preheader: `Book your test and your mock teaching for ${input.subject}.`,
+    title: input.expireDays === undefined ? "Your test and mock teaching are not booked yet" : "Book your test and mock teaching",
     tone: "ink",
     name: input.name,
     paragraphs: [
       input.expireDays === undefined
-        ? `You have not yet booked your onsite visit for ${input.subject}.`
-        : `Thank you for your pre-screening response. We invite you to one onsite visit for ${input.subject}.`,
+        ? `You have not yet booked your test and your mock teaching for ${input.subject}.`
+        : `Thank you for your pre-screening response. We invite you to the test and the final-round mock teaching for ${input.subject}.`,
     ],
     details: [
       { label: "Subject", value: input.subject },
-      { label: "Paper assessment", value: "2 hours" },
+      { label: "Test and mock teaching", value: VISIT_LENGTH },
       { label: "Location", value: input.location },
       ...(input.expireDays === undefined ? [] : [{ label: "Link closes", value: `${input.expireDays} days after this email` }]),
     ],
-    action: { label: "Book your visit", url: input.url },
-    after: ["We will contact you after we grade your paper. Candidates who pass can then book mock teaching."],
+    action: { label: "Book your two times", url: input.url },
+    stepsHeading: "Your test and mock teaching",
+    steps: TWO_DAY_STEPS,
+    list: VISIT_BRING,
+    after: ["You book both times together: the test first, then the mock teaching on the same day or a later day.", ...mockPrep(input.subject).paragraphs],
+    links: mockPrep(input.subject).links,
   });
 const onLine = (text: string) => `${text} Contact BeGifted on LINE: ${HIRING_LINE_URL}`;
 const DAY = 86400000;
@@ -512,28 +609,39 @@ export async function inviteToVisit(
     throw new HiringError(409, "This candidate cannot get an onsite invitation at this stage.");
   if (!c.email)
     throw new HiringError(409, "A verified application email is required.");
-  if (!c.preScreen || !c.preScreenAssessment)
-    throw new HiringError(409, "The pre-screen response has no score yet.");
-  const { stops } = hardStops(
-    c.preScreen,
-    c.workRightsAnswer,
-    normalizeSubjects(c.preScreen.subjects),
-    config,
-  );
-  if (stops.length) throw new HiringError(409, stops.join(" "));
-  const supported = supportedVisitSubjects(c.preScreen, c.workRightsAnswer, c.preScreenAssessment, config);
-  if (!topHiringSubject(supported, config.subjectPriority))
-    throw new HiringError(409, "No supported subject is open for hiring.");
-  const subject = topHiringSubject(
-    supported.filter((v) => config.interviewers.some((i) => i.subjects.includes(v))),
-    config.subjectPriority,
-  );
-  if (!subject)
-    throw new HiringError(409, `No head is set for the subject: ${supported.join(", ")}.`);
+  // After a visit (cancel, no-show, No booking) the new link keeps that visit's subject: the pre-screen never gates
+  // booking (Kevin, 24 Nov 2026), and a candidate may have booked on a Next steps link without passing answers.
+  const again = c.stage === "no_booking" ? c.visitSubject : null;
+  if (!again) {
+    if (!c.preScreen || !c.preScreenAssessment)
+      throw new HiringError(409, "The pre-screen response has no score yet.");
+    const { stops } = hardStops(
+      c.preScreen,
+      c.workRightsAnswer,
+      normalizeSubjects(c.preScreen.subjects),
+      config,
+    );
+    if (stops.length) throw new HiringError(409, stops.join(" "));
+    const supported = supportedVisitSubjects(c.preScreen, c.workRightsAnswer, config);
+    if (!topHiringSubject(supported, config.subjectPriority))
+      throw new HiringError(409, "No supported subject is open for hiring.");
+    if (!visitSubject(c.preScreen, c.workRightsAnswer, config))
+      throw new HiringError(409, `No head is set for the subject: ${supported.join(", ")}.`);
+  }
+  const subject = again ?? visitSubject(c.preScreen!, c.workRightsAnswer, config)!;
   const limit = resend ? null : blockingLimit("onsite", subject, await readLimitUsage(tx, "onsite", now), config);
   if (limit)
     throw new HiringError(409, `The onsite limit "${LIMIT_TEXT[limit]}" is full. Raise the number to send more.`);
-  const expires = new Date(
+  // The "Next steps" email already gave this candidate a visit link. Keep its second, so that link now books the visit,
+  // but only while it outlasts the whole onsite window: a shorter link would show few times and expire early.
+  const kept =
+    !resend &&
+    ["pre_screen", "no_reply"].includes(c.stage) &&
+    c.inviteExpiresAt &&
+    c.inviteExpiresAt.getTime() >= now.getTime() + config.onsiteFollowUp.expireDays * DAY
+      ? c.inviteExpiresAt
+      : null;
+  const expires = kept ?? new Date(
     (Math.floor(now.getTime() / 1000) + VISIT_LINK_DAYS * 86400) * 1000,
   );
   const revision = c.revision + 1;
@@ -621,6 +729,51 @@ async function assessmentData(db: Database, now: Date) {
 const { profileText, ...candidateColumns } = getTableColumns(s.hiringCandidates);
 /** Not-blank text, as JS `.trim()` sees it: ASCII space and the Unicode spaces it also strips (NBSP, U+FEFF, U+3000…). Listed, so the Postgres locale cannot change it. */
 export const NOT_BLANK_PATTERN = "[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]";
+const candidateSummary = { ...candidateColumns, hasSourceText: sql<boolean>`${profileText} ~ ${NOT_BLANK_PATTERN}` };
+
+function dashboardCandidate(c: Omit<Candidate, "profileText"> & { hasSourceText: boolean }, config: HiringConfig, callInvited: boolean, callBooked: boolean) {
+  const parts = c.preScreenAssessment && c.preScreen ? preScreenPoints(c.preScreenAssessment, config.preScreenWeights,
+    c.universityAssessment?.fraction ?? 0, availabilityFraction(c.preScreen)) : null;
+  const penalty = workRightsPenalty(c.workRightsAnswer, config);
+  return {
+    ...c,
+    queueManual: !!c.queueManual,
+    workRightsConfirmed: undefined,
+    resumePath: undefined,
+    resumeSha256: undefined,
+    resumeState: (c.resumePath ? "available" : c.resumeStoredAt ? "deleted" : "none") as "available" | "deleted" | "none",
+    profileScore: c.profileAssessment ? profileScore(c.profileAssessment, config.profileWeights,
+      c.universityAssessment?.fraction ?? 0, penalty, highSchoolFraction(c.profileAssessment, config)) : null,
+    highSchool: highSchoolMatch(c.profileAssessment?.schools, config.highSchools),
+    preScreenScore: parts?.total ?? null,
+    preScreenParts: parts,
+    workRightsPenalty: penalty,
+    workRightsAccepted: workRightsAccepted(c.workRightsAnswer, config.acceptedWorkRights),
+    callInvited,
+    callBooked,
+  };
+}
+
+export function searchHiringCandidates(db: Database, query: string) {
+  const { id, name, email, visitSubject } = s.hiringCandidates;
+  const value = query.replace(/[\\%_]/g, "\\$&");
+  return db.select({ id, name, email, visitSubject }).from(s.hiringCandidates)
+    .where(or(ilike(name, `%${value}%`), ilike(email, `%${value}%`)))
+    .orderBy(desc(sql<boolean>`coalesce(${email} ilike ${value}, false)`), desc(ilike(name, `${value}%`)), asc(name), asc(id))
+    .limit(25);
+}
+
+export async function hiringCandidateRecord(db: Database, id: string) {
+  const b = s.hiringBookings;
+  const [[candidate], { config }, sentAt, booked] = await Promise.all([
+    db.select(candidateSummary).from(s.hiringCandidates).where(eq(s.hiringCandidates.id, id)),
+    settings(db),
+    callInviteSentAt(db, id),
+    db.select({ id: b.id }).from(b).where(and(eq(b.candidateId, id), eq(b.kind, "call"), eq(b.status, "confirmed"))).limit(1),
+  ]);
+  if (!candidate) throw new HiringError(404, "Candidate not found.");
+  return dashboardCandidate(candidate, config, !!sentAt, booked.length > 0);
+}
 
 /** No link secret means no head links. The dashboard must still load. */
 function briefPaths(bookings: { id: string; kind: string; status: string; endTime: Date }[], now: Date): Record<string, string> {
@@ -635,13 +788,106 @@ function briefPaths(bookings: { id: string; kind: string; status: string; endTim
     throw error;
   }
 }
+
+async function approvedOffers(db: Database): Promise<OfferRow[] | null> {
+  const d = s.hiringDecisions;
+  const c = s.hiringCandidates;
+  const o = s.hiringOutbox;
+  const b = s.hiringBookings;
+  const a = s.hiringAudit;
+  const form = s.hiringOnboarding;
+  const packet = alias(a, "offer_packet");
+  const read = async <T>(source: string, query: PromiseLike<T>) => {
+    try {
+      return await query;
+    } catch (error) {
+      console.error(`Hiring dashboard could not read ${source}`, error instanceof Error ? error.name : "UnknownError");
+      return null;
+    }
+  };
+  const decisions = await read("approved offers", db.select({
+    decisionId: d.id, candidateId: c.id, name: c.name, visitSubject: c.visitSubject, subjects: c.subjects, key: d.outboxKey,
+  }).from(d).innerJoin(c, eq(c.id, d.candidateId))
+    .where(and(eq(d.status, "sent"), eq(d.decision, "hire"), eq(c.stage, "hired"))).orderBy(desc(d.createdAt)));
+  if (!decisions?.length) return decisions && [];
+
+  const keys = decisions.flatMap(({ key }) => key ? [key] : []);
+  const candidates = [...new Set(decisions.map(({ candidateId }) => candidateId))];
+  const decisionIds = decisions.map(({ decisionId }) => decisionId);
+  const [emails, bookings, forms, types, directTypes, pdfs] = await Promise.all([
+    read("offer emails", db.select({ key: o.key, status: o.status, sentAt: o.sentAt }).from(o)
+      .where(and(eq(o.kind, "email"), inArray(o.key, keys)))),
+    read("contract bookings", db.select({ candidateId: b.candidateId, startTime: b.startTime, endTime: b.endTime })
+      .from(b).where(confirmedContractBooking(inArray(b.candidateId, candidates))).orderBy(asc(b.startTime))),
+    read("onboarding dates", db.select({ candidateId: form.candidateId, decisionId: form.decisionId, submittedAt: form.submittedAt })
+      .from(form).where(inArray(form.decisionId, decisionIds))),
+    read("approved offer types", db.select({
+      key: sql<string>`${a.detail}->>'key'`, type: sql<OfferType | null>`${packet.detail}->>'offerType'`,
+    }).from(a).innerJoin(packet, and(eq(packet.candidateId, a.candidateId), eq(packet.action, "final-review-packet"),
+      sql`${packet.id}::text = ${a.detail}->>'packetId'`))
+      .where(and(eq(a.action, "final-review-signed"), inArray(sql`${a.detail}->>'key'`, keys)))),
+    // Older direct hires share the same database transaction timestamp with their audit row.
+    read("direct hire offer types", db.select({
+      decisionId: d.id, type: sql<OfferType | null>`min(${a.detail}->>'offer')`,
+    }).from(d).innerJoin(a, and(eq(a.candidateId, d.candidateId),
+      sql`case when ${a.detail} ? 'decisionId' then ${a.detail}->>'decisionId' = ${d.id}::text else ${a.createdAt} = ${d.createdAt} end`,
+      eq(a.action, "head-decision"), sql`${a.detail}->>'decision' = 'hire'`, sql`${a.detail} ? 'offer'`))
+      .where(inArray(d.id, decisionIds)).groupBy(d.id).having(sql`count(*) = 1`)),
+    read("signed contracts", (async () => {
+      const [{ list }, { signedContractPath }] = await Promise.all([import("@vercel/blob"), import("./contract-templates")]);
+      const paths = new Map(candidates.map((id) => [signedContractPath(id), id]));
+      const samplePath = signedContractPath("");
+      const prefix = samplePath.slice(0, samplePath.lastIndexOf("/") + 1);
+      const dates = new Map<string, string>();
+      const abortSignal = AbortSignal.timeout(2_000);
+      let cursor: string | undefined;
+      do {
+        const page = await list({ prefix, cursor, abortSignal });
+        for (const blob of page.blobs) {
+          const id = paths.get(blob.pathname);
+          if (id) dates.set(id, blob.uploadedAt.toISOString());
+        }
+        cursor = page.cursor;
+      } while (cursor && dates.size < paths.size);
+      return dates;
+    })()),
+  ]);
+  const emailByKey = new Map(emails?.map((email) => [email.key, email]));
+  const bookingByCandidate = new Map(bookings?.map((booking) => [booking.candidateId, booking]));
+  const formByDecision = new Map(forms?.map((entry) => [entry.decisionId, entry]));
+  const typeByKey = new Map(types?.map((entry) => [entry.key, entry.type]));
+  const typeByDecision = new Map(directTypes?.map((entry) => [entry.decisionId, entry.type]));
+  return decisions.map(({ candidateId, decisionId, name, visitSubject, subjects, key }) => {
+    const email = key ? emailByKey.get(key) : undefined;
+    const type = key && typeByKey.has(key) ? typeByKey.get(key) : typeByDecision.get(decisionId);
+    const offerType = type && OFFER_TYPES.includes(type) ? type : null;
+    const booking = bookingByCandidate.get(candidateId);
+    const form = formByDecision.get(decisionId);
+    return {
+      candidateId, decisionId, outboxKey: key, name, subject: visitSubject ?? subjects[0] ?? null,
+      emailStatus: email?.status ?? null, sentAt: email?.sentAt?.toISOString() ?? null, offerType,
+      booking: booking ? { start: booking.startTime.toISOString(), end: booking.endTime.toISOString() } : null,
+      uploadedAt: pdfs?.get(candidateId) ?? null,
+      submittedAt: form?.candidateId === candidateId ? form.submittedAt.toISOString() : null,
+      unknown: { email: emails === null, offerType: !offerType, booking: !bookings, pdf: !pdfs, form: !forms },
+    };
+  });
+}
+
 export async function dashboard(db: Database = getDb()) {
   const now = new Date();
+  const c = s.hiringCandidates;
+  const b = s.hiringBookings;
+  const visitKinds = ["paper", "mock"] as const;
+  const candidateOrder = [desc(c.updatedAt), asc(c.id)];
+  const bookingOrder = [desc(b.startTime), asc(b.id)];
+  const recentCandidates = db.$with("recent_candidates").as(db.select({ id: c.id }).from(c).orderBy(...candidateOrder).limit(2000));
+  const recentBookings = db.$with("recent_bookings").as(db.select({ id: b.id }).from(b).orderBy(...bookingOrder).limit(2000));
   // Every read here is independent, so they go in one wave. Only visitClashes and the onsite entries wait for this one.
   const [
     { row, config },
-    candidates,
-    allBookings,
+    candidateRows,
+    bookingRows,
     outbox,
     contacts,
     groups,
@@ -656,18 +902,29 @@ export async function dashboard(db: Database = getDb()) {
     funnelAudit,
     onsiteRead,
     headDecisionRows,
+    paperCheckRows,
+    packetRows,
+    offers,
   ] = await Promise.all([
     settings(db),
-    db
-      .select({ ...candidateColumns, hasSourceText: sql<boolean>`${profileText} ~ ${NOT_BLANK_PATTERN}` })
-      .from(s.hiringCandidates)
-      .orderBy(desc(s.hiringCandidates.updatedAt))
-      .limit(2000),
-    db
-      .select()
-      .from(s.hiringBookings)
-      .orderBy(desc(s.hiringBookings.startTime))
-      .limit(2000),
+    // Older records are available in assessment lookup without changing the rows used by other views.
+    db.with(recentCandidates)
+      .select({ ...candidateSummary, recent: sql<boolean>`${recentCandidates.id} is not null` })
+      .from(c)
+      .leftJoin(recentCandidates, eq(c.id, recentCandidates.id))
+      .where(or(
+        isNotNull(recentCandidates.id),
+        inArray(c.id, db.select({ id: b.candidateId }).from(b).where(inArray(b.kind, visitKinds))),
+        inArray(c.id, db.select({ id: s.hiringPaperResults.candidateId }).from(s.hiringPaperResults)),
+        inArray(c.id, db.select({ id: s.hiringMockResults.candidateId }).from(s.hiringMockResults)),
+      ))
+      .orderBy(...candidateOrder),
+    db.with(recentBookings)
+      .select({ ...getTableColumns(b), recent: sql<boolean>`${recentBookings.id} is not null` })
+      .from(b)
+      .leftJoin(recentBookings, eq(b.id, recentBookings.id))
+      .where(or(isNotNull(recentBookings.id), inArray(b.kind, visitKinds)))
+      .orderBy(...bookingOrder),
     db
       .select({
         id: s.hiringOutbox.id,
@@ -731,9 +988,15 @@ export async function dashboard(db: Database = getDb()) {
       .where(eq(s.hiringAudit.action, "head-decision"))
       .orderBy(desc(s.hiringAudit.createdAt))
       .limit(200),
+    paperChecks(db, now),
+    // Who has a final review packet, so Gift's list holds the reviews she can sign now. Never the packet itself.
+    db.select({ candidateId: s.hiringAudit.candidateId }).from(s.hiringAudit).where(eq(s.hiringAudit.action, "final-review-packet")),
+    approvedOffers(db),
   ]);
   // The visit screens never see an HR call. The Calls tab reads `calls`.
+  const allBookings = bookingRows.flatMap(({ recent, ...booking }) => recent ? [booking] : []);
   const bookings = allBookings.filter(isVisitBooking);
+  const assessmentBookings = bookingRows.flatMap(({ recent, ...booking }) => !recent && isVisitBooking(booking) ? [booking] : []);
   const calls = allBookings
     .filter((b) => b.kind === "call" && b.status === "confirmed")
     .map((b) => ({ candidateId: b.candidateId, start: b.startTime, end: b.endTime }));
@@ -770,7 +1033,19 @@ export async function dashboard(db: Database = getDb()) {
   }
   // visitClashes is one shared read for all heads. It never fails the dashboard: a missing index reports stale.
   // The queue gates below run after the suggested heads above, because they read config.
-  const clashes = await visitClashes(db, bookings);
+  const [clashes, wiseWindows, testRooms] = await Promise.all([
+    visitClashes(db, bookings),
+    // Like visitClashes, this never fails the dashboard: on an error the Rules row shows no Wise hours.
+    readWiseWindows(db, config.interviewers.filter((h) => h.hoursFromWise).map((h) => h.canonicalKey)).catch((error) => {
+      console.error("Hiring dashboard could not read Wise hours", error instanceof Error ? error.name : "UnknownError");
+      return {} as Awaited<ReturnType<typeof readWiseWindows>>;
+    }),
+    // A failed read leaves every weekend test at "no room" on the run sheet; it never fails the dashboard.
+    weekendTestRooms(db, [...bookings, ...assessmentBookings]).catch((error) => {
+      console.error("Hiring dashboard could not read weekend test rooms", error instanceof Error ? error.name : "UnknownError");
+      return new Map<string, string | null>();
+    }),
+  ]);
   const usage = { preScreen: preScreenUsage, onsite: onsiteUsage };
   const holds: Record<string, QueueHold> = {};
   let preScreenOrder: string[] = [];
@@ -789,8 +1064,18 @@ export async function dashboard(db: Database = getDb()) {
     for (const e of release) holds[e.id] = { funnel, state: "next", position: 0, limit: null, subject: e.subject };
     for (const e of held) holds[e.id] = { funnel, state: "held", position: e.position, limit: e.limit, subject: e.subject };
   }
+  const invitedCalls = new Set(inviteOutbox.filter((o) => o.status === "sent" && o.key === `${o.candidateId}:call-invite`).map((o) => o.candidateId));
+  const bookedCalls = new Set(calls.map((call) => call.candidateId));
+  const candidates: ReturnType<typeof dashboardCandidate>[] = [];
+  const assessmentCandidates: ReturnType<typeof dashboardCandidate>[] = [];
+  for (const { recent, ...candidate } of candidateRows) {
+    const present = dashboardCandidate(candidate, config, invitedCalls.has(candidate.id), bookedCalls.has(candidate.id));
+    (recent ? candidates : assessmentCandidates).push(present);
+  }
+  const withRoom = (booking: typeof bookings[number]) => testRooms.has(booking.id) ? { ...booking, room: testRooms.get(booking.id) } : booking;
   return {
     config,
+    offers,
     ...assessment,
     // False until the first save: the interviewers shown then are suggestions, not stored heads.
     configSaved: !!row,
@@ -802,55 +1087,17 @@ export async function dashboard(db: Database = getDb()) {
     callOrder,
     headMocks: headWeekMocks(bookings, now),
     heads: Object.fromEntries(
-      config.interviewers.map((head) => [head.canonicalKey, headDayState(head, enrollments, schedules, localDate(now))]),
+      config.interviewers.map((head) => [head.canonicalKey, headDayState(head, enrollments, schedules, localDate(now), wiseWindows[head.canonicalKey])]),
     ),
     revision: row?.revision ?? 0,
     workerAt: row?.workerAt ?? null,
     workerSummary: row?.workerSummary ?? null,
     workerError: row?.workerError ?? null,
     writeGate: runtimeWritesAllowed(),
-    candidates: candidates.map((c) => {
-      const parts =
-        c.preScreenAssessment && c.preScreen
-          ? preScreenPoints(
-              c.preScreenAssessment,
-              config.preScreenWeights,
-              c.universityAssessment?.fraction ?? 0,
-              availabilityFraction(c.preScreen),
-            )
-          : null;
-      return {
-        ...c,
-        // The stored list can be long, and the screen only needs to know the row was moved.
-        queueManual: !!c.queueManual,
-        // The screen reads workRightsAnswer. This old column stays in the database only.
-        workRightsConfirmed: undefined,
-        // The text itself is read on demand. hasSourceText (from SQL) tells the screen whether there is any, such as for a person added from the tracker.
-        // The screen opens a file only through the guarded route, so it never gets the storage path.
-        resumePath: undefined,
-        resumeSha256: undefined,
-        resumeState: (c.resumePath ? "available" : c.resumeStoredAt ? "deleted" : "none") as "available" | "deleted" | "none",
-        profileScore: c.profileAssessment
-          ? profileScore(
-              c.profileAssessment,
-              config.profileWeights,
-              c.universityAssessment?.fraction ?? 0,
-              workRightsPenalty(c.workRightsAnswer, config),
-            )
-          : null,
-        // The pre-screen score is the eight-part total, not the profile formula.
-        preScreenScore: parts?.total ?? null,
-        preScreenParts: parts,
-        workRightsPenalty: workRightsPenalty(c.workRightsAnswer, config),
-        workRightsAccepted: workRightsAccepted(
-          c.workRightsAnswer,
-          config.acceptedWorkRights,
-        ),
-        // The gate on the screen must agree with the worker: a sent call link lifts the earlier-contact hold.
-        callInvited: inviteOutbox.some((o) => o.key === `${c.id}:call-invite` && o.status === "sent"),
-      };
-    }),
-    bookings,
+    candidates,
+    bookings: bookings.map(withRoom),
+    assessmentCandidates,
+    assessmentBookings: assessmentBookings.map(withRoom),
     calls,
     missedCalls,
     headDecisions: headDecisionRows.map((row) => ({
@@ -862,6 +1109,13 @@ export async function dashboard(db: Database = getDb()) {
       draftProblem: typeof row.detail.draftProblem === "string" ? row.detail.draftProblem : null,
       at: row.at,
     })),
+    reviewPackets: [...new Set(packetRows.flatMap((packet) => (packet.candidateId ? [packet.candidateId] : [])))],
+    // Near-miss papers sent to a head for a check (Kevin, 24 Nov 2026), with the head's link while open.
+    // `headLabel` and `done.head` are display names; `head` stays the key the Heads screen matches.
+    paperChecks: paperCheckRows.map((check) => {
+      const label = (key: string | null) => (key && contacts.find((c) => c.canonicalKey === key)?.displayName) || key;
+      return { ...check, headLabel: label(check.head), done: check.done && { ...check.done, head: label(check.done.head) ?? check.done.head } };
+    }),
     // The head's page for each mock (scores and decision), as a path. The same link the head gets in LINE.
     briefPaths: briefPaths(bookings, now),
     visitClashes: clashes,
@@ -901,7 +1155,9 @@ async function liveForList(db: Database, config: HiringConfig, subjects: Subject
     return await readLiveBusy(
       db,
       config.interviewers.filter((h) => subjects.every((v) => h.subjects.includes(v))).map((h) => h.canonicalKey),
-      businessDates(now, config.holidays),
+      // The page's live read stays on the first five business dates so the Wise load does not grow. Later dates use the
+      // 30-minute Wise copy, and the confirm step always reads the chosen date live.
+      businessDates(now, config.holidays, 5),
       { cacheMs: 60_000, deadlineMs: 12_000 },
     );
   } catch (error) {
@@ -915,7 +1171,7 @@ async function assertPassingPaper(db: Database, candidateId: string, subject: Su
     eq(s.hiringPaperResults.candidateId, candidateId), eq(s.hiringPaperResults.subject, subject),
   ));
   if (result?.status !== "done" || !result.fileId || !result.marks ||
-    computeSheet(result.marks, passRulesFor(config, subject)).result !== "passed")
+    (computeSheet(result.marks, passRulesFor(config, subject)).result !== "passed" && !(await headOverride(db, result))))
     throw new HiringError(409, "Finish grading and confirm a passing paper before booking mock teaching.");
 }
 
@@ -1175,6 +1431,7 @@ export async function bookInterview(
           to: candidate.email,
           ...hiringEmail({
             subject: `BeGifted ${cap.kind === "mock" ? "mock teaching" : "paper assessment"} confirmed`,
+            hero: "visit",
             preheader: `Your ${cap.kind === "mock" ? "mock teaching" : "paper assessment"} appointment is confirmed.`,
             title: `Your ${cap.kind === "mock" ? "mock teaching" : "paper assessment"} is confirmed`,
             tone: "ink",
@@ -1277,7 +1534,25 @@ export async function briefMock(token: string, db: Database, now: Date, kinds: (
 export async function briefCandidateId(token: string, db: Database = getDb(), now = new Date()) {
   return (await briefMock(token, db, now, ["mock", "call"])).candidateId;
 }
-/** What the interviewer sees. No contact details and no scores (Kevin's decision, 12 Nov 2026). */
+/** The résumé (ATS) score in parts, with the same numbers as the final review. Null before the résumé is assessed. */
+export function resumeAts(
+  candidate: Pick<typeof s.hiringCandidates.$inferSelect, "profileAssessment" | "universityAssessment" | "workRightsAnswer">,
+  config: HiringConfig,
+) {
+  if (!candidate.profileAssessment) return null;
+  const prestige = candidate.universityAssessment?.fraction ?? 0;
+  const school = highSchoolFraction(candidate.profileAssessment, config);
+  const penalty = workRightsPenalty(candidate.workRightsAnswer, config);
+  return {
+    score: profileScore(candidate.profileAssessment, config.profileWeights, prestige, penalty, school),
+    parts: profileParts(candidate.profileAssessment, config.profileWeights, prestige, school),
+    penalty,
+  };
+}
+/**
+ * What the interviewer sees. No contact details. The résumé score breakdown shows (Kevin, 24 Nov 2026; before that,
+ * no AI score showed: Kevin, 12 Nov 2026). The paper marks and other people's mock scores stay off the page.
+ */
 export async function briefView(token: string, db: Database = getDb(), now = new Date()) {
   const mock = await briefMock(token, db, now);
   const [candidate] = await db
@@ -1286,6 +1561,9 @@ export async function briefView(token: string, db: Database = getDb(), now = new
       preScreen: s.hiringCandidates.preScreen,
       resumePath: s.hiringCandidates.resumePath,
       resumeType: s.hiringCandidates.resumeType,
+      profileAssessment: s.hiringCandidates.profileAssessment,
+      universityAssessment: s.hiringCandidates.universityAssessment,
+      workRightsAnswer: s.hiringCandidates.workRightsAnswer,
     })
     .from(s.hiringCandidates)
     .where(eq(s.hiringCandidates.id, mock.candidateId));
@@ -1311,8 +1589,13 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     .where(and(eq(s.hiringAudit.candidateId, mock.candidateId), eq(s.hiringAudit.action, "head-decision")))
     .orderBy(desc(s.hiringAudit.createdAt))
     .limit(1);
+  const recommendationReady = now >= mock.endTime && !!(await completedBriefResult(db, mock));
+  const result = own.replaced;
+  const checking = result?.bookingId === mock.id && (result.status === "uploaded" || result.status === "marking");
   return {
     // The last head decision for this candidate, so the page shows what was sent.
+    // Gift's Hire on her own mock that sent the offer, not an earlier recommendation of hers.
+    offerSent: !!decided?.detail.offer,
     decision: (!decided?.detail.bookingId || decided.detail.bookingId === mock.id) && decided?.detail.decision === "hire" ? ("hire" as const) : decided?.detail.decision === "reject" ? ("reject" as const) : null,
     name: candidate.name,
     subject: mock.subjects.join(", "),
@@ -1322,11 +1605,24 @@ export async function briefView(token: string, db: Database = getDb(), now = new
     interviewer: mock.interviewerKey,
     location: config.location,
     answers: candidate.preScreen,
+    ats: resumeAts(candidate, config),
     resume: storedResume(mock.candidateId, candidate.resumePath, candidate.resumeType)?.extension ?? null,
     // The interviewer's own scores for this mock, to show again. Never an AI score or another person's.
     rubric: own.rubric,
     form: own.form,
+    recommendationReady,
+    // The head scores while they watch; only the recommendation waits for the lesson to end.
+    mockStarted: now >= mock.startTime,
+    mockEnded: now >= mock.endTime,
+    recommendationBlock: own.form !== "closed" || recommendationReady || now < mock.endTime ? null : checking ? ("checking" as const) : ("admin" as const),
   };
+}
+/** Read the completed result for this booking, using the same check for the brief and its decision. */
+export async function completedBriefResult(db: Database, mock: { id: string; candidateId: string }) {
+  const m = s.hiringMockResults;
+  const [result] = await db.select({ id: m.id, rubric: m.rubric }).from(m).where(and(eq(m.candidateId, mock.candidateId),
+    eq(m.bookingId, mock.id), eq(m.status, "done")));
+  return result?.rubric && !checkRubric(result.rubric).length && !rubricNeedsCheck(result.rubric) ? result : null;
 }
 const briefSubject = (mock: { subjects: Subject[] }) => mock.subjects[0];
 type MockResult = typeof s.hiringMockResults.$inferSelect;
@@ -1334,7 +1630,8 @@ type MockResult = typeof s.hiringMockResults.$inferSelect;
 const ownBriefRubric = (row: MockResult | undefined, mockId: string) =>
   row?.source === "person" && row.bookingId === mockId && !row.changedBy && !row.checkedBy ? row.rubric : null;
 /**
- * What the score form shows. `wait`: the lesson has not started. `closed`: a result that is not this head's own untouched
+ * What the score form shows. `wait`: the lesson has not ended, so the head can score during it but the recommendation
+ * waits (Kevin, 24 Nov 2026: heads fill the sheet in while they watch). `closed`: a result that is not this head's own untouched
  * scores is recorded, or a decision is drafted, so only a person with Hiring access can change it. The page shows a
  * rubric only when it is the head's own.
  */
@@ -1353,7 +1650,7 @@ async function briefRubric(mock: { id: string; candidateId: string; subjects: Su
     sql`${s.hiringAudit.detail}->>'bookingId' = ${mock.id}`,
   )).limit(1);
   const closed = !subject || !!draft || !!recommended || (!!row && row.source !== "tracker" && !rubric);
-  return { rubric, form: now < mock.endTime ? ("wait" as const) : closed ? ("closed" as const) : ("open" as const), replaced: row };
+  return { rubric, form: closed ? ("closed" as const) : now < mock.endTime ? ("wait" as const) : ("open" as const), replaced: row };
 }
 /**
  * The interviewer's scores for one mock, sent from the interviewer link (Kevin's decision, 13 Nov 2026: a score form,
@@ -1371,10 +1668,11 @@ export async function saveBriefRubric(token: string, rubric: MockRubric, db: Dat
     const mock = await briefMock(token, tx, now);
     const subject = briefSubject(mock);
     const { form, replaced: before } = await briefRubric(mock, tx, now);
-    if (form === "wait") throw new HiringError(409, "You can send scores after the mock lesson ends.");
     if (form === "closed" || !subject) throw new HiringError(409, BRIEF_CLOSED);
     const problems = checkRubric(rubric);
-    if (problems.length || rubricNeedsCheck(rubric)) throw new HiringError(400, "Give every item a whole score from 1 to 10.");
+    // The head's form is always the current one, so a send without an item is refused.
+    if (problems.length || rubricNeedsCheck(rubric) || RUBRIC_ITEMS.some((id) => !(id in rubric.items)))
+      throw new HiringError(400, "Give every item a whole score from 1 to 10.");
     const m = s.hiringMockResults;
     const fresh = {
       bookingId: mock.id,
@@ -1414,10 +1712,10 @@ export async function saveBriefRubric(token: string, rubric: MockRubric, db: Dat
     return rubricTotals(rubric).total;
   });
 }
-type VisitLink = { id: string; exp: number; kind: "visit" | "paper-visit" };
+type VisitLink = { id: string; exp: number; kind: "visit" | "paper-visit" | "two-day" };
 function visitToken(token: string, now: Date): VisitLink {
   const cap = readBookingToken(token, now);
-  if (cap.kind !== "visit" && cap.kind !== "paper-visit") throw new HiringError(404, onLine("This booking link is no longer active."));
+  if (cap.kind !== "visit" && cap.kind !== "paper-visit" && cap.kind !== "two-day") throw new HiringError(404, onLine("This booking link is no longer active."));
   return { ...cap, kind: cap.kind };
 }
 const bookable = (config: HiringConfig, candidateId: string) =>
@@ -1436,23 +1734,123 @@ const visitRows = (db: Database, candidateId: string) =>
 type VisitRow = Awaited<ReturnType<typeof visitRows>>[number];
 const examOf = (rows: VisitRow[]) => rows.find((b) => b.kind === "paper");
 
+/** Stages where a live "Next steps" link books at once: the pre-screen answers never gate booking (Kevin, 24 Nov 2026). */
+const NEXT_STEPS_OPEN = ["pre_screen", "no_reply", "review"];
+/**
+ * The answers' visit subject when one is usable. Else, because the answers never gate booking: the subject the
+ * candidate chose or ticked even when a hard stop dropped it, then the CV subjects, then any subject, each time the
+ * highest-ranked one that is hiring and has a head. So a candidate who answered always gets times.
+ */
+function nextStepsSubject(c: Candidate, config: HiringConfig): Subject | null {
+  const top = (subjects: readonly Subject[]) =>
+    topHiringSubject(subjects.filter((v) => config.interviewers.some((i) => i.subjects.includes(v))), config.subjectPriority);
+  return (
+    (c.preScreen && visitSubject(c.preScreen, c.workRightsAnswer, config)) ||
+    top(normalizeSubjects(c.preScreen?.testSubject ?? "")) ||
+    top(normalizeSubjects(c.preScreen?.subjects ?? "")) ||
+    top(c.subjects) ||
+    top(SUBJECTS)
+  );
+}
+
 /**
  * The link's expiry second must equal the row's, so a new link ends the old one. A booked link stays open until the visit
  * starts. An unbooked link closes at expireDays even when the worker is not running to mark No booking.
  */
+/**
+ * A live "Next steps" link whose questions are not answered yet: the page asks them before it shows the times (Kevin,
+ * 24 Nov 2026: answer first). The answers themselves never gate booking.
+ */
+const answersFirst = (candidate: Candidate, cap: VisitLink) =>
+  candidate.inviteExpiresAt?.getTime() === cap.exp * 1000 &&
+  cap.kind !== "paper-visit" &&
+  NEXT_STEPS_OPEN.includes(candidate.stage) &&
+  !candidate.preScreen;
+const ANSWERS_FIRST = "Please answer the questions on this page first. Then you can choose your times.";
+
+/** The candidate of a link whose questions are still open. For the portfolio upload, which comes before the answers. */
+export async function questionsOpen(token: string, db: Database = getDb(), now = new Date()) {
+  const cap = visitToken(token, now);
+  if (!answersFirst(await candidateById(db, cap.id), cap))
+    throw new HiringError(409, "The questions of this link are closed.");
+  return cap.id;
+}
+
+/**
+ * The questions on the booking page (Kevin, 24 Nov 2026). The answers are stored in the Google Form's shape, and the
+ * same link then books at once: the answers never gate booking. A hard stop only moves the candidate to review with a
+ * note for staff, at once, because a booking can come before the worker's next cycle. The AI scores the answers later.
+ */
+export async function answerPreScreen(token: string, value: unknown, db: Database = getDb(), now = new Date()) {
+  const answers = answersSchema.parse(value);
+  const cap = visitToken(token, now);
+  // Art & Design needs a portfolio: a file uploaded on the page, or a link. Storage is read before the lock.
+  const art = answers.subjects.includes("Art & Design Technology");
+  const file = art && (await portfolioUploaded(cap.id))
+    ? `Uploaded file: ${new URL(`/api/hiring/portfolio/${cap.id}`, process.env.APP_BASE_URL || "https://bgscheduler.vercel.app")}`
+    : "";
+  await withDatabaseTransaction(db, async (tx) => {
+    const [row] = await tx.select().from(s.hiringCandidates).where(eq(s.hiringCandidates.id, cap.id)).for("update");
+    if (!row) throw new HiringError(404, onLine("This booking link is no longer active."));
+    // A second send, or a Google Form answer that came first: the page reloads and shows what is true now.
+    if (!answersFirst(row, cap)) return;
+    if (art && !file && !answers.portfolio) throw new HiringError(400, "Upload your Art & Design portfolio, or add a link to it.");
+    const preScreen = answersToPreScreen(answers, now, file);
+    const { config } = await settings(tx);
+    const { stops } = hardStops(preScreen, row.workRightsAnswer, normalizeSubjects(preScreen.subjects), config);
+    const [saved] = await tx
+      .update(s.hiringCandidates)
+      .set({
+        preScreen,
+        preScreenRepliedAt: now,
+        // A late answer wakes a No reply row, as in the sheet import. A row in review stays there.
+        stage: stops.length ? "review" : row.stage === "no_reply" ? "pre_screen" : row.stage,
+        ...(stops.length ? { reviewNote: stops.join(" ") } : {}),
+        revision: row.revision + 1,
+        updatedAt: now,
+      })
+      .where(eq(s.hiringCandidates.id, row.id))
+      .returning();
+    // They answered, so an unsent form or reminder must not follow, as in the sheet import.
+    await tx
+      .update(s.hiringOutbox)
+      .set({ status: "cancelled" })
+      .where(
+        and(
+          eq(s.hiringOutbox.candidateId, row.id),
+          sql`${s.hiringOutbox.payload}->>'workflowStage' = 'pre_screen'`,
+          inArray(s.hiringOutbox.status, ["pending", "failed"]),
+        ),
+      );
+    // As in the sheet import: the recruitment group hears only of an answer to a form that was sent.
+    if (await formSentAt(tx, row.id)) await queueRecruitmentForm(tx, saved, now);
+    await audit(tx, "candidate", "pre-screen-answered", row.id, { source: "booking-page", stops });
+    if (stops.length && row.stage !== "review") await audit(tx, "hiring-queue", "move-to-review", row.id, { phase: "pre", reasons: stops });
+  });
+}
+
 async function openVisit(db: Database, cap: VisitLink, config: HiringConfig, now: Date) {
   const candidate = await candidateById(db, cap.id);
   const rows = await visitRows(db, cap.id);
-  let open = candidate.inviteExpiresAt?.getTime() === cap.exp * 1000 && !!candidate.visitSubject;
+  const linked = candidate.inviteExpiresAt?.getTime() === cap.exp * 1000;
+  let subject = candidate.visitSubject;
+  let open = linked && !!subject;
   if (open && candidate.stage === "onsite_booked") {
     const exam = examOf(rows);
     open = !!exam && exam.startTime > now;
   } else if (open && candidate.stage === "onsite_invited") {
-    const sentAt = await linkSentAt(db, cap.id);
-    open = !sentAt || now.getTime() - sentAt.getTime() < config.onsiteFollowUp.expireDays * DAY;
+    // A "Next steps" candidate already holds this link, so a cancelled invitation (a hold) must close it too.
+    const live = await linkSentAt(db, cap.id);
+    open = !!live && (!live.sentAt || now.getTime() - live.sentAt.getTime() < config.onsiteFollowUp.expireDays * DAY);
+  } else if (linked && cap.kind !== "paper-visit" && NEXT_STEPS_OPEN.includes(candidate.stage)) {
+    // Answer first: the page asks the questions before the times, and a booking is refused with the same words.
+    if (!candidate.preScreen) throw new HiringError(409, ANSWERS_FIRST);
+    subject ??= nextStepsSubject(candidate, config);
+    if (!subject) throw new HiringError(409, onLine("There are no open visit times at the moment. Please try again later."));
+    open = true;
   } else open = false;
   if (!open) throw new HiringError(404, onLine("This booking link is no longer active."));
-  return { candidate, subject: candidate.visitSubject!, rows };
+  return { candidate, subject: subject!, rows };
 }
 
 /** Why this booked visit cannot move, or null. send_new_link needs a visit with no confirmed rows, and the next booking has no `reschedule_of`, so that click resets the count. */
@@ -1469,6 +1867,28 @@ const paperVisitSlots = async (db: Database, config: HiringConfig, subject: Subj
     .filter((slot) => Date.parse(slot.start) < cap.exp * 1000 && slot.start !== examOf(rows)?.startTime.toISOString())
     .map((slot) => ({ date: slot.date, examStart: slot.start, examEnd: slot.end, mockStart: null, mockEnd: null }));
 
+/**
+ * A "two-day" link: every open test time (Monday to Sunday, by the test office hours) and every open mock teaching hour
+ * (Monday to Friday, by the head's saved hours, Wise and the weekly limit). The candidate's own booked times stay in the
+ * lists, so a move can change one and keep the other.
+ * shortcut: with two free heads the first in settings order gets the mock; use `assignHead` if one head fills up first.
+ */
+const twoDaySlots = async (db: Database, config: HiringConfig, subject: Subject, cap: VisitLink, now: Date, indexDb = db, live?: LiveBusy) => {
+  const open = (start: string) => Date.parse(start) < cap.exp * 1000;
+  const tests = (await availableSlots(db, config, "paper", [subject], now, db, undefined, cap.id))
+    .filter((slot) => open(slot.start))
+    .map((slot) => ({ date: slot.date, examStart: slot.start, examEnd: slot.end, mockStart: null, mockEnd: null }));
+  const seen = new Set<string>();
+  const mocks = (await availableSlots(db, config, "mock", [subject], now, indexDb, live, cap.id))
+    .filter((slot) => open(slot.start) && !seen.has(slot.start) && !!seen.add(slot.start))
+    .map((slot) => ({ date: slot.date, start: slot.start, end: slot.end, interviewerKey: slot.interviewerKey! }));
+  // The mock teaching follows the test (same day after the grading gap, or a later day), so a time with no partner is not a choice.
+  return {
+    tests: tests.filter((test) => mocks.some((mock) => mockCanFollow(test.examEnd, mock.start))),
+    mocks: mocks.filter((mock) => tests.some((test) => mockCanFollow(test.examEnd, mock.start))),
+  };
+};
+
 const offeredSlots = async (db: Database, config: HiringConfig, subject: Subject, cap: VisitLink, rows: VisitRow[], now: Date, indexDb = db, live?: LiveBusy) =>
   (await availableVisitSlots(db, config, subject, now, cap.id, indexDb, live)).filter((slot) => {
     const start = new Date(slot.examStart).getTime();
@@ -1478,22 +1898,57 @@ const offeredSlots = async (db: Database, config: HiringConfig, subject: Subject
 export async function visitView(token: string, db: Database = getDb(), now = new Date()) {
   const cap = visitToken(token, now);
   const { config } = await settings(db);
+  const candidate = await candidateById(db, cap.id);
+  if (answersFirst(candidate, cap))
+    return {
+      kind: "visit" as const,
+      paired: true,
+      twoDay: cap.kind === "two-day",
+      mockSlots: [] as { date: string; start: string; end: string }[],
+      subject: "",
+      location: config.location,
+      enabled: false,
+      slots: [],
+      visit: null,
+      canMove: false,
+      notice: ANSWERS_FIRST as string | null,
+      checkedAt: null,
+      waiting: "answers" as "answers" | null,
+      // Where the page uploads an Art & Design portfolio while the questions are open.
+      portfolioPath: portfolioPath(cap.id) as string | null,
+      // The link holder's own résumé degree, for a one-tap confirm in place of the two degree questions (Kevin, 24 Nov 2026).
+      knownDegree: profileDegree(candidate.profileAssessment) as KnownDegree | null,
+      // Subjects a visit can be in now (hiring, with a head), highest priority first: the page lists them first.
+      testSubjects: config.subjectPriority
+        .filter((p) => p.hiring && config.interviewers.some((i) => i.subjects.includes(p.subject)))
+        .map((p) => p.subject) as Subject[],
+      timeRuleMet: false,
+      liveDates: [] as string[],
+    };
   const { subject, rows } = await openVisit(db, cap, config, now);
   const enabled = bookable(config, cap.id);
   const exam = examOf(rows);
   const mock = rows.find((b) => b.kind === "mock");
   const refusal = exam ? moveRefusal(rows, now) : null;
   const paired = cap.kind === "visit" || !!mock;
-  let slots: (Awaited<ReturnType<typeof paperVisitSlots>>[number] | (Awaited<ReturnType<typeof offeredSlots>>[number] & { examEnd: string }))[] = [];
+  let slots: (Awaited<ReturnType<typeof paperVisitSlots>>[number] | Awaited<ReturnType<typeof offeredSlots>>[number])[] = [];
+  let mockSlots: { date: string; start: string; end: string }[] = [];
+  const twoDay = cap.kind === "two-day";
   let notice: string | null = null;
   let live: LiveBusy | null = null;
   if (!enabled) notice = onLine("Booking is temporarily paused.");
   else if (refusal) notice = refusal;
   else {
     try {
-      if (paired) {
+      if (twoDay) {
         live = await liveForList(db, config, [subject], now);
-        slots = (await offeredSlots(db, config, subject, cap, rows, now, db, live ?? undefined)).map((slot) => ({ ...slot, examEnd: slot.mockStart }));
+        const lists = await twoDaySlots(db, config, subject, cap, now, db, live ?? undefined);
+        slots = lists.tests;
+        // The head is the server's choice, so the page gets no name.
+        mockSlots = lists.mocks.map(({ date, start, end }) => ({ date, start, end }));
+      } else if (paired) {
+        live = await liveForList(db, config, [subject], now);
+        slots = await offeredSlots(db, config, subject, cap, rows, now, db, live ?? undefined);
       } else slots = await paperVisitSlots(db, config, subject, cap, rows, now);
       if (!slots.length) notice = onLine("There are no open visit times at the moment. Please try again later.");
     } catch (error) {
@@ -1504,7 +1959,10 @@ export async function visitView(token: string, db: Database = getDb(), now = new
   }
   return {
     kind: "visit" as const,
-    paired,
+    paired: paired || twoDay,
+    // The test and the mock teaching are two choices on two days. `mockSlots` is empty for every other link.
+    twoDay,
+    mockSlots,
     subject,
     location: config.location,
     enabled,
@@ -1523,6 +1981,15 @@ export async function visitView(token: string, db: Database = getDb(), now = new
     notice,
     // When the times were checked against live Wise. Null means the 30-minute Wise copy was used.
     checkedAt: live?.checkedAt ?? null,
+    waiting: null as "answers" | null,
+    portfolioPath: null as string | null,
+    knownDegree: null as KnownDegree | null,
+    testSubjects: [] as Subject[],
+    // The saved answers already give a weekend hour and a weekday hour from 15:00: the page ticks that box for the candidate.
+    // Only an exact grid answer ticks the box for the candidate; old sheet or form text still asks (code review r23).
+    timeRuleMet: !!candidate.preScreen && !!parseWeekHours(candidate.preScreen.availability) && meetsTimeRule(candidate.preScreen.availability),
+    // The dates the live Wise read covered (liveForList): the page says "checked live" on these only (code review r4).
+    liveDates: live ? businessDates(now, config.holidays, 5) : ([] as string[]),
   };
 }
 
@@ -1567,6 +2034,50 @@ export async function endVisit(tx: Database, rows: VisitRow[], status: "cancelle
       });
 }
 
+/**
+ * Kevin, 22 Nov 2026: a failed paper cancels the mock of the same visit, and the head hears at once. Fail closed, so a
+ * head is never sent away in error: only a counted result ("done") that is "not passed" does it. A missing pass mark, a
+ * result that still needs a check, and a mock that has started all leave the mock in place. The stage does not change:
+ * a person still sends the Reject result.
+ */
+export const lockCandidate = (tx: Database, candidateId: string) =>
+  tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"hiring-candidate:" + candidateId},0))`);
+
+/** A counted paper fail in this subject, read under the caller's `lockCandidate`. Null for anything else. */
+export async function countedFail(tx: Database, candidateId: string, subject: Subject) {
+  const { config } = await settings(tx);
+  const [result] = await tx.select().from(s.hiringPaperResults).where(and(
+    eq(s.hiringPaperResults.candidateId, candidateId), eq(s.hiringPaperResults.subject, subject),
+  ));
+  // A sheet with no question tried is more likely the wrong scan than a fail, so a person decides that one.
+  if (result?.status !== "done" || !result.marks?.questions.some((q) => q.attempted)) return null;
+  const sheet = computeSheet(result.marks, passRulesFor(config, subject));
+  // A head's override passes a near miss, so it is not a fail.
+  return sheet.result === "not_passed" && !(await headOverride(tx, result)) ? { result, sheet, config } : null;
+}
+
+/** The caller holds `lockCandidate` and has read a counted fail. Returns the mock cancelled and the paper booking it followed. */
+export async function cancelFailedMock(tx: Database, result: { candidateId: string; subject: Subject; bookingId: string | null }, actor: string, now: Date) {
+  const rows = await visitRows(tx, result.candidateId);
+  const mock = rows.find((b) => b.kind === "mock" && b.subjects.includes(result.subject) && b.startTime > now);
+  // The result must be for this visit's paper: that paper has started, and a result tied to another booking is an older one.
+  const exam = mock && rows.find((b) => b.kind === "paper" && b.visitId === mock.visitId);
+  if (!mock || !exam || exam.startTime > now || (result.bookingId && result.bookingId !== exam.id)) return null;
+  await endVisit(tx, [mock], "cancelled", now);
+  await enqueue(tx, headNotice(mock, "cancelled"));
+  await audit(tx, actor, "mock-cancelled-after-fail", result.candidateId, { subject: result.subject, bookingId: mock.id });
+  return { mock, exam };
+}
+
+export async function cancelMockAfterFail(db: Database, candidateId: string, subject: Subject, actor: string, now = new Date()) {
+  return withDatabaseTransaction(db, async (tx) => {
+    await lockCandidate(tx, candidateId);
+    // Read under the lock, so a mark changed back to a pass a moment ago is seen.
+    const fail = await countedFail(tx, candidateId, subject);
+    return !!fail && !!(await cancelFailedMock(tx, fail.result, actor, now));
+  });
+}
+
 // ---- The HR pre-screen call that a candidate books (Kevin's decisions, 12 Nov 2026) ----
 
 type CallLink = { id: string; exp: number };
@@ -1587,6 +2098,14 @@ const callRows = (db: Database, candidateId: string) =>
       ),
     );
 type CallRow = Awaited<ReturnType<typeof callRows>>[number];
+/** A confirmed HR call exists, ahead or started with no result yet: the `callBooked` that `profileGate` reads. */
+export const hasBookedCall = async (db: Database, candidateId: string) => (await callRows(db, candidateId)).length > 0;
+/** A booking or a good call answers the reminder, so one that still waits must not leave. */
+export const cancelCallReminder = (tx: Database, candidateId: string) =>
+  tx
+    .update(s.hiringOutbox)
+    .set({ status: "cancelled" })
+    .where(and(eq(s.hiringOutbox.key, `${candidateId}:call-invite-reminder`), inArray(s.hiringOutbox.status, ["pending", "failed"])));
 /** The candidate's call that has not ended. A call that ended with no result stays in the past and does not stop a new one. */
 const comingCall = async (db: Database, candidateId: string, now: Date) =>
   (await callRows(db, candidateId)).find((b) => b.endTime > now);
@@ -1610,8 +2129,8 @@ async function openCall(db: Database, cap: CallLink, config: HiringConfig) {
   return entry.subject;
 }
 function callMoveRefusal(call: CallRow, now: Date) {
-  if (call.rescheduleOf) return onLine("This call has already moved once.");
-  if (call.startTime <= now) return onLine("This call has started and cannot move.");
+  if (call.rescheduleOf) return onLine("This R1 interview has already moved once.");
+  if (call.startTime <= now) return onLine("This R1 interview has started and cannot move.");
   return null;
 }
 type HrBusyRead = { at: number; key: string; read: ReturnType<typeof readHrBusy> };
@@ -1639,7 +2158,7 @@ async function hrBusy(db: Database, config: HiringConfig, now: Date, fresh = fal
  * A call whose time has passed with no result from HR. The candidate waits for HR: a "No answer" closes it and opens the
  * link again. Without this a link could book a new call every time the last one ended.
  */
-const CALL_PASSED = "Your call time has passed. BeGifted will contact you about a new time.";
+const CALL_PASSED = "Your R1 interview time has passed. BeGifted will contact you about a new time.";
 /**
  * Can the call page show times now? Rules and setup shows this, and no call link leaves unless it says `readable`.
  * It shares the page's 60-second read, so it reports what a candidate would get.
@@ -1679,20 +2198,21 @@ export async function callView(token: string, db: Database = getDb(), now = new 
   else {
     try {
       const { dates, busy } = await hrBusy(db, config, now);
-      slots = callSlots(dates, [...busy, ...(await otherCalls(db, cap.id, now))], now).filter(
+      slots = r1Slots(dates, [...busy, ...(await otherCalls(db, cap.id, now))], now).filter(
         (slot) => new Date(slot.start).getTime() < cap.exp * 1000 && slot.start !== own?.startTime.toISOString(),
       );
-      if (!slots.length) notice = onLine("There are no open call times at the moment. Please try again later.");
+      if (!slots.length) notice = onLine("There are no open R1 interview times at the moment. Please try again later.");
     } catch (error) {
       // The calendar could not be read. A time that cannot be proved free is not shown.
       if (!(error instanceof HiringError)) throw error;
-      notice = onLine("Call times cannot be shown at the moment. Please try again later.");
+      notice = onLine("R1 interview times cannot be shown at the moment. Please try again later.");
     }
   }
   // The stored phone number is never returned: the link is the only check, and a link can be forwarded.
   return {
     kind: "call" as const,
-    minutes: CALL_MINUTES,
+    // A call booked before 22 Nov 2026 lasts 15 minutes.
+    minutes: own ? Math.round((own.endTime.getTime() - own.startTime.getTime()) / 60000) : CALL_MINUTES,
     enabled,
     slots,
     call: own ? { start: own.startTime.toISOString(), end: own.endTime.toISOString() } : null,
@@ -1724,7 +2244,7 @@ export async function bookCall(token: string, value: unknown, db: Database = get
       if (passedCall(rows, now)) throw new HiringError(409, onLine(CALL_PASSED));
       return;
     }
-    if (!input.move) throw new HiringError(409, "You already have a booked call. Use Move this call to change it.");
+    if (!input.move) throw new HiringError(409, "You already have a booked R1 interview. Use Move this R1 interview to change it.");
     const refusal = callMoveRefusal(own, now);
     if (refusal) throw new HiringError(409, refusal);
   };
@@ -1732,7 +2252,7 @@ export async function bookCall(token: string, value: unknown, db: Database = get
   // One live read of HR's calendar, just before the transaction: a Google call inside it would hold HR's lock for seconds.
   const calendar = await hrBusy(db, config, now, true).catch((error) => {
     if (!(error instanceof HiringError)) throw error;
-    throw new HiringError(503, onLine("Call times cannot be checked at the moment. Please try again later."));
+    throw new HiringError(503, onLine("R1 interview times cannot be checked at the moment. Please try again later."));
   });
   return withDatabaseTransaction(db, async (tx) => {
     await tx.execute(sql`select id from hiring_candidates where id=${cap.id} for update`);
@@ -1746,10 +2266,10 @@ export async function bookCall(token: string, value: unknown, db: Database = get
     const own = rows.find((b) => b.endTime > now);
     if (own?.startTime.getTime() === start) return own;
     refuseChange(own, rows);
-    const slot = callSlots(calendar.dates, [...calendar.busy, ...(await otherCalls(tx, cap.id, now))], new Date()).find(
+    const slot = r1Slots(calendar.dates, [...calendar.busy, ...(await otherCalls(tx, cap.id, now))], new Date()).find(
       (v) => new Date(v.start).getTime() === start && start < cap.exp * 1000,
     );
-    if (!slot) throw new HiringError(409, "That call time is no longer available. Choose another time.");
+    if (!slot) throw new HiringError(409, "That R1 interview time is no longer available. Choose another time.");
     const candidate = await candidateById(tx, cap.id);
     if (own) await endVisit(tx, [own], "cancelled", now, false);
     const [call] = await tx
@@ -1780,19 +2300,22 @@ export async function bookCall(token: string, value: unknown, db: Database = get
           // HR gets its own email below, with the résumé. The candidate's copy must not carry the file.
           cc: [],
           ...hiringEmail({
-            subject: `BeGifted call ${own ? "moved" : "confirmed"}`,
-            preheader: `${bangkok(call.startTime)} (Bangkok). We will call you by phone.`,
-            title: own ? "Your call has moved" : "Your call is confirmed",
+            subject: `BeGifted R1: HR Interview ${own ? "moved" : "confirmed"}`,
+            hero: "r1",
+            process: 1,
+            preheader: `${bangkok(call.startTime)} (Bangkok). Google Meet video call.`,
+            title: own ? "Your R1 interview has moved" : "Your R1 interview is confirmed",
             name: candidate.name,
-            paragraphs: [`Your call with BeGifted ${own ? "has moved. The new time is below" : "is confirmed"}.`],
+            paragraphs: [`Your R1: HR Interview with BeGifted ${own ? "has moved. The new time is below" : "is confirmed"}.`],
             details: [
               { label: "Time", value: `${bangkok(call.startTime)}–${bangkokTime(call.endTime)} (Bangkok)` },
-              { label: "We will call", value: input.phone },
+              { label: "Where", value: "Google Meet. The link is in your Google Calendar invitation." },
+              { label: "Backup phone", value: input.phone },
             ],
-            ...(own ? {} : { action: { label: "Move your call", url: callLink(cap.id, new Date(cap.exp * 1000)) } }),
+            ...(own ? {} : { action: { label: "Move your R1 interview", url: callLink(cap.id, new Date(cap.exp * 1000)) } }),
             after: [
-              own ? "This call cannot move again through the link." : "You can move this call once, before it starts.",
-              "Please keep your phone near you at this time.",
+              own ? "This interview cannot move again through the link." : "You can move this interview once, before it starts.",
+              "Please join from a quiet place, with your camera and microphone on.",
               "For other changes, message BeGifted on LINE.",
             ],
           }),
@@ -1809,16 +2332,16 @@ export async function bookCall(token: string, value: unknown, db: Database = get
         cc: [],
         attachResume: resume,
         ...hiringEmail({
-          subject: `Pre-screen call ${own ? "moved" : "booked"}: ${candidate.name}`,
-          preheader: `${bangkok(call.startTime)} (Bangkok). Call ${input.phone}.`,
-          title: `Pre-screen call ${own ? "moved" : "booked"}`,
+          subject: `R1 ${own ? "moved" : "booked"}: ${candidate.name}`,
+          preheader: `${bangkok(call.startTime)} (Bangkok). Google Meet. Backup phone ${input.phone}.`,
+          title: `R1: HR Interview ${own ? "moved" : "booked"}`,
           name: "HR team",
-          paragraphs: [`${candidate.name} ${own ? "moved" : "booked"} a pre-screen call. Call this person at the time below.`],
+          paragraphs: [`${candidate.name} ${own ? "moved" : "booked"} R1: HR Interview. Join with the Google Meet link in the calendar event. Phone the backup number only if the video call fails.`],
           details: [
             { label: "Candidate", value: candidate.name },
             { label: "Subject", value: subject },
             { label: "Time", value: `${bangkok(call.startTime)}–${bangkokTime(call.endTime)} (Bangkok)` },
-            { label: "Phone", value: input.phone },
+            { label: "Backup phone", value: input.phone },
             { label: "Email", value: candidate.email ?? "Not recorded" },
             { label: "Résumé", value: resume ? RESUME_ATTACHED : "No file stored. See the Hiring page." },
           ],
@@ -1835,6 +2358,7 @@ export async function bookCall(token: string, value: unknown, db: Database = get
     });
     // After the phone update, so the notice carries the number HR will call.
     await queueRecruitmentMock(tx, call, own ? "moved" : "booked", own?.startTime);
+    await cancelCallReminder(tx, cap.id);
     // The phone number stays out of the audit row.
     await audit(tx, "candidate", own ? "call-moved" : "call-booked", cap.id, { start: slot.start });
     return call;
@@ -1849,9 +2373,15 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
   const { config } = await settings(db);
   if (!bookable(config, cap.id)) throw new HiringError(503, "Booking is temporarily unavailable.");
   // A retry returns the original visit.
-  const prior = examOf(await visitRows(db, cap.id));
-  if (prior?.startTime.getTime() === start) return prior;
+  const twoDay = cap.kind === "two-day";
+  const mockStart = input.mockStart ? new Date(input.mockStart).getTime() : null;
+  /** The booked visit already has these times: a retry, which returns the original. */
+  const same = (rows: VisitRow[]) =>
+    examOf(rows)?.startTime.getTime() === start && (!twoDay || rows.find((b) => b.kind === "mock")?.startTime.getTime() === mockStart);
+  const priorRows = await visitRows(db, cap.id);
+  if (same(priorRows)) return examOf(priorRows)!;
   const open = await openVisit(db, cap, config, now);
+  if (twoDay && mockStart === null) throw new HiringError(400, "Choose a mock teaching time too.");
   if (cap.kind === "paper-visit" && !open.rows.some((row) => row.kind === "mock")) {
     return withDatabaseTransaction(db, async (tx) => {
       await tx.execute(sql`select id from hiring_candidates where id=${cap.id} for update`);
@@ -1878,6 +2408,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
         key: `booking:${paper.id}:email`, candidateId: cap.id, bookingId: paper.id, kind: "email",
         payload: { to: candidate.email, ...hiringEmail({
           subject: "BeGifted paper assessment confirmed", preheader: bangkok(paper.startTime),
+          hero: "visit",
           title: "Your paper assessment is confirmed", name: candidate.name,
           paragraphs: ["We will contact you after we grade your paper."],
           details: [
@@ -1885,7 +2416,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
             { label: "Time", value: `${bangkok(paper.startTime)}–${bangkokTime(paper.endTime)} (Bangkok)` },
             { label: "Location", value: current.location },
           ],
-          ...(previous ? {} : { action: { label: "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!) } }),
+          ...(previous ? {} : { action: { label: "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!, "paper-visit") } }),
         }) },
       });
       await enqueue(tx, { key: `booking:${paper.id}:calendar`, candidateId: cap.id, bookingId: paper.id, kind: "calendar", payload: {} });
@@ -1905,9 +2436,18 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
   const unavailable = () => new HiringError(409, "That visit time is no longer available. Choose another time.");
   // The same live read as the list, so the head assigned here is the head the candidate's list was built on.
   const live = (await liveForList(db, config, [open.subject], now)) ?? undefined;
-  const slot = (await offeredSlots(db, config, open.subject, cap, open.rows, now, db, live)).find(
-    (v) => new Date(v.examStart).getTime() === start,
-  );
+  /** The chosen times, if still open. A two-day visit joins a test time and a mock teaching hour that follows it (`mockCanFollow`). */
+  const pick = async (d: Database, c: HiringConfig, subject: Subject, rows: VisitRow[], at: Date) => {
+    if (!twoDay) return (await offeredSlots(d, c, subject, cap, rows, at, db, live)).find((v) => new Date(v.examStart).getTime() === start);
+    const { tests, mocks } = await twoDaySlots(d, c, subject, cap, at, db, live);
+    const test = tests.find((v) => Date.parse(v.examStart) === start);
+    const mock = mocks.find((v) => Date.parse(v.start) === mockStart);
+    // `date` is the day of the head's hour: the live Wise check reads it.
+    return test && mock && mockCanFollow(test.examEnd, mock.start)
+      ? { date: mock.date, examStart: test.examStart, examEnd: test.examEnd, mockStart: mock.start, mockEnd: mock.end, interviewerKey: mock.interviewerKey, subject }
+      : undefined;
+  };
+  const slot = await pick(db, config, open.subject, open.rows, now);
   if (!slot) throw unavailable();
   // The head's hour is the only part Wise can block. Office staff supervise the exam.
   const evidence = await verifyLiveSlot(db, {
@@ -1925,12 +2465,10 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
     const latest = await settings(tx);
     if (!bookable(latest.config, cap.id)) throw new HiringError(503, "Booking has been paused.");
     const { candidate, subject, rows } = await openVisit(tx, cap, latest.config, now);
-    if (examOf(rows)?.startTime.getTime() === start) return examOf(rows)!;
+    if (same(rows)) return examOf(rows)!;
     refuseChange(rows);
     if (input.subject !== subject) throw new HiringError(409, onLine("This visit is for another subject."));
-    const fresh = (await offeredSlots(tx, latest.config, subject, cap, rows, new Date(), db, live)).find(
-      (v) => new Date(v.examStart).getTime() === start,
-    );
+    const fresh = await pick(tx, latest.config, subject, rows, new Date());
     // Only this head's lock is held, and the live read was for this head.
     if (!fresh || fresh.interviewerKey !== slot.interviewerKey) throw unavailable();
     const head = latest.config.interviewers.find((i) => i.canonicalKey === fresh.interviewerKey);
@@ -1948,7 +2486,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
       calendarOwner: latest.config.connectedEmail,
       visitId,
     };
-    const examRange = { startTime: new Date(fresh.examStart), endTime: new Date(fresh.mockStart) };
+    const examRange = { startTime: new Date(fresh.examStart), endTime: new Date(fresh.examEnd) };
     const mockRange = { startTime: new Date(fresh.mockStart), endTime: new Date(fresh.mockEnd) };
     const [exam, mock] = await tx
       .insert(s.hiringBookings)
@@ -1974,7 +2512,7 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
       .returning();
     await tx
       .update(s.hiringCandidates)
-      .set({ stage: "onsite_booked", revision: candidate.revision + 1, updatedAt: new Date() })
+      .set({ stage: "onsite_booked", visitSubject: subject, revision: candidate.revision + 1, updatedAt: new Date() })
       .where(eq(s.hiringCandidates.id, candidate.id));
     if (candidate.email)
       await enqueue(tx, {
@@ -1986,24 +2524,28 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
           to: candidate.email,
           ...hiringEmail({
             subject: `BeGifted onsite visit ${rows.length ? "moved" : "confirmed"}`,
-            preheader: `Exam ${bangkok(exam.startTime)} (Bangkok), then mock teaching with ${head.canonicalKey}.`,
+            hero: "visit",
+            preheader: `Test ${bangkok(exam.startTime)} (Bangkok). If you pass, mock teaching follows ${twoDay ? `on ${bangkok(mock.startTime)}` : "on the same day"}.`,
             title: rows.length ? "Your visit has moved" : "Your visit is confirmed",
             tone: "ink",
             name: candidate.name,
-            paragraphs: [`Your onsite visit ${rows.length ? "has moved. The new times are below" : "is confirmed"}.`],
+            paragraphs: [`Your ${twoDay ? "test and your mock teaching are" : "onsite visit is"} ${rows.length ? "moved. The new times are below" : "confirmed"}.`],
             details: [
               { label: "Subject", value: subject },
-              { label: "Exam", value: `${bangkok(exam.startTime)}–${bangkokTime(exam.endTime)} (Bangkok)` },
-              { label: "Mock teaching", value: `${bangkok(mock.startTime)}–${bangkokTime(mock.endTime)} (Bangkok), with ${head.canonicalKey}` },
+              { label: "Test", value: `${bangkok(exam.startTime)}–${bangkokTime(exam.endTime)} (Bangkok)` },
+              { label: twoDay ? "Final round: mock teaching, if you pass" : "Mock teaching, if you pass", value: `${bangkok(mock.startTime)}–${bangkokTime(mock.endTime)} (Bangkok), with ${head.canonicalKey}` },
               { label: "Location", value: latest.config.location },
             ],
             ...(rows.length
               ? {}
-              : { action: { label: "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!, "visit") } }),
+              : { action: { label: twoDay ? "Move your times" : "Move your visit", url: visitLink(cap.id, candidate.inviteExpiresAt!, twoDay ? "two-day" : "visit") } }),
+            stepsHeading: twoDay ? "Your test and mock teaching" : "Your visit day",
+            steps: twoDay ? TWO_DAY_STEPS : VISIT_STEPS,
+            list: VISIT_BRING,
             after: [
               rows.length
-                ? "This visit cannot move again through the link."
-                : "You can move this visit once, up to 24 hours before it starts.",
+                ? "This booking cannot move again through the link."
+                : twoDay ? "You can move your times once, up to 24 hours before the test starts." : "You can move this visit once, up to 24 hours before it starts.",
               "For other changes, message BeGifted on LINE.",
               ...mockPrep(subject).paragraphs,
             ],
@@ -2019,8 +2561,9 @@ export async function bookVisit(token: string, value: unknown, db: Database = ge
         kind: "calendar",
         payload: {},
       });
-    await queueRecruitmentMock(tx, mock, rows.length ? "moved" : "booked", oldMock?.startTime);
-    await enqueue(tx, headNotice(mock, rows.length ? "moved" : undefined, oldMock?.startTime));
+    // A paper-only booking that moves to a paired link has no old mock, so its mock is new to the head.
+    await queueRecruitmentMock(tx, mock, oldMock ? "moved" : "booked", oldMock?.startTime);
+    await enqueue(tx, headNotice(mock, oldMock ? "moved" : undefined, oldMock?.startTime));
     // With a new head, the old head still needs to hear that the hour is free.
     if (oldMock && oldMock.interviewerKey !== head.canonicalKey) await enqueue(tx, headNotice(oldMock, "cancelled"));
     await audit(tx, "candidate-link", rows.length ? "visit-move" : "visit-booking", cap.id, {
@@ -2088,7 +2631,7 @@ export async function reviewCandidate(
   id: string,
   input: {
     revision: number;
-    action: "advance" | "paper_pass" | "stop" | "invite_onsite" | "send_new_link" | "cancel_visit" | "mark_no_show";
+    action: "advance" | "paper_pass" | "stop" | "invite_onsite" | "send_new_link" | "cancel_visit" | "mark_no_show" | "bring_back";
     subjects: Subject[];
     reason: string;
   },
@@ -2129,7 +2672,7 @@ export async function reviewCandidate(
         input.action === "send_new_link" || unsent ? `${id}:visit-invite:${c.revision + 1}` : `${id}:visit-invite`;
       const subject = await inviteToVisit(tx, c, config, key, now, resend);
       await tx.update(s.hiringCandidates).set({ reviewNote: input.reason }).where(eq(s.hiringCandidates.id, id));
-      detail = { subject, score: preScreenTotal(c, config), passScore: config.preScreenThreshold };
+      detail = { subject, score: c.preScreen && c.preScreenAssessment ? preScreenTotal(c, config) : null, passScore: config.preScreenThreshold };
     } else if (input.action === "cancel_visit" || input.action === "mark_no_show") {
       const rows = await visitRows(tx, id);
       const exam = examOf(rows);
@@ -2153,6 +2696,15 @@ export async function reviewCandidate(
         })
         .where(eq(s.hiringCandidates.id, id));
       detail = { visitId: exam.visitId, examStart: exam.startTime.toISOString() };
+    } else if (input.action === "bring_back") {
+      // Kevin, 25 Nov 2026: a soft-rejected candidate comes back to New, and the pass score no longer holds them.
+      // The worker's gate and queue then decide as for anyone else. No email here.
+      if (c.stage !== "soft_rejected") throw new HiringError(409, "Only a soft-rejected candidate can be brought back.");
+      // Back where they were: a review row goes back to review, where only a person emails it.
+      await tx
+        .update(s.hiringCandidates)
+        .set({ ...unsoftReject(c), broughtBackAt: now, reviewNote: input.reason, revision: c.revision + 1, updatedAt: now })
+        .where(eq(s.hiringCandidates.id, id));
     } else if (input.action === "stop") {
       if (isDecided(c.stage)) throw new HiringError(409, "A result was already sent to this candidate. Send a new decision to change it.");
       // HR's bad call is this action, so a booked call never refuses it: one still ahead is cancelled first.
@@ -2274,7 +2826,7 @@ export async function reviewCandidate(
         if (!(await inviteToPreScreen(tx, c, now)))
           throw new HiringError(409, "A pre-screen form was already queued for this candidate. No new form can be sent.");
         // Kevin's rule: a click past the call queue counts as HR's good call.
-        const skippedCall = profileGate(c, config).awaitingCall;
+        const skippedCall = profileGate({ ...c, callBooked: await hasBookedCall(tx, id) }, config).awaitingCall;
         if (skippedCall) detail = { goodCall: "manual" };
         await cancelComingCall(tx, id, now);
         await tx
@@ -2328,9 +2880,11 @@ async function openContract(db: Database, decisionId: string) {
   return row.candidate;
 }
 
+const confirmedContractBooking = (candidate: ReturnType<typeof eq>) =>
+  and(candidate, eq(s.hiringBookings.kind, "contract"), eq(s.hiringBookings.status, "confirmed"));
+
 const contractBooking = async (db: Database, id: string) =>
-  (await db.select().from(s.hiringBookings).where(and(eq(s.hiringBookings.candidateId, id),
-    eq(s.hiringBookings.kind, "contract"), eq(s.hiringBookings.status, "confirmed"))))[0];
+  (await db.select().from(s.hiringBookings).where(confirmedContractBooking(eq(s.hiringBookings.candidateId, id))))[0];
 
 async function contractSlots(db: Database, id: string, calendar: Awaited<ReturnType<typeof hrBusy>>, now: Date, exp: number) {
   return callSlots(calendar.dates, [...calendar.busy, ...await otherCalls(db, id, now)], now, CONTRACT_MINUTES)
@@ -2397,8 +2951,9 @@ export async function bookContract(token: string, value: unknown, db: Database =
     }).returning();
     const mail = hiringEmail({
       subject: "BeGifted contract signing confirmed", preheader: bangkok(booking.startTime),
+      hero: "offer",
       title: "Your contract signing is confirmed", name: current.name,
-      paragraphs: ["Please meet our HR team at the location below."],
+      paragraphs: ["Please meet our team at the location below."],
       details: [
         { label: "Time", value: `${bangkok(booking.startTime)}–${bangkokTime(booking.endTime)} (Bangkok)` },
         { label: "Location", value: latest.config.location },

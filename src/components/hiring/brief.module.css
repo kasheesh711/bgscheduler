@@ -1,0 +1,672 @@
+/* The interviewer's brief: one wide score sheet with the candidate's files beside it. Colours come from .page in booking.module.css. */
+.wrap {
+  display: grid;
+  gap: 16px;
+  width: 100%;
+  max-width: 1560px;
+  margin: 0 auto;
+  padding: 16px 12px 0;
+}
+.back {
+  /* Stays in view when the link opens at the scores or the recommendation. */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  /* Full width, so the sliders scrolling under it do not show beside the link. */
+  justify-self: stretch;
+  padding-inline: 4px;
+  background: var(--paper);
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.top,
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+}
+.top {
+  display: grid;
+  gap: 16px;
+  padding: 16px 20px;
+}
+.eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.name {
+  margin: 0 0 8px;
+  font-family: var(--serif);
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 24px;
+  margin: 0;
+}
+.facts dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.facts dd {
+  margin: 0;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+/* ATS score: one small bar for each part. */
+.ats {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+.atsHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+}
+.atsHead strong {
+  font-family: var(--mono);
+  font-size: 22px;
+}
+.atsParts {
+  display: grid;
+  gap: 4px 20px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+.atsParts li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px auto;
+  gap: 8px;
+  align-items: center;
+}
+.atsParts .num {
+  font-family: var(--mono);
+}
+.atsBar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--line);
+}
+.atsBar > span {
+  display: block;
+  height: 100%;
+  background: var(--ink-2);
+}
+.penalty {
+  color: var(--err);
+}
+
+.cols {
+  display: grid;
+  gap: 16px;
+  align-items: start;
+}
+.sheet {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.panel {
+  padding: 16px 20px;
+}
+.panel:focus {
+  outline: none;
+}
+/* A link to #scores or #recommendation focuses the panel; a keyboard user sees where it landed (Sol review, round 13). */
+.panel:focus-visible {
+  /* Soft, because Chrome also shows it when a click opens the brief at this panel. */
+  outline: 2px solid color-mix(in oklch, var(--ink) 35%, transparent);
+  outline-offset: 2px;
+}
+.panelTitle {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* Score rows: the level names show once, above the bars. */
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px 12px;
+  align-items: center;
+  padding: 2px 0;
+}
+.scale {
+  display: none;
+  grid-template-columns: 2fr 3fr 3fr 2fr;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: center;
+}
+.part {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.part > legend {
+  padding: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.item {
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.item:hover {
+  text-decoration: underline;
+}
+.barLine {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2ch;
+  gap: 10px;
+  align-items: center;
+}
+.bar {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 3px;
+}
+.cell {
+  position: relative;
+  height: 28px;
+  border-radius: 4px;
+  background: var(--line);
+  cursor: pointer;
+}
+/* The gap after 2, 5 and 8 marks where one level ends. */
+.cell:is(:nth-child(2), :nth-child(5), :nth-child(8)) {
+  margin-right: 4px;
+}
+.cell:hover {
+  background: #cfc5b0;
+}
+.cell:has(input:focus-visible) {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.bar[data-band="0"] .cell[data-on] {
+  background: var(--err);
+}
+.bar[data-band="1"] .cell[data-on] {
+  background: #c9861a;
+}
+.bar[data-band="2"] .cell[data-on] {
+  background: #3a62ad;
+}
+.bar[data-band="3"] .cell[data-on] {
+  background: var(--ok);
+}
+.value {
+  font-family: var(--mono);
+  font-weight: 600;
+  text-align: right;
+}
+.levels {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--paper);
+  font-size: 14px;
+}
+.levels dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.levels dd {
+  margin: 0;
+}
+.ticks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  align-items: center;
+  padding-bottom: 6px;
+  font-size: 14px;
+}
+.ticks label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-height: 32px;
+}
+.extra {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.choices {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.choices legend {
+  float: left;
+  margin-right: 12px;
+  padding: 0;
+}
+.choice {
+  /* Holds the hidden radio, so it cannot add height to the document. */
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 64px;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+}
+.choice:has(input:checked) {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+.choice:has(input:focus-visible) {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+/* Gift's offer letter choice: three labelled boxes on their own line under the question. */
+.offerChoices { flex-wrap: wrap; }
+.offerChoices legend { float: none; flex-basis: 100%; margin: 0 0 4px; }
+.offerChoices .choice { padding: 0 12px; }
+.sendEnd {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+.total {
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 600;
+}
+
+/* Candidate files */
+.docs {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.tabs {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.tab {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tab[aria-pressed="true"] {
+  background: var(--ink);
+  color: #fff;
+}
+.open {
+  margin-left: auto;
+  padding: 0 8px;
+  font-size: 14px;
+}
+.pane {
+  max-height: 80vh;
+  padding: 12px;
+  overflow-y: auto;
+  background: #ece6d8;
+}
+.pane canvas {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  background: #fff;
+}
+.text {
+  padding: 4px 8px;
+  background: none;
+}
+
+@media (min-width: 700px) {
+  .top {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 440px);
+    align-items: start;
+  }
+  .atsParts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .row {
+    grid-template-columns: minmax(150px, 230px) minmax(0, 1fr);
+  }
+  .scale {
+    display: grid;
+    /* The same column as the bars, less the score number. */
+    margin-right: calc(2ch + 10px);
+  }
+  .levels {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .ticks {
+    grid-column: 2;
+  }
+}
+/* 960: the brief also opens beside the head's list in Hiring, in a pane about 1,000px wide. */
+@media (min-width: 960px) {
+  .wrap {
+    padding: 16px 20px 0;
+  }
+  .cols {
+    grid-template-columns: minmax(0, 11fr) minmax(0, 9fr);
+  }
+  .docs {
+    position: sticky;
+    top: 16px;
+    height: calc(100dvh - 32px);
+  }
+  .pane {
+    max-height: none;
+  }
+}
+
+/* Forced colours remove backgrounds, so each selected state takes a system colour. */
+@media (forced-colors: active) {
+  .cell {
+    border: 1px solid CanvasText;
+  }
+  .bar .cell[data-on],
+  .tab[aria-pressed="true"],
+  .choice:has(input:checked) {
+    background: Highlight;
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
+}
+
+/* Phone: every score and choice is a 44px target; the ten score steps sit in two rows of five (bands 1–2, then 3–4). */
+@media (max-width: 699px) {
+  .bar {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    row-gap: 6px;
+  }
+  .cell {
+    height: 44px;
+  }
+  .item,
+  .ticks label,
+  .choice,
+  .tab {
+    min-height: 44px;
+  }
+  .open {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}
+/* Inside the head's Hiring screen (embed=1): less top gutter. The background is in booking.module.css. */
+[data-bare] > .wrap {
+  padding-top: 8px;
+}
+
+/* The band names may wrap but never clip, and each score tile has a visible edge (3:1 against the card). */
+.scale > * {
+  min-width: 0;
+}
+
+/* Inside the head's Hiring screen the pane is narrower: each item name sits above full-width tiles, so the tiles are
+   large and the four band names fit on one line over their bands. */
+@media (min-width: 700px) {
+  [data-bare] .row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.cell {
+  outline: 1px solid #948a73;
+  outline-offset: -1px;
+}
+
+/* The short header inside the head's Hiring screen: one line of facts, the ATS parts in two short rows. */
+.top[data-compact] {
+  gap: 8px 24px;
+  padding: 10px 16px;
+}
+.top[data-compact] .name {
+  margin: 0 0 2px;
+  font-size: 26px;
+}
+.top[data-compact] .facts dt,
+.top[data-compact] .facts dd {
+  display: inline;
+}
+.top[data-compact] .facts dt::after {
+  content: " ";
+}
+.top[data-compact] .atsHead strong {
+  font-size: 18px;
+}
+.top[data-compact] .atsParts {
+  grid-template-columns: repeat(4, max-content);
+  gap: 2px 16px;
+  font-size: 12px;
+}
+.top[data-compact] .atsParts li {
+  grid-template-columns: auto 32px auto;
+  gap: 6px;
+}
+@media (min-width: 1000px) {
+  .top[data-compact] {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+}
+
+/* Inside the head's Hiring screen the résumé sits beside the form from a 720px pane (a 1024px laptop). */
+@media (min-width: 720px) {
+  [data-bare] .cols {
+    grid-template-columns: minmax(0, 11fr) minmax(0, 9fr);
+  }
+  [data-bare] .docs {
+    position: sticky;
+    top: 16px;
+    height: calc(100dvh - 32px);
+  }
+  [data-bare] .pane {
+    max-height: none;
+  }
+}
+/* A link that opens at the scores or the recommendation lands below the sticky way back. */
+.panel[id] {
+  scroll-margin-top: 52px;
+}
+@media (max-width: 699px) {
+  .tabs {
+    flex-wrap: wrap;
+  }
+  .cell:is(:nth-child(2), :nth-child(5), :nth-child(8)) {
+    margin-right: 0;
+  }
+}
+@media (max-width: 359px) {
+  .panel {
+    padding-inline: 12px;
+  }
+}
+
+/* The score slider (Kevin, 24 Nov 2026): the far left stop is "not scored", then 1–10. The fill takes the band colour. */
+.slider {
+  --fill-colour: var(--ink-2);
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+.slider[data-band="0"] { --fill-colour: var(--err); }
+.slider[data-band="1"] { --fill-colour: #c9861a; }
+.slider[data-band="2"] { --fill-colour: #3a62ad; }
+.slider[data-band="3"] { --fill-colour: var(--ok); }
+.slider input {
+  width: 100%;
+  height: 44px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.slider input::-webkit-slider-runnable-track {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(to right, var(--fill-colour) var(--fill), var(--line) var(--fill));
+  box-shadow: inset 0 0 0 1px #948a73;
+}
+.slider input::-moz-range-track {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(to right, var(--fill-colour) var(--fill), var(--line) var(--fill));
+  box-shadow: inset 0 0 0 1px #948a73;
+}
+.slider input::-webkit-slider-thumb {
+  width: 28px;
+  height: 28px;
+  margin-top: -9px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: var(--fill-colour);
+  box-shadow: 0 0 0 1px var(--ink);
+  -webkit-appearance: none;
+  appearance: none;
+}
+.slider input::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: var(--fill-colour);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+/* Not scored yet: a hollow thumb on the "–" stop. */
+.slider:not([data-band]) input::-webkit-slider-thumb { background: #fff; box-shadow: 0 0 0 2px #948a73; }
+.slider:not([data-band]) input::-moz-range-thumb { background: #fff; box-shadow: 0 0 0 2px #948a73; }
+.slider input:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+/* The numbers sit under the thumb's stops: 11 columns, each as wide as one step, centred on the stops. */
+.sliderNumbers {
+  display: grid;
+  grid-template-columns: repeat(11, minmax(0, 1fr));
+  margin-inline: calc(14px - (100% - 28px) / 20);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-align: center;
+}
+/* The band names on one wrapping line: each carries its score, so they need no column grid. Hidden on a phone, as before. */
+@media (min-width: 700px) {
+  .scale {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 2px 16px;
+  }
+  .scale > span {
+    white-space: nowrap;
+  }
+}
+.scale { align-items: end; }
+.top[data-compact] .name { overflow-wrap: anywhere; }
+[data-bare] .tabs { flex-wrap: wrap; }
+/* Below a 1000px pane the short header stacks, and the files panel never grows past its column. */
+.top[data-compact] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.docs {
+  grid-template-columns: minmax(0, 1fr);
+}
+.tabs {
+  flex-wrap: wrap;
+}
+@media (min-width: 1000px) {
+  .top[data-compact] {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+}
+/* A wide pane puts the item name beside its slider, so more items fit on the first screen. */
+@media (min-width: 900px) {
+  [data-bare] .row {
+    grid-template-columns: minmax(140px, 180px) minmax(0, 1fr);
+  }
+}
+.sliderNumbers { cursor: pointer; }
+.sliderNumbers [data-on] { color: var(--ink); font-weight: 700; }
+@media (min-width: 700px) {
+  [data-bare] .scale { display: grid; grid-template-columns: repeat(2, max-content); grid-template-rows: repeat(2, auto); grid-auto-flow: column; justify-content: space-between; }
+}
+@media (max-width: 699px) {
+  .sendBar > div:first-of-type { grid-column: 1 / -1; }
+  .sendBar > .sendEnd { grid-column: 1 / -1; justify-content: space-between; }
+  .sendBar button[type="submit"] { white-space: nowrap; }
+}
+/* The radio covers its whole box, so a tap or click anywhere on Yes or No picks it (blind test, round 12). */
+.choiceInput { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+/* "More scores below" sits beside the count on a laptop; a phone head scrolls the one column anyway. */
+.countRow { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.countRow > p { margin: 0; }
+/* Beside the count on one line; where the bar is too narrow for that, the cue hides so the bar never grows (critic review, round 16). */
+.moreBelow { min-height: 24px; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; text-decoration: underline; white-space: nowrap; cursor: pointer; }
+.sendBar { container-type: inline-size; }
+@container (max-width: 399px) { .moreBelow { display: none; } }
+@media (max-width: 699px) { .moreBelow { display: none; } }
+/* The way back from changed sent scores shows at every width, with a full touch target on a phone (Sol review, round 20). */
+.discard { min-height: 24px; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; text-decoration: underline; cursor: pointer; }
+@media (max-width: 699px) { .discard { min-height: 44px; } }
+/* The scoring hint names the pointer the head has: a phone is tapped, not clicked (critic review, round 15). */
+.coarsePointer { display: none; }
+@media (pointer: coarse) { .finePointer { display: none; } .coarsePointer { display: inline; } }
+.prep { text-wrap: pretty; }

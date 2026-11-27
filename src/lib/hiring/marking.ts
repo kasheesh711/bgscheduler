@@ -5,11 +5,12 @@ import * as s from "@/lib/db/schema";
 import { callOpenRouter, isCreditExhausted, type OpenRouterCallResult } from "@/lib/feedback-autowriter/openrouter";
 import { readAssessmentBytes } from "./assessment-files";
 import { callClaude } from "./claude";
-import { checkPaperMarks, checkRubric, paperNeedsCheck, RUBRIC, RUBRIC_ITEMS, rubricNeedsCheck, type MockRubric, type PaperMarks } from "./marking-sheet";
-import { HiringError, PAPER_LEVELS, runtimeWritesAllowed, type Subject } from "./model";
-import { audit, MARKING_STUCK_AFTER_MS } from "./service";
+import { checkPaperMarks, checkRubric, computeSheet, passRulesFor, LEGACY_RUBRIC_ITEMS, paperNeedsCheck, RUBRIC, RUBRIC_ITEMS, rubricNeedsCheck, type MockRubric, type PaperMarks, type StressTicks } from "./marking-sheet";
+import { HiringError, OVERRIDE_REASON_MIN, PAPER_LEVELS, runtimeWritesAllowed, type Subject } from "./model";
+import { afterPaperCounted, afterPaperCountedQuietly, overrideRefusal, paperCheckView } from "./paper-check";
+import { audit, MARKING_STUCK_AFTER_MS, settings } from "./service";
 
-export const MARKING_PROMPT_VERSION = "hiring-marking-2026-11-13.1";
+export const MARKING_PROMPT_VERSION = "hiring-marking-2026-11-20.1";
 // One deadline for the whole run, below the route's 300 seconds, so a slow run can still save its result.
 const RUN_BUDGET_MS = 285_000;
 // Send only to hosts that keep nothing and do not train on it: a scan holds a candidate's name and handwriting.
@@ -117,6 +118,7 @@ function callFailureText(call: Extract<OpenRouterCallResult, { ok: false }>) {
   if (call.httpStatus === 429) return "The AI service is busy. The upload is saved. Retry in a few minutes.";
   return `The AI could not finish (${call.error}). The upload is saved. Retry.`;
 }
+
 
 /** A paid answer must not be lost to an audit error, so this never throws. */
 const auditQuietly = (db: Database, actor: string, action: string, candidateId: string, detail: Record<string, unknown>) =>
@@ -229,6 +231,7 @@ async function runResult<T>(table: typeof p, spec: Spec<T>, id: string, actor: s
       .returning({ id: table.id });
     if (!saved.length) return { status: "replaced" as const, error: "A newer upload replaced this file while it was being read." };
     await auditQuietly(db, actor, spec.doneAudit, claimed.candidateId, { subject: claimed.subject, status });
+    if (spec.kind === "paper") await afterPaperCountedQuietly(db, claimed.candidateId, claimed.subject, actor, new Date());
     return { status, error: null };
   } catch (error) {
     // Only a known message reaches the screen. An unknown error could hold file text, so only its name is logged.
@@ -238,8 +241,9 @@ async function runResult<T>(table: typeof p, spec: Spec<T>, id: string, actor: s
 }
 
 /**
- * Marks one uploaded paper. The result counts at once. It changes no stage, writes no old-flow paper pass, and queues no
- * message, so an AI "Passed" can never start the old flow's mock invitation.
+ * Marks one uploaded paper. The result counts at once. It changes no stage and writes no old-flow paper pass, so an AI
+ * "Passed" can never start the old flow's mock invitation. A counted fail goes to `afterPaperCounted`: a near miss goes to
+ * the subject's head for a check, and a clear fail cancels the mock and queues the rejection email.
  */
 export const markPaper = (id: string, actor: string, db: Database, callModel?: CallModel, now = new Date()) =>
   runResult(
@@ -273,15 +277,26 @@ const rubricAnswer = z
   .object({
     items: z.object(Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, z.number().nullable()]))).strict(),
     comments: z.string().max(4000),
+    stressTest: z.object({ listens: z.boolean(), explains: z.boolean(), plan: z.boolean() }).strict(),
+    oldForm: z.boolean(),
   })
   .strict();
+const CONDUCT_ITEMS = RUBRIC_ITEMS.filter((id) => !LEGACY_RUBRIC_ITEMS.includes(id));
 
 export const MOCK_INSTRUCTIONS = `You read a completed form: a head teacher's scores for a candidate tutor's mock lesson at BeGifted. ${TRUST_BOUNDARY}
 Copy what the head wrote. Do not judge the lesson. Each item is scored from 1 to 10, usually 10, 7, 4 or 1:
 ${RUBRIC.flatMap(({ part, items }) => items.map(([id, label]) => `- ${id}: ${label} (${part})`)).join("\n")}
 Give null for an item with no score you can read. Do not guess it, and do not work it out from a total on the form.
+stressTest: the Stress Test sub-rubric ticks. listens = "A. Listens & acknowledges", explains = "B. Explains without blaming", plan = "C. Concrete plan & follow-up". true only for a clear tick; false for no tick or no sub-rubric on the form.
+oldForm: true only if the form has no "Professional Conduct" part at all (the older 10-item form). Give null for those 4 items then.
 comments: the head's other comments, word for word, translated to English if they are in another language. Use an empty string if there are none.
 Do not add up a total. The system does that.`;
+
+// A head can write 7.5 or 0. Losing the good scores for that would strand the mock, so a person sets that one score.
+const normalizeScores = (rubric: MockRubric): MockRubric => {
+  const problems = checkRubric(rubric);
+  return { ...rubric, items: Object.fromEntries(Object.entries(rubric.items).map(([item, score]) => [item, problems.some((problem) => problem.startsWith(`${item} `)) ? null : score])) as MockRubric["items"] };
+};
 
 /** Reads an uploaded mock rubric. Same rules as a paper: it changes no stage and queues no message. */
 export const readMockRubric = (id: string, actor: string, db: Database, callModel?: CallModel, now = new Date()) =>
@@ -292,13 +307,17 @@ export const readMockRubric = (id: string, actor: string, db: Database, callMode
       name: "mock_rubric",
       schema: rubricAnswer as unknown as z.ZodType<MockRubric>,
       instructions: MOCK_INSTRUCTIONS,
-      // A head can write 7.5 or 0. Losing nine good scores for that would strand the mock, so a person sets that one score.
-      normalize: (rubric) => ({
-        ...rubric,
-        items: Object.fromEntries(RUBRIC_ITEMS.map((item) => [item, checkRubric({ ...rubric, items: { ...rubric.items } }).some((problem) => problem.startsWith(`${item} `)) ? null : rubric.items[item]])) as MockRubric["items"],
-      }),
-      // Ten blanks means the wrong file, not ten unreadable scores.
-      check: (rubric) => (RUBRIC_ITEMS.every((item) => rubric.items[item] === null) ? ["No score could be read. Check that this is the right form."] : checkRubric(rubric)),
+      normalize: ({ oldForm, ...rubric }: MockRubric & { oldForm?: boolean }) => {
+        // A scan of the older 10-item form is stored in that shape, so nobody invents 4 scores. Both signs are needed, so
+        // a new form the AI misreads still needs a check.
+        if (oldForm && CONDUCT_ITEMS.every((item) => rubric.items[item] === null)) {
+          const items = Object.fromEntries(LEGACY_RUBRIC_ITEMS.map((item) => [item, rubric.items[item]]));
+          return normalizeScores({ items: items as MockRubric["items"], comments: rubric.comments });
+        }
+        return normalizeScores(rubric);
+      },
+      // All blanks means the wrong file, not that many unreadable scores.
+      check: (rubric) => (Object.values(rubric.items).every((score) => score === null) ? ["No score could be read. Check that this is the right form."] : checkRubric(rubric)),
       needsCheck: rubricNeedsCheck,
       doneAudit: "mock-read",
       sources: async (_claimed, scan) => [{ label: "The completed rubric:", name: "rubric.pdf", file: scan }],
@@ -311,17 +330,21 @@ export const readMockRubric = (id: string, actor: string, db: Database, callMode
     now,
   );
 
-/** A person's change. The AI's first answer stays. The server recalculates the sheet from these marks. */
-export async function changePaperMarks(id: string, input: { updatedAt: string; marks: Record<string, number | null>; comment: string }, actor: string, db: Database, now = new Date()) {
-  const [row] = await db.select().from(p).where(eq(p.id, id));
-  if (!row?.marks || !["done", "needs_check"].includes(row.status)) throw new HiringError(409, "This paper has no marks to change yet.");
-  const questions = row.marks.questions.map((q) => {
+/** A person's marks over the saved ones. The override check and the save read the same result. */
+const withPersonMarks = (marks: PaperMarks, input: Record<string, number | null>) =>
+  marks.questions.map((q) => {
     // The AI names the ids, so "constructor" must not read a value from the object's prototype.
-    if (!Object.hasOwn(input.marks, q.id) || input.marks[q.id] === q.marks) return q;
-    const value = input.marks[q.id];
+    if (!Object.hasOwn(input, q.id) || input[q.id] === q.marks) return q;
+    const value = input[q.id];
     // The AI's points no longer add up to a mark that a person set, so they go. The AI's first answer keeps them.
     return value === null ? { ...q, marks: null, readable: false, points: [] } : { ...q, marks: value, readable: true, attempted: true, points: [] };
   });
+
+/** A person's change. The AI's first answer stays. The server recalculates the sheet from these marks. */
+export async function changePaperMarks(id: string, input: { updatedAt: string; marks: Record<string, number | null>; comment: string }, actor: string, db: Database, now = new Date(), followUp = true) {
+  const [row] = await db.select().from(p).where(eq(p.id, id));
+  if (!row?.marks || !["done", "needs_check"].includes(row.status)) throw new HiringError(409, "This paper has no marks to change yet.");
+  const questions = withPersonMarks(row.marks, input.marks);
   const marks: PaperMarks = { ...row.marks, questions, comment: input.comment };
   const problems = checkPaperMarks(marks);
   if (problems.length) throw new HiringError(400, problems.join(" "));
@@ -333,13 +356,55 @@ export async function changePaperMarks(id: string, input: { updatedAt: string; m
     .returning({ id: p.id });
   if (!saved.length) throw new HiringError(409, "These marks changed while you were editing. Refresh the page.");
   await audit(db, actor, "paper-marks-changed", row.candidateId, { subject: row.subject, before: row.marks.questions.map((q) => [q.id, q.marks]), after: questions.map((q) => [q.id, q.marks]) });
+  if (followUp) await afterPaperCountedQuietly(db, row.candidateId, row.subject, actor, now);
+  return row;
+}
+
+/**
+ * The head's check of a near-miss paper, from the LINE link. Every question needs a mark. The head's marks replace the
+ * AI's (the AI's first answer stays), then `afterPaperCounted` sends the candidate on to the mock or rejects.
+ */
+export async function submitPaperCheck(token: string, input: { updatedAt: string; marks: Record<string, number>; comment: string; override?: string }, db: Database, now = new Date()) {
+  if (!runtimeWritesAllowed()) throw new HiringError(503, "A check can be saved only on the live site.");
+  const view = await paperCheckView(token, db, now);
+  if (view.done) throw new HiringError(409, "Your check is already recorded.");
+  if (!view.open) throw new HiringError(409, "This paper no longer needs a check.");
+  const missing = view.questions.filter((q) => !Object.hasOwn(input.marks, q.id));
+  if (missing.length) throw new HiringError(400, `Give a mark for question ${missing.map((q) => q.id).join(", ")}.`);
+  const override = input.override?.trim() || undefined;
+  if (override) {
+    if (override.length < OVERRIDE_REASON_MIN) throw new HiringError(400, `Write why in at least ${OVERRIDE_REASON_MIN} characters.`);
+    // Checked before the marks save, so a refused override changes nothing.
+    const [row] = await db.select().from(s.hiringPaperResults).where(eq(s.hiringPaperResults.id, view.id));
+    const { config } = await settings(db);
+    const marks = { ...row.marks!, questions: withPersonMarks(row.marks!, input.marks) };
+    const refused = overrideRefusal(computeSheet(marks, passRulesFor(config, row.subject)));
+    if (refused) throw new HiringError(400, refused);
+  }
+  const head = view.head ?? "admin";
+  const actor = `head:${head}`;
+  const row = await changePaperMarks(view.id, input, actor, db, now, false);
+  // A noted missing page sets the row back to "needs check". The head has read the paper, so the head's marks count.
+  await db.update(p).set({ status: "done", checkedBy: actor, checkedAt: now }).where(and(eq(p.id, view.id), eq(p.status, "needs_check")));
+  return afterPaperCounted(db, row.candidateId, row.subject, actor, now, head, override);
 }
 
 /** A person's change to a rubric. Same rule as marks: the AI's first read stays, and the total is calculated. */
-export async function changeRubric(id: string, input: { updatedAt: string; items: Partial<MockRubric["items"]>; comments: string }, actor: string, db: Database, now = new Date()) {
+export async function changeRubric(
+  id: string,
+  input: { updatedAt: string; items: Partial<MockRubric["items"]>; comments: string; stressTest?: StressTicks },
+  actor: string,
+  db: Database,
+  now = new Date(),
+) {
   const [row] = await db.select().from(m).where(eq(m.id, id));
   if (!row?.rubric || !["done", "needs_check"].includes(row.status)) throw new HiringError(409, "This rubric has no scores to change yet.");
-  const rubric: MockRubric = { items: { ...row.rubric.items, ...input.items }, comments: input.comments };
+  const rubric: MockRubric = {
+    ...row.rubric,
+    items: { ...row.rubric.items, ...input.items },
+    comments: input.comments,
+    ...(input.stressTest ? { stressTest: input.stressTest } : {}),
+  };
   const problems = checkRubric(rubric);
   if (problems.length) throw new HiringError(400, problems.join(" "));
   const saved = await db
@@ -348,7 +413,12 @@ export async function changeRubric(id: string, input: { updatedAt: string; items
     .where(and(eq(m.id, id), eq(m.updatedAt, new Date(input.updatedAt)), inArray(m.status, ["done", "needs_check"])))
     .returning({ id: m.id });
   if (!saved.length) throw new HiringError(409, "These scores changed while you were editing. Refresh the page.");
-  await audit(db, actor, "mock-rubric-changed", row.candidateId, { subject: row.subject, before: row.rubric.items, after: rubric.items });
+  await audit(db, actor, "mock-rubric-changed", row.candidateId, {
+    subject: row.subject,
+    before: row.rubric.items,
+    after: rubric.items,
+    ...(input.stressTest ? { stressBefore: row.rubric.stressTest ?? null, stressAfter: rubric.stressTest ?? null } : {}),
+  });
 }
 
 /**
@@ -400,4 +470,5 @@ export async function clearResultCheck(kind: "paper" | "mock", id: string, actor
     .returning();
   if (!row) throw new HiringError(409, "This result does not need a check. Refresh the page.");
   await audit(db, actor, "result-checked", row.candidateId, { kind, subject: row.subject });
+  if (kind === "paper") await afterPaperCountedQuietly(db, row.candidateId, row.subject, actor, now);
 }

@@ -3,7 +3,10 @@ import Link from "next/link";
 import { HiringStaffPreview } from "@/components/hiring/staff-preview";
 import { resolveUserAccess } from "@/lib/auth-access";
 import { navigationAccess } from "@/lib/navigation/tools";
-import { isRoleView } from "@/lib/hiring/role-views";
+import { headKeys, isRoleView } from "@/lib/hiring/role-views";
+import { settings } from "@/lib/hiring/service";
+import { getDb } from "@/lib/db";
+import { resolveTeacherCanonicalKeys } from "@/lib/progress-tests/teacher-access";
 import { canUseClassCapture } from "@/lib/class-capture/sessions";
 import { creditControlActive } from "@/lib/credit-control/mode";
 import { resolveLearningPlansAccess } from "@/lib/learning-plans/access";
@@ -54,7 +57,11 @@ async function ManageAccessBody({ searchParams }: { searchParams: Search }) {
   const landing = access.allowedPages?.length === 1 ? access.allowedPages[0] : "/";
   const canViewHiring = access.role === "admin" && (!access.allowedPages || access.allowedPages.includes("/hiring"));
   const previewHref = `/admin/users?preview=${encodeURIComponent(email)}`;
-  const role = canViewHiring && isRoleView(hiringView) ? hiringView : null;
+  // A head's preview opens on their own Heads screen, as /hiring does for them.
+  const head = canViewHiring
+    ? await Promise.all([resolveTeacherCanonicalKeys(email), settings(getDb())]).then(([keys, { config }]) => keys.find((key) => headKeys(config).includes(key)) ?? null)
+    : null;
+  const role = canViewHiring && isRoleView(hiringView) ? hiringView : head ? "heads" : null;
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto pb-6">
       <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background p-3">
@@ -91,9 +98,10 @@ async function ManageAccessBody({ searchParams }: { searchParams: Search }) {
           {hiringViews.map(([view, label]) => <Link key={view} aria-current={role === view ? "page" : undefined}
             className={`rounded-md border px-3 py-1.5 ${role === view ? "bg-primary text-primary-foreground" : ""}`}
             href={`${previewHref}&hiringView=${view}`}>{label}</Link>)}
+          {head && <Link className="underline underline-offset-4" href={`/hiring?view=heads&head=${encodeURIComponent(head)}`}>Open the live screen, with the brief →</Link>}
         </nav>
       )}
-      {role && <HiringStaffPreview role={role} key={`${email}:${role}`} />}
+      {role && <HiringStaffPreview role={role} head={role === "heads" ? head : undefined} key={`${email}:${role}`} />}
     </div>
   );
 }

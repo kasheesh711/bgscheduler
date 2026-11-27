@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { after, NextResponse } from "next/server";
-import { requireHiringAdmin } from "@/lib/hiring/access";
+import { headKeyFor, requireHiringAdmin } from "@/lib/hiring/access";
 import { createFileIntent, finishFile } from "@/lib/hiring/assessment-files";
 import { cachedHiringCapacity } from "@/lib/hiring/capacity-cache";
 import { hiringError, requireSameOrigin } from "@/lib/hiring/http";
@@ -8,13 +8,14 @@ import { changePaperMarks, changePaperSubject, changeRubric, clearResultCheck } 
 import { RUBRIC_ITEMS, type RubricItem } from "@/lib/hiring/marking-sheet";
 import { configSchema, localDate, subjectSchema } from "@/lib/hiring/model";
 import { headWeek } from "@/lib/hiring/head-schedule";
-import { callCalendarState, candidateById, changePreScreenScore, dashboard, reviewCandidate, saveHeadDays, saveSettings, settings } from "@/lib/hiring/service";
+import { callCalendarState, candidateById, changePreScreenScore, dashboard, hiringCandidateRecord, reviewCandidate, saveHeadDays, saveSettings, searchHiringCandidates, settings } from "@/lib/hiring/service";
 import { moveInQueue, recordCall, resetQueueOrder, saveCallNotes } from "@/lib/hiring/queue";
 import { discardDecision, draftDecision, saveDraft, sendDecision } from "@/lib/hiring/decisions";
 import { deliverBookingMessages, deliverOutbox } from "@/lib/hiring/worker";
 import { getDb } from "@/lib/db";
 import { finalReviewAccess } from "@/lib/hiring/final-review";
 import { googleConnectionStatus } from "@/lib/hiring/google";
+import { headKeys } from "@/lib/hiring/role-views";
 
 // A dashboard or head-schedule load can trigger a cold Wise index build.
 export const maxDuration = 120;
@@ -77,6 +78,7 @@ const command = z.discriminatedUnion("action", [
       updatedAt: z.iso.datetime(),
       items: z.partialRecord(z.enum(RUBRIC_ITEMS as [RubricItem, ...RubricItem[]]), z.number().nullable()),
       comments: z.string().trim().max(4000),
+      stressTest: z.object({ listens: z.boolean(), explains: z.boolean(), plan: z.boolean() }).strict().optional(),
     })
     .strict(),
   z
@@ -117,7 +119,7 @@ const command = z.discriminatedUnion("action", [
     .strict(),
   z
     .object({
-      action: z.enum(["advance", "paper_pass", "stop", "invite_onsite", "send_new_link", "cancel_visit", "mark_no_show"]),
+      action: z.enum(["advance", "paper_pass", "stop", "invite_onsite", "send_new_link", "cancel_visit", "mark_no_show", "bring_back"]),
       id: z.uuid(),
       revision: z.number().int().nonnegative(),
       subjects: z.array(subjectSchema).max(18),
@@ -148,15 +150,29 @@ export async function GET(request: Request) {
         headers: { "Cache-Control": "no-store" },
       });
     }
-    const id = params.get("candidateId");
-    if (id !== null) {
-      const candidate = await candidateById(getDb(), z.uuid().parse(id));
+    const search = params.get("candidateSearch");
+    if (search !== null) {
+      const query = z.string().trim().min(1).max(200).parse(search);
+      return NextResponse.json({ candidates: await searchHiringCandidates(getDb(), query) }, { headers: { "Cache-Control": "no-store" } });
+    }
+    const candidateId = params.get("candidateId");
+    if (candidateId !== null) {
+      const id = z.uuid().parse(candidateId);
+      if (params.get("record") === "1") {
+        const candidate = await hiringCandidateRecord(getDb(), id);
+        return NextResponse.json({ candidate }, { headers: { "Cache-Control": "no-store" } });
+      }
+      const candidate = await candidateById(getDb(), id);
       return NextResponse.json(
         { id: candidate.id, profileText: candidate.profileText },
         { headers: { "Cache-Control": "no-store" } },
       );
     }
     const data = await dashboard();
+    // A head opens /hiring on their own Heads screen (Kevin, 24 Nov 2026). The tutor-contact match is the one sign-in uses.
+    const heads = headKeys(data.config);
+    // Gift's Heads screen also lists the final reviews (Kevin, 24 Nov 2026), also when staff preview it.
+    const [viewerHead, finalReviewer] = await Promise.all([headKeyFor(actor, heads), headKeyFor(process.env.HIRING_FINAL_REVIEWER_EMAIL, heads)]);
     // The read of the people@ calendar that the call page uses (kept 60 seconds). A slow Google must not hold the
     // dashboard, so it gets 4 seconds here; the read itself goes on and the next load finds its answer.
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -168,6 +184,8 @@ export async function GET(request: Request) {
       {
         ...data,
         reviewAccess: finalReviewAccess(actor),
+        viewerHead,
+        finalReviewer,
         google: { ...(await googleConnectionStatus(data.config.connectedEmail)), callCalendar },
       },
       { headers: { "Cache-Control": "no-store" } },

@@ -1,5 +1,7 @@
 /* Candidate booking page. Its own look on purpose (owner request, 11 Nov 2026): it does not follow the app theme. */
 .page {
+  /* A focused field scrolls clear of the sticky bar at the bottom (Sol r26). */
+  scroll-padding-block: 16px 140px;
   --paper: #f6f1e7;
   --card: #fffdf8;
   --ink: #14213d;
@@ -15,6 +17,8 @@
   --serif: var(--font-cormorant), "Cormorant Garamond", Georgia, serif;
   --mono: var(--font-jetbrains-mono), ui-monospace, monospace;
   height: 100%;
+  /* One background however short the content is (Opus r5). */
+  min-height: 100dvh;
   overflow-y: auto;
   background: var(--paper);
   color: var(--ink);
@@ -67,6 +71,8 @@
 }
 .title {
   margin-top: 18px;
+  /* Lining figures, so "R1" never reads as "Rı" in Cormorant (Opus r10). */
+  font-variant-numeric: lining-nums;
   font-family: var(--serif);
   font-size: clamp(38px, 9vw, 56px);
   font-weight: 500;
@@ -117,11 +123,76 @@
 .hero[data-brief] + .sheet {
   margin-top: -40px;
 }
+.hero[data-brief] + .sheet .card {
+  /* Keep the name on an opaque surface while the brief loads. */
+  animation: none;
+}
 @media (min-width: 1024px) {
   .hero[data-brief] .heroInner,
   .hero[data-brief] + .sheet {
     max-width: 880px;
   }
+}
+/* The head's paper check shows the paper beside the marks, so it uses the full width. */
+@media (min-width: 1024px) {
+  .hero[data-wide] .heroInner,
+  .hero[data-wide] + .sheet {
+    max-width: 1440px;
+  }
+}
+/* Inside the head's Hiring screen (embed=1) there is no hero: the sheet starts at the top and uses the pane's width. */
+.page[data-bare] {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: transparent;
+}
+.page[data-bare] .sheet {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  max-width: none;
+  margin-top: 0;
+  padding: 0;
+}
+/* No frame, and the facts on one line, so the paper and the marks start near the top (Kevin: "so much white space"). */
+.page[data-bare] .card {
+  flex: 1;
+  min-height: 0;
+  gap: 14px;
+  padding: 14px 20px 32px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  animation: none;
+}
+.page[data-bare] .card > .facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 20px;
+}
+.page[data-bare] .card > .facts .answers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+}
+.page[data-bare] .card > .facts .answers > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.page[data-bare] .card > .facts .answers dd {
+  margin: 0;
+}
+.page[data-bare] .card > .facts .ghost {
+  width: auto;
+  min-height: 44px;
+  padding: 0 14px;
+}
+.page[data-bare] .stepTitle {
+  font-size: 20px;
 }
 @keyframes rise {
   from {
@@ -203,153 +274,12 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.briefVisit {
-  gap: 12px;
-  padding: 12px;
-  border-radius: 12px;
-  background: var(--paper);
-}
-.briefVisit > :first-child dd {
-  color: var(--ink);
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1.2;
-}
-.briefDetails {
-  gap: 8px 16px;
-}
-@media (min-width: 360px) {
-  .briefVisit {
-    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  }
-  .briefDetails {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-.page a.jumpLink {
-  min-height: 44px;
-  text-decoration: none;
-}
-.preScreen > summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 44px;
-  list-style: none;
-  cursor: pointer;
-}
-.preScreen > summary::-webkit-details-marker {
-  display: none;
-}
-.preScreen > summary::after {
-  content: "";
-  width: 9px;
-  height: 9px;
-  margin-right: 4px;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: rotate(45deg);
-}
-.preScreen[open] > summary {
-  margin-bottom: 12px;
-}
-.preScreen[open] > summary::after {
-  transform: rotate(225deg);
-}
 .facts:global(#scores) {
   scroll-margin-top: max(16px, env(safe-area-inset-top, 0px));
-}
-.rubricPart,
-.criterionScore {
-  display: grid;
-  min-width: 0;
-  gap: 6px;
-}
-.criterionScore > legend {
-  margin-bottom: 2px;
-}
-@media (min-width: 1024px) {
-  .criterionScore {
-    grid-template-columns: minmax(0, 1fr) 380px;
-    align-items: center;
-    gap: 12px;
-  }
-  .criterionScore > legend {
-    /* Place the legend in the grid. */
-    float: left;
-    margin-bottom: 0;
-  }
-}
-.scoreRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 380px;
-}
-.scoreTiles {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(44px, 1fr));
-  gap: 6px;
-  flex: 1;
-}
-@media (max-width: 340px) {
-  .scoreHint {
-    font-size: 12px;
-    letter-spacing: -0.01em;
-  }
-}
-.scoreTile {
-  position: relative;
-  display: grid;
-  place-items: center;
-  min-height: 44px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.scoreTile:has(input:enabled):hover {
-  border-color: var(--ink);
-}
-.scoreTile:has(input:disabled) {
-  cursor: default;
-  opacity: 0.65;
-}
-.scoreTile:has(input:checked),
-.input.otherScore[data-selected] {
-  border-color: var(--ink);
-  background-color: var(--ink);
-  color: #fff;
-}
-.input.otherScore {
-  appearance: none;
-  width: 76px;
-  min-height: 44px;
-  padding: 0 22px 0 8px;
-  border-radius: 12px;
-  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
-    linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position: right 13px center, right 8px center;
-  background-repeat: no-repeat;
-  background-size: 5px 5px;
-  font-size: 14px;
 }
 @media (max-width: 360px) {
   .hero[data-brief] + .sheet .card {
     padding-inline: 10px;
-  }
-  .scoreRow,
-  .scoreTiles {
-    gap: 4px;
-  }
-  .input.otherScore {
-    width: 64px;
-    padding-inline: 6px 19px;
-  }
-}
-@media (forced-colors: active) {
-  .input.otherScore {
-    appearance: auto;
   }
 }
 .field[data-sticky] {
@@ -395,9 +325,10 @@
   border: 1px solid var(--line);
   border-radius: 16px;
   background: var(--paper);
+  scroll-margin-top: max(4px, env(safe-area-inset-top, 0px));
 }
 .scoreSummary:focus {
-  outline: 3px solid var(--accent);
+  outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
 .scoreSummary strong {
@@ -413,19 +344,17 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-.scoreActions .button,
 .scoreActions .ghost {
   min-height: 44px;
   text-align: center;
 }
-.scoreChanges a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
+/* Give the scroll area room to put the sent receipt at the top. */
+.facts:has(.scoreActions) + .facts {
+  min-height: calc(100dvh - 140px);
+  align-content: start;
 }
 .decisionActions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   text-align: center;
 }
@@ -481,16 +410,14 @@
     box-shadow: 0 0 0 8px rgb(31 122 77 / 0);
   }
 }
+/* Four weeks of dates wrap into rows, so no date is hidden off-screen. */
 .days {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
   gap: 8px;
-  margin: 0 -18px;
-  padding: 2px 18px 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
+  padding: 2px 0 6px;
 }
 .day {
-  flex: 1 0 56px;
   display: grid;
   justify-items: center;
   gap: 0;
@@ -593,6 +520,10 @@
 textarea.input {
   padding: 12px 16px;
 }
+input[type="file"].input {
+  padding: 13px 16px;
+  font-size: 15px;
+}
 .input:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
@@ -656,18 +587,10 @@ textarea.input {
 .day:focus-visible,
 .button:focus-visible,
 .ghost:focus-visible,
-.preScreen > summary:focus-visible,
 .page a:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
 }
-.scoreTile:has(input:focus-visible),
-.input.otherScore:focus-visible,
-.scoreActions :is(.button, .ghost):focus-visible {
-  outline: 2px solid var(--ink);
-  outline-offset: 2px;
-}
-
 /* Confirmations */
 .checks {
   display: grid;
@@ -697,7 +620,8 @@ textarea.input {
   width: 22px;
   height: 22px;
   margin-top: 1px;
-  border: 1.5px solid #b8ae98;
+  /* 3:1 against white (WCAG 1.4.11, Opus r13). */
+  border: 1.5px solid #8f8571;
   border-radius: 7px;
   background: #fff;
   color: transparent;
@@ -746,17 +670,13 @@ textarea.input {
   margin: 0 -18px;
   padding: 14px 18px;
   border-block: 1px solid var(--line);
-  background: rgb(255 253 248 / 0.92);
-  backdrop-filter: blur(8px);
+  /* Solid: WebKit showed the content through a translucent bar (Opus r6). */
+  background: var(--card);
 }
 @media (min-width: 640px) {
   .confirm {
     margin: 0 -32px;
     padding: 18px 32px;
-  }
-  .days {
-    margin: 0;
-    padding: 2px 0 6px;
   }
 }
 .summary {
@@ -782,6 +702,7 @@ textarea.input {
   color: #fbf7ee;
   font-size: 16px;
   font-weight: 600;
+  text-decoration: none;
   cursor: pointer;
   transition:
     transform 0.15s,
@@ -804,6 +725,10 @@ textarea.input {
 }
 .ghost:hover:not(:disabled) {
   background: #f1ebde;
+}
+.button[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: progress;
 }
 .button:disabled,
 .ghost:disabled {
@@ -868,6 +793,12 @@ textarea.input {
   color: var(--muted);
   text-align: center;
 }
+/* The LINE link is a full 44 px target, also when it stands alone on its line (Sol r29). */
+.help a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
 
 /* Booked visit: a ticket. */
 .ticket {
@@ -890,6 +821,7 @@ textarea.input {
   background: rgb(255 255 255 / 0.06);
 }
 .ticketDate b {
+  font-variant-numeric: lining-nums tabular-nums;
   font-family: var(--serif);
   font-size: 46px;
   font-weight: 600;
@@ -981,19 +913,64 @@ textarea.input {
 }
 
 /* The heading inside the pre-screen summary keeps the summary look. */
-.summaryHeading {
-  display: inline;
-  margin: 0;
-  font: inherit;
-}
 
-/* Keyboard focus never lands under the sticky Send block. */
-.page :is(input, select, textarea, button):focus-visible {
+.page[data-brief] {
+  scroll-padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px));
+}
+.page[data-brief] .factLabel {
+  font-size: 12px;
+}
+.page[data-brief] .note {
+  font-size: 14px;
+}
+.page[data-brief] :is(.answers dd, .ghost, .success, .alert, textarea) {
+  font-size: 16px;
+}
+.page[data-brief] p.success {
+  display: block;
+}
+@media (forced-colors: active) {
+  /* The radio is hidden, so the chosen tile must carry the system selection colours. */
+  /* forced-color-adjust: none keeps the navy ring too, which cannot be seen on a dark canvas. */
+}
+/* Leave space for the sticky Send bar when the browser scrolls a control into view. */
+.page[data-brief] :is(input, select, textarea, button, summary) {
+  scroll-margin-bottom: 16px;
+}
+.page[data-brief] :is(a, button, select, textarea, summary, label):is(:focus, :has(> input:focus)) {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.page:not([data-brief]) :is(input, select, textarea, button):focus-visible {
   scroll-margin-bottom: 200px;
 }
 
-/* The open dropdown keeps dark text even when the closed select is filled. */
-.input.otherScore option {
-  color: var(--ink);
-  background: #fff;
+/* The candidate pages with a side rail (candidate.module.css .layout) use more of a wide screen. */
+@media (min-width: 1024px) {
+  .page:has([data-wide-layout]) .heroInner,
+  .page:has([data-wide-layout]) .sheet {
+    max-width: 1040px;
+  }
+  .page:has([data-wide-layout]) .card {
+    padding: 40px 44px;
+  }
+}
+@media (max-width: 359px) {
+  .title {
+    font-size: 34px;
+  }
+}
+
+/* A bar that ends the card fills to the card's bottom edge: no rule over an empty strip (Opus r10). */
+@media (max-width: 1023px) {
+  .card > [data-wide-layout]:last-child [data-confirm]:last-child {
+    margin-bottom: -22px;
+    border-bottom: 0;
+    border-radius: 0 0 24px 24px;
+  }
+}
+@media (min-width: 640px) and (max-width: 1023px) {
+  .card > [data-wide-layout]:last-child [data-confirm]:last-child {
+    margin-bottom: -32px;
+  }
 }

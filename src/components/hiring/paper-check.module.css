@@ -1,0 +1,183 @@
+.questionList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+.questions {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.question {
+  border: 1px solid var(--border, #e5e2dc);
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.label {
+  font-weight: 600;
+}
+
+.level,
+.max,
+.reason {
+  color: var(--muted-foreground, #6b6760);
+  font-size: 0.875rem;
+}
+
+.reason {
+  margin: 0;
+}
+
+.markRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mark {
+  width: 6rem;
+  border-color: #948a73;
+  font-variant-numeric: tabular-nums;
+}
+
+.total {
+  margin: 0.75rem 0;
+  font-size: 1.05rem;
+}
+
+/* The paper and the marks. Stacked on a phone; side by side from 1024px, the paper fixed while the marks scroll. */
+.split {
+  display: grid;
+  gap: 24px;
+}
+
+.paper {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.marks {
+  min-width: 0;
+}
+
+/* 700: the check also opens beside the head's list in Hiring, in a pane 740–1,140px wide. */
+@media (min-width: 700px) {
+  .split {
+    grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);
+    align-items: start;
+  }
+
+  .paper {
+    position: sticky;
+    top: 12px;
+  }
+
+  /* The page box of PdfPages: as tall as the window allows. */
+  .paper > div {
+    height: calc(100dvh - 80px);
+  }
+}
+
+.submit {
+  position: sticky;
+  bottom: 0;
+  display: grid;
+  gap: 6px;
+  padding: 10px 0 12px;
+  background: var(--card, #fffdf8);
+  border-top: 1px solid var(--line, #e6decd);
+}
+
+/* A focused mark never hides under the sticky score and submit. */
+.mark {
+  scroll-margin-bottom: 200px;
+}
+
+/* A wide pane: the questions scroll in their own area and the score and Submit sit below it, never over a question. */
+@media (min-width: 700px) {
+  .questions {
+    max-height: calc(100dvh - 400px);
+    min-height: 200px;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+  .submit {
+    position: static;
+  }
+}
+.more {
+  justify-self: start;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  margin: 0;
+  color: var(--muted, #5b6478);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Inside the head's Hiring screen: the marks column fills the pane, the questions take the rest of it, and the score,
+   Submit and "Your marks are final." always show below them. */
+@media (min-width: 700px) {
+  [data-bare] .marks {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    row-gap: 8px;
+    min-height: 0;
+    height: 100%;
+  }
+  /* The split takes the frame's height left under the facts, so the marks column ends at the bottom of the pane. */
+  [data-bare] .split {
+    flex: 1;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+  }
+  /* The paper fills its column and its pages scroll inside the box, so a long paper never moves the marks. */
+  [data-bare] .paper {
+    position: static;
+    align-self: stretch;
+    grid-template-rows: auto minmax(0, 1fr);
+    min-height: 0;
+    overflow: hidden;
+  }
+  [data-bare] .paper > div {
+    height: auto;
+    min-height: 0;
+  }
+  [data-bare] .questions {
+    max-height: none;
+    min-height: 0;
+  }
+}
+
+.paperHead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.fullPaper { display: inline-flex; align-items: center; min-height: 44px; font-family: var(--sans, inherit); font-size: 15px; font-weight: 600; }
+/* In the head's pane the mark sits to the right of its question, so each card is shorter and more questions fit (Sol review, round 11). */
+[data-bare] .questions { container-type: inline-size; }
+@container (min-width: 320px) {
+  .questionList { gap: 8px; }
+  .question { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; row-gap: 2px; align-items: center; padding: 6px 10px; }
+  .question > .head, .question > .reason { grid-column: 1; }
+  .question > .head { justify-content: flex-start; }
+  .question > .markRow { grid-column: 2; grid-row: 1 / span 2; flex-direction: column; align-items: flex-end; gap: 0; }
+  .question .mark { width: 5rem; min-height: 44px; border-radius: 12px; }
+  .question .max { font-size: 12px; text-align: right; }
+}
+[data-bare] .total { margin: 4px 0; }

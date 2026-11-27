@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PaperLevel } from "../model";
-import { canTeachUpTo, checkPaperMarks, checkRubric, computeSheet, paperNeedsCheck, rubricNeedsCheck, rubricTotals, RUBRIC_ITEMS, type MockRubric, type PaperQuestion } from "../marking-sheet";
+import { canTeachUpTo, checkPaperMarks, checkRubric, computeSheet, LEGACY_RUBRIC_ITEMS, paperNeedsCheck, rubricNeedsCheck, rubricTotals, RUBRIC_ITEMS, stressSuggestion, type MockRubric, type PaperQuestion } from "../marking-sheet";
 
 const q = (id: string, level: PaperLevel, marks: number | null, max = 10, patch: Partial<PaperQuestion> = {}): PaperQuestion => ({
   id, level, marks, max, reason: "Seen", attempted: true, readable: marks !== null, ...patch,
@@ -94,16 +94,33 @@ describe("rubric", () => {
     items: { ...Object.fromEntries(RUBRIC_ITEMS.map((id) => [id, 10])), ...patch } as MockRubric["items"],
     comments: "",
   });
-  it("has 10 items in 4 parts, worth 100", () => {
-    expect(RUBRIC_ITEMS).toHaveLength(10);
-    expect(rubricTotals(rubric())).toMatchObject({ total: 100, complete: true });
-    expect(rubricTotals(rubric()).parts.map((p) => p.max)).toEqual([30, 30, 20, 20]);
+  const legacy = (): MockRubric => ({ items: Object.fromEntries(LEGACY_RUBRIC_ITEMS.map((id) => [id, 8])) as MockRubric["items"], comments: "" });
+  it("has 14 items in 5 parts, worth 140", () => {
+    expect(RUBRIC_ITEMS).toHaveLength(14);
+    expect(rubricTotals(rubric())).toMatchObject({ total: 140, max: 140, percent: 100, complete: true });
+    expect(rubricTotals(rubric()).parts.map((p) => p.max)).toEqual([30, 30, 20, 20, 40]);
+  });
+  it("keeps a result from the old 10-item form valid, out of 100", () => {
+    expect(checkRubric(legacy())).toEqual([]);
+    expect(rubricTotals(legacy())).toMatchObject({ total: 80, max: 100, percent: 80, complete: true });
+    expect(rubricTotals(legacy()).parts).toHaveLength(4);
+  });
+  it("needs every new item on the new form, and no required-checks answer (removed 25 Nov 2026)", () => {
+    expect(checkRubric({ ...rubric(), items: { ...rubric().items, hygiene: undefined } })).toEqual(["hygiene is missing."]);
+    expect(checkRubric(rubric())).toEqual([]);
+    expect(rubricNeedsCheck({ ...rubric(), checksDone: null })).toBe(false);
+  });
+  it("suggests a Stress Test score from the ticks", () => {
+    expect(stressSuggestion()).toBe(1);
+    expect(stressSuggestion({ listens: true, explains: false, plan: false })).toBe(4);
+    expect(stressSuggestion({ listens: true, explains: true, plan: false })).toBe(7);
+    expect(stressSuggestion({ listens: true, explains: true, plan: true })).toBe(10);
   });
   it("adds parts, and a blank item scores nothing and needs a check", () => {
     const totals = rubricTotals(rubric({ accuracy: 7, pace: null }));
     expect(totals.parts[0].scored).toBe(27);
     expect(totals.parts[1].scored).toBe(20);
-    expect(totals).toMatchObject({ total: 87, complete: false });
+    expect(totals).toMatchObject({ total: 127, complete: false });
     expect(rubricNeedsCheck(rubric({ pace: null }))).toBe(true);
   });
   it("accepts a score between the printed bands, and refuses one off the scale", () => {

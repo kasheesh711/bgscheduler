@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { ensureIndex, type IndexedTutorGroup } from "@/lib/search/index";
@@ -18,12 +18,15 @@ import {
   CALL_DAY_END,
   CALL_DAY_START,
   CALL_MINUTES,
+  CALL_STEP_MINUTES,
+  R1_DAY_START,
   instant,
   isVisitBooking,
   localDate,
   overlap,
   weekStart,
   HiringError,
+  VISIT_GAP_MINUTES,
   type HiringConfig,
   type InterviewKind,
   type Slot,
@@ -32,8 +35,13 @@ import {
 } from "./model";
 
 import { headWeekMocks } from "./limits";
+import { withWiseHours } from "./rules";
+import { classesInHiringRooms, isWeekendDate, weekendTestFits } from "./rooms";
 
 const MAX_SOURCE_AGE = 90 * 60 * 1000;
+/** Kevin, 25 Nov 2026: 12:00–13:00 is every head's lunch, so no mock teaching touches it. */
+export const MOCK_LUNCH = { start: 12 * 60, end: 13 * 60 };
+export const overlapsLunch = (start: number, end: number) => start < MOCK_LUNCH.end && end > MOCK_LUNCH.start;
 // Real data_issue_type values are alias, modality, tag, completeness, conflict_model and sync.
 // Block on alias (identity) and on every completeness issue except the sync's availability message
 // (orchestrator.ts: `Failed to fetch availability for teacher "…"`). Wise hours are not used, and a failed
@@ -84,7 +92,7 @@ export function snapshotBusy(group: Pick<IndexedTutorGroup, "leaves" | "sessionB
   return busy;
 }
 
-// Saved office hours decide when a head is in. Wise working hours are not used (Kevin's instruction).
+// Saved office hours decide when a head is in. Wise working hours are used only for a head set to `hoursFromWise`.
 export function indexedSlotAvailable(
   group: IndexedTutorGroup,
   date: string,
@@ -101,6 +109,30 @@ export function indexedSlotAvailable(
       overlap(range, { start: b.startTime, end: b.endTime }),
     )
   );
+}
+
+/**
+ * The active snapshot's Wise working-hour windows for these heads, by head. The dashboard shows them; the slot
+ * checks read the same rows from the warm index instead. A head with no windows gets an empty list (no hours).
+ */
+export async function readWiseWindows(db: Database, keys: string[]) {
+  const out: Record<string, { weekday: number; startMinute: number; endMinute: number; modality: string }[]> =
+    Object.fromEntries(keys.map((key) => [key, []]));
+  if (!keys.length) return out;
+  const rows = await db
+    .select({
+      key: s.tutorIdentityGroups.canonicalKey,
+      weekday: s.recurringAvailabilityWindows.weekday,
+      startMinute: s.recurringAvailabilityWindows.startMinute,
+      endMinute: s.recurringAvailabilityWindows.endMinute,
+      modality: s.recurringAvailabilityWindows.modality,
+    })
+    .from(s.recurringAvailabilityWindows)
+    .innerJoin(s.tutorIdentityGroups, eq(s.tutorIdentityGroups.id, s.recurringAvailabilityWindows.groupId))
+    .innerJoin(s.snapshots, and(eq(s.snapshots.id, s.recurringAvailabilityWindows.snapshotId), eq(s.snapshots.active, true)))
+    .where(inArray(s.tutorIdentityGroups.canonicalKey, keys));
+  for (const { key, ...window } of rows) out[key]?.push(window);
+  return out;
 }
 
 export type OfficeContext = {
@@ -224,16 +256,20 @@ export async function availableSlots(
   movingCandidate?: string,
 ): Promise<Slot[]> {
   if (!subjects.length || (kind === "mock" && subjects.length !== 1)) return [];
-  const dates = businessDates(now, config.holidays);
+  // A weekend day gives test times only when the test office hours in Hiring settings hold that day.
+  const dates = businessDates(now, config.holidays, undefined, kind === "paper");
   const calendar = await readCalendar(db);
   const { bookings, observations } = calendar;
   const duration = kind === "mock" ? 60 : subjects.length * 120;
   const slots: Slot[] = [];
   const index = kind === "mock" ? await ensureIndex(indexDb) : null;
   if (index) assertFreshIndex(index, now);
+  // A weekend test needs one of the hiring rooms that no class holds (see rooms.ts).
+  const roomClasses = kind === "paper" ? await classesInHiringRooms(db, dates.filter(isWeekendDate)) : [];
   for (const date of dates) {
     const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
-    const headCounts = kind === "mock" ? headWeekMocks(bookings, instant(date, 0)) : {};
+    // A move gives up the candidate's own mock, so it does not count toward the head's week either.
+    const headCounts = kind === "mock" ? headWeekMocks(bookings.filter((b) => b.candidateId !== movingCandidate), instant(date, 0)) : {};
     const office = config.paperOfficeHours.find((w) => w.weekday === weekday);
     const begin = kind === "mock" ? 600 : office?.startMinute;
     const finish = kind === "mock" ? 960 : office?.endMinute;
@@ -243,13 +279,17 @@ export async function availableSlots(
       const end = start + duration,
         range = { start: instant(date, start), end: instant(date, end) };
       if (range.start <= now) continue;
+      if (kind === "mock" && overlapsLunch(start, end)) continue;
       if (kind === "paper") {
+        const tests = bookings.filter((b) => b.kind === "paper" && b.candidateId !== movingCandidate);
         if (
-          bookings.filter(
-            (b) =>
-              b.kind === "paper" && b.candidateId !== movingCandidate &&
-              overlap(range, { start: b.startTime, end: b.endTime }),
-          ).length < config.paperCapacity
+          tests.filter((b) => overlap(range, { start: b.startTime, end: b.endTime })).length < config.paperCapacity &&
+          (!isWeekendDate(date) ||
+            weekendTestFits(
+              range,
+              tests.filter((b) => localDate(b.startTime) === date).map((b) => ({ id: b.id, start: b.startTime, end: b.endTime })),
+              roomClasses,
+            ))
         )
           slots.push({
             date,
@@ -268,12 +308,14 @@ export async function availableSlots(
           (g) => g.canonicalKey === interviewer.canonicalKey,
         );
         if (!group || !indexedSlotAvailable(group, date, start, end)) continue;
-        if (!headInOffice(interviewer, date, start, end, calendar)) continue;
+        if (!headInOffice(withWiseHours(interviewer, group.availabilityWindows), date, start, end, calendar)) continue;
         if (!liveFree(live, interviewer.canonicalKey, range)) continue;
         if (
           bookings.some(
             (b) =>
               b.interviewerKey === interviewer.canonicalKey &&
+              // A move gives up the candidate's own mock, so it must not block its new time.
+              b.candidateId !== movingCandidate &&
               overlap(range, { start: b.startTime, end: b.endTime }),
           )
         )
@@ -300,13 +342,15 @@ export async function availableSlots(
 }
 
 /**
- * One-visit times: a 2-hour exam on the hour, then a 1-hour mock with one head. Read-only.
+ * One-visit times: a 2-hour exam on the hour, a grading gap (VISIT_GAP_MINUTES), then a 1-hour mock with one head. Read-only.
  * The exam needs room (paperCapacity) and blocks no head. The mock hour needs the head to be in saved
  * office hours, free in Wise and on leave, free of sit-ins and hiring bookings, and under the weekly limit.
  * The server picks the head (fewest mocks that week, then settings order). Candidates never choose.
  * Every confirmed mock counts toward the weekly limit, old flow or new, because each one uses the head's hour.
  * `movingCandidate`'s own rows are left out: a move gives them up, so they must not block its new time.
  */
+const MOCK_START = 120 + VISIT_GAP_MINUTES;
+const MOCK_END = MOCK_START + 60;
 export async function availableVisitSlots(
   db: Database,
   config: HiringConfig,
@@ -335,11 +379,12 @@ export async function availableVisitSlots(
   for (const date of businessDates(now, config.holidays))
     for (
       let exam = Math.ceil(config.visitStartMinute / 60) * 60;
-      exam + 180 <= config.visitEndMinute;
+      exam + MOCK_END <= config.visitEndMinute;
       exam += 60
     ) {
       const examRange = { start: instant(date, exam), end: instant(date, exam + 120) };
       if (examRange.start <= now) continue;
+      if (overlapsLunch(exam + MOCK_START, exam + MOCK_END)) continue;
       if (
         bookings.filter(
           (b) =>
@@ -348,7 +393,7 @@ export async function availableVisitSlots(
         ).length >= config.paperCapacity
       )
         continue;
-      const mock = { start: examRange.end, end: instant(date, exam + 180) };
+      const mock = { start: instant(date, exam + MOCK_START), end: instant(date, exam + MOCK_END) };
       const free = heads.filter((head) => {
         const group = index.tutorGroups.find(
           (g) => g.canonicalKey === head.canonicalKey,
@@ -356,8 +401,8 @@ export async function availableVisitSlots(
         return (
           !!group &&
           weekMocks(head.canonicalKey, date) < config.onsiteLimits.perHeadPerWeek &&
-          indexedSlotAvailable(group, date, exam + 120, exam + 180) &&
-          headInOffice(head, date, exam + 120, exam + 180, calendar) &&
+          indexedSlotAvailable(group, date, exam + MOCK_START, exam + MOCK_END) &&
+          headInOffice(withWiseHours(head, group.availabilityWindows), date, exam + MOCK_START, exam + MOCK_END, calendar) &&
           liveFree(live, head.canonicalKey, mock) &&
           !bookings.some(
             (b) =>
@@ -375,6 +420,7 @@ export async function availableVisitSlots(
         slots.push({
           date,
           examStart: examRange.start.toISOString(),
+          examEnd: examRange.end.toISOString(),
           mockStart: mock.start.toISOString(),
           mockEnd: mock.end.toISOString(),
           interviewerKey: assignHead(
@@ -506,8 +552,24 @@ async function readLive(db: Database, headKeys: string[], dates: string[], deadl
   return { checkedAt: new Date().toISOString(), snapshotId: index.snapshotId, heads };
 }
 
+// The list reads Wise live only for the first five dates. When the confirm step refuses a later time, the head's live busy
+// times for that day are kept for one sync (30 minutes), so the list stops offering that time and another free head can take it.
+// shortcut: kept per server instance; a reload on another instance can show the time once more and the confirm refuses it again.
+const REFUSAL_MS = 30 * 60_000;
+type Refusal = { at: number; busy: Range[] };
+const refusals = ((globalThis as { __bgscheduler_hiringRefusals?: Map<string, Refusal> })
+  .__bgscheduler_hiringRefusals ??= new Map<string, Refusal>());
+export const forgetLiveRefusals = () => refusals.clear();
+const refusedBusy = (key: string, range: Range) => {
+  const hit = refusals.get(`${key}|${localDate(range.start)}`);
+  if (hit && Date.now() - hit.at > REFUSAL_MS) refusals.delete(`${key}|${localDate(range.start)}`);
+  else if (hit) return hit.busy.some((b) => overlap(range, b));
+  return false;
+};
+
 /** With a live read, a head is free only when that read shows no class and no leave in the range. */
 const liveFree = (live: LiveBusy | undefined, key: string, range: Range) => {
+  if (refusedBusy(key, range)) return false;
   if (!live) return true;
   const head = live.heads.get(key);
   return !!head && !("error" in head) && ![...head.classes, ...head.leaves].some((b) => overlap(range, b));
@@ -523,6 +585,8 @@ export async function verifyLiveSlot(db: Database, slot: Slot) {
   const head = live.heads.get(slot.interviewerKey)!;
   if ("error" in head) throw new HiringError(409, head.error);
   const range = { start: new Date(slot.start), end: new Date(slot.end) };
+  if ([...head.classes, ...head.leaves].some((b) => overlap(range, b)))
+    refusals.set(`${slot.interviewerKey}|${slot.date}`, { at: Date.now(), busy: [...head.classes, ...head.leaves] });
   if (head.classes.some((b) => overlap(range, b)))
     throw new HiringError(409, "The interviewer now has a class. Choose another time.");
   if (head.leaves.some((b) => overlap(range, b)))
@@ -534,10 +598,10 @@ const HR_LUNCH_START = 12 * 60;
 const HR_LUNCH_END = 13 * 60 + 15;
 
 /** HR call and signing slots on business dates. The caller must supply the complete busy list. */
-export function callSlots(dates: string[], busy: { start: Date; end: Date }[], now: Date, duration = CALL_MINUTES) {
+export function callSlots(dates: string[], busy: { start: Date; end: Date }[], now: Date, duration = CALL_MINUTES, dayStart = CALL_DAY_START) {
   const slots: { date: string; start: string; end: string }[] = [];
   for (const date of dates)
-    for (let minute = CALL_DAY_START; minute + duration <= CALL_DAY_END; minute += CALL_MINUTES) {
+    for (let minute = dayStart; minute + duration <= CALL_DAY_END; minute += CALL_STEP_MINUTES) {
       if (minute < HR_LUNCH_END && minute + duration > HR_LUNCH_START) continue;
       const range = { start: instant(date, minute), end: instant(date, minute + duration) };
       if (range.start > now && !busy.some((other) => overlap(range, other)))
@@ -545,3 +609,7 @@ export function callSlots(dates: string[], busy: { start: Date; end: Date }[], n
     }
   return slots;
 }
+
+/** R1 interview slots: afternoon only. Times already booked in the morning stay as they are. */
+export const r1Slots = (dates: string[], busy: { start: Date; end: Date }[], now: Date) =>
+  callSlots(dates, busy, now, CALL_MINUTES, R1_DAY_START);

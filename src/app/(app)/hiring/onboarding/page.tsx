@@ -16,7 +16,7 @@ async function Body() {
     await requireHiringHr();
   } catch (error) {
     if (error instanceof HiringError && error.status === 401) redirect("/login?callbackUrl=%2Fhiring%2Fonboarding");
-    return <p role="alert">Hiring HR access is required.</p>;
+    return <p role="alert">Final review access is required.</p>;
   }
   const db = getDb();
   const [hires, experts] = await Promise.all([onboardingRoster(db), expertsRoster(db)]);

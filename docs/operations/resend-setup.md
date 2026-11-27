@@ -192,7 +192,7 @@ If Resend mail is missing or landing in spam:
 1. Vercel → Settings → Environment Variables → `OUTBOUND_EMAIL_TRANSPORT` → change it to `gmail`.
 2. Redeploy.
 
-All app mail **except Admissions** then goes back through Workspace Gmail, with the Apps Script relay as backup. Admissions has no fallback: to stop Admissions mail, remove `RESEND_API_KEY` from Vercel and redeploy. That also moves staff mail back to Gmail, because Resend is skipped when it is unconfigured. If teacher mail alone is the problem, remove `RESEND_AUDIENCE` instead: staff mail stays on Resend and teacher mail goes back to Gmail.
+Since 26 Nov 2026 this switch no longer moves mail. Staff and hiring mail always send as admin@begiftededucation.com through Workspace Gmail, and teacher mail always sends through Resend, with no fallback either way. Admissions has no fallback: to stop Admissions mail, remove `RESEND_API_KEY` from Vercel and redeploy. `RESEND_AUDIENCE` is no longer read.
 
 ## Rules that always apply
 

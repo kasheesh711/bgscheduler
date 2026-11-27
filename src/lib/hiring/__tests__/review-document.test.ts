@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewPacket } from "../final-review";
 import { computeSheet } from "../marking-sheet";
-import { DEFAULT_WEIGHTS } from "../model";
 import { reviewDocument } from "../review-document";
+// The weights before the high-school part (24 Nov 2026). These tests pin scores made with them.
+const DEFAULT_WEIGHTS = { degree: 10, subject: 10, curriculum: 20, teaching: 20, english: 20, prestige: 20, school: 0 };
 
 const paper = computeSheet({ questions: [
   { id: "1", level: "Key Stage 3", marks: 18, max: 20, reason: "Correct method", attempted: true, readable: true },
@@ -19,7 +20,8 @@ const packet: ReviewPacket = {
     recommendation: { id: "head", head: "Kru Peat", reason: "Clear lesson." },
     ats: { score: 76.5, weights: DEFAULT_WEIGHTS, prestige: 0.525, penalty: 4,
       criteria: (["degree", "subject", "curriculum", "teaching", "english"] as const).map((id) => ({
-        id, result: id === "english" ? "partial" : "met", evidence: `Used <slides> & "notes" 'well'`, reason: "Source checked.",
+        id, result: id === "english" ? "partial" : "met",
+        evidence: id === "subject" ? "" : `Used <slides> & "notes" 'well'`, reason: "Source checked.",
       })) },
     paper: { id: "paper", fileId: "file", updatedAt: "2026-11-19T03:00:00Z", ...paper },
     mock: { id: "mock", total: 84, rubric: { comments: "Clear explanations.",
@@ -39,9 +41,16 @@ describe("review document", () => {
     expect(parts.reduce((sum, part) => sum + Number(part[1]), 0) - penalty).toBe(packet.evidence.ats.score);
     expect(ats).toContain(`<strong>Total</strong><strong class="num">${packet.evidence.ats.score.toFixed(1)} / 100</strong>`);
     expect(ats.match(/<svg class="stack"/g)).toHaveLength(1);
-    expect(ats.match(/<polygon class="radar-grid"/g)).toHaveLength(4);
-    expect(ats.match(/<circle class="radar-dot"/g)).toHaveLength(5);
-    expect(ats).toContain(">Partial</tspan>");
+    expect(ats).toContain('<div class="stack-ends" aria-hidden="true"><span>0</span><span>100</span></div>');
+    expect(ats).not.toContain('<svg class="radar"');
+    const disclosures = [...ats.matchAll(/<details><summary>(.*?)<\/summary><p class="copy">(.*?)<\/p><\/details>/g)];
+    expect(disclosures.map((match) => match[1].match(/<span>([^<]+)<\/span>/)?.[1])).toEqual([
+      "Degree · Met", "Curriculum · Met", "Teaching · Met", "English · Partly",
+    ]);
+    expect(disclosures[0][1]).toMatch(/<span class="num">[\d.]+ \/ [\d.]+<\/span>/);
+    expect(disclosures[0][2]).toBe("Used &lt;slides&gt; &amp; &quot;notes&quot; &#39;well&#39;");
+    expect(ats).toContain("<span>Subject · Met</span>");
+    expect(ats).not.toContain('class="evidence-list"');
     expect(ats).toContain('fill="url(#lost-points)"');
     expect(ats).toContain('<path class="penalty-marker"');
   });
@@ -52,7 +61,9 @@ describe("review document", () => {
     const summary = html.split("<h2>Assessment summary</h2>")[1].split("</section>")[0];
     const levels = html.split("<h2>Paper by level</h2>")[1].split("</section>")[0];
     expect(summary).toContain("<strong>45%</strong>");
-    expect(summary).toContain(">Passed a level</span>");
+    expect(summary).toContain('<span>36 / 80</span><span class="chip pass">Level passed</span>');
+    expect(summary).toContain("<strong>84%</strong>");
+    expect(summary).not.toContain("84 / 100");
     expect(summary).toMatch(/<h3>ATS<\/h3>[^]*?<strong>79\.5<\/strong> \/ 100<\/p>\s*<\/div><p class="band">Fair<\/p>/);
     expect(summary.match(/<path [^>]*class="gauge-track"/g)).toHaveLength(3);
     expect(summary).not.toContain('class="target"');
@@ -93,7 +104,7 @@ describe("review document", () => {
     const html = await reviewDocument({ ...packet, evidence: { ...packet.evidence, ats: { score, criteria } } }, "resume.pdf", "marked-exam.pdf");
     const ats = html.split("<h2>Initial ATS assessment</h2>")[1].split("</section>")[0];
     expect([...ats.matchAll(/<summary>([^<]+)<\/summary>/g)].map((match) => match[1])).toEqual([
-      "Degree evidence", "Subject evidence", "Curriculum evidence", "Teaching evidence", "English evidence",
+      "Degree evidence", "Curriculum evidence", "Teaching evidence", "English evidence",
     ]);
     expect(ats).toContain('<svg class="radar"');
     expect(ats).not.toContain('<svg class="stack"');

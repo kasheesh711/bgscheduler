@@ -1,6 +1,9 @@
 import { Suspense } from "react";
-import { BookingShell } from "@/components/hiring/booking";
-import { BriefGone, BriefLoading, InterviewerBrief } from "@/components/hiring/brief";
+import { BriefGone, BriefLoading, BriefShell, InterviewerBrief, ScheduleLink } from "@/components/hiring/brief";
+import { auth } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { finalReviewerKey } from "@/lib/hiring/access";
+import { finalReviewAccess } from "@/lib/hiring/final-review";
 import { HiringError } from "@/lib/hiring/model";
 import { briefView } from "@/lib/hiring/service";
 
@@ -12,26 +15,43 @@ export const metadata = {
   referrer: "no-referrer" as const,
 };
 
-async function Body({ params }: { params: Promise<{ token: string }> }) {
-  const { token } = await params;
+type Props = { params: Promise<{ token: string }>; searchParams: Promise<{ embed?: string }> };
+
+async function Body({ params, searchParams }: Props) {
+  const [{ token }, { embed }] = await Promise.all([params, searchParams]);
   let brief: Awaited<ReturnType<typeof briefView>>;
   try {
     brief = await briefView(token);
   } catch (error) {
     if (!(error instanceof HiringError)) throw error;
-    return <BriefGone />;
+    return <>{embed !== "1" && <ScheduleLink />}<BriefGone /></>;
   }
+  // Gift's own mock ends in her hiring decision and an offer, not a recommendation (Kevin, 25 Nov 2026).
+  const owner = !!brief.interviewer && brief.interviewer === await finalReviewerKey(getDb());
+  // The offer also needs her sign-in. From the LINE link she may have none, so the page links to sign-in first.
+  const email = owner ? (await auth())?.user?.email?.trim().toLowerCase() : undefined;
+  const signIn = owner && !(email && finalReviewAccess(email).gift) ? `/login?callbackUrl=${encodeURIComponent(`/hiring/brief/${token}`)}` : undefined;
   // The page is a client component: send only the answers it shows, not the sheet row or submit time.
   const answers = brief.answers && { ...brief.answers, sourceRow: 0, submittedAt: "" };
-  return <InterviewerBrief brief={{ ...brief, answers }} resumeUrl={`/api/hiring/brief/${token}/resume`} rubricUrl={`/api/hiring/brief/${token}/rubric`} decisionUrl={`/api/hiring/brief/${token}/decision`} />;
+  return <>{embed !== "1" && <ScheduleLink />}<InterviewerBrief compact={embed === "1"} owner={owner} signIn={signIn} brief={{ ...brief, answers }} resumeUrl={`/api/hiring/brief/${token}/resume`} rubricUrl={`/api/hiring/brief/${token}/rubric`} decisionUrl={`/api/hiring/brief/${token}/decision`} /></>;
 }
 
-export default function Page(props: { params: Promise<{ token: string }> }) {
+// The head's Hiring screen opens this page inside itself with embed=1, with no gutter or second background.
+async function Shell(props: Props) {
+  const { embed } = await props.searchParams;
   return (
-    <BookingShell kind="brief">
+    <BriefShell bare={embed === "1"}>
       <Suspense fallback={<BriefLoading />}>
         <Body {...props} />
       </Suspense>
-    </BookingShell>
+    </BriefShell>
+  );
+}
+
+export default function Page(props: Props) {
+  return (
+    <Suspense fallback={<BriefShell><BriefLoading /></BriefShell>}>
+      <Shell {...props} />
+    </Suspense>
   );
 }

@@ -1,5 +1,5 @@
 import { formatInTimeZone } from "date-fns-tz";
-import { localDate, shiftDate, ZONE } from "./model";
+import { DEFAULT_PAPER_CHECKERS, localDate, shiftDate, ZONE, type HiringConfig } from "./model";
 
 // ─── The simple screens for HR, Admin and the heads (Kevin's decision, 18 Nov 2026). Pure helpers: no reads, no writes. ───
 
@@ -67,3 +67,12 @@ export const dayTitle = (date: string, today: string) => {
   const label = new Date(`${date}T12:00:00Z`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "short", timeZone: "UTC" });
   return date === today ? `Today · ${label}` : date === shiftDate(today, 1) ? `Tomorrow · ${label}` : label;
 };
+
+/** Everyone with a Heads screen: the mock interviewers, then each paper checker who gives no mocks (Tito). */
+export const headKeys = (config: Pick<HiringConfig, "interviewers" | "paperCheckers">) => [...new Set([
+  ...config.interviewers.map((head) => head.canonicalKey),
+  ...(config.paperCheckers ?? DEFAULT_PAPER_CHECKERS).map((row) => row.canonicalKey),
+])];
+
+/** "Wanwisa (Gift) Montrikittiphant" is "Gift". A name with no nickname stays whole. */
+export const nickname = (name: string) => /\(([^)]+)\)/.exec(name)?.[1].trim() || name;
