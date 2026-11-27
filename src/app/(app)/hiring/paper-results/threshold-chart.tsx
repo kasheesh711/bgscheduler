@@ -23,7 +23,7 @@ export function ThresholdChart() {
   const year = series[selected];
   return <div className="my-4 rounded-xl border bg-card shadow-sm">
     <div className="grid gap-3 border-b px-4 py-3 sm:grid-cols-[minmax(0,1fr)_6rem] sm:px-6">
-      <label className="text-sm font-medium">Syllabus and entry route<select aria-label="Syllabus and entry route" className={selectStyle} value={routeIndex} onChange={e => setRouteIndex(Number(e.target.value))}>
+      <label className="min-w-0 text-sm font-medium">Syllabus and entry route<select aria-label="Syllabus and entry route" className={selectStyle} value={routeIndex} onChange={e => setRouteIndex(Number(e.target.value))}>
         {syllabuses.map((s, i) => <option key={s.subject} value={i}>{s.subject} ({s.code})</option>)}</select></label>
       <label className="text-sm font-medium">Grade<select aria-label="Grade" className={selectStyle} value={gradeIndex} onChange={e => setGradeIndex(Number(e.target.value))}>
         {grades.map((g, i) => <option key={g} value={i}>{g}</option>)}</select></label>
@@ -33,6 +33,9 @@ export function ThresholdChart() {
         <h3 className="font-semibold">Five-year {grades[gradeIndex]} threshold</h3><strong className="text-2xl tabular-nums text-primary">{average === null ? "Unavailable" : average.toFixed(1) + "%"}</strong>
         <span className="text-sm text-muted-foreground">{average === null ? "Published in " + available.length + " of 5 series" : average === benchmark ? "At the hiring benchmark" : Math.abs(average - benchmark).toFixed(1) + " points " + (average > benchmark ? "above" : "below") + " the hiring benchmark"}</span>
       </div>
+      {route.code === "0500" && <p className="mt-2 text-sm text-muted-foreground">
+        {route.years[0].components === "12, 22" ? "Paper 12 (Reading) and Paper 22 (Directed Writing and Composition)." : "Paper 12 (Reading) and Component 03 (Coursework Portfolio)."} The optional speaking test has a separate grade. <a className="underline underline-offset-4" href="https://www.cambridgeinternational.org/Images/635230-2024-2026-syllabus.pdf">0500 syllabus</a>
+      </p>}
       <div className="relative ml-8 mr-1 mt-6 h-40 border-b sm:h-48">
         {[0, 50, 100].map(value => <div key={value} className="absolute inset-x-0 border-t border-border" style={{ bottom: value + "%" }}>
           <span className="absolute right-full mr-2 -translate-y-1/2 text-xs text-muted-foreground">{value}%</span></div>)}

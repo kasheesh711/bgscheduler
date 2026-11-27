@@ -14,9 +14,9 @@ import { settings } from "@/lib/hiring/service";
 import { ScoreExplorer } from "./score-explorer";
 import { CambridgeThresholds } from "./cambridge-thresholds";
 
-// The same question paper and scheme are registered under three teaching subjects.
-const englishSubjects = ["EFL/ESL", "English Language", "English Literature"];
-const englishQuestions = ["1a", "1b", "1c", "1d", "1e", "1f", "1g(i)", "1g(ii)", "writing 1", "writing 2"];
+// Hiring uses the English Language paper for all three English teaching tracks.
+const paperGroup = (subject: string) =>
+  subject === "EFL/ESL" || subject === "English Literature" ? "English Language" : subject;
 
 export const metadata = { title: "Paper results by subject | BeGifted Ops", robots: { index: false, follow: false } };
 
@@ -36,18 +36,14 @@ async function Report() {
     paperChecks(db, new Date()),
   ]);
   const groups = new Map<string, { score: number; subject: string; maximum: number }[]>();
-  const observedSubjects = new Set<string>();
   const checkById = new Map(checks.map(check => [check.resultId, check]));
   for (const paper of rows) {
     const result = paperScore(paper, config, checkById.get(paper.id));
     if ((result.verdict !== "pass" && result.verdict !== "fail") || result.percent === null || !result.max) continue;
-    const labels = new Set(paper.marks?.questions.map(q => q.id.trim().toLowerCase()));
-    const isSharedEnglish = englishSubjects.includes(paper.subject) && labels.size === englishQuestions.length && englishQuestions.every(label => labels.has(label));
-    const group = isSharedEnglish ? "English" : paper.subject;
+    const group = paperGroup(paper.subject);
     const observations = groups.get(group) ?? [];
     observations.push({ score: result.percent, subject: paper.subject, maximum: result.max });
     groups.set(group, observations);
-    observedSubjects.add(paper.subject);
   }
   const summary = [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([subject, observations]) => {
     const subjects = new Set(observations.map(o => o.subject));
@@ -55,7 +51,7 @@ async function Report() {
     const data = paperDistribution(observations.map(o => o.score))!;
     return { subject, data, cutoffs, observations };
   });
-  const empty = SUBJECTS.filter(subject => !observedSubjects.has(subject)).sort();
+  const empty = [...new Set(SUBJECTS.map(paperGroup))].filter(group => !groups.has(group)).sort();
   const n = summary.reduce((total, row) => total + row.data.scores.length, 0);
   return <>
     {summary.length > 0 && <ScoreExplorer rows={summary} />}
