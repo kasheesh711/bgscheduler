@@ -190,6 +190,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
   }, [demo]);
   const demoStep = useDemoState();
   const [briefOpen, setBriefOpen] = useState(false);
+  const [newReportTab, setNewReportTab] = useState(false);
   const hash = useSyncExternalStore(subscribeToReviewLink, () => window.location.hash, () => null);
   const reviewLink = param === "hr" && hash ? /^#review-(.+)$/.exec(hash)?.[1] : undefined;
   const giftOnly = !!data?.reviewAccess?.gift && !data.reviewAccess.hr;
@@ -439,6 +440,11 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
     if (loaded && !demo) return restoreHiringScroll(scrollKey, surface.current);
   }, [loaded, demo, scrollKey]);
   const personalHead = data?.viewerHead ?? head;
+  const paperChecksDue = fullAccess && personalHead && data
+    ? data.paperChecks.filter((check) => check.head === personalHead && !check.done && check.path).length
+    : null;
+  const personalTask = paperChecksDue === null ? "Your mock teaching and decisions" : paperChecksDue === 0
+    ? "No papers to re-mark" : `${paperChecksDue} ${paperChecksDue === 1 ? "paper" : "papers"} to re-mark`;
   const chooseWorkspace = (event: MouseEvent<HTMLAnchorElement>, name: HiringView) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
@@ -446,11 +452,11 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
     if (menu) closeToolsMenu(menu);
     switchView(name);
   };
-  const workspaceLink = (name: HiringView, label: string, hint?: string) => (
+  const workspaceLink = (name: HiringView, label: string, hint?: string, descriptionId?: string) => (
     <a key={name} href={`/hiring?view=${name}${demo ? "&demo=1" : ""}`} aria-label={label}
-      aria-current={view === name ? "page" : undefined} onClick={(event) => chooseWorkspace(event, name)}>
+      aria-current={view === name ? "page" : undefined} aria-describedby={descriptionId} onClick={(event) => chooseWorkspace(event, name)}>
       {view === name && <span className={nav.activeMark} aria-hidden="true">✓</span>}
-      <span>{label}{hint && <small>{hint}</small>}</span>
+      <span>{label}{hint && <small id={descriptionId}>{hint}</small>}</span>
     </a>
   );
   const workspace = <div className={nav.toolGroup} role="group" aria-label="Workspace">
@@ -464,6 +470,7 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
         const descriptionId = `hiring-${phone ? "phone" : "desktop"}-${report}-task`;
         return <Link key={report} href={hiringReportHref(report, reportFrom)} prefetch={false} scroll={false}
           aria-label={HIRING_REPORTS[report]} aria-describedby={descriptionId}
+          target={newReportTab ? "_blank" : undefined} rel={newReportTab ? "noopener" : undefined}
           onNavigate={() => saveHiringScroll(scrollKey, surface.current)}>
           <span>{HIRING_REPORTS[report]}<small id={descriptionId} className={phone ? "sr-only" : undefined}>{REPORT_HINTS[report]}</small></span>
         </Link>;
@@ -471,7 +478,12 @@ export function HiringDashboard({ head = null, fullAccess = false }: { head?: st
     </div>
   );
   const staffTools = (phone: boolean) => <>
-    {MORE_TOOLS.map((name) => workspaceLink(name, name === "heads" && personalHead ? "My list" : VIEWS[name], name === "heads" && personalHead ? "Your mock teaching and decisions" : TOOL_HINTS[name]))}
+    {MORE_TOOLS.map((name) => workspaceLink(name, name === "heads" && personalHead ? "My list" : VIEWS[name],
+      name === "heads" && personalHead ? personalTask : TOOL_HINTS[name], `hiring-${phone ? "phone" : "desktop"}-${name}-task`))}
+    {!demo && <label className={nav.reportPreference}>
+      <input type="checkbox" checked={newReportTab} onChange={(event) => setNewReportTab(event.target.checked)} />
+      <span>Open reports in new tabs<small>Keep unsaved setup changes open</small></span>
+    </label>}
     {!demo && <a href="/hiring?demo=1" target="_blank" rel="noopener" className={nav.practice}
       aria-label="Practice demo, opens in a new tab" aria-describedby={phone ? "hiring-phone-practice-data" : "hiring-desktop-practice-data"}>
       <span>Practice demo <span aria-hidden="true">↗</span><small id={phone ? "hiring-phone-practice-data" : "hiring-desktop-practice-data"}>Sample data</small></span>

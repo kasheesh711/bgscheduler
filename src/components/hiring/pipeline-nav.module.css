@@ -43,10 +43,10 @@
   padding: 4px 8px;
   border-radius: 6px;
   color: var(--ink);
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
 }
 
-.tools a small {
+.tools :is(a, .reportPreference) small {
   display: block;
   color: var(--muted);
   font-size: 0.75rem;
@@ -63,7 +63,7 @@
 
 .activeMark { flex-shrink: 0; font-weight: 750; }
 
-.tools .moreTools { position: relative; }
+.tools .moreTools { position: relative; margin-inline-start: auto; }
 .tools .moreTools > summary { gap: 6px; list-style: none; cursor: pointer; }
 .tools .moreTools > summary::-webkit-details-marker { display: none; }
 .tools .moreTools > summary::after {
@@ -80,16 +80,28 @@
 
 .moreItems {
   position: absolute;
-  inset-inline-start: 0;
+  inset-inline-end: 0;
   inset-block-start: 100%;
   display: grid;
-  min-width: max-content;
+  width: min(21rem, calc(100vw - 48px));
   padding: 4px 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--paper);
   box-shadow: 0 6px 18px rgb(0 0 0 / 0.1);
 }
+
+.reportPreference {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+  cursor: pointer;
+}
+.reportPreference input { flex-shrink: 0; }
 
 .tools .practice {
   margin-top: 4px;
@@ -220,12 +232,13 @@
     display: flex;
     align-items: stretch;
     justify-content: space-between;
+    flex-wrap: wrap;
     gap: 8px;
   }
-  .phoneReports { min-width: 0; flex: 1; }
+  .phoneReports { min-width: 0; flex: 1 1 min(100%, 13rem); }
   .phoneReports .reportGroup {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 6.4rem), 1fr));
     align-content: start;
     column-gap: 3px;
   }
@@ -254,19 +267,19 @@
   .tools { display: block; padding-block-end: 4px; font-size: 1rem; }
   .tools .toolGroup {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 6.75rem), 1fr));
     gap: 2px 4px;
     margin-bottom: 4px;
   }
   .tools .groupLabel { grid-column: 1 / -1; padding: 2px 4px; }
   .phoneStaff {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
     gap: 2px 4px;
     padding-block: 4px;
     border-top: 1px solid var(--line);
   }
-  .phoneStaff .practice { grid-column: 1 / -1; }
+  .phoneStaff :is(.practice, .reportPreference) { grid-column: 1 / -1; }
   .tools a { min-height: 48px; min-width: 48px; }
   .reportNav {
     flex-wrap: nowrap;
@@ -278,7 +291,7 @@
   }
   .backFull { display: none; }
   .backShort { display: inline; }
-  .mobile { display: block; align-self: center; min-width: 0; max-width: 39%; }
+  .mobile { display: block; align-self: center; min-width: 0; max-width: 100%; }
   .mobile > summary {
     display: flex;
     align-items: center;
@@ -311,6 +324,7 @@
 
 @media (width < 350px) {
   .phoneReports a { font-size: 0.8125rem; }
+  .phoneReports { flex-basis: min(100%, 11.5rem); }
 }
 
 @media (min-width: 720px) {
@@ -323,5 +337,5 @@
 
 @media (720px <= width < 860px) {
   .tools .moreTools { position: static; }
-  .moreItems { inset-inline: auto 24px; }
+  .moreItems { inset-inline-end: 24px; }
 }

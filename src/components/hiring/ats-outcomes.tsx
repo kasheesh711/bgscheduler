@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { HiringReportJump } from "@/components/hiring/hiring-report-nav";
 import type { atsOutcomes } from "@/lib/hiring/ats-outcomes";
 import { trialScore } from "@/lib/hiring/ats-trial";
@@ -20,6 +20,7 @@ export function AtsOutcomes({ report }: { report: Report }) {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [candidateName, setCandidateName] = useState("");
+  const [openCohort, setOpenCohort] = useState<string | null>(null);
   const criteria = cases.find(c => c.ats)?.ats?.parts ?? [];
   const scored = cases.flatMap(c => c.ats ? [{ ...c, ats: c.ats, trial: trialScore(c.ats, from, to) }] : []);
   const trialByCandidate = new Map(scored.map(c => [c.id, c.trial]));
@@ -38,10 +39,10 @@ export function AtsOutcomes({ report }: { report: Report }) {
   const flat = criteriaCounts.filter(p => tested.length > 1 && passed.length && failed.length && p.pass + p.fail === tested.length);
   const crossed = scored.filter(c => (c.trial >= cutoff) !== (c.ats.score >= threshold));
   const outcomes = [
-    { label: "Paper passed", group: passed, total: cases.filter(c => c.paper === "pass").length },
-    { label: "Paper failed", group: failed, total: cases.filter(c => c.paper === "fail").length },
-    { label: "Accepted", group: scored.filter(c => c.decision === "Accepted"), total: accepted.total },
-    { label: "Rejected", group: scored.filter(c => c.decision === "Rejected"), total: rejected.total },
+    { id: "paper-pass", label: "Paper passed", members: cases.filter(c => c.paper === "pass") },
+    { id: "paper-fail", label: "Paper failed", members: cases.filter(c => c.paper === "fail") },
+    { id: "accepted", label: "Accepted", members: cases.filter(c => c.decision === "Accepted") },
+    { id: "rejected", label: "Rejected", members: cases.filter(c => c.decision === "Rejected") },
   ];
   const donor = criteria.find(p => p.name === from);
   const recipient = criteria.find(p => p.name === to);
@@ -69,7 +70,10 @@ export function AtsOutcomes({ report }: { report: Report }) {
         <h2 id="ats-trial" tabIndex={-1} className={heading}>Test a scoring change</h2>
         <button type="button" className="min-h-11 cursor-pointer rounded-md border px-3 text-sm font-medium hover:bg-muted" onClick={() => resetTrial(threshold)}>Reset trial</button>
       </div>
-      <p className="mt-2 rounded-md bg-muted px-3 py-2 text-sm"><strong>Preview only.</strong> Trial settings apply to this report. Hiring uses the live cutoff of {threshold} and the current weights.</p>
+      <div className="mt-2 rounded-md bg-muted px-3 py-2 text-sm">
+        <p><strong>Preview only.</strong> Trial settings apply to this report. Hiring uses the live cutoff of {threshold} and the current weights.</p>
+        {(trialActive || from) && <a href="/hiring/ats-outcomes#ats-trial" target="_blank" rel="noopener" className="inline-flex min-h-11 items-center font-medium underline underline-offset-4">Open saved settings in a new tab</a>}
+      </div>
       <div className="my-4 grid gap-3 sm:grid-cols-3">
         <div>
           <label htmlFor="ats-cutoff">Trial cutoff <strong>{cutoff}</strong></label>
@@ -87,11 +91,33 @@ export function AtsOutcomes({ report }: { report: Report }) {
       {donor && recipient && <p className="mb-3 text-sm"><strong>Trial weights</strong> · {from} {donor.max} → {donor.max - 5} · {to} {recipient.max} → {recipient.max + 5}</p>}
       <table className={table + " max-sm:[&_td]:px-1 max-sm:[&_th]:px-1"}><caption className="mb-2 text-left font-medium">Candidates meeting the cutoff</caption>
         <thead><tr><th>Observed outcome</th><th>Current · {threshold}</th><th>Trial · {cutoff}</th><th>Change</th></tr></thead>
-        <tbody>{outcomes.map(({ label, group, total }) => {
-          const current = group.filter(c => c.ats.score >= threshold).length;
-          const trial = group.filter(c => c.trial >= cutoff).length;
-          return <tr key={label}><th scope="row" className="font-medium">{label}<span className="block text-xs font-normal text-muted-foreground">{group.length} scored of {total}</span></th>
-            {group.length ? <><td>{current} / {group.length}</td><td>{trial} / {group.length}</td><td className="font-medium">{changeFmt.format(trial - current)}</td></> : <td colSpan={3} className={small}>No scored candidates</td>}</tr>;
+        <tbody>{outcomes.map(({ id, label, members }) => {
+          const group = members.filter(person => person.ats !== null);
+          const current = group.filter(person => person.ats && person.ats.score >= threshold).length;
+          const trial = group.filter(person => (trialByCandidate.get(person.id) ?? -1) >= cutoff).length;
+          const open = openCohort === id;
+          const detailsId = "ats-cohort-" + id;
+          return <Fragment key={id}>
+            <tr><th scope="row" className="font-medium">
+              {members.length ? <button type="button" aria-expanded={open} aria-controls={detailsId} aria-label={"Inspect " + label + " candidates"} className="min-h-11 cursor-pointer text-left underline underline-offset-4" onClick={() => setOpenCohort(open ? null : id)}>{label}</button> : label}
+              <span className="block text-xs font-normal text-muted-foreground">{group.length} scored of {members.length}</span>
+            </th>
+            {group.length ? <><td>{current} / {group.length}</td><td>{trial} / {group.length}</td><td className="font-medium">{changeFmt.format(trial - current)}</td></> : <td colSpan={3} className={small}>No scored candidates</td>}</tr>
+            {members.length > 0 && <tr id={detailsId} hidden={!open}><td colSpan={4}>
+              {open && <ul aria-label={label + " cohort"} className="divide-y rounded-md bg-muted px-3">
+                {members.map(person => {
+                  const trialScore = trialByCandidate.get(person.id);
+                  return <li key={person.id} className="break-words py-2">
+                    <strong>{person.name}</strong>
+                    {person.ats && trialScore !== undefined ? <span className="block text-sm">
+                      Current {fmt.format(person.ats.score)} · {person.ats.score >= threshold ? "Meets cutoff" : "Below cutoff"}<br/>
+                      Trial {fmt.format(trialScore)} · {trialScore >= cutoff ? "Meets cutoff" : "Below cutoff"}
+                    </span> : <span className="block text-sm">ATS score missing</span>}
+                  </li>;
+                })}
+              </ul>}
+            </td></tr>}
+          </Fragment>;
         })}</tbody></table>
       <div className="mt-3 text-sm" aria-live="polite">{crossed.length ? <><strong>{crossed.length} crossed the cutoff.</strong> {crossed.map(c => c.name + (c.trial >= cutoff ? " (now above or at cutoff)" : " (now below)")).join(", ")}.</> : "No candidate in this sample crosses the cutoff in this trial."}</div>
     </section>
@@ -102,8 +128,8 @@ export function AtsOutcomes({ report }: { report: Report }) {
     </section>
     <section className={panel}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-        <HiringReportJump id="ats-evidence-owner-link" fragment="owner-selections" className="order-last inline-flex min-h-11 items-center text-sm underline underline-offset-4">Open owner selections</HiringReportJump>
         <h2 id="candidate-evidence" tabIndex={-1} className={heading}>Candidate evidence</h2>
+        <HiringReportJump id="ats-evidence-owner-link" fragment="owner-selections" className="inline-flex min-h-11 items-center text-sm underline underline-offset-4">Open owner selections</HiringReportJump>
       </div>
       <p className={small}>{accepted.total} confirmed hires · {rejected.total} confirmed rejections · {tested.length} scored candidates with settled paper results. Expand a name to check its scores.</p>
       <label className="mt-3 block text-sm font-medium">Find candidate by name<input type="search" value={candidateName} onChange={e => setCandidateName(e.target.value)} aria-controls="ats-candidate-list" className={select + " sm:max-w-xs"}/></label>
