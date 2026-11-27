@@ -61,9 +61,7 @@ export function FunnelChart({ stages, highlight, onHighlight, onSelect, onDrop }
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => onDrop(e, b.stage)}
             >
-              <title>
-                {b.stage} · {b.count} candidates · {(b.share * 100).toFixed(1)}%
-              </title>
+              <title>{`${b.stage} · ${b.count} ${b.count === 1 ? "candidate" : "candidates"} · ${(b.share * 100).toFixed(1)}%`}</title>
               <path data-footprint="" d={ribbon(b.start, b.end, r0, r1)} opacity=".34" />
               <path d={ribbon(b.start, b.end, r0 * 0.93, r1 * 0.93)} opacity=".6" />
               <path d={ribbon(b.start, b.end, r0 * 0.84, r1 * 0.84)} />

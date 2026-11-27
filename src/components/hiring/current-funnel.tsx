@@ -308,7 +308,7 @@ export function CurrentFunnelWorkspace({
               aria-expanded={expanded}
               onClick={() => setExpanded(!expanded)}
             >
-              {expanded ? "Hide averages" : "Show averages"}
+              {expanded ? "Hide charts and averages" : "Show charts and averages"}
             </button>
           </div>
           {chartMode === "Funnel" ? (
