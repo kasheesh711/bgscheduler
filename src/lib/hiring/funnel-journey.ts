@@ -1,4 +1,5 @@
 export const milestones = [
+  "SEEK",
   "Subjects",
   "Prescreen",
   "Test",
@@ -6,7 +7,6 @@ export const milestones = [
   "Interview",
   "Final review",
   "Offer letter",
-  "Signed",
 ] as const;
 export type Milestone = (typeof milestones)[number];
 export type PaperReview = {
@@ -23,13 +23,29 @@ export type HiringJourney = {
   name: string;
   subjects: string[];
   reached: Milestone[];
+  /** The recorded intake decision stays available if staff bring the person back. */
+  scoreExit: { score: number | null; cutoff: number | null; held: boolean; returned: boolean } | null;
+  status: string;
   waived: boolean;
   reviews: PaperReview[];
   signedAt: string | null;
 };
 
-export type JourneyFilter = { subject?: string; from?: Milestone; to?: Milestone; pending?: boolean };
+export type JourneyFilter = {
+  subject?: string;
+  from?: Milestone;
+  to?: Milestone;
+  pending?: boolean;
+  scoreExit?: "initial" | "held" | "returned";
+};
 export function matchesJourney(j: HiringJourney, filter: JourneyFilter) {
+  if (
+    filter.scoreExit &&
+    (!j.scoreExit ||
+      (filter.scoreExit === "held" && !j.scoreExit.held) ||
+      (filter.scoreExit === "returned" && !j.scoreExit.returned))
+  )
+    return false;
   const reviews = j.reviews.filter((r) => !filter.subject || r.subject === filter.subject);
   if (filter.pending && !reviews.some((r) => !r.decidedAt)) return false;
   if (filter.to === "Human review" && !reviews.length) return false;

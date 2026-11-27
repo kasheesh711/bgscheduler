@@ -118,6 +118,9 @@ export async function currentFunnel(db: Database, now = new Date()) {
     db
       .select({
         waiver: c.paperWaiver,
+        seek: sql<boolean>`${c.seekApplicationId} is not null or jsonb_array_length(${c.sourceIds}) > 0`,
+        filteredAt: c.softRejectedAt,
+        broughtBackAt: c.broughtBackAt,
         hasPaperScore: sql<boolean>`exists (select 1 from ${s.hiringPaperResults}
           where ${s.hiringPaperResults.candidateId} = ${c.id} and ${s.hiringPaperResults.marks} is not null)`,
         hasInterviewScore: sql<boolean>`exists (select 1 from ${s.hiringMockResults}
@@ -132,6 +135,9 @@ export async function currentFunnel(db: Database, now = new Date()) {
         phone: c.phone,
         stage: c.stage,
         subjects: c.subjects,
+        // Before the first invitation, the recorded ATS assessment owns the subject matches.
+        assessedSubjects: sql<Subject[]>`coalesce(jsonb_path_query_array(${c.profileAssessment},
+          '$.subjects[*] ? (@.relevant == true).subject'), '[]'::jsonb)`,
         visitSubject: c.visitSubject,
         revision: c.revision,
         answered: sql<boolean>`${c.preScreen} is not null and ${c.preScreenRepliedAt} is not null`,
@@ -159,6 +165,7 @@ export async function currentFunnel(db: Database, now = new Date()) {
       .from(a)
       .where(
         inArray(a.action, [
+          "source-import",
           "move-to-review",
           "pre-screen-release",
           "onsite-release",
@@ -166,6 +173,9 @@ export async function currentFunnel(db: Database, now = new Date()) {
           "waive_paper",
           "head-decision",
           "soft-reject",
+          "soft-reject-restore",
+          "bring-back",
+          "bring_back",
           "stop",
           "no-reply",
           "no-booking",
@@ -268,7 +278,10 @@ export async function currentFunnel(db: Database, now = new Date()) {
         paperReviews.set(resultId, review);
         continue;
       }
-      if (a.action === "move-to-review")
+      if (a.action === "source-import") continue;
+      if (["soft-reject-restore", "bring-back", "bring_back"].includes(a.action))
+        log("Application screening", a.at);
+      else if (a.action === "move-to-review")
         log(
           a.detail.phase === "pre" || (p.replyAt && p.replyAt <= a.at)
             ? "Pre-screen"
@@ -351,6 +364,10 @@ export async function currentFunnel(db: Database, now = new Date()) {
       )
         stage = "Mock teaching";
     }
+    // A historical pre-screen reply may predate its SEEK import. Import never restarts that wait.
+    const intake = audits.find((a) => a.action === "source-import");
+    if (intake && !events.some((e) => e.at <= +intake.at && e.stage !== "Application screening"))
+      log("Application screening", intake.at);
     const stays = measureStays(events, stage, +now);
     // A candidate can have two papers with overlapping checks. Count that time only once.
     const intervals: { start: number; end: number }[] = [];
@@ -374,22 +391,32 @@ export async function currentFunnel(db: Database, now = new Date()) {
       t.completed++;
       t.completedDays += sample.days;
     }
-    const recentlySigned =
-      signedAt && Date.parse(signedAt) <= +now && Date.parse(signedAt) >= +now - 84 * day;
-    const reviewedOut =
-      p.stage === "rejected" &&
-      reviews.some((r) => r.passed === false && r.decidedAt && Date.parse(r.decidedAt) >= +now - 84 * day);
-    if (stage || recentlySigned || reviewedOut) {
+    const assignedSubjects = [
+      ...new Set([
+        ...p.subjects,
+        ...(p.visitSubject ? [p.visitSubject] : []),
+        ...reviews.map((r) => r.subject),
+      ]),
+    ];
+    const subjects = assignedSubjects.length ? assignedSubjects : [...new Set(p.assessedSubjects)];
+    if (p.seek) {
+      const decision = audits.findLast((a) => a.action === "soft-reject");
+      const scoreExit =
+        decision || p.filteredAt || p.stage === "soft_rejected"
+          ? {
+              score: typeof decision?.detail.score === "number" ? decision.detail.score : null,
+              cutoff: typeof decision?.detail.threshold === "number" ? decision.detail.threshold : null,
+              held: p.stage === "soft_rejected",
+              returned:
+                p.stage !== "soft_rejected" &&
+                (!!p.broughtBackAt ||
+                  audits.some((a) => ["soft-reject-restore", "bring-back", "bring_back"].includes(a.action))),
+            }
+          : null;
       const entered = new Set(events.filter((e) => e.at <= +now).map((e) => e.stage));
       if (stage) entered.add(stage);
-      const subjects = [
-        ...new Set([
-          ...p.subjects,
-          ...(p.visitSubject ? [p.visitSubject] : []),
-          ...reviews.map((r) => r.subject),
-        ]),
-      ];
-      const reached: Milestone[] = ["Subjects"];
+      const reached: Milestone[] = ["SEEK"];
+      if (!scoreExit?.held) reached.push("Subjects");
       if (entered.has("HR call") || entered.has("Pre-screen") || p.answered) reached.push("Prescreen");
       if (!p.waiver && (entered.has("Paper assessment") || p.passAt || p.hasPaperScore || reviews.length))
         reached.push("Test");
@@ -403,12 +430,14 @@ export async function currentFunnel(db: Database, now = new Date()) {
       if (entered.has("Final review")) reached.push("Final review");
       if (offer?.emailStatus === "sent" && offer.sentAt && Date.parse(offer.sentAt) <= +now)
         reached.push("Offer letter");
-      if (signedAt && Date.parse(signedAt) <= +now) reached.push("Signed");
+
       journeys.push({
         id: p.id,
         name: p.name,
         subjects: subjects.length ? subjects : ["Subject unknown"],
         reached,
+        scoreExit,
+        status: p.stage.replaceAll("_", " "),
         waived: !!p.waiver,
         signedAt,
         reviews,
@@ -428,7 +457,7 @@ export async function currentFunnel(db: Database, now = new Date()) {
       phone: p.phone,
       stage,
       rawStage: p.stage,
-      appliedSubjects: p.subjects,
+      appliedSubjects: subjects,
       subjects: p.visitSubject ? [p.visitSubject] : p.subjects,
       revision: p.revision,
       answered: p.answered,

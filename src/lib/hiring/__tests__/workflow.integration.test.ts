@@ -1039,7 +1039,7 @@ describe("hiring workflow persistence", () => {
       const real = await vi.importActual<typeof import("../availability")>("../availability");
       vi.mocked(availableSlots).mockImplementation((...args) => real.availableSlots(...args));
       const graded = async (score: number) => {
-        const row = await invited();
+        const row = await invited({sourceIds: ["seek-paper-" + score]});
         await bookVisit(bookingToken(row.id, "two-day", row.inviteExpiresAt!), choice(EXAM, { mockStart: "2026-11-03T04:00:00.000Z" }), db);
         const [result] = await db.insert(s.hiringPaperResults).values({ candidateId: row.id, subject: "Mathematics", source: "person", status: "done", updatedAt: now, marks: { comment: "", missingPages: null, questions: [
           { id: "1", level: "IGCSE / GCSE" as const, attempted: true, readable: true, marks: score, max: 10, reason: "Marked." },
@@ -1938,7 +1938,7 @@ describe("hiring workflow persistence", () => {
       expect((await readLimitUsage(db, "onsite", new Date())).perWeek).toBe(2);
     });
     it("rolls back the waiver preview and queues one mock invitation without recording a paper pass", async () => {
-      const row = await invited();
+      const row = await invited({sourceIds: ["seek-waiver"]});
       await db.update(s.hiringCandidates).set({
         resumePath: resumePath(row.id, "a".repeat(64), "pdf"), resumeType: "application/pdf",
       }).where(eq(s.hiringCandidates.id, row.id));
@@ -1956,8 +1956,29 @@ describe("hiring workflow persistence", () => {
       expect((await jobsOf(row.id)).filter(j=>j.key.includes("mock-invite"))).toHaveLength(1);
       const report = await currentFunnel(db, now);
       expect(report.journeys.find(j => j.id === row.id)).toMatchObject({
-        waived: true, reached: ["Subjects", "Prescreen", "Interview"],
+        waived: true, reached: ["SEEK", "Subjects", "Prescreen", "Interview"],
       });
+    });
+    it("counts each SEEK person once and keeps a returned scoring exit out of the current holds", async () => {
+      const [held, returned, tracker] = await db.insert(s.hiringCandidates).values([
+        {name: "Held", sourceIds: ["seek-1", "seek-2"], profileAssessment: six as never, stage: "soft_rejected" as const, softRejectedAt: now},
+        {name: "Returned", seekApplicationId: "seek-3", stage: "new" as const, softRejectedAt: now, broughtBackAt: now},
+        {name: "Tracker", stage: "new" as const},
+      ]).returning();
+      await db.insert(s.hiringAudit).values([held, returned].map((person) => ({
+        candidateId: person.id, actor: "hiring-queue", action: "soft-reject",
+        createdAt: now, detail: {score: 70, threshold: 75},
+      })));
+      const report = await currentFunnel(db, now);
+      expect(report.journeys.filter(j => j.id === held.id)).toHaveLength(1);
+      expect(report.journeys.find(j => j.id === held.id)).toMatchObject({
+        subjects: ["Mathematics"], reached: ["SEEK"], scoreExit: {score: 70, cutoff: 75, held: true, returned: false},
+      });
+      expect(report.journeys.find(j => j.id === returned.id)).toMatchObject({
+        reached: ["SEEK", "Subjects"], scoreExit: {score: 70, cutoff: 75, held: false, returned: true},
+      });
+      expect(report.journeys.some(j => j.id === tracker.id)).toBe(false);
+      expect(report.rows.some(r => r.id === tracker.id)).toBe(true);
     });
     it("old paper and mock links still work for old-flow candidates", async () => {
       const paper = {

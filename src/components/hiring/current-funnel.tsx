@@ -166,15 +166,22 @@ export function CurrentFunnelWorkspace({
     setJourneyFilter(filter);
   }
   const matched = journeyFilter ? report.journeys.filter((j) => matchesJourney(j, journeyFilter)) : [];
-  const matchedIds = new Set(matched.map((j) => j.id));
+  const matchedById = new Map(matched.map((j) => [j.id, j]));
   const activeIds = new Set(report.rows.map((p) => p.id));
-  const reviewedExits = report.journeys.filter((j) => !activeIds.has(j.id) && !j.signedAt).length;
+
   const query = filter.trim().toLocaleLowerCase();
   const finished = matched
     .filter((j) => !activeIds.has(j.id) && j.name.toLocaleLowerCase().includes(query))
     .sort((a, b) => (b.signedAt ?? "").localeCompare(a.signedAt ?? ""));
   const waivedPath = journeyFilter?.from === "Prescreen" && journeyFilter?.to === "Interview";
   const flowLabel = [
+    journeyFilter?.scoreExit === "initial"
+      ? "Initially filtered"
+      : journeyFilter?.scoreExit === "held"
+        ? "Still filtered"
+        : journeyFilter?.scoreExit === "returned"
+          ? "Returned after scoring"
+          : undefined,
     journeyFilter?.subject,
     [journeyFilter?.from, journeyFilter?.to].filter(Boolean).join(" → "),
   ]
@@ -190,7 +197,7 @@ export function CurrentFunnelWorkspace({
   const rows = report.rows.filter(
     (p) =>
       (!stage || p.stage === stage) &&
-      (!journeyFilter || matchedIds.has(p.id)) &&
+      (!journeyFilter || matchedById.has(p.id)) &&
       p.name.toLocaleLowerCase().includes(query),
   );
   async function refresh() {
@@ -304,9 +311,8 @@ export function CurrentFunnelWorkspace({
         <div>
           <h1>Hiring funnel</h1>
           <p>
-            {report.rows.length} active · {report.journeys.filter((j) => j.reached.includes("Signed")).length}{" "}
-            signed{reviewedExits ? " · " + reviewedExits + " exited after review" : ""} · Updated{" "}
-            {date(report.now)} Bangkok
+            {report.rows.length} active · {report.journeys.filter((j) => j.signedAt).length} signed from SEEK
+            · Updated {date(report.now)} Bangkok
           </p>
         </div>
         <button className={layout.refresh} onClick={() => void refresh().catch((e) => setError(e.message))}>
@@ -416,7 +422,7 @@ export function CurrentFunnelWorkspace({
           <footer className={layout.caption}>
             {chartMode === "Funnel"
               ? "Funnel area shows each stage’s share of active candidates."
-              : "Totals count people who reached each step. Includes active candidates and recent exits at signing or paper review (12 weeks). Each person’s width is split across their subjects."}{" "}
+              : "All recorded SEEK candidates, counted once. Subject colors use assigned subjects or recorded ATS matches. Each person’s width is shared across their subjects."}{" "}
             Avg. stay includes exits in the past 12 weeks.
           </footer>
         </section>
@@ -491,6 +497,7 @@ export function CurrentFunnelWorkspace({
           {error && !op && <p role="alert">{error}</p>}
           <ul className={layout.list} tabIndex={0} aria-label="Candidates ordered by time in stage">
             {rows.map((p) => {
+              const intakeScore = journeyFilter?.scoreExit ? matchedById.get(p.id)?.scoreExit : null;
               const phone = p.phone && phoneView(p.phone),
                 actions = moves(p, fullAccess),
                 appointments = p.bookings.filter((b) => b.kind === "paper" || b.kind === "mock");
@@ -560,9 +567,20 @@ export function CurrentFunnelWorkspace({
                     </span>
                   </div>
                   <div className={layout.nextAction}>
+                    {intakeScore && (
+                      <p>
+                        {[
+                          intakeScore.score === null ? null : "Intake score " + intakeScore.score,
+                          intakeScore.cutoff === null ? null : "Cutoff " + intakeScore.cutoff,
+                          intakeScore.returned ? "Returned to funnel" : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                    )}
                     {(journeyFilter?.to === "Human review" || journeyFilter?.from === "Human review") &&
-                      matched
-                        .find((j) => j.id === p.id)
+                      matchedById
+                        .get(p.id)
                         ?.reviews.filter(
                           (r) => !journeyFilter?.subject || r.subject === journeyFilter.subject,
                         )
@@ -700,25 +718,40 @@ export function CurrentFunnelWorkspace({
                   <p>{j.subjects.join(", ")}</p>
                 </div>
                 <div>
-                  <strong>{j.signedAt ? "Signed" : "Exited after paper review"}</strong>
+                  <strong>
+                    {j.signedAt
+                      ? "Signed"
+                      : j.scoreExit?.held
+                        ? "Below intake cutoff"
+                        : j.reviews.some((r) => r.passed === false)
+                          ? "Exited after paper review"
+                          : j.status}
+                  </strong>
                   <p>
                     {j.signedAt
                       ? date(j.signedAt)
-                      : j.reviews
-                          .filter((r) => r.passed === false)
-                          .map((r) =>
-                            [
-                              r.subject,
-                              [r.initial, r.final]
-                                .filter((v) => v !== null)
-                                .map((v) => v + "%")
-                                .join(" → ") || "Checked",
-                              r.head,
-                            ]
-                              .filter(Boolean)
-                              .join(" · "),
-                          )
-                          .join(", ")}
+                      : j.scoreExit && journeyFilter?.scoreExit
+                        ? [
+                            j.scoreExit.score === null ? null : "Score " + j.scoreExit.score,
+                            j.scoreExit.cutoff === null ? null : "Cutoff " + j.scoreExit.cutoff,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")
+                        : j.reviews
+                            .filter((r) => r.passed === false)
+                            .map((r) =>
+                              [
+                                r.subject,
+                                [r.initial, r.final]
+                                  .filter((v) => v !== null)
+                                  .map((v) => v + "%")
+                                  .join(" → ") || "Checked",
+                                r.head,
+                              ]
+                                .filter(Boolean)
+                                .join(" · "),
+                            )
+                            .join(", ")}
                   </p>
                 </div>
               </li>
