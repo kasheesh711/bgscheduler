@@ -59,7 +59,7 @@ export type FunnelPerson = {
   email: string | null;
   phone: string | null;
   subjects: Subject[];
-  appliedSubjects: Subject[];
+  appliedSubjects: string[];
   rawStage: Stage;
   stage: FunnelStage;
   since: string | null;
