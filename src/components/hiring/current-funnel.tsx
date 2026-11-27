@@ -1,9 +1,20 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import type { CurrentFunnel, FunnelPerson, FunnelStage } from "@/lib/hiring/current-funnel";
+import {
+  FileText,
+  Phone,
+  RefreshCw,
+  GitBranch,
+  Filter,
+  Search,
+  ArrowDownWideNarrow,
+  GripVertical,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FunnelChart, SubjectSankey, chartSubjects, stageColors, type ChartMode } from "./funnel-chart";
 import layout from "./current-funnel.module.css";
+import { matchesJourney, type JourneyFilter } from "@/lib/hiring/funnel-journey";
 import { phoneView } from "@/lib/hiring/phone";
 
 type Action =
@@ -39,6 +50,7 @@ const button =
   "min-h-11 rounded-md border px-2.5 py-2 text-sm font-medium hover:bg-muted focus-visible:outline-2 disabled:opacity-50";
 const moves = (p: FunnelPerson, full: boolean): Action[] => {
   const actions: Action[] = [];
+  if (p.stage === "Human review") return actions;
   if (!p.answered && ["new", "review"].includes(p.rawStage)) actions.push("advance");
   if (p.answered && ["pre_screen", "review", "new"].includes(p.rawStage)) actions.push("invite_onsite");
   if (
@@ -104,7 +116,7 @@ export function CurrentFunnelWorkspace({
   const [report, setReport] = useState(initial),
     [stage, setStage] = useState<FunnelStage | null>(null),
     [filter, setFilter] = useState("");
-  const [subject, setSubject] = useState<string | null>(null);
+  const [journeyFilter, setJourneyFilter] = useState<JourneyFilter | null>(null);
   const [op, setOp] = useState<Operation | null>(null),
     [reason, setReason] = useState(""),
     [outcome, setOutcome] = useState("Reached"),
@@ -145,11 +157,29 @@ export function CurrentFunnelWorkspace({
       stage,
     );
   }
-  function selectChart(nextStage: FunnelStage | null, nextSubject?: string) {
-    const clear = stage === nextStage && subject === (nextSubject ?? null);
-    setStage(clear ? null : nextStage);
-    setSubject(clear ? null : (nextSubject ?? null));
+  function selectChart(nextStage: FunnelStage | null) {
+    setStage(stage === nextStage ? null : nextStage);
+    setJourneyFilter(null);
   }
+  function selectJourney(filter: JourneyFilter | null) {
+    setStage(null);
+    setJourneyFilter(filter);
+  }
+  const matched = journeyFilter ? report.journeys.filter((j) => matchesJourney(j, journeyFilter)) : [];
+  const matchedIds = new Set(matched.map((j) => j.id));
+  const activeIds = new Set(report.rows.map((p) => p.id));
+  const reviewedExits = report.journeys.filter((j) => !activeIds.has(j.id) && !j.signedAt).length;
+  const query = filter.trim().toLocaleLowerCase();
+  const finished = matched
+    .filter((j) => !activeIds.has(j.id) && j.name.toLocaleLowerCase().includes(query))
+    .sort((a, b) => (b.signedAt ?? "").localeCompare(a.signedAt ?? ""));
+  const waivedPath = journeyFilter?.from === "Prescreen" && journeyFilter?.to === "Interview";
+  const flowLabel = [
+    journeyFilter?.subject,
+    [journeyFilter?.from, journeyFilter?.to].filter(Boolean).join(" → "),
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const chartProps = {
     stages: report.stages,
     highlight: hovered ?? stage,
@@ -160,8 +190,8 @@ export function CurrentFunnelWorkspace({
   const rows = report.rows.filter(
     (p) =>
       (!stage || p.stage === stage) &&
-      (!subject || chartSubjects(p).includes(subject)) &&
-      p.name.toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase()),
+      (!journeyFilter || matchedIds.has(p.id)) &&
+      p.name.toLocaleLowerCase().includes(query),
   );
   async function refresh() {
     const response = await fetch("/api/hiring/current-funnel", {
@@ -274,17 +304,19 @@ export function CurrentFunnelWorkspace({
         <div>
           <h1>Hiring funnel</h1>
           <p>
-            {report.rows.length} active candidates · Updated {date(report.now)} Bangkok
+            {report.rows.length} active · {report.journeys.filter((j) => j.reached.includes("Signed")).length}{" "}
+            signed{reviewedExits ? " · " + reviewedExits + " exited after review" : ""} · Updated{" "}
+            {date(report.now)} Bangkok
           </p>
         </div>
-        <button className={button} onClick={() => void refresh().catch((e) => setError(e.message))}>
-          Refresh
+        <button className={layout.refresh} onClick={() => void refresh().catch((e) => setError(e.message))}>
+          <RefreshCw size={14} aria-hidden="true" /> Refresh
         </button>
       </header>
       <div className={layout.split}>
         <section className={layout.panel} data-expanded={expanded} aria-label="Current hiring funnel">
           <div className={layout.panelTitle}>
-            <h2>{chartMode === "Sankey" ? "Subjects by stage" : "Candidates by stage"}</h2>
+            <h2>{chartMode === "Sankey" ? "Hiring journey" : "Candidates by stage"}</h2>
             <div className={layout.modeBar} aria-label="Chart view">
               {(["Sankey", "Funnel"] as const).map((mode) => (
                 <Button
@@ -294,10 +326,18 @@ export function CurrentFunnelWorkspace({
                   aria-pressed={chartMode === mode}
                   onClick={() => {
                     setChartMode(mode);
-                    if (mode === "Funnel") setSubject(null);
+                    if (mode !== chartMode) {
+                      setJourneyFilter(null);
+                      setStage(null);
+                    }
                     setHovered(null);
                   }}
                 >
+                  {mode === "Sankey" ? (
+                    <GitBranch size={14} aria-hidden="true" />
+                  ) : (
+                    <Filter size={14} aria-hidden="true" />
+                  )}{" "}
                   {mode}
                 </Button>
               ))}
@@ -306,7 +346,12 @@ export function CurrentFunnelWorkspace({
           {chartMode === "Funnel" ? (
             <FunnelChart {...chartProps} />
           ) : (
-            <SubjectSankey {...chartProps} rows={report.rows} subject={subject} />
+            <SubjectSankey
+              journeys={report.journeys}
+              selection={journeyFilter}
+              onSelect={selectJourney}
+              onDrop={dropCandidate}
+            />
           )}
           <button
             type="button"
@@ -371,7 +416,7 @@ export function CurrentFunnelWorkspace({
           <footer className={layout.caption}>
             {chartMode === "Funnel"
               ? "Funnel area shows each stage’s share of active candidates."
-              : "Select a subject or ribbon to see its candidates. Each person contributes one unit of width, split equally across their subjects. Labels count people."}{" "}
+              : "Totals count people who reached each step. Includes active candidates and recent exits at signing or paper review (12 weeks). Each person’s width is split across their subjects."}{" "}
             Avg. stay includes exits in the past 12 weeks.
           </footer>
         </section>
@@ -405,29 +450,36 @@ export function CurrentFunnelWorkspace({
         <section className={layout.queue} aria-label="Candidate queue">
           <div className={layout.queueTop}>
             <h2 className="text-xl font-semibold">
-              {[subject, stage].filter(Boolean).join(" · ") || "Candidates"}{" "}
-              <span className={layout.count}>{rows.length}</span>
+              {flowLabel || stage || "Candidates"}
+              {waivedPath && " · Test waived"}
+              {journeyFilter?.pending && " · Waiting"}{" "}
+              <span className={layout.count}>{rows.length + finished.length}</span>
             </h2>
-            {(stage || subject) && (
+            {(stage || journeyFilter) && (
               <button
                 className={button}
                 onClick={() => {
                   setStage(null);
-                  setSubject(null);
+                  setJourneyFilter(null);
                 }}
               >
-                {subject ? "Clear filters" : "All stages"}
+                {journeyFilter ? "Clear filters" : "All stages"}
               </button>
             )}
-            <input
-              aria-label="Find candidate"
-              placeholder="Find candidate"
-              className={layout.search}
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-            />
+            <label className={layout.searchBox}>
+              <Search size={14} aria-hidden="true" />
+              <input
+                aria-label="Find candidate"
+                placeholder="Find candidate"
+                className={layout.search}
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+              />
+            </label>
           </div>
-          <p className={layout.queueCaption}>Longest wait first</p>
+          <p className={layout.queueCaption}>
+            <ArrowDownWideNarrow size={13} aria-hidden="true" /> Longest wait first
+          </p>
           <div role="status">
             {notice} {notice && delivery && "Email · " + delivery}
             {notice.includes("to rebook") && openerId && (
@@ -457,7 +509,7 @@ export function CurrentFunnelWorkspace({
                   }}
                   onDragEnd={() => setDrag(null)}
                 >
-                  <div>
+                  <div className={layout.identity}>
                     {actions.length > 0 && (
                       <span
                         className={layout.grip}
@@ -485,7 +537,7 @@ export function CurrentFunnelWorkspace({
                           e.stopPropagation();
                         }}
                       >
-                        ⠿
+                        <GripVertical size={15} aria-hidden="true" />
                       </span>
                     )}
                     <a
@@ -497,19 +549,34 @@ export function CurrentFunnelWorkspace({
                     >
                       {p.name}
                     </a>
-                    <p className="text-sm">
+                    <p>
                       {chartSubjects(p).join(", ")} · {p.stage}
                     </p>
-                    <p>
-                      <strong>
-                        {p.since
-                          ? ((now - Date.parse(p.since)) / day).toFixed(1) + " days"
-                          : "Start date unknown"}
-                      </strong>
-                      {p.since && " · since " + date(p.since)}
-                    </p>
+                    <span
+                      className={layout.wait}
+                      title={p.since ? "Since " + date(p.since) + " Bangkok" : undefined}
+                    >
+                      {p.since ? ((now - Date.parse(p.since)) / day).toFixed(1) + " days" : "Start unknown"}
+                    </span>
                   </div>
-                  <div className="text-sm">
+                  <div className={layout.nextAction}>
+                    {(journeyFilter?.to === "Human review" || journeyFilter?.from === "Human review") &&
+                      matched
+                        .find((j) => j.id === p.id)
+                        ?.reviews.filter(
+                          (r) => !journeyFilter?.subject || r.subject === journeyFilter.subject,
+                        )
+                        .map((r) => (
+                          <p key={r.subject}>
+                            {r.subject} · {r.initial === null ? "Paper check" : r.initial + "%"}
+                            {r.final !== null && " → " + r.final + "%"} ·{" "}
+                            {r.passed === null
+                              ? "Awaiting " + (r.head ?? "head review")
+                              : r.passed
+                                ? "Passed head review"
+                                : "Below pass mark"}
+                          </p>
+                        ))}
                     <strong>{p.next}</strong>
                     <p>
                       {p.contact
@@ -550,17 +617,32 @@ export function CurrentFunnelWorkspace({
                         rel="noreferrer"
                         href={"/api/hiring/resume/" + p.id}
                       >
-                        Résumé
+                        <FileText size={13} aria-hidden="true" /> Résumé
                       </a>
                     ) : (
-                      <span className="text-xs">Résumé unavailable</span>
+                      <span
+                        className={layout.unavailable}
+                        title="Résumé unavailable"
+                        aria-label="Résumé unavailable"
+                      >
+                        <FileText size={14} aria-hidden="true" />
+                        <span className="sr-only">Résumé unavailable</span>
+                      </span>
                     )}
                     {phone ? (
                       <a className={button} href={phone.href} title={phone.display}>
-                        Call<span className="sr-only"> {phone.display}</span>
+                        <Phone size={13} aria-hidden="true" /> Call
+                        <span className="sr-only"> {phone.display}</span>
                       </a>
                     ) : (
-                      <span className="text-xs">Phone unavailable</span>
+                      <span
+                        className={layout.unavailable}
+                        title="Phone unavailable"
+                        aria-label="Phone unavailable"
+                      >
+                        <Phone size={14} aria-hidden="true" />
+                        <span className="sr-only">Phone unavailable</span>
+                      </span>
                     )}
                     <button className={button} onClick={() => open(p, "follow_up")}>
                       Log call
@@ -604,8 +686,34 @@ export function CurrentFunnelWorkspace({
                 </li>
               );
             })}
+            {finished.map((j) => (
+              <li key={j.id} className={layout.candidate}>
+                <div>
+                  <a
+                    className={layout.candidateName}
+                    href={"/hiring?view=overview&candidate=" + j.id}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {j.name}
+                  </a>
+                  <p>{j.subjects.join(", ")}</p>
+                </div>
+                <div>
+                  <strong>{j.signedAt ? "Signed" : "Exited after paper review"}</strong>
+                  <p>
+                    {j.signedAt
+                      ? date(j.signedAt)
+                      : j.reviews
+                          .filter((r) => r.passed === false)
+                          .map((r) => r.subject + " · " + (r.final === null ? "Checked" : r.final + "%"))
+                          .join(", ")}
+                  </p>
+                </div>
+              </li>
+            ))}
           </ul>
-          {!rows.length && <p>No candidates match this selection.</p>}
+          {!rows.length && !finished.length && <p>No candidates match this selection.</p>}
         </section>
       </div>
       <dialog

@@ -2,6 +2,8 @@ import { eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
 import { approvedOffers } from "./service";
+import { PAPER_CHECK_REQUESTED, PAPER_CHECK_DONE } from "./paper-check";
+import type { HiringJourney, Milestone, PaperReview } from "./funnel-journey";
 import { offerNext } from "./offer-rows";
 import { storedResume } from "./resume-files";
 import type { Stage, Subject } from "./model";
@@ -11,6 +13,7 @@ export const funnelSteps = [
   "HR call",
   "Pre-screen",
   "Paper assessment",
+  "Human review",
   "Mock teaching",
   "Final review",
   "Offer and contract",
@@ -22,6 +25,7 @@ const nextAction: Record<FunnelStage, string> = {
   "HR call": "Follow up on HR call",
   "Pre-screen": "Check response",
   "Paper assessment": "Check paper or booking",
+  "Human review": "Await the subject head’s paper check",
   "Mock teaching": "Check mock or booking",
   "Final review": "Review recommendation",
   "Offer and contract": "Check contract",
@@ -113,6 +117,13 @@ export async function currentFunnel(db: Database, now = new Date()) {
       .orderBy(s.hiringStageEntries.id),
     db
       .select({
+        waiver: c.paperWaiver,
+        hasPaperScore: sql<boolean>`exists (select 1 from ${s.hiringPaperResults}
+          where ${s.hiringPaperResults.candidateId} = ${c.id} and ${s.hiringPaperResults.marks} is not null)`,
+        hasInterviewScore: sql<boolean>`exists (select 1 from ${s.hiringMockResults}
+          where ${s.hiringMockResults.candidateId} = ${c.id} and ${s.hiringMockResults.rubric} is not null)`,
+        signedDecision: s.hiringOnboarding.decisionId,
+        confirmedSigned: s.hiringOnboarding.signedAt,
         id: c.id,
         name: c.name,
         email: c.email,
@@ -129,7 +140,8 @@ export async function currentFunnel(db: Database, now = new Date()) {
         resumeType: c.resumeType,
         passAt: c.paperPassedAt,
       })
-      .from(c),
+      .from(c)
+      .leftJoin(s.hiringOnboarding, eq(s.hiringOnboarding.candidateId, c.id)),
     db
       .select({
         id: b.id,
@@ -164,6 +176,9 @@ export async function currentFunnel(db: Database, now = new Date()) {
           "call-good",
           "call-no-answer",
           "mock-rubric-submitted",
+          "final-review-packet",
+          PAPER_CHECK_REQUESTED,
+          PAPER_CHECK_DONE,
         ]),
       ),
     db
@@ -201,6 +216,7 @@ export async function currentFunnel(db: Database, now = new Date()) {
   }));
   const byStage = new Map(totals.map((t) => [t.stage, t]));
   const rows: FunnelPerson[] = [];
+  const journeys: HiringJourney[] = [];
   for (const p of people) {
     const events: Entry[] = [];
     const history: FunnelPerson["history"] = [];
@@ -217,7 +233,41 @@ export async function currentFunnel(db: Database, now = new Date()) {
       log(afterReply ? "Pre-screen" : stageOf(entry.stage), entry.at);
     }
     if (p.replyAt) log("Pre-screen", p.replyAt);
-    for (const a of actions.get(p.id) ?? []) {
+    const paperReviews = new Map<string, PaperReview>();
+    const audits = (actions.get(p.id) ?? []).filter((a) => a.at <= now).sort((a, b) => +a.at - +b.at);
+    for (const a of audits) {
+      if (a.action === PAPER_CHECK_REQUESTED || a.action === PAPER_CHECK_DONE) {
+        const resultId = a.detail.resultId,
+          subject = a.detail.subject;
+        if (typeof resultId !== "string" || typeof subject !== "string") continue;
+        const review = paperReviews.get(resultId) ?? {
+          subject,
+          head: null,
+          initial: null,
+          requestedAt: null,
+          decidedAt: null,
+          passed: null,
+          final: null,
+        };
+        if (typeof a.detail.head === "string") review.head = a.detail.head;
+        if (a.action === PAPER_CHECK_REQUESTED) {
+          review.requestedAt ??= a.at.toISOString();
+          review.initial = typeof a.detail.percent === "number" ? a.detail.percent : null;
+          log("Human review", a.at);
+        } else {
+          review.decidedAt = a.at.toISOString();
+          review.passed = typeof a.detail.passed === "boolean" ? a.detail.passed : null;
+          review.final = typeof a.detail.percent === "number" ? a.detail.percent : null;
+          if (
+            review.passed &&
+            (visits.get(p.id) ?? []).some((b) => b.kind === "mock" && b.status === "confirmed")
+          )
+            log("Mock teaching", a.at);
+          else log(review.passed ? "Paper assessment" : null, a.at);
+        }
+        paperReviews.set(resultId, review);
+        continue;
+      }
       if (a.action === "move-to-review")
         log(
           a.detail.phase === "pre" || (p.replyAt && p.replyAt <= a.at)
@@ -228,7 +278,7 @@ export async function currentFunnel(db: Database, now = new Date()) {
       else if (a.action === "pre-screen-release") log("Pre-screen", a.at);
       else if (["onsite-release", "invite_onsite"].includes(a.action)) log("Paper assessment", a.at);
       else if (a.action === "waive_paper") log("Mock teaching", a.at);
-      else if (a.action === "head-decision" || a.action === "mock-rubric-submitted") {
+      else if (["head-decision", "mock-rubric-submitted", "final-review-packet"].includes(a.action)) {
         log("Final review", a.at);
         finalReviewAt = Math.max(finalReviewAt, +a.at);
       } else if (a.action === "funnel-call")
@@ -263,8 +313,12 @@ export async function currentFunnel(db: Database, now = new Date()) {
     for (const d of outcomes.get(p.id) ?? [])
       if (d.at) log(d.decision === "hire" ? "Offer and contract" : null, d.at);
     const offer = offerById.get(p.id);
-    const done = offer?.uploadedAt && offer.submittedAt;
-    if (done) log(null, new Date(Math.max(Date.parse(offer.uploadedAt!), Date.parse(done))));
+    const signedAt =
+      offer && p.signedDecision === offer.decisionId && p.confirmedSigned
+        ? p.confirmedSigned.toISOString()
+        : (offer?.uploadedAt ?? null);
+    const done = signedAt && offer?.submittedAt;
+    if (done) log(null, new Date(Math.max(Date.parse(signedAt!), Date.parse(done))));
     let stage = stageOf(p.stage);
     if (stage === "Application screening") {
       if (p.answered) stage = "Pre-screen";
@@ -287,11 +341,78 @@ export async function currentFunnel(db: Database, now = new Date()) {
     )
       stage = "Final review";
     if (stage === "Paper assessment" && p.passAt && p.stage === "onsite_booked") stage = "Mock teaching";
-    const { since, completed } = measureStays(events, stage, +now);
+    const reviews = [...paperReviews.values()];
+    const pendingReview = reviews.find((r) => !r.decidedAt);
+    if (stage === "Paper assessment" || stage === "Mock teaching") {
+      if (pendingReview) stage = "Human review";
+      else if (
+        reviews.some((r) => r.passed) &&
+        personBookings.some((b) => b.kind === "mock" && b.status === "confirmed")
+      )
+        stage = "Mock teaching";
+    }
+    const stays = measureStays(events, stage, +now);
+    // A candidate can have two papers with overlapping checks. Count that time only once.
+    const intervals: { start: number; end: number }[] = [];
+    for (const r of reviews) {
+      if (!r.requestedAt) continue;
+      const start = Date.parse(r.requestedAt),
+        end = r.decidedAt ? Date.parse(r.decidedAt) : Infinity;
+      const previous = intervals.at(-1);
+      if (previous && start <= previous.end) previous.end = Math.max(previous.end, end);
+      else intervals.push({ start, end });
+    }
+    const open = intervals.find((i) => i.end === Infinity);
+    const since = stage === "Human review" ? (open ? new Date(open.start).toISOString() : null) : stays.since;
+    const completed = stays.completed.filter((s) => s.stage !== "Human review");
+    for (const i of intervals) {
+      if (i.end <= +now && i.end >= +now - 84 * day)
+        completed.push({ stage: "Human review", days: (i.end - i.start) / day });
+    }
     for (const sample of completed) {
       const t = byStage.get(sample.stage)!;
       t.completed++;
       t.completedDays += sample.days;
+    }
+    const recentlySigned =
+      signedAt && Date.parse(signedAt) <= +now && Date.parse(signedAt) >= +now - 84 * day;
+    const reviewedOut =
+      p.stage === "rejected" &&
+      reviews.some((r) => r.passed === false && r.decidedAt && Date.parse(r.decidedAt) >= +now - 84 * day);
+    if (stage || recentlySigned || reviewedOut) {
+      const entered = new Set(events.filter((e) => e.at <= +now).map((e) => e.stage));
+      if (stage) entered.add(stage);
+      const subjects = [
+        ...new Set([
+          ...p.subjects,
+          ...(p.visitSubject ? [p.visitSubject] : []),
+          ...reviews.map((r) => r.subject),
+        ]),
+      ];
+      const reached: Milestone[] = ["Subjects"];
+      if (entered.has("HR call") || entered.has("Pre-screen") || p.answered) reached.push("Prescreen");
+      if (!p.waiver && (entered.has("Paper assessment") || p.passAt || p.hasPaperScore || reviews.length))
+        reached.push("Test");
+      if (reviews.length) reached.push("Human review");
+      if (
+        p.hasInterviewScore ||
+        (!pendingReview && entered.has("Mock teaching")) ||
+        audits.some((a) => a.action === "mock-rubric-submitted")
+      )
+        reached.push("Interview");
+      if (entered.has("Final review")) reached.push("Final review");
+      if (offer?.emailStatus === "sent" && offer.sentAt && Date.parse(offer.sentAt) <= +now)
+        reached.push("Offer letter");
+      if (signedAt && Date.parse(signedAt) <= +now) reached.push("Signed");
+      journeys.push({
+        id: p.id,
+        name: p.name,
+        subjects: subjects.length ? subjects : ["Subject unknown"],
+        reached,
+        waived: !!p.waiver,
+        signedAt,
+        reviews,
+      });
     }
     if (!stage) continue;
     const t = byStage.get(stage)!;
@@ -335,7 +456,15 @@ export async function currentFunnel(db: Database, now = new Date()) {
               : "Answers received · awaiting assessment invitation"
             : stage === "HR call" && p.callComplete
               ? "Call complete · awaiting pre-screen"
-              : nextAction[stage],
+              : stage === "Human review" && pendingReview
+                ? [
+                    pendingReview.subject + " paper check",
+                    pendingReview.initial === null ? null : pendingReview.initial + "%",
+                    pendingReview.head || "Head unassigned",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                : nextAction[stage],
       bookings: personBookings
         .filter((b) => b.status === "confirmed" && b.start > now)
         .sort((a, b) => +a.start - +b.start)
@@ -351,6 +480,7 @@ export async function currentFunnel(db: Database, now = new Date()) {
   return {
     now: now.toISOString(),
     rows,
+    journeys,
     stages: totals.map((t) => ({
       stage: t.stage,
       count: t.count,

@@ -1,3 +1,4 @@
+import { currentFunnel } from "../current-funnel";
 import {
   beforeAll,
   afterAll,
@@ -1035,9 +1036,11 @@ describe("hiring workflow persistence", () => {
     });
     it("a near miss goes to the head for a check, the head's marks decide, and a clear fail gets the rejection email at once", async () => {
       await setVisit({ paperPassRules: [{ subject: "Mathematics", level: "IGCSE / GCSE", percent: 80 }] });
+      const real = await vi.importActual<typeof import("../availability")>("../availability");
+      vi.mocked(availableSlots).mockImplementation((...args) => real.availableSlots(...args));
       const graded = async (score: number) => {
         const row = await invited();
-        await bookVisit(link(row), choice(), db);
+        await bookVisit(bookingToken(row.id, "two-day", row.inviteExpiresAt!), choice(EXAM, { mockStart: "2026-11-03T04:00:00.000Z" }), db);
         const [result] = await db.insert(s.hiringPaperResults).values({ candidateId: row.id, subject: "Mathematics", source: "person", status: "done", updatedAt: now, marks: { comment: "", missingPages: null, questions: [
           { id: "1", level: "IGCSE / GCSE" as const, attempted: true, readable: true, marks: score, max: 10, reason: "Marked." },
         ] } }).returning();
@@ -1062,6 +1065,15 @@ describe("hiring workflow persistence", () => {
       expect(more).toHaveLength(0);
       expect(notice.groupId).toBe("group");
       expect(notice.message).toContain("AI score 75% · pass mark 80%");
+      // PostgreSQL timestamps the audit rows independently of the simulated booking clock.
+      const auditTime = async (action:string) => {
+        const [entry] = await db.select({at:s.hiringAudit.createdAt}).from(s.hiringAudit)
+          .where(and(eq(s.hiringAudit.candidateId,near.row.id),eq(s.hiringAudit.action,action)));
+        return entry.at;
+      };
+      const waiting = await currentFunnel(db, await auditTime("paper-check-requested"));
+      expect(waiting.rows.find(p=>p.id===near.row.id)?.stage).toBe("Human review");
+      expect(waiting.journeys.find(p=>p.id===near.row.id)?.reached).not.toContain("Interview");
       expect((await mockOf(near.row.id)).status).toBe("confirmed");
       expect(await rejection(near.row.id)).toBeUndefined();
       const token = notice.message.match(/\/hiring\/paper-check\/([\w.-]+)/)![1];
@@ -1072,6 +1084,10 @@ describe("hiring workflow persistence", () => {
       expect((await submitPaperCheck(token, { updatedAt: view.updatedAt, marks: { "1": 8 }, comment: "Fair." }, db)).outcome).toBe("passed");
       expect((await mockOf(near.row.id)).status).toBe("confirmed");
       expect((await read(near.row.id)).stage).toBe("onsite_booked");
+      const checked = await currentFunnel(db, await auditTime("paper-check-done"));
+      expect(checked.journeys.find(p=>p.id===near.row.id)).toMatchObject({
+        reached:expect.arrayContaining(["Test","Human review","Interview"]), reviews:[{initial:75,final:80,passed:true}],
+      });
       expect(await rejection(near.row.id)).toBeUndefined();
       expect((await paperCheckView(token, db)).done).toEqual({ passed: true, percent: 80, head: "Peat", override: null });
       await expect(submitPaperCheck(token, { updatedAt: view.updatedAt, marks: { "1": 8 }, comment: "" }, db)).rejects.toThrow(/already recorded/);
@@ -1938,6 +1954,10 @@ describe("hiring workflow persistence", () => {
       expect(await read(row.id)).toMatchObject({stage:"mock_invited",paperPassedAt:null,paperWaiver:{by:"owner",reason:move.reason}});
       await expect(reviewCandidate(row.id, move, "owner", db, now)).rejects.toThrow(/changed/);
       expect((await jobsOf(row.id)).filter(j=>j.key.includes("mock-invite"))).toHaveLength(1);
+      const report = await currentFunnel(db, now);
+      expect(report.journeys.find(j => j.id === row.id)).toMatchObject({
+        waived: true, reached: ["Subjects", "Prescreen", "Interview"],
+      });
     });
     it("old paper and mock links still work for old-flow candidates", async () => {
       const paper = {

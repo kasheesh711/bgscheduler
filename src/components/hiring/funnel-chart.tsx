@@ -1,9 +1,25 @@
 "use client";
-import { Fragment, type DragEvent } from "react";
+import { Fragment, useState, type CSSProperties, type DragEvent } from "react";
 import type { CurrentFunnel, FunnelPerson, FunnelStage } from "@/lib/hiring/current-funnel";
+import {
+  milestones,
+  matchesJourney,
+  type Milestone,
+  type HiringJourney,
+  type JourneyFilter,
+} from "@/lib/hiring/funnel-journey";
 import styles from "./current-funnel.module.css";
 
-export const stageColors = ["#968aff", "#898af6", "#b998ee", "#cb84dd", "#ed89b2", "#f79b93", "#f6bb81"];
+export const stageColors = [
+  "#968aff",
+  "#898af6",
+  "#b998ee",
+  "#cb84dd",
+  "#ffbc75",
+  "#ed89b2",
+  "#f79b93",
+  "#f6bb81",
+];
 export type ChartMode = "Funnel" | "Sankey";
 export function chartSubjects(person: FunnelPerson): string[] {
   const subjects = [...new Set([...person.appliedSubjects, ...person.subjects])];
@@ -28,12 +44,11 @@ export function FunnelChart({ stages, highlight, onHighlight, onSelect, onDrop }
   if (!total) return <div className={styles.emptyChart}>No active candidates</div>;
   // These boundaries give each person equal area under the point-symmetric taper.
   const boundary = (fraction: number) => (1 - Math.sqrt(1 - (1 - 0.18 ** 2) * fraction)) / 0.82;
-  let seen = 0;
   const bands = stages.flatMap((s, index) => {
     if (!s.count) return [];
-    const start = boundary(seen / total) * 100;
-    seen += s.count;
-    const end = boundary(seen / total) * 100;
+    const before = stages.slice(0, index).reduce((sum, step) => sum + step.count, 0);
+    const start = boundary(before / total) * 100;
+    const end = boundary((before + s.count) / total) * 100;
     return [{ ...s, start, end, share: s.count / total, index }];
   });
   return (
@@ -94,9 +109,16 @@ export function FunnelChart({ stages, highlight, onHighlight, onSelect, onDrop }
                   </span>
                   <span className={styles.chartStage} style={{ left }}>
                     {
-                      ["Screening", "HR call", "Pre-screen", "Paper", "Mock", "Final review", "Offer"][
-                        b.index
-                      ]
+                      [
+                        "Screening",
+                        "HR call",
+                        "Pre-screen",
+                        "Paper",
+                        "Human review",
+                        "Mock",
+                        "Final review",
+                        "Offer",
+                      ][b.index]
                     }
                   </span>
                 </>
@@ -108,181 +130,327 @@ export function FunnelChart({ stages, highlight, onHighlight, onSelect, onDrop }
   );
 }
 
+const subjectColors = [
+  "#a092ff",
+  "#f3929e",
+  "#7fa8ff",
+  "#efb87e",
+  "#cc93e5",
+  "#d5ce84",
+  "#c28de3",
+  "#8ba3df",
+];
+const dropStages: Partial<Record<Milestone, FunnelStage>> = {
+  Prescreen: "Pre-screen",
+  Test: "Paper assessment",
+  Interview: "Mock teaching",
+  "Final review": "Final review",
+  "Offer letter": "Offer and contract",
+};
+
 export function SubjectSankey({
-  rows,
-  stages,
-  subject,
-  highlight,
-  onHighlight,
+  journeys,
+  selection,
   onSelect,
   onDrop,
-}: ChartProps & {
-  rows: FunnelPerson[];
-  subject: string | null;
+}: {
+  journeys: HiringJourney[];
+  selection: JourneyFilter | null;
+  onSelect: (filter: JourneyFilter | null) => void;
+  onDrop: ChartProps["onDrop"];
 }) {
-  if (!rows.length) return <div className={styles.emptyChart}>No active candidates</div>;
-  const groups = new Map<
-    string,
-    {
-      people: number;
-      weight: number;
-      links: Map<FunnelStage, { people: number; weight: number }>;
-    }
-  >();
-  for (const person of rows) {
-    const names = chartSubjects(person);
-    for (const name of names) {
-      const group = groups.get(name) ?? {
-        people: 0,
-        weight: 0,
-        links: new Map(),
-      };
-      const link = group.links.get(person.stage) ?? { people: 0, weight: 0 };
-      group.people++;
-      group.weight += 1 / names.length;
-      link.people++;
-      link.weight += 1 / names.length;
-      group.links.set(person.stage, link);
-      groups.set(name, group);
-    }
+  const [hover, setHover] = useState<string | null>(null);
+  const [inspect, setInspect] = useState("");
+  function trace(subject: string | null, detail = "") {
+    setHover(subject);
+    setInspect(detail);
   }
-  const subjects = [...groups.entries()].sort(
-    ([a, ga], [b, gb]) => gb.people - ga.people || a.localeCompare(b),
-  );
-  const active = stages.filter((s) => s.count);
-  const gap = 20,
-    ink = 92,
-    scale = ink / rows.length;
-  const height = ink + (Math.max(subjects.length, active.length) - 1) * gap + 20;
-  let sourceY = (height - ink - (subjects.length - 1) * gap) / 2;
-  let targetY = (height - ink - (active.length - 1) * gap) / 2;
-  const targets = active.map((s) => {
-    const y = targetY,
-      size = s.count * scale;
-    targetY += size + gap;
-    return {
-      ...s,
-      y,
-      size,
-      used: 0,
-      color: stageColors[stages.findIndex((a) => a.stage === s.stage)],
-    };
-  });
-  const sources = subjects.map(([name, group]) => {
-    const y = sourceY,
-      size = group.weight * scale;
-    sourceY += size + gap;
-    let from = y;
-    const links = targets.flatMap((target) => {
-      const link = group.links.get(target.stage);
-      if (!link) return [];
-      const width = link.weight * scale,
-        to = target.y + target.used;
-      const path = `M22 ${from} C48 ${from} 52 ${to} 72 ${to} v${width} C52 ${to + width} 48 ${from + width} 22 ${from + width} Z`;
-      target.used += width;
-      from += width;
-      return [{ ...link, path, stage: target.stage, color: target.color }];
+  const subjects = [...new Set(journeys.flatMap((j) => j.subjects))]
+    .map((name) => {
+      const members = journeys.filter((j) => j.subjects.includes(name));
+      return { name, members, weight: members.reduce((sum, j) => sum + 1 / j.subjects.length, 0) };
+    })
+    .sort((a, b) => b.weight - a.weight || a.name.localeCompare(b.name));
+  const total = journeys.length,
+    gap = subjects.length > 7 ? 9 : 3;
+  const mainHeight = 75 + Math.max(0, subjects.length - 1) * gap + 12;
+  const scale = 75 / Math.max(total, 1);
+  const reviewGroups = subjects
+    .map((s) => s.members.filter((j) => matchesJourney(j, { subject: s.name, to: "Human review" })))
+    .filter((group) => group.length);
+  const reviewHeight =
+    reviewGroups.reduce((sum, group) => sum + group.reduce((n, j) => n + scale / j.subjects.length, 0), 0) +
+    Math.max(0, reviewGroups.length - 1) * gap;
+  const plotHeight = mainHeight + (reviewHeight ? reviewHeight + 8 : 0);
+  const x = milestones.map((_, i) => 17 + (i * 78) / (milestones.length - 1));
+  const columns = milestones.map((label, i) => {
+    const members = journeys.filter((j) => j.reached.includes(label));
+    const lanes = subjects.map((s, colorIndex) => {
+      const people = s.members.filter((j) => matchesJourney(j, { subject: s.name, to: label }));
+      return {
+        subject: s.name,
+        people,
+        weight: people.reduce((sum, j) => sum + 1 / j.subjects.length, 0),
+        color: subjectColors[colorIndex % subjectColors.length],
+        y: 0,
+        incoming: 0,
+        outgoing: 0,
+      };
     });
-    return { name, y, size, people: group.people, links };
+    const visible = lanes.filter((l) => l.people.length);
+    const size = members.length * scale + Math.max(0, visible.length - 1) * gap;
+    let y = label === "Human review" ? mainHeight : (mainHeight - size) / 2;
+    for (const lane of visible) {
+      lane.y = y;
+      y += lane.weight * scale + gap;
+    }
+    return { label, x: x[i], members, lanes };
   });
-  return (
-    <div className={styles.sankey} aria-label="Subject to current stage">
-      <div className={styles.sankeyHead}>
-        <span>Teaching subject</span>
-        <span>Current stage</span>
-      </div>
-      <div className={styles.sankeyScroll}>
-        <div
-          className={styles.sankeyPlot}
-          style={{ minHeight: Math.max(subjects.length, active.length) * 27 }}
-        >
-          <svg
-            viewBox={`0 0 100 ${height}`}
-            preserveAspectRatio="none"
-            role="group"
-            aria-label="Candidates by subject and stage"
-            onMouseLeave={() => onHighlight(null)}
+  const edges = columns.flatMap((from, i) => {
+    const next: Milestone[] =
+      from.label === "Prescreen"
+        ? ["Test", "Interview"]
+        : from.label === "Test"
+          ? ["Interview", "Human review"]
+          : milestones.slice(i + 1, i + 2);
+    return next.flatMap((label) => {
+      const to = columns[milestones.indexOf(label)];
+      if (!to) return [];
+      return from.lanes.flatMap((a, index) => {
+        const filter = { subject: a.subject, from: from.label, to: to.label };
+        const people = a.people.filter((j) => matchesJourney(j, filter));
+        if (!people.length) return [];
+        const b = to.lanes[index],
+          size = people.reduce((sum, j) => sum + 1 / j.subjects.length, 0) * scale;
+        const start = a.y + a.outgoing,
+          end = b.y + b.incoming;
+        a.outgoing += size;
+        b.incoming += size;
+        const left = from.x + 0.65,
+          right = to.x - 0.65,
+          middle = (left + right) / 2;
+        // A paper waiver bypasses the test node.
+        const waiver = from.label === "Prescreen" && to.label === "Interview";
+        const lift = waiver ? Math.max(start, end) + gap : 0;
+        const path = `M${left} ${start} C${middle} ${start - lift} ${middle} ${end - lift} ${right} ${end} v${size} C${middle} ${end + size - lift} ${middle} ${start + size - lift} ${left} ${start + size} Z`;
+        return [{ filter, people, size, path, waiver }];
+      });
+    });
+  });
+  const activeSubject = hover ?? selection?.subject;
+  const waiting = journeys.filter((j) => j.reviews.some((r) => !r.decidedAt)).length;
+  function choose(filter: JourneyFilter) {
+    const same =
+      filter.subject === selection?.subject &&
+      filter.from === selection?.from &&
+      filter.to === selection?.to &&
+      filter.pending === selection?.pending;
+    onSelect(same ? null : filter);
+  }
+  const dropProps = (label: Milestone) => {
+    const stage = dropStages[label];
+    return stage
+      ? {
+          "data-drop-stage": stage,
+          onDragOver: (e: DragEvent) => e.preventDefault(),
+          onDrop: (e: DragEvent) => onDrop(e, stage),
+        }
+      : {};
+  };
+  const draw = (orientation: string) => (
+    <>
+      <defs>
+        {subjects.map((s, i) => (
+          <linearGradient key={s.name} id={orientation + "-strand-" + i} x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0" stopColor={subjectColors[i % subjectColors.length]} stopOpacity=".96" />
+            <stop offset=".48" stopColor={subjectColors[i % subjectColors.length]} stopOpacity=".68" />
+            <stop offset="1" stopColor={subjectColors[i % subjectColors.length]} stopOpacity=".94" />
+          </linearGradient>
+        ))}
+      </defs>
+      {edges.map((e) => {
+        const label = `${e.filter.subject} · ${e.filter.from} → ${e.filter.to} · ${e.people.length} ${e.people.length === 1 ? "candidate" : "candidates"}${e.waiver ? " · Test waived" : ""}`;
+        return (
+          <path
+            key={label}
+            d={e.path}
+            fill={
+              "url(#" +
+              orientation +
+              "-strand-" +
+              subjects.findIndex((s) => s.name === e.filter.subject) +
+              ")"
+            }
+            opacity={!activeSubject || activeSubject === e.filter.subject ? 1 : 0.15}
+            data-weight={e.size / scale}
+            role="button"
+            tabIndex={0}
+            aria-label={label}
+            onMouseEnter={() => trace(e.filter.subject, label)}
+            onFocus={() => trace(e.filter.subject, label)}
+            onBlur={() => trace(null)}
+            onClick={() => choose(e.filter)}
+            onKeyDown={(e2) => {
+              if (e2.key === "Enter" || e2.key === " ") {
+                e2.preventDefault();
+                choose(e.filter);
+              }
+            }}
+            {...dropProps(e.filter.to)}
           >
-            {sources.map((s) => (
-              <g key={s.name}>
-                <rect x="20.8" y={s.y} width="1.2" height={s.size} rx=".4" fill="#c3b4f1" />
-                {s.links.map((l) => {
-                  const label = `${s.name} → ${l.stage} · ${l.people} ${l.people === 1 ? "candidate" : "candidates"}`;
-                  return (
-                    <path
-                      key={l.stage}
-                      d={l.path}
-                      fill={l.color}
-                      role="button"
-                      tabIndex={0}
-                      aria-label={label}
-                      data-drop-stage={l.stage}
-                      data-weight={l.weight}
-                      opacity={
-                        (!subject || subject === s.name) && (!highlight || highlight === l.stage) ? 0.82 : 0.2
-                      }
-                      onClick={() => onSelect(l.stage, s.name)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          onSelect(l.stage, s.name);
-                        }
-                      }}
-                      onMouseEnter={() => onHighlight(l.stage)}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => onDrop(e, l.stage)}
-                    >
-                      <title>{label}</title>
-                    </path>
-                  );
-                })}
-              </g>
-            ))}
-            {targets.map((t) => (
-              <rect
-                key={t.stage}
-                x="72"
-                y={t.y}
-                width="1.2"
-                height={t.size}
-                rx=".4"
-                fill={t.color}
-                data-drop-stage={t.stage}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => onDrop(e, t.stage)}
-              />
-            ))}
-          </svg>
-          {sources.map((s) => (
-            <button
-              key={s.name}
-              type="button"
-              className={styles.subjectNode}
-              style={{ top: (100 * (s.y + s.size / 2)) / height + "%" }}
-              onClick={() => onSelect(null, s.name)}
-              aria-pressed={s.name === subject}
-              title={s.name}
-            >
-              {s.name} <b>{s.people}</b>
-            </button>
-          ))}
-          {targets.map((t) => (
-            <button
-              key={t.stage}
-              type="button"
-              className={styles.stageNode}
-              style={{ top: (100 * (t.y + t.size / 2)) / height + "%" }}
-              onClick={() => onSelect(t.stage)}
-              data-drop-stage={t.stage}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => onDrop(e, t.stage)}
-              title={t.stage}
-            >
-              {t.stage} <b>{t.count}</b>
-              <small>{t.current === null ? "Wait unknown" : t.current.toFixed(1) + " d avg. wait"}</small>
-            </button>
-          ))}
-        </div>
+            <title>{label}</title>
+          </path>
+        );
+      })}
+      {columns.map((col) => (
+        <g key={col.label}>
+          <line
+            x1={col.x}
+            x2={col.x}
+            y1="0"
+            y2={plotHeight}
+            stroke="#443f55"
+            vectorEffect="non-scaling-stroke"
+            strokeDasharray="2 5"
+          />
+          {col.lanes
+            .filter((l) => l.weight > 0)
+            .map((l) => {
+              const label = `${l.subject} · ${col.label} · ${l.people.length}`;
+              return (
+                <rect
+                  key={l.subject}
+                  x={col.x - 0.65}
+                  y={l.y}
+                  width={1.3}
+                  height={l.weight * scale}
+                  rx=".3"
+                  fill={l.color}
+                  opacity={!activeSubject || activeSubject === l.subject ? 1 : 0.24}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={label}
+                  onMouseEnter={() => trace(l.subject, label)}
+                  onFocus={() => trace(l.subject, label)}
+                  onBlur={() => trace(null)}
+                  onClick={() => choose({ subject: l.subject, to: col.label })}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      choose({ subject: l.subject, to: col.label });
+                    }
+                  }}
+                  {...dropProps(col.label)}
+                >
+                  <title>{label}</title>
+                </rect>
+              );
+            })}
+        </g>
+      ))}
+    </>
+  );
+  return (
+    <div className={styles.journey} onMouseLeave={() => trace(null)}>
+      <div className={styles.journeyHeaders}>
+        {columns.map((col, i) => (
+          <button
+            type="button"
+            key={col.label}
+            style={
+              {
+                "--col": (i === 0 ? 8 : col.x) + "%",
+                "--row": 4 + (i * 90) / (milestones.length - 1) + "%",
+              } as CSSProperties
+            }
+            data-review={col.label === "Human review"}
+            title={col.label === "Human review" ? "Subject head’s recheck of a near-pass paper" : col.label}
+            aria-label={col.label + " · " + col.members.length + " candidates"}
+            onClick={() => choose({ subject: selection?.subject, to: col.label })}
+            {...dropProps(col.label)}
+          >
+            <span>{col.label}</span>
+            <b>{col.members.length}</b>
+          </button>
+        ))}
+      </div>
+      <div
+        className={styles.journeyBody}
+        data-dense={subjects.length > 7}
+        style={{ "--subject-rows": subjects.length } as CSSProperties}
+      >
+        <svg
+          className={styles.horizontalJourney}
+          viewBox={`0 0 100 ${plotHeight}`}
+          preserveAspectRatio="none"
+          role="group"
+          aria-label="Hiring journey by subject"
+        >
+          {draw("desktop")}
+        </svg>
+        <svg
+          className={styles.verticalJourney}
+          viewBox={`0 0 ${plotHeight} 100`}
+          preserveAspectRatio="none"
+          role="group"
+          aria-label="Hiring journey by subject"
+        >
+          <g transform="matrix(0 1.15385 1 0 0 -15.6154)">{draw("phone")}</g>
+        </svg>
+        {waiting > 0 && (
+          <button
+            className={styles.reviewTag}
+            type="button"
+            style={{
+              left: columns[3].x + "%",
+              top: ((mainHeight + reviewHeight + 3) / plotHeight) * 100 + "%",
+            }}
+            onClick={() => choose({ to: "Human review", pending: true })}
+          >
+            {waiting} waiting for review
+          </button>
+        )}
+        {columns[0].lanes.map((l) => (
+          <button
+            type="button"
+            className={styles.journeySubject}
+            key={l.subject}
+            title={l.subject}
+            style={{ top: ((l.y + (l.weight * scale) / 2) / plotHeight) * 100 + "%" }}
+            aria-pressed={selection?.subject === l.subject && !selection.from && !selection.to}
+            onClick={() => choose({ subject: l.subject })}
+            onMouseEnter={() => setHover(l.subject)}
+            onMouseLeave={() => setHover(null)}
+          >
+            {l.subject} <b>{l.people.length}</b>
+          </button>
+        ))}
+      </div>
+      <select
+        style={{
+          borderInlineStart:
+            "4px solid " +
+            (subjects.findIndex((s) => s.name === selection?.subject) >= 0
+              ? subjectColors[subjects.findIndex((s) => s.name === selection?.subject) % subjectColors.length]
+              : "#9a96a8"),
+        }}
+        className={styles.mobileSubject}
+        aria-label="Filter hiring journey by subject"
+        value={selection?.subject ?? ""}
+        onChange={(e) => onSelect(e.target.value ? { subject: e.target.value } : null)}
+      >
+        <option value="">All subjects</option>
+        {subjects.map((s) => (
+          <option key={s.name}>{s.name}</option>
+        ))}
+      </select>
+      <div className={styles.chartReadout}>
+        {inspect ||
+          (selection
+            ? [selection.subject, [selection.from, selection.to].filter(Boolean).join(" → ")]
+                .filter(Boolean)
+                .join(" · ")
+            : "Near-pass papers branch to Human review. Select a ribbon to see its candidates.")}
       </div>
     </div>
   );
