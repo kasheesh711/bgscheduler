@@ -2833,12 +2833,10 @@ export async function reviewCandidate(
           ),
         );
     } else {
-      if (
-        !input.subjects.length ||
-        new Set(input.subjects).size !== input.subjects.length
-      )
-        throw new HiringError(400, "Select at least one distinct subject.");
+      if (new Set(input.subjects).size !== input.subjects.length)
+        throw new HiringError(400, "Each subject can appear only once.");
       if (input.action === "paper_pass") {
+        if (!input.subjects.length) throw new HiringError(400, "Select the subject of the passed paper assessment.");
         if(input.funnel){
           if(!c.preScreen || !c.preScreenRepliedAt) throw new HiringError(409, ANSWERS_FIRST);
           for(const subject of input.subjects) await assertPassingPaper(tx,id,subject,config);
@@ -2906,8 +2904,11 @@ export async function reviewCandidate(
           );
         if (!workRightsAccepted(c.workRightsAnswer, config.acceptedWorkRights))
           throw new HiringError(409, "The work-rights answer is missing or not accepted.");
-        const subject = topHiringSubject(input.subjects, config.subjectPriority);
-        if (!subject)
+        const subjects = input.subjects.length ? input.subjects : c.subjects;
+        const subject = topHiringSubject(subjects, config.subjectPriority);
+        if (!config.subjectPriority.some((p) => p.hiring))
+          throw new HiringError(409, "No subject is open for hiring.");
+        if (subjects.length && !subject)
           throw new HiringError(409, "None of the selected subjects is open for hiring.");
         const limit = blockingLimit("pre_screen", subject, await readLimitUsage(tx, "pre_screen", now), config);
         if (limit)
@@ -2927,7 +2928,7 @@ export async function reviewCandidate(
             }),
             stage: "pre_screen",
             // The limits read the first subject as the queue subject.
-            subjects: [subject, ...input.subjects.filter((v) => v !== subject)],
+            subjects: subject ? [subject, ...subjects.filter((v) => v !== subject)] : [],
             reviewNote: input.reason,
             revision: c.revision + 1,
             updatedAt: now,

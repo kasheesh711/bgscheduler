@@ -1020,6 +1020,25 @@ describe("the questions on the booking page (Kevin, 24 Nov 2026)", () => {
     await formRow(row.id, { sentAt: after(-1), createdAt: after(-1) });
     return { row, token: visitLink(row.id, expires).split("/hiring/book/")[1] };
   }
+  it("previews and queues a funnel invitation before the candidate chooses a subject", async () => {
+    const row = await seed({ subjects: [] });
+    const input = { action: "advance" as const, revision: row.revision, subjects: [], reason: "Invite to pre-screen", funnel: true };
+    const actor = "hr@example.com";
+    await expect(reviewCandidate(row.id, { ...input, preview: true }, actor, db))
+      .rejects.toMatchObject({ messagePreview: { to: row.email } });
+    expect(await forms()).toHaveLength(0);
+    expect(await candidate(row.id)).toMatchObject({ stage: "new", revision: row.revision });
+
+    await reviewCandidate(row.id, { ...input, expectedRecipient: row.email! }, actor, db);
+    const saved = await candidate(row.id);
+    expect(saved).toMatchObject({ stage: "pre_screen", subjects: [], visitSubject: null });
+    expect(await forms()).toHaveLength(1);
+    expect(await readLimitUsage(db, "pre_screen", now)).toMatchObject({ perDay: 1, perWeek: 1, waiting: 1, bySubject: {} });
+    const token = visitLink(row.id, saved.inviteExpiresAt!).split("/hiring/book/")[1];
+    expect(await visitView(token, db)).toMatchObject({ waiting: "answers" });
+    await answerPreScreen(token, { ...answers, subjects: ["Physics"], testSubject: "Physics" }, db);
+    expect(await visitView(token, db)).toMatchObject({ subject: "Physics" });
+  });
   it("shows the times on the same link as soon as the questions are answered, and never sends the page answer back", async () => {
     const { row, token } = await holder();
     expect(await visitView(token, db)).toMatchObject({ waiting: "answers", slots: [], portfolioPath: `hiring-portfolios/${row.id}` });

@@ -75,22 +75,23 @@ export function mergeManualOrder(ranked: QueueEntry[]): QueueEntry[] {
 /** The first limit that is used up for this funnel and subject. A limit the funnel does not have never blocks. */
 export function blockingLimit(
   funnel: Funnel,
-  subject: Subject,
+  subject: Subject | null,
   usage: LimitUsage,
   config: HiringConfig,
 ): LimitName | null {
+  const subjectUsage = subject ? usage.bySubject[subject] ?? 0 : 0;
   const checks: [LimitName, number, number][] =
     funnel === "pre_screen"
       ? [
           ["perDay", usage.perDay, config.preScreenLimits.perDay],
           ["perWeek", usage.perWeek, config.preScreenLimits.perWeek],
           ["waiting", usage.waiting, config.preScreenLimits.waiting],
-          ["perSubject", usage.bySubject[subject] ?? 0, config.preScreenLimits.perSubject],
+          ["perSubject", subjectUsage, config.preScreenLimits.perSubject],
         ]
       : [
           ["perWeek", usage.perWeek, config.onsiteLimits.perWeek],
           ["unbooked", usage.unbooked, config.onsiteLimits.unbooked],
-          ["perSubject", usage.bySubject[subject] ?? 0, config.onsiteLimits.perSubject],
+          ["perSubject", subjectUsage, config.onsiteLimits.perSubject],
         ];
   return checks.find(([, used, max]) => used >= max)?.[0] ?? null;
 }
