@@ -1,11 +1,11 @@
-export type MockPair = { id: string; name: string; fractions: number[]; penalty: number; saved: number; mark: number; subjects: string[] };
-export function replayWeights(pair: MockPair, weights: number[]) {
+export type PaperPair = { id: string; name: string; fractions: number[]; penalty: number; saved: number; mark: number; subjects: string[] };
+export function replayWeights(pair: PaperPair, weights: number[]) {
   return Math.max(0, weights.reduce((total, w, j) => total + w * pair.fractions[j], -pair.penalty));
 }
 
 /** Search all seven-weight allocations on the five-point grid, plus the saved rule if it is off-grid.
  * Each omission chooses weights from its training candidates, then predicts the omitted mark. */
-export function mockBacktest(pairs: MockPair[], saved: number[]) {
+export function paperBacktest(pairs: PaperPair[], saved: number[]) {
   const n = pairs.length;
   if (n < 3 || pairs.every(p => p.mark === pairs[0].mark)) return null;
   const marks = pairs.map(p => p.mark);

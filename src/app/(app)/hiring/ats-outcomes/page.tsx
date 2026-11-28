@@ -11,7 +11,7 @@ import { HiringError } from "@/lib/hiring/model";
 export const metadata = { title: "ATS outcomes | BeGifted Ops", robots: { index: false, follow: false } };
 
 const reportSections = [
-  { id: "mock-backtest", label: "Mock backtest" },
+  { id: "paper-backtest", label: "Paper backtest" },
   { id: "analysis", label: "Score analysis" },
   { id: "factors", label: "Score factors" },
   { id: "ats-trial", label: "Trial" },

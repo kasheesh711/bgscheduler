@@ -7,8 +7,7 @@ import { checkRubric, rubricTotals } from "./marking-sheet";
 import { paperChecks } from "./paper-check";
 import { resumeAts, settings } from "./service";
 import { highSchoolFraction, profileParts, PROFILE_CRITERIA } from "./scoring";
-import { readTrackerResults } from "./result-history";
-import { mockBacktest, type MockPair } from "./ats-mock-backtest";
+import { paperBacktest, type PaperPair } from "./ats-paper-backtest";
 import { summarizeScores } from "./ats-trial";
 
 async function ownerPicks(db: Database) {
@@ -30,19 +29,10 @@ async function ownerPicks(db: Database) {
 }
 
 export async function atsOutcomes(db: Database) {
-  const { config } = await settings(db);
-  const tracker = await readTrackerResults(config).catch(() => null);
-  return assembleAtsReport(db, config, tracker);
-}
-
-export async function assembleAtsReport(db: Database, config: Awaited<ReturnType<typeof settings>>["config"],
-  tracker: Awaited<ReturnType<typeof readTrackerResults>> | null) {
-  const trackerMarks = tracker?.mocks.filter(m => m.history.score !== null && Number.isFinite(m.history.score)) ?? [];
-  const ids = [...new Set(trackerMarks.map(m => m.applicantId))];
-  const emails = ids.flatMap(id => tracker?.emails.get(id) || []);
-  const [rows, [soft], paperRows, mockRows, checks, picks] = await Promise.all([
+  const [{ config }, rows, [soft], paperRows, mockRows, checks, picks] = await Promise.all([
+    settings(db),
     db.select({
-      id: candidates.id, name: candidates.name, stage: candidates.stage, applicantId: candidates.applicantId, email: candidates.email,
+      id: candidates.id, name: candidates.name, stage: candidates.stage,
       profileAssessment: candidates.profileAssessment,
       universityAssessment: candidates.universityAssessment,
       workRightsAnswer: candidates.workRightsAnswer,
@@ -51,7 +41,7 @@ export async function assembleAtsReport(db: Database, config: Awaited<ReturnType
         or(and(eq(candidates.stage, "hired"), eq(decisions.decision, "hire")),
           and(eq(candidates.stage, "rejected"), eq(decisions.decision, "reject"))),
       ))),
-    }).from(candidates).where(or(inArray(candidates.stage, [...DECIDED_STAGES]), inArray(candidates.applicantId, ids), inArray(candidates.email, emails),
+    }).from(candidates).where(or(inArray(candidates.stage, [...DECIDED_STAGES]),
       exists(db.select({ id: papers.id }).from(papers).where(and(eq(papers.candidateId, candidates.id), ne(papers.source, "tracker")))),
       exists(db.select({ id: mocks.id }).from(mocks).where(and(eq(mocks.candidateId, candidates.id), ne(mocks.source, "tracker")))),
     )),
@@ -65,32 +55,12 @@ export async function assembleAtsReport(db: Database, config: Awaited<ReturnType
   ]);
   const dimensions = [...Object.entries(PROFILE_CRITERIA), ["prestige", "University"], ["school", "High school"]]
     .map(([key, name]) => ({ name, weight: config.profileWeights[key as keyof typeof config.profileWeights] ?? 0 }));
-  const historyByCandidate = new Map<string, { sat: boolean; marks: { subject: string; score: number }[] }>();
-  let unmatchedMarks = 0;
-  for (const id of ids) {
-    const email = tracker?.emails.get(id);
-    const matched = rows.filter(r => r.applicantId === id || (email && r.email === email));
-    const marks = trackerMarks.filter(m => m.applicantId === id).map(m => ({ subject: m.subject, score: m.history.score! }));
-    if (matched.length !== 1) { unmatchedMarks += marks.length; continue; }
-    const entry = historyByCandidate.get(matched[0].id) ?? { sat: false, marks: [] };
-    entry.marks.push(...marks);
-    historyByCandidate.set(matched[0].id, entry);
-  }
-  for (const id of tracker?.paperSitters ?? []) {
-    const email = tracker?.emails.get(id);
-    const matched = rows.filter(r => r.applicantId === id || (email && r.email === email));
-    if (matched.length === 1) {
-      const entry = historyByCandidate.get(matched[0].id) ?? { sat:false, marks:[] };
-      entry.sat = true;
-      historyByCandidate.set(matched[0].id, entry);
-    }
-  }
   const cases = rows.map(row => {
     const results = paperRows.filter(paper => paper.candidateId === row.id).map(paper => {
       const result = paperScore(paper, config, checks.find(check => check.resultId === paper.id));
       const attempted = paper.marks?.questions.some(question => question.attempted);
       const verdict = attempted && (result.verdict === "pass" || result.verdict === "fail") ? result.verdict : null;
-      return { subject: paper.subject, attempted: !!attempted, verdict, percent: verdict ? result.percent : null };
+      return { subject: paper.subject, verdict, percent: verdict ? result.percent : null };
     });
     // A candidate can qualify in one subject. A fail requires a settled result for every subject tested.
     const paper = results.some(r => r.verdict === "pass") ? "pass" as const
@@ -112,23 +82,18 @@ export async function assembleAtsReport(db: Database, config: Awaited<ReturnType
     rows.filter((row) => row.stage === stage && row.confirmed).map((row) => resumeAts(row, config)),
     config.profileThreshold,
   );
-  const backtests = (["tracker", "website"] as const).map(source => {
-    const pairs: MockPair[] = [];
-    let missingAts = 0, noPaper = 0, people = 0, marks = 0;
-    for (const c of cases) {
-      const history = historyByCandidate.get(c.id);
-      const observed = source === "tracker" ? history?.marks ?? [] : c.mock.map(m => ({ subject:m.subject, score:m.percent }));
-      if (!observed.length) continue;
-      people++; marks += observed.length;
-      if (!(history?.sat || c.results.some(r => r.attempted))) { noPaper++; continue; }
-      if (!c.ats || !c.fractions) { missingAts++; continue; }
-      pairs.push({ id:c.id, name:c.name, fractions:c.fractions, penalty:c.ats.penalty, saved:c.ats.score,
-        mark:observed.reduce((sum,m)=>sum+m.score,0)/observed.length, subjects:observed.map(m=>m.subject) });
-    }
-    return { source, marks, people, noPaper, missingAts, pairs, fit:mockBacktest(pairs, dimensions.map(d=>d.weight)) };
-  });
+  const pairs: PaperPair[] = [];
+  let paperCount = 0, missingAts = 0;
+  for (const c of cases) {
+    const settled = c.results.flatMap(r => r.percent !== null && r.verdict ? [{subject:r.subject, percent:r.percent}] : []);
+    if (!settled.length) continue;
+    paperCount += settled.length;
+    if (!c.ats || !c.fractions) { missingAts++; continue; }
+    pairs.push({ id:c.id, name:c.name, fractions:c.fractions, penalty:c.ats.penalty, saved:c.ats.score,
+      mark:settled.reduce((sum,r)=>sum+r.percent,0)/settled.length, subjects:settled.map(r=>r.subject) });
+  }
   return {
-    backtests, trackerAvailable: tracker !== null, unmatchedMarks,
+    backtest: {pairs, paperCount, missingAts, fit:paperBacktest(pairs, dimensions.map(d=>d.weight))},
     accepted: cohort("hired"), rejected: cohort("rejected"),
     cases, dimensions, picks, checkedAt: new Date().toISOString(), threshold: config.profileThreshold, softRejected: soft.total,
     stageOnly: rows.filter((row) => (row.stage === "hired" || row.stage === "rejected") && !row.confirmed).length,

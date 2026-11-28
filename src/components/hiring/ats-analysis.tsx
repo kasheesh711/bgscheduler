@@ -3,12 +3,12 @@
 import { useMemo, useState } from "react";
 import { factorFit, linearFit, observations, type Observation, type Outcome, type Report } from "@/lib/hiring/ats-regression";
 import { trialScore } from "@/lib/hiring/ats-trial";
-import { MockBacktest } from "./ats-mock-backtest";
+import { PaperBacktest } from "./ats-paper-backtest";
 import s from "./ats-analysis.module.css";
 
 const format = new Intl.NumberFormat("en", { maximumFractionDigits: 1 });
 const signed = new Intl.NumberFormat("en", { maximumFractionDigits: 1, signDisplay: "exceptZero" });
-const labels = { paper: "Subject paper", mock: "Mock teaching", decision: "Hiring decision" };
+const labels = { paper: "Subject paper", mock: "Teaching rubric", decision: "Hiring decision" };
 const ticks = [0, 25, 50, 75, 100];
 
 function ScorePlot({ points, outcome, fit, cutoff }: { cutoff: number; points: Observation[]; outcome: Outcome; fit: ReturnType<typeof linearFit> }) {
@@ -91,7 +91,7 @@ function ScoreFactors({ report, paper, onTrial }: { report: Report; paper: Obser
         const open = expanded === f.name;
         const levels = new Map<number, { total: number; n: number }>();
         if (open) for (const p of paper) {
-          const value = p.factors[f.index];
+          const value = Math.round(p.factors[f.index] * 1e9) / 1e9;
           const level = levels.get(value) ?? { total: 0, n: 0 };
           level.total += p.y; level.n++;
           levels.set(value, level);
@@ -137,7 +137,7 @@ export function AtsAnalysis({ report, onTrial }: { report: Report; onTrial: (fro
   const fit = outcome === "decision" ? null : linearFit(points);
   const hires = points.filter(p => p.positive), rejected = points.filter(p => p.positive === false);
   return <>
-    <MockBacktest report={report}/>
+    <PaperBacktest report={report}/>
     <section id="analysis" tabIndex={-1} className={s.surface} aria-labelledby="relationship-title">
       <div className={s.head}><div><h2 id="relationship-title">ATS score and outcomes</h2>
         <p className={s.caption}>{labels[outcome]} · {points.length} paired candidates</p></div>
@@ -155,7 +155,7 @@ export function AtsAnalysis({ report, onTrial }: { report: Report; onTrial: (fro
           <CutoffBands points={points} outcome={outcome} cutoff={report.threshold}/>
         </aside></div>
       <div className={s.foot}><strong>Sample coverage</strong> · {points.length} paired + {sample.noScore} with an outcome but no ATS score + {sample.noOutcome} without this outcome = {report.cases.length} in the report.
-        <p>{outcome === "decision" ? "A confirmed hire or rejection requires a sent decision that matches the candidate’s stage." : outcome === "paper" ? "Each point averages one candidate’s settled subject scores. A subject uses its qualifying level or best attempted level, including applicable head checks. Pass rates use the settled candidate verdict." : "Each point averages one candidate’s completed subject rubrics. Each website rubric score is earned marks divided by available marks. Historical tracker marks appear in the mock backtest."} The report includes candidates with an assessment record or a final stage. Scores replay today’s weights. Candidates who never reached assessment have no observed test score. Results can differ by subject and test level.</p>
+        <p>{outcome === "decision" ? "A confirmed hire or rejection requires a sent decision that matches the candidate’s stage." : outcome === "paper" ? "Each point averages one candidate’s settled subject scores. A subject uses its qualifying level or best attempted level, including applicable head checks. Pass rates use the settled candidate verdict." : "Each point averages one candidate’s completed subject rubrics. Each website rubric score is earned marks divided by available marks."} The report includes candidates with an assessment record or a final stage. Scores replay today’s weights. Candidates who never reached assessment have no observed test score. Results can differ by subject and test level.</p>
       </div>
     </section>
     <ScoreFactors report={report} paper={paper.points} onTrial={onTrial}/>

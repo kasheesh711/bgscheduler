@@ -45,8 +45,7 @@ export function AtsOutcomes({ initialReport }: { initialReport: Report }) {
       if (!response.ok) throw Error();
       const next = await response.json() as Report;
       if (request.current === controller) {
-        if (next.trackerAvailable) { setReport(next); setState("ready"); }
-        else setState("stale");
+        setReport(next); setState("ready");
       }
     } catch {
       if (request.current === controller) setState("stale");
@@ -81,7 +80,7 @@ export function AtsOutcomes({ initialReport }: { initialReport: Report }) {
   if (denied) return <p role="alert">Hiring access is required. <a className="underline" href="/login?callbackUrl=%2Fhiring%2Fats-outcomes">Sign in again</a></p>;
   return <>
     <div className="flex flex-wrap items-center justify-between gap-x-4 rounded-lg border bg-card px-4 text-sm">
-      <p role="status" className="py-2"><strong>{state === "stale" ? "Refresh failed" : !report.trackerAvailable ? "Tracker unavailable · database only" : state === "checking" ? "Checking for updates…" : "Updates every minute"}</strong>
+      <p role="status" className="py-2"><strong>{state === "stale" ? "Refresh failed" : state === "checking" ? "Checking for updates…" : "Updates every minute"}</strong>
         <span className="ml-2 inline-block text-muted-foreground">Last successful read · {bangkokReadTime(report.checkedAt)} Bangkok</span></p>
       <button className="min-h-11 cursor-pointer font-medium underline underline-offset-4" disabled={state === "checking"} onClick={refresh}>{state === "stale" ? "Retry refresh" : "Refresh now"}</button>
     </div>

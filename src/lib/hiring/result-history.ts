@@ -27,7 +27,6 @@ export function parseTrackerResults(recruit: unknown[][], mockLog: unknown[][]) 
     throw new Error("Mock Teaching Test Log headers changed. Review the source mapping.");
   const emails = new Map<string, string | null>();
   const papers: TrackerPaper[] = [];
-  const paperSitters = new Set<string>();
   let noSubject = 0;
   for (const row of recruit.slice(2)) {
     const applicantId = cell(row, 0);
@@ -36,7 +35,6 @@ export function parseTrackerResults(recruit: unknown[][], mockLog: unknown[][]) 
     emails.set(applicantId, email);
     const outcome = cell(row, 19);
     if (!outcome) continue;
-    if (/^(passed|not passed|failed)$/i.test(outcome)) paperSitters.add(applicantId);
     const subjects = normalizeSubjects(cell(row, 13) || cell(row, 20));
     if (!subjects.length) noSubject++;
     const passed = normalizeSubjects(cell(row, 20));
@@ -72,10 +70,10 @@ export function parseTrackerResults(recruit: unknown[][], mockLog: unknown[][]) 
       history: { score: isNumber ? score : null, outcome: isNumber || !scoreText ? outcome : [scoreText, outcome].filter(Boolean).join(" "), comment: cell(row, 8), date: cell(row, 4) || null, head: cell(row, 3) },
     });
   }
-  return { papers, mocks, emails, noSubject, paperSitters };
+  return { papers, mocks, emails, noSubject };
 }
 
-export async function readTrackerResults(config: HiringConfig) {
+async function readTrackerResults(config: HiringConfig) {
   const tabs = await listGoogleSheetProperties(config.connectedEmail, TRACKER_ID);
   const read = (name: string, last: string) => {
     const tab = tabs.find((t) => t.title === name);

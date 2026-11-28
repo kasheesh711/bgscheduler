@@ -1,4 +1,4 @@
-import { mockBacktest } from "../ats-mock-backtest";
+import { paperBacktest } from "../ats-paper-backtest";
 import { factorFit } from "../ats-regression";
 import { trialScore, summarizeScores } from "../ats-trial";
 import { describe, expect, it } from "vitest";
@@ -310,11 +310,11 @@ describe("buildInsights with the visit stages", () => {
 });
 
 describe("ATS outcomes", () => {
-  it("maximizes mock correlation and uses the closest saved allocation when many weights tie", () => {
+  it("maximizes written paper correlation and uses the closest saved allocation when many weights tie", () => {
     const pairs = [0, 0.5, 1].map((value, i) => ({
       id: String(i), name: "", fractions: [1-value,value,0,0,0,0,0], penalty: 0, saved: 100*(1-value), mark: 60+20*value, subjects: [],
     }));
-    const fit = mockBacktest(pairs, [100,0,0,0,0,0,0])!;
+    const fit = paperBacktest(pairs, [100,0,0,0,0,0,0])!;
     expect(fit.tried).toBe(230230);
     expect(fit.savedR).toBeCloseTo(-1);
     expect(fit.bestR).toBeCloseTo(1);
