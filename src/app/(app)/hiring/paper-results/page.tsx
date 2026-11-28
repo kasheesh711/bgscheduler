@@ -3,15 +3,16 @@ import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { HiringReportJump, HiringReportNav } from "@/components/hiring/hiring-report-nav";
 import { getDb } from "@/lib/db";
-import { hiringPaperResults as papers } from "@/lib/db/schema";
+import { hiringCandidates as candidates, hiringPaperResults as papers } from "@/lib/db/schema";
 import { requireHiringAdmin } from "@/lib/hiring/access";
 import { paperScore } from "@/lib/hiring/assessment-view";
 import { HiringError, SUBJECTS } from "@/lib/hiring/model";
 import { paperChecks } from "@/lib/hiring/paper-check";
+import { paperProfileSummary } from "@/lib/hiring/paper-profile-summary";
 import { paperDistribution } from "@/lib/hiring/paper-distribution";
-import { settings } from "@/lib/hiring/service";
+import { resumeAts, settings } from "@/lib/hiring/service";
 
-import { ScoreExplorer } from "./score-explorer";
+import { ScoreExplorer, type PaperObservation } from "./score-explorer";
 import { CambridgeThresholds } from "./cambridge-thresholds";
 
 // Hiring uses the English Language paper for all three English teaching tracks.
@@ -33,6 +34,8 @@ async function Report() {
   const excluded = db.select({
     id: sql<null>`null::uuid`, subject: papers.subject, status: papers.status, source: papers.source,
     marks: sql<null>`null::jsonb`, updatedAt: sql<null>`null::timestamptz`, records: count(),
+    candidateId: sql<null>`null::uuid`, name: sql<null>`null::text`, profileAssessment: sql<null>`null::jsonb`,
+    universityAssessment: sql<null>`null::jsonb`, workRightsAnswer: sql<null>`null::text`, preScreen: sql<null>`null::jsonb`,
   }).from(papers).where(not(markedAndDone)).groupBy(papers.subject, papers.status, papers.source);
   const [{ config }, rows, checks] = await Promise.all([
     settings(db),
@@ -41,14 +44,17 @@ async function Report() {
       marks: papers.marks,
       updatedAt: sql<Date | null>`${papers.updatedAt}`.mapWith((value: string | Date | null) => typeof value === "string" ? new Date(value) : value),
       records: sql<number>`1`.mapWith(Number),
-    }).from(papers).where(markedAndDone).unionAll(excluded),
+      candidateId: sql<string | null>`${candidates.id}`, name: sql<string | null>`${candidates.name}`,
+      profileAssessment: candidates.profileAssessment, universityAssessment: candidates.universityAssessment,
+      workRightsAnswer: candidates.workRightsAnswer, preScreen: candidates.preScreen,
+    }).from(papers).innerJoin(candidates, eq(candidates.id, papers.candidateId)).where(markedAndDone).unionAll(excluded),
     paperChecks(db, new Date()),
   ]);
-  const groups = new Map<string, { score: number; subject: string; earned: number; maximum: number }[]>();
+  const groups = new Map<string, PaperObservation[]>();
   const checkById = new Map(checks.map(check => [check.resultId, check]));
   const exclusions = { unfinished: 0, review: 0, historical: 0, unscored: 0 };
   for (const paper of rows) {
-    if (paper.id === null) {
+    if (paper.id === null || paper.candidateId === null || paper.name === null) {
       if (paper.status === "needs_check") exclusions.review += paper.records;
       else if (paper.status !== "done") exclusions.unfinished += paper.records;
       else if (paper.source === "tracker") exclusions.historical += paper.records;
@@ -63,7 +69,15 @@ async function Report() {
     }
     const group = paperGroup(paper.subject);
     const observations = groups.get(group) ?? [];
-    observations.push({ score: result.percent, subject: paper.subject, earned: result.scored, maximum: result.max });
+    const teaching = paper.profileAssessment?.criteria.find(criterion => criterion.id === "teaching");
+    const experience = paper.preScreen?.experience?.trim() || teaching?.brief || teaching?.reason || null;
+    observations.push({
+      score: result.percent, subject: paper.subject, earned: result.scored, maximum: result.max,
+      candidateId: paper.candidateId, name: paper.name, atsScore: resumeAts(paper, config)?.score ?? null,
+      university: paper.universityAssessment?.name || paper.profileAssessment?.universities?.find(u => u.completedDegree)?.name || null,
+      profileSummary: paperProfileSummary(paper.preScreen, paper.profileAssessment, paper.subject),
+      experience: experience && experience.length > 150 ? experience.slice(0, 149).trimEnd() + "…" : experience,
+    });
     groups.set(group, observations);
   }
   const summary = [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([subject, observations]) => {
