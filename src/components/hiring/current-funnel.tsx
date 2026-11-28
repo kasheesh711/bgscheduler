@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CurrentFunnel, FunnelPerson, FunnelStage } from "@/lib/hiring/current-funnel";
 import {
   FileText,
@@ -202,13 +202,38 @@ export function CurrentFunnelWorkspace({
       (!journeyFilter || matchedById.has(p.id)) &&
       p.name.toLocaleLowerCase().includes(query),
   );
-  async function refresh() {
+  const refresh = useCallback(async (signal?: AbortSignal) => {
     const response = await fetch("/api/hiring/current-funnel", {
       cache: "no-store",
+      signal,
     });
     if (!response.ok) throw Error("Could not refresh the queue.");
-    setReport(await response.json());
-  }
+    const next: CurrentFunnel = await response.json();
+    // A slow background read must not undo a newer report from a staff action.
+    setReport((current) => next.now >= current.now ? next : current);
+  }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    let pending = false;
+    async function refreshVisible() {
+      if (document.visibilityState !== "visible" || pending) return;
+      pending = true;
+      try {
+        await refresh(controller.signal);
+      } catch {
+        // Keep the last report and its update time. The next poll retries.
+      } finally {
+        pending = false;
+      }
+    }
+    const timer = window.setInterval(refreshVisible, 30_000);
+    document.addEventListener("visibilitychange", refreshVisible);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshVisible);
+    };
+  }, [refresh]);
   function open(p: FunnelPerson, action: Action, ids: string[] = []) {
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setOpenerId(p.id);
