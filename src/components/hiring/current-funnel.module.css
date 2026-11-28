@@ -197,7 +197,7 @@
   overflow: auto;
 }
 .journeyHeaders {
-  flex: 0 0 65px;
+  flex: 0 0 clamp(86px, 6vw, 106px);
   position: relative;
 }
 .journeyHeaders button {
@@ -215,6 +215,26 @@
   display: block;
   white-space: nowrap;
 }
+.timingKey,
+.hrTiming,
+.nodeTimes {
+  font-size: 0.7rem;
+  color: #d8d2e3;
+  font-variant-numeric: tabular-nums;
+}
+.timingKey { margin-bottom: 7px; }
+.nodeTimes {
+  display: grid;
+  justify-content: center;
+  gap: 2px;
+  margin-top: 5px;
+  white-space: nowrap;
+}
+.nodeTimes strong { font-weight: 550; }
+.nodeTimes em { font-style: normal; font-weight: 400; }
+.nodeTimes i { display: none; }
+.hrTiming { margin: 6px 0 0; }
+.atsScore { font-size: 0.75rem; font-weight: 600; font-variant-numeric: tabular-nums; }
 .journeyHeaders button[data-review="true"] span {
   color: #ffd097;
 }
@@ -660,6 +680,9 @@
   box-shadow: 0 5px 24px #0002;
 }
 @media (min-width: 781px) {
+  @container (max-width:750px) {
+    .nodeTimes em { display: none; }
+  }
   @container (max-width:620px) {
     .journeyHeaders button {
       width: 10.2%;
@@ -724,7 +747,7 @@
     margin: 0;
   }
   .panel .journey {
-    height: clamp(238px, 36vh, 312px);
+    height: clamp(310px, 44vh, 405px);
     min-height: min(238px, 37vh);
   }
   .journeyHeaders,
@@ -737,14 +760,14 @@
   }
   .journey {
     display: grid;
-    grid-template-columns: 26% 1fr;
-    grid-template-rows: minmax(0, 1fr) auto 34px;
+    grid-template-columns: minmax(108px, 34%) 1fr;
+    grid-template-rows: auto minmax(248px, 1fr) auto auto auto;
     padding: 8px;
     gap: 3px;
   }
   .journeyHeaders {
     grid-column: 1;
-    grid-row: 1;
+    grid-row: 2;
   }
   .journeyHeaders button {
     left: 0;
@@ -756,13 +779,23 @@
     align-items: baseline;
     font-size: clamp(0.66rem, 2.85vw, 0.75rem);
   }
+  .timingKey,
+  .hrTiming { grid-column: 1 / -1; margin: 0; font-size: 0.65rem; }
+  .journeyHeaders button {
+    flex-wrap: wrap;
+    width: 100%;
+    gap: 1px 4px;
+  }
+  .nodeTimes { display: block; width: 100%; margin: 0; font-size: 0.65rem; }
+  .nodeTimes em { display: none; }
+  .nodeTimes i { display: inline; font-style: normal; }
   .journeyHeaders b {
     font-size: 0.75rem;
     padding: 0;
   }
   .journeyBody {
     grid-column: 2;
-    grid-row: 1;
+    grid-row: 2;
     min-height: 0;
   }
   .intakeStats {

@@ -21,6 +21,7 @@ export type PaperReview = {
 export type HiringJourney = {
   id: string;
   name: string;
+  atsScore: number | null;
   subjects: string[];
   reached: Milestone[];
   /** The recorded intake decision stays available if staff bring the person back. */
