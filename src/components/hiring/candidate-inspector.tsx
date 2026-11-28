@@ -654,6 +654,9 @@ export function CandidateInspector({
         {usesSubjects && (
           <fieldset className={css.subjectPicker}>
             <legend>Subjects</legend>
+            {actions.some((a) => a.action === "advance") && (
+              <p className={css.inspectorMeta}>You can leave subjects blank. The candidate selects them on the pre-screen form.</p>
+            )}
             {SUBJECTS.map((subject) => (
               <label key={subject}>
                 <input
@@ -687,7 +690,7 @@ export function CandidateInspector({
               key={action}
               type="button"
               className={action === "stop" ? css.stopButton : index === 0 ? css.primary : css.secondary}
-              disabled={busy || reason.trim().length < 5 || (SUBJECT_ACTIONS.includes(action) && !subjects.length)}
+              disabled={busy || reason.trim().length < 5 || (action === "paper_pass" && !subjects.length)}
               onClick={async () => {
                 const saved = await command({
                   action,
