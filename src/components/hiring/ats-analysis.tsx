@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { factorFit, linearFit, observations, type Observation, type Outcome, type Report } from "@/lib/hiring/ats-regression";
+import { replayWeights } from "@/lib/hiring/ats-paper-backtest";
 import { trialScore } from "@/lib/hiring/ats-trial";
 import { PaperBacktest } from "./ats-paper-backtest";
 import s from "./ats-analysis.module.css";
@@ -11,7 +12,7 @@ const signed = new Intl.NumberFormat("en", { maximumFractionDigits: 1, signDispl
 const labels = { paper: "Subject paper", mock: "Teaching rubric", decision: "Hiring decision" };
 const ticks = [0, 25, 50, 75, 100];
 
-function ScorePlot({ points, outcome, fit, cutoff }: { cutoff: number; points: Observation[]; outcome: Outcome; fit: ReturnType<typeof linearFit> }) {
+function ScorePlot({ points, outcome, fit, cutoff, rule }: { rule: string; cutoff: number; points: Observation[]; outcome: Outcome; fit: ReturnType<typeof linearFit> }) {
   const [selected, setSelected] = useState("");
   const current = points.find(p => p.id === selected) ?? points[0];
   if (!current) return <p className={s.foot}>No candidates have both scores for this comparison yet.</p>;
@@ -45,7 +46,7 @@ function ScorePlot({ points, outcome, fit, cutoff }: { cutoff: number; points: O
           aria-label={title} title={title} aria-pressed={index >= 0} onClick={() => setSelected(next.id)}>{group.length > 1 && <b className={s.count}>{group.length}</b>}</button>;
       })}
     </div>
-    <p className={s.axis}>ATS score (points) <span className={s.cutoffKey}>Saved cutoff {cutoff}</span></p>
+    <p className={s.axis}>{rule} ATS score (points) <span className={s.cutoffKey}>Saved cutoff {cutoff}</span></p>
     <div className={s.inspect}>
       <label>Inspect candidate <select value={current.id} onChange={e=>setSelected(e.target.value)}>
         {points.map(p => <option value={p.id} key={p.id}>{p.name}</option>)}</select></label>
@@ -131,19 +132,33 @@ function ScoreFactors({ report, paper, onTrial }: { report: Report; paper: Obser
 
 export function AtsAnalysis({ report, onTrial }: { report: Report; onTrial: (from: string, to: string) => void }) {
   const [outcome, setOutcome] = useState<Outcome>("paper");
+  const [trialPlot, setTrialPlot] = useState(false);
   const paper = useMemo(() => observations(report, "paper"), [report]);
   const sample = useMemo(() => outcome === "paper" ? paper : observations(report, outcome), [report, outcome, paper]);
-  const { points } = sample;
+  const tuned = outcome === "paper" && trialPlot && report.backtest.fit !== null;
+  const points = useMemo(() => {
+    const fit = report.backtest.fit;
+    if (!tuned || !fit) return sample.points;
+    const scores = new Map(report.backtest.pairs.map(p => [p.id, replayWeights(p,fit.weights)]));
+    return sample.points.map(p=>({...p,x:scores.get(p.id) ?? p.x}));
+  }, [sample.points, report.backtest, tuned]);
   const fit = outcome === "decision" ? null : linearFit(points);
   const hires = points.filter(p => p.positive), rejected = points.filter(p => p.positive === false);
   return <>
-    <PaperBacktest report={report}/>
+    <PaperBacktest report={report} onPlot={trial => {
+      setOutcome("paper"); setTrialPlot(trial); document.getElementById("analysis")?.focus();
+    }}/>
     <section id="analysis" tabIndex={-1} className={s.surface} aria-labelledby="relationship-title">
       <div className={s.head}><div><h2 id="relationship-title">ATS score and outcomes</h2>
         <p className={s.caption}>{labels[outcome]} · {points.length} paired candidates</p></div>
         <div className={s.tabs} role="group" aria-label="Choose outcome">{(Object.keys(labels) as Outcome[]).map(kind =>
           <button key={kind} aria-pressed={kind===outcome} onClick={()=>setOutcome(kind)}>{labels[kind]}</button>)}</div></div>
-      <div className={s.content}><div className={s.chart}><ScorePlot key={outcome} points={points} outcome={outcome} fit={fit} cutoff={report.threshold}/></div>
+      <div className={s.content}><div className={s.chart}>
+          {outcome==="paper" && report.backtest.fit && <div className={s.rulePicker} role="group" aria-label="Score weights on plot">
+            <button type="button" aria-pressed={!tuned} onClick={()=>setTrialPlot(false)}>Saved weights</button>
+            <button type="button" aria-pressed={tuned} onClick={()=>setTrialPlot(true)}>Optimized weights</button>
+          </div>}
+          <ScorePlot key={outcome} points={points} outcome={outcome} fit={fit} cutoff={report.threshold} rule={tuned ? "Trial" : "Saved"}/></div>
         <aside className={s.aside}>
           <h3>{outcome === "decision" ? "Confirmed decisions" : "For 10 more ATS points"}</h3>
           {outcome === "decision" ? <p><strong>{hires.length} scored hires · {rejected.length} scored rejections</strong>. {hires.length && rejected.length
@@ -155,7 +170,7 @@ export function AtsAnalysis({ report, onTrial }: { report: Report; onTrial: (fro
           <CutoffBands points={points} outcome={outcome} cutoff={report.threshold}/>
         </aside></div>
       <div className={s.foot}><strong>Sample coverage</strong> · {points.length} paired + {sample.noScore} with an outcome but no ATS score + {sample.noOutcome} without this outcome = {report.cases.length} in the report.
-        <p>{outcome === "decision" ? "A confirmed hire or rejection requires a sent decision that matches the candidate’s stage." : outcome === "paper" ? "Each point averages one candidate’s settled subject scores. A subject uses its qualifying level or best attempted level, including applicable head checks. Pass rates use the settled candidate verdict." : "Each point averages one candidate’s completed subject rubrics. Each website rubric score is earned marks divided by available marks."} The report includes candidates with an assessment record or a final stage. Scores replay today’s weights. Candidates who never reached assessment have no observed test score. Results can differ by subject and test level.</p>
+        <p>{outcome === "decision" ? "A confirmed hire or rejection requires a sent decision that matches the candidate’s stage." : outcome === "paper" ? "Each point averages one candidate’s settled subject scores. A subject uses its qualifying level or best attempted level, including applicable head checks. Pass rates use the settled candidate verdict." : "Each point averages one candidate’s completed subject rubrics. Each website rubric score is earned marks divided by available marks."} The report includes candidates with an assessment record or a final stage. The saved score replays today’s weights. Candidates who never reached assessment have no observed test score. Results can differ by subject and test level.</p>
       </div>
     </section>
     <ScoreFactors report={report} paper={paper.points} onTrial={onTrial}/>

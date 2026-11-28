@@ -7,7 +7,7 @@ import s from "./ats-analysis.module.css";
 const correlation = (v: number | null) => v === null ? "Undefined" : v.toFixed(3);
 const decimal = new Intl.NumberFormat("en", {maximumFractionDigits:1});
 
-export function PaperBacktest({report}: {report: Report}) {
+export function PaperBacktest({report, onPlot}: {report: Report; onPlot: (trial: boolean) => void}) {
   const b = report.backtest;
   const {fit} = b;
   const counts = b.pairs.length;
@@ -24,7 +24,13 @@ export function PaperBacktest({report}: {report: Report}) {
         ? "Keep the saved weights live. Test the best paper-based mix in parallel." : "Keep the saved weights."}</p>
       {fit && <p className={s.caption}><strong>Trial weight changes</strong> · {report.dimensions.flatMap((d,i) =>
         d.weight===fit.weights[i] ? [] : [d.name+" "+d.weight+" → "+fit.weights[i]]).join(" · ") || "Keep all seven weights"}</p>}
-      {fit ? <><div className={s.comparison}><div><small>Saved correlation</small><strong>{correlation(fit.savedR)}</strong></div><div><small>Best replay correlation</small><strong>{correlation(fit.bestR)}</strong></div></div>
+      {fit ? <><div className={s.correlation}>
+          {[{label:"Saved correlation",r:fit.savedR,trial:false},{label:"Best replay correlation",r:fit.bestR,trial:true}].map(item =>
+            <button type="button" key={item.label} onClick={()=>onPlot(item.trial)} aria-label={"Inspect "+item.label.toLowerCase()+" on the score plot"}>
+              <span>{item.label}</span><strong>{correlation(item.r)}</strong>
+              <i className={s.diverge} aria-hidden="true">{item.r !== null && <span style={{width:Math.abs(item.r)*50+"%", ...(item.r<0?{right:"50%",background:"var(--negative)"}:{left:"50%",background:"var(--teal)"})}}/>}</i>
+            </button>)}
+        </div><p className={s.caption}>Correlation ranges from −1 to +1. Select a rule to inspect its score plot.</p>
         <p className={s.caption}>{fit.tried.toLocaleString("en-US")} allocations checked · {fit.ties.toLocaleString("en-US")} tied for best. Among ties, the trial keeps weights closest to the saved rule.</p>
         <p className={s.caption}><strong>At the saved cutoff of {report.threshold}</strong> · {savedAbove.filter(p=>verdicts.get(p.id)==="pass").length} passes among {savedAbove.length} meeting the saved rule. The tuned rule includes {trialAbove.filter(p=>verdicts.get(p.id)==="pass").length} passes among {trialAbove.length}.</p></>
         : <p>{counts<3?"At least three paper sitters need a settled written paper percentage and ATS dimensions.":"The available scores have too little variation to estimate a correlation."}</p>}
