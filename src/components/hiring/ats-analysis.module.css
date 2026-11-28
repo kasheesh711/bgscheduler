@@ -50,3 +50,5 @@
 .comparison {display:flex;flex-wrap:wrap;gap:10px 34px;margin:12px 0}
 .comparison small,.comparison strong {display:block}.comparison small {font-size:.84rem;color:var(--muted)}.comparison strong {font-size:2rem;line-height:1.15;letter-spacing:-.04em}
 .replay {width:100%;font-size:.85rem;color:var(--ink);text-align:left;margin:10px 0;table-layout:fixed;font-variant-numeric:tabular-nums}.replay th:first-child {width:40%;overflow-wrap:anywhere}.replay :is(td,th) {border-top:1px solid var(--line);padding:6px 4px}.replay caption {text-align:left;font-weight:600;padding:5px 0}
+
+@media(max-width:360px) { .pane > div > nav[aria-label="Hiring reports"] {flex-wrap:wrap;justify-content:flex-start;gap:0 10px} }

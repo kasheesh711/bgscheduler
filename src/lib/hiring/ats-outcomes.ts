@@ -3,7 +3,7 @@ import type { Database } from "@/lib/db";
 import { hiringAudit, hiringCandidates as candidates, hiringDecisions as decisions, hiringPaperResults as papers, hiringMockResults as mocks } from "@/lib/db/schema";
 import { DECIDED_STAGES } from "./model";
 import { paperScore } from "./assessment-view";
-import { rubricTotals } from "./marking-sheet";
+import { checkRubric, rubricTotals } from "./marking-sheet";
 import { paperChecks } from "./paper-check";
 import { resumeAts, settings } from "./service";
 import { highSchoolFraction, profileParts, PROFILE_CRITERIA } from "./scoring";
@@ -97,7 +97,7 @@ export async function assembleAtsReport(db: Database, config: Awaited<ReturnType
       : results.length && results.every(r => r.verdict === "fail") ? "fail" as const : null;
     const mock = mockRows.filter(m => m.candidateId === row.id && m.rubric).flatMap(m => {
       const totals = rubricTotals(m.rubric!);
-      return totals.complete ? [{ subject: m.subject, percent: totals.percent }] : [];
+      return totals.complete && !checkRubric(m.rubric!).length ? [{ subject: m.subject, percent: totals.percent }] : [];
     });
     const decision = row.confirmed ? row.stage === "hired" ? "Accepted" as const : "Rejected" as const : null;
     const ratings = (row.profileAssessment?.criteria ?? []).filter(c => c.id === "teaching" || c.id === "english")

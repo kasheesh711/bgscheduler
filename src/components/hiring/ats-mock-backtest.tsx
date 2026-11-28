@@ -33,7 +33,7 @@ export function MockBacktest({report}: {report: Report}) {
         : <p>{counts<3?"At least three paper sitters need a recorded mock mark and ATS dimensions.":"The available scores have too little variation to estimate a correlation."}</p>}
     </div>
     <aside className={s.aside}><h3>Can the result carry forward?</h3>
-      {fit?.folds ? <p>After choosing weights again with each candidate left out, the mean error was <strong>{decimal.format(fit.mae!)} marks</strong>. The saved rule missed by <strong>{decimal.format(fit.savedMae!)} marks</strong> and the training mean by <strong>{decimal.format(fit.baseline!)} marks</strong> across {fit.folds} of {counts} folds.</p>
+      {fit?.folds ? <p>After choosing weights again with each candidate left out, the mean error was <strong>{decimal.format(fit.mae!)} marks</strong>. The saved rule missed by <strong>{decimal.format(fit.savedMae!)} marks</strong> and the training mean by <strong>{decimal.format(fit.baseline!)} marks</strong> across {fit.folds} of {counts} folds. {fit.mae! > fit.savedMae! ? "The saved rule predicted these held-out marks more accurately." : fit.mae! < fit.savedMae! ? "The trial had smaller held-out errors on these candidates." : "Both rules had the same mean error."}</p>
         : <p>There are too few informative candidates for a held-out check. A close fit to these scores can disappear on the next mock.</p>}
       <p>Record the saved and trial scores before each new mock. Compare their correlations on the next cohort before changing invitations.</p>
     </aside></div>

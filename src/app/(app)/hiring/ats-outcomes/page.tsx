@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { HiringReportJump, HiringReportNav } from "@/components/hiring/hiring-report-nav";
+import styles from "@/components/hiring/ats-analysis.module.css";
 import { AtsOutcomes } from "@/components/hiring/ats-outcomes";
 import { getDb } from "@/lib/db";
 import { requireHiringAdmin } from "@/lib/hiring/access";
@@ -31,7 +32,7 @@ async function Body() {
 }
 
 export default function Page() {
-  return <section aria-labelledby="ats-title" tabIndex={0} className="max-[360px]:[&>div>nav]:flex-wrap min-h-0 flex-1 overflow-y-auto scroll-pt-24 sm:scroll-pt-14">
+  return <section aria-labelledby="ats-title" tabIndex={0} className={styles.pane+" min-h-0 flex-1 overflow-y-auto scroll-pt-24 sm:scroll-pt-14"}>
     <div className="mx-auto grid min-w-0 max-w-6xl grid-cols-1 gap-5 px-1 py-3 sm:px-6 sm:py-6">
     <Suspense><HiringReportNav active="ats-outcomes" fragments={reportSections.map(({ id }) => id)} /></Suspense>
     <header>
