@@ -1,9 +1,13 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import type { paperDistribution } from "@/lib/hiring/paper-distribution";
 
-type Row = { subject: string; data: NonNullable<ReturnType<typeof paperDistribution>>; cutoffs: number[]; observations: { score: number; subject: string; earned: number; maximum: number }[] };
+export type PaperObservation = {
+  score: number; subject: string; earned: number; maximum: number;
+  candidateId: string; name: string; atsScore: number | null; university: string | null; experience: string | null;
+};
+type Row = { subject: string; data: NonNullable<ReturnType<typeof paperDistribution>>; cutoffs: number[]; observations: PaperObservation[] };
 const fmt = (value: number) => value.toFixed(1);
 
 function SubjectChart({ subject, data, cutoffs, observations }: Row) {
@@ -23,6 +27,19 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
   const [selected, setSelected] = useState<number | null>(null);
   const [hover, setHover] = useState<number | null>(null);
   const inspected = hover ?? selected;
+  const candidates = new Map(observations.filter(o => o.score === inspected).map(o => [o.candidateId, o]));
+  const bubbleOpen = inspected !== null;
+  useEffect(() => {
+    if (!bubbleOpen) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setHover(null);
+        setSelected(null);
+      }
+    };
+    document.addEventListener("keydown", dismiss);
+    return () => document.removeEventListener("keydown", dismiss);
+  }, [bubbleOpen]);
   const counts = new Map<number, number>();
   for (const score of scores) counts.set(score, (counts.get(score) ?? 0) + 1);
   const discreteScores = [...counts.keys()];
@@ -149,11 +166,24 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
         {cutoffs.map(value => <div key={value} className="pointer-events-none absolute inset-y-0 border-l-2 border-dashed border-[var(--chart-2)]" style={{ left: value + "%" }} />)}
         {showTrialLine && <div className="pointer-events-none absolute inset-y-0 border-l-2 border-[var(--chart-3)]" style={{ left: cutoff + "%" }} />}
         {inspected !== null && <div className="pointer-events-none absolute inset-y-0 border-l border-dotted border-primary" style={{ left: inspected + "%" }}>
-          <span className="absolute top-0 rounded bg-primary px-1.5 py-0.5 text-xs font-semibold text-primary-foreground" style={{ transform: inspected > 85 ? "translateX(-100%)" : inspected < 15 ? "none" : "translateX(-50%)" }}>{fmt(inspected)}%</span>
+        </div>}
+        {inspected !== null && <div key={inspected} id="paper-score-summary" role="tooltip" tabIndex={selected === inspected ? 0 : undefined}
+          className="absolute bottom-4 z-10 max-h-48 w-64 max-w-full overflow-y-auto overscroll-contain rounded-lg border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-md [overflow-wrap:anywhere]"
+          style={{ left: `clamp(0px, calc(${inspected}% - 8rem), max(0px, calc(100% - 16rem)))` }}
+          onPointerMove={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
+          <p className="font-semibold text-primary">Paper score {fmt(inspected)}%</p>
+          {[...candidates.values()].map(candidate => <div key={candidate.candidateId} className="mt-1 border-t pt-1.5">
+            <p className="font-semibold">{candidate.name}</p>
+            <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+              <dt className="text-muted-foreground">ATS score</dt><dd>{candidate.atsScore === null ? "Not scored" : `${Number(fmt(candidate.atsScore))}/100`}</dd>
+              <dt className="text-muted-foreground">University</dt><dd>{candidate.university || "Not recorded"}</dd>
+              <dt className="text-muted-foreground">Teaching experience</dt><dd>{candidate.experience || "Not recorded"}</dd>
+            </dl>
+          </div>)}
         </div>}
         {[...counts].map(([score, n]) => <button key={score} type="button" aria-label={`Inspect ${fmt(score)} percent, ${n} ${n === 1 ? "paper" : "papers"}`}
-          aria-pressed={selected === score} className="absolute bottom-0 grid size-8 -translate-x-1/2 translate-y-1/2 cursor-pointer place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-primary"
-          style={{ left: score + "%" }} onPointerEnter={e => { if (e.pointerType === "mouse") setHover(score); }} onPointerLeave={() => setHover(null)}
+          aria-describedby={inspected === score ? "paper-score-summary" : undefined} aria-pressed={selected === score} className="absolute bottom-0 grid size-8 -translate-x-1/2 translate-y-1/2 cursor-pointer place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-primary"
+          style={{ left: score + "%" }} onPointerEnter={e => { if (e.pointerType === "mouse") setHover(score); }}
           onFocus={() => setHover(score)} onBlur={() => setHover(null)} onClick={event => { if (event.detail === 0) inspect(score); }}>
           <span className={`rounded-full border-2 border-card bg-primary ${inspected === score ? "ring-2 ring-primary" : ""}`} style={{ width: Math.min(20, 10 + 2 * n), height: Math.min(20, 10 + 2 * n) }} />
         </button>)}
