@@ -1,0 +1,64 @@
+.surface { --ink:#122e3c; --teal:#007769; --muted:#445e66; --line:#cedddc; color:var(--ink); background:#fcfdf9; border:1px solid var(--line); border-radius:16px; overflow:hidden; min-width:0 }
+.head { padding:20px 24px 15px; display:flex; justify-content:space-between; align-items:end; gap:16px; flex-wrap:wrap; border-bottom:1px solid var(--line) }
+.head h2,.factorTitle { font-size:clamp(1.35rem,2.5vw,1.85rem); font-weight:650; letter-spacing:-.035em; line-height:1.15 }
+.surface p { line-height:1.5 }
+.tabs { display:flex; flex-wrap:wrap; gap:3px; padding:3px; border:1px solid var(--line); border-radius:10px }
+.tabs button { min-height:44px; padding:0 12px; border-radius:7px; cursor:pointer; font-size:.88rem; font-weight:600 }
+.tabs button[aria-pressed=true] { background:var(--ink); color:white }
+.content { display:grid; grid-template-columns:minmax(0,1.8fr) minmax(245px,1fr) }
+.chart { padding:18px 24px 14px; min-width:0 }
+.chart h3,.aside h3,.factorHead h3 {font-size:1rem; font-weight:650}
+.key,.caption,.fact small { font-size:.84rem; color:var(--muted) }
+.plot { margin:14px 14px 0 35px; height:220px; position:relative; border:solid var(--line); border-width:0 0 1px 1px; background:repeating-linear-gradient(to top,transparent 0, transparent calc(25% - 1px), #dee7e4 calc(25% - 1px),#dee7e4 25%) }
+.plot svg { position:absolute; width:100%; height:100%; pointer-events:none; overflow:hidden }
+.tickY,.tickX { position:absolute; font: .72rem ui-monospace,monospace; color:var(--muted) }
+.tickY { right:calc(100% + 5px); transform:translateY(50%) }
+.tickX { top:calc(100% + 5px); transform:translateX(-50%) }
+.dot {position:absolute; width:28px;height:28px;transform:translate(-50%,50%);border-radius:50%;cursor:pointer;display:grid;place-items:center}
+.dot::after {content:"";width:10px;height:10px;border:1.5px solid white;border-radius:50%;background:var(--teal);box-shadow:0 0 0 1px var(--teal)}
+.dot[aria-pressed=true] {z-index:1}
+.dot[aria-pressed=true]::after {background:var(--ink);box-shadow:0 0 0 3px #e8b14e}
+.axis {text-align:center;margin:21px 0 10px;font-size:.8rem;font-weight:600}
+.inspect {display:flex; align-items:center; gap:6px 12px; flex-wrap:wrap; border-top:1px solid var(--line);padding-top:8px;font-size:.85rem}
+.inspect select {max-width:100%;min-height:44px;background:white;border:1px solid var(--line);border-radius:7px;padding:4px 8px;color:var(--ink)}
+.aside {padding:20px 24px;background:#eaf3ee;display:flex;flex-direction:column;gap:10px}
+.fact {display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}.fact strong {font-size:2.3rem;letter-spacing:-.055em;font-variant-numeric:tabular-nums;line-height:1.1}
+.band {display:grid;grid-template-columns:1fr auto;font-size:.86rem;gap:3px 12px}.track {grid-column:span 2;background:#cbded6;border-radius:2px;height:6px;overflow:hidden}.fill {display:block;height:100%;background:var(--teal)}
+.foot,.factorFoot {padding:12px 24px;border-top:1px solid var(--line);font-size:.86rem;color:var(--muted)}
+.factorHead {padding:20px 24px 12px}.factorGrid {display:grid;grid-template-columns: minmax(0,1.6fr) minmax(240px,1fr)}
+.factorList {padding:0 24px 16px}.factor {display:grid;grid-template-columns:minmax(78px,1fr) minmax(45px,1fr) 98px;gap:8px;align-items:center;border-top:1px solid var(--line);padding:7px 0;font-size:.87rem}
+.factor strong {font-weight:600}.factor small {display:block;color:var(--muted)}.factor output {text-align:right;font-variant-numeric:tabular-nums}
+.diverge {height:22px;position:relative;background:linear-gradient(90deg,transparent calc(50% - .5px),#879d99 calc(50% - .5px),#879d99 calc(50% + .5px),transparent calc(50% + .5px))}
+.diverge span {position:absolute;top:6px;height:10px;border-radius:2px}
+.surface :is(button,select,summary):focus-visible {outline:3px solid #275ba5;outline-offset:2px}
+@media(max-width:760px) { .head,.factorHead {padding:16px}.content,.factorGrid {grid-template-columns:1fr}.chart,.aside,.factorList,.foot,.factorFoot {padding:14px 16px}.plot {height:185px}.tabs {width:100%}.tabs button {flex:1;padding:0 6px}.head {gap:10px}.aside {border-top:1px solid var(--line)} }
+.surface { --negative:#936235 }
+.cutoff {position:absolute;top:0;bottom:0;border-left:1px dashed #976c30;pointer-events:none}
+.cutoffKey {font-weight:400;color:var(--muted);margin-left:8px}.cutoffKey::before {content:"";display:inline-block;width:12px;border-top:2px dashed #976c30;vertical-align:middle;margin-right:4px}
+.count {position:absolute;bottom:18px;left:17px;font:600 .7rem ui-monospace,monospace;border-radius:9px;padding:1px 4px;color:white;background:var(--teal)}
+.factor {width:100%;min-height:48px;text-align:left;cursor:pointer}
+.factor:hover,.factor[aria-expanded=true] {background:#eaf3ee}
+.estimate {text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.estimate b {display:inline-block;width:14px;color:var(--muted)}
+.breakdown {font-size:.85rem;padding:8px 12px;background:#eaf3ee;color:var(--ink)}
+:global(.dark) .surface {--ink:#e1f1eb;--teal:#59c7b3;--muted:#bad2ca;--line:#395750;--negative:#e6ad74;background:#192b28}
+:global(.dark) .aside,:global(.dark) .breakdown,:global(.dark) .factor:hover,:global(.dark) .factor[aria-expanded=true] {background:#233b34}
+:global(.dark) .tabs button[aria-pressed=true],:global(.dark) .count {color:#152c27}
+:global(.dark) .inspect select {background:#192b28}
+:global(.dark) .plot {background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% - 1px),#36504a calc(25% - 1px),#36504a 25%)}
+
+.recommendation {font-size:clamp(1.1rem,2vw,1.55rem);letter-spacing:-.02em;font-weight:600;margin:6px 0 12px}
+.comparison {display:flex;flex-wrap:wrap;gap:10px 34px;margin:12px 0}
+.comparison small,.comparison strong {display:block}.comparison small {font-size:.84rem;color:var(--muted)}.comparison strong {font-size:2rem;line-height:1.15;letter-spacing:-.04em}
+.replay {width:100%;font-size:.85rem;color:var(--ink);text-align:left;margin:10px 0;table-layout:fixed;font-variant-numeric:tabular-nums}.replay th:first-child {width:40%;overflow-wrap:anywhere}.replay :is(td,th) {border-top:1px solid var(--line);padding:6px 4px}.replay caption {text-align:left;font-weight:600;padding:5px 0}
+
+@media(max-width:360px) { .pane > div > nav[aria-label="Hiring reports"] {flex-wrap:wrap;justify-content:flex-start;gap:0 10px} }
+
+.correlation {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0 4px}
+.correlation button {cursor:pointer;border:1px solid var(--line);border-radius:8px;text-align:left;padding:8px 12px}
+.correlation button:hover {border-color:var(--teal)}
+.correlation button>span {font-size:.84rem;color:var(--muted);display:block}
+.correlation strong {font-size:1.65rem;letter-spacing:-.04em}
+.correlation i {display:block;height:18px;background-color:color-mix(in srgb,var(--line) 35%,transparent)}
+.rulePicker {display:flex;gap:12px;margin-bottom:6px;font-size:.84rem}
+.rulePicker button {cursor:pointer;min-height:44px;padding:0 4px;color:var(--muted)}
+.rulePicker button[aria-pressed=true] {color:var(--ink);font-weight:650;border-bottom:2px solid var(--teal)}
