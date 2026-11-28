@@ -879,7 +879,7 @@ async function postDraft(deps: AutowriterDeps, input: {
       if (outcome.gate) {
         return settleGate({ reason, detail: input.detail, row, now: clock(deps), release, out, draftPatch });
       }
-      if (/^(detail_read_failed|credits_read_failed|function_budget)/u.test(reason)) {
+      if (/^(detail_read_failed|credits_read_failed|events_read_failed|function_budget)/u.test(reason)) {
         await release({ ...draftPatch, state: "pending", reason, retryInMs: AUTOWRITER_RETRY_DELAY_MS, countRetry: true });
         return out("retry", reason);
       }
