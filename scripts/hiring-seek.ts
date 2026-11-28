@@ -1,5 +1,6 @@
 import { chromium, type Page } from "playwright-core";
-import { mkdtemp, readFile, rm, mkdir } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, mkdir } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
@@ -58,23 +59,47 @@ async function documentText(data: Buffer) {
   throw new Error("The resume is not a supported PDF or Word document.");
 }
 
+/**
+ * Playwright starts Chrome with a fake keychain by default, so a session saved by normal Chrome cannot be read. Every
+ * launch uses the real macOS keychain, the same as the plain Chrome window that `connectSeek` opens.
+ */
+export const SEEK_CHROME = { channel: "chrome", ignoreDefaultArgs: ["--use-mock-keychain"] };
+
+/** Args for a plain (not automated) Chrome window on the worker profile. SEEK's CAPTCHA rejects automated windows. */
+export const plainChromeArgs = (profilePath: string, jobId: string) => [
+  "-naW",
+  "Google Chrome",
+  "--args",
+  `--user-data-dir=${profilePath}`,
+  `https://th.employer.seek.com/candidates/?jobid=${jobId}`,
+];
+
 export async function connectSeek(profilePath: string, jobId: string) {
   await mkdir(profilePath, { recursive: true, mode: 0o700 });
-  const browser = await chromium.launchPersistentContext(profilePath, {
-    channel: "chrome",
-    headless: false,
-    acceptDownloads: false,
-  });
+  // Chrome keeps this symlink while any Chrome (the worker's or a past connect window) has the profile open.
+  if (await lstat(path.join(profilePath, "SingletonLock")).then(() => true, () => false))
+    throw new Error(
+      "Another Chrome is using the SEEK profile. Stop the worker (launchctl bootout gui/$(id -u)/com.begifted.hiring) and quit any SEEK Chrome window, then try again.",
+    );
+  console.log(
+    "Sign in to SEEK in the Chrome window that opens. When the candidate list shows, quit that window (Cmd+Q).",
+  );
+  await new Promise<void>((resolve, reject) =>
+    execFile("open", plainChromeArgs(profilePath, jobId), (error) => (error ? reject(error) : resolve())),
+  );
+  const browser = await chromium.launchPersistentContext(profilePath, { ...SEEK_CHROME, headless: true });
   try {
     const page = browser.pages()[0] ?? (await browser.newPage());
     await page.goto(`https://th.employer.seek.com/candidates/?jobid=${jobId}`);
-    console.log(
-      "Sign in to SEEK in this browser. The connection will close after the candidate list is available.",
-    );
-    await page
-      .getByTestId("job-application-card")
-      .first()
-      .waitFor({ state: "visible", timeout: 300000 });
+    // Signed in only when a candidate card shows; SEEK's sign-in redirect can come after load.
+    const card = page.getByTestId("job-application-card").first();
+    let signedIn = false;
+    for (let i = 0; i < 30 && seekSignedIn(page.url()) && !signedIn; i++) {
+      signedIn = await card.isVisible();
+      if (!signedIn) await page.waitForTimeout(1000);
+    }
+    if (!signedIn) throw new Error(SEEK_SIGNED_OUT);
+    console.log("SEEK is connected. The worker can run now.");
   } finally {
     await browser.close();
   }
@@ -499,7 +524,7 @@ export async function importSeek(
   phones?: PhoneReads,
 ) {
   const browser = await chromium.launchPersistentContext(profilePath, {
-    channel: "chrome",
+    ...SEEK_CHROME,
     headless: true,
     acceptDownloads: true,
     viewport: { width: 1440, height: 1000 },
@@ -579,7 +604,7 @@ async function tryPhone(page: Page, card: ReturnType<Page["getByTestId"]>, id: s
  */
 export async function readSeekPhones(profilePath: string, jobId: string, phones: PhoneReads) {
   const browser = await chromium.launchPersistentContext(profilePath, {
-    channel: "chrome",
+    ...SEEK_CHROME,
     headless: true,
     acceptDownloads: false,
     viewport: { width: 1440, height: 1000 },
@@ -618,7 +643,7 @@ export async function backfillSeek(
   step: (applicationId: string, read: () => Promise<BackfillRead>) => Promise<"read" | "skipped" | "failed" | "stop">,
 ) {
   const browser = await chromium.launchPersistentContext(profilePath, {
-    channel: "chrome",
+    ...SEEK_CHROME,
     headless: true,
     acceptDownloads: true,
     viewport: { width: 1440, height: 1000 },
