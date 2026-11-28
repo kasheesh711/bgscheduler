@@ -1,8 +1,10 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { HiringReportJump } from "@/components/hiring/hiring-report-nav";
 import type { atsOutcomes } from "@/lib/hiring/ats-outcomes";
+import { AtsAnalysis } from "./ats-analysis";
+import { OwnerSelections } from "./owner-selections";
 import { trialScore } from "@/lib/hiring/ats-trial";
 
 type Report = Awaited<ReturnType<typeof atsOutcomes>>;
@@ -14,9 +16,84 @@ const small = "text-sm text-muted-foreground";
 const select = "mt-1 block min-h-11 w-full rounded-md border bg-background px-2 py-2 text-sm";
 const table = "w-full text-left text-sm tabular-nums [&_td]:p-2 [&_th]:p-2 [&_tr]:border-b";
 
-export function AtsOutcomes({ report }: { report: Report }) {
+const clock = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", year: "numeric", month: "short", day: "numeric",
+  hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+function bangkokReadTime(iso: string) {
+  const parts = Object.fromEntries(clock.formatToParts(new Date(iso)).map(p => [p.type, p.value]));
+  return parts.day+" "+parts.month+" "+parts.year+" · "+parts.hour+":"+parts.minute+":"+parts.second;
+}
+
+export function AtsOutcomes({ initialReport }: { initialReport: Report }) {
+  const [report, setReport] = useState(initialReport);
+  const [state, setState] = useState<"ready" | "checking" | "stale" | "denied">("ready");
+  const request = useRef<AbortController | null>(null);
+  const rerun = useRef(false);
+  const refresh = useCallback(async function read() {
+    if (request.current || document.hidden) return;
+    const controller = new AbortController();
+    request.current = controller;
+    setState("checking");
+    const timeout = window.setTimeout(() => controller.abort(), 25000);
+    try {
+      const response = await fetch("/api/hiring/ats-outcomes", { cache: "no-store", signal: controller.signal });
+      if (request.current !== controller) return;
+      if (response.status === 401 || response.status === 403 || (response.redirected && new URL(response.url).pathname === "/login")) {
+        rerun.current = false;
+        setState("denied");
+        return;
+      }
+      if (!response.ok) throw Error();
+      const next = await response.json() as Report;
+      if (request.current === controller) {
+        if (next.trackerAvailable) { setReport(next); setState("ready"); }
+        else setState("stale");
+      }
+    } catch {
+      if (request.current === controller) setState("stale");
+    } finally {
+      window.clearTimeout(timeout);
+      if (request.current === controller) {
+        request.current = null;
+        if (rerun.current) { rerun.current = false; void read(); }
+      }
+    }
+  }, []);
+  const denied = state === "denied";
+  useEffect(() => {
+    if (denied) return;
+    const timer = window.setInterval(refresh, 60000);
+    const onReturn = () => {
+      if (document.hidden) return;
+      if (request.current) rerun.current = true;
+      else void refresh();
+    };
+    document.addEventListener("visibilitychange", onReturn);
+    window.addEventListener("online", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onReturn);
+      rerun.current = false;
+      window.removeEventListener("online", refresh);
+      request.current?.abort();
+      request.current = null;
+    };
+  }, [refresh, denied]);
+  if (denied) return <p role="alert">Hiring access is required. <a className="underline" href="/login?callbackUrl=%2Fhiring%2Fats-outcomes">Sign in again</a></p>;
+  return <>
+    <div className="flex flex-wrap items-center justify-between gap-x-4 rounded-lg border bg-card px-4 text-sm">
+      <p role="status" className="py-2"><strong>{state === "stale" ? "Refresh failed" : !report.trackerAvailable ? "Tracker unavailable · database only" : state === "checking" ? "Checking for updates…" : "Updates every minute"}</strong>
+        <span className="ml-2 inline-block text-muted-foreground">Last successful read · {bangkokReadTime(report.checkedAt)} Bangkok</span></p>
+      <button className="min-h-11 cursor-pointer font-medium underline underline-offset-4" disabled={state === "checking"} onClick={refresh}>{state === "stale" ? "Retry refresh" : "Refresh now"}</button>
+    </div>
+    <ReportBody report={report} />
+    <OwnerSelections picks={report.picks} />
+  </>;
+}
+
+function ReportBody({ report }: { report: Report }) {
   const { cases, threshold, accepted, rejected } = report;
-  const [cutoff, setCutoff] = useState(threshold);
+  const [editedCutoff, setCutoff] = useState<number | null>(null);
+  const cutoff = editedCutoff ?? threshold;
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [candidateName, setCandidateName] = useState("");
@@ -50,11 +127,14 @@ export function AtsOutcomes({ report }: { report: Report }) {
   const nameQuery = candidateName.trim().toLowerCase();
   const evidence = cases.filter(c => c.name.toLowerCase().includes(nameQuery));
   function resetTrial(nextCutoff: number) {
-    setCutoff(nextCutoff);
+    setCutoff(nextCutoff === threshold ? null : nextCutoff);
     setFrom("");
     setTo("");
   }
   return <>
+    <AtsAnalysis report={report} onTrial={(fromName, toName) => {
+      setCutoff(null); setFrom(fromName); setTo(toName); document.getElementById("ats-trial")?.focus();
+    }} />
     <section className="rounded-xl border-l-4 border-l-primary bg-primary/5 p-4 sm:p-6">
       <h2 className={heading}>What should we tune?</h2>
       {above.length ? <p className="mt-3"><strong>{above.filter(c => c.paper === "pass").length} of {above.length}</strong> assessed candidates at or above {threshold} passed a subject paper. {below.length ? <><strong>{below.filter(c => c.paper === "pass").length} of {below.length}</strong> below the cutoff also passed.</> : "There are no settled, scored paper results below the cutoff."}</p> : <p className="mt-3">There are no settled, scored paper results at or above {threshold} yet.</p>}
@@ -78,9 +158,9 @@ export function AtsOutcomes({ report }: { report: Report }) {
         <div>
           <label htmlFor="ats-cutoff">Trial cutoff <strong>{cutoff}</strong></label>
           <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2">
-            <button type="button" aria-label="Lower trial cutoff by one point" className="size-11 cursor-pointer rounded-md border hover:bg-muted disabled:opacity-50" disabled={cutoff === 0} onClick={() => setCutoff(value => Math.max(0, value - 1))}>−</button>
+            <button type="button" aria-label="Lower trial cutoff by one point" className="size-11 cursor-pointer rounded-md border hover:bg-muted disabled:opacity-50" disabled={cutoff === 0} onClick={() => setCutoff(Math.max(0, cutoff - 1))}>−</button>
             <input id="ats-cutoff" className="block h-11 w-full accent-primary" type="range" min="0" max="100" value={cutoff} onChange={e => setCutoff(Number(e.target.value))}/>
-            <button type="button" aria-label="Raise trial cutoff by one point" className="size-11 cursor-pointer rounded-md border hover:bg-muted disabled:opacity-50" disabled={cutoff === 100} onClick={() => setCutoff(value => Math.min(100, value + 1))}>+</button>
+            <button type="button" aria-label="Raise trial cutoff by one point" className="size-11 cursor-pointer rounded-md border hover:bg-muted disabled:opacity-50" disabled={cutoff === 100} onClick={() => setCutoff(Math.min(100, cutoff + 1))}>+</button>
           </div>
         </div>
         <label>Move five points from<select className={select} value={from} onChange={e => {setFrom(e.target.value); setTo("");}}>

@@ -1,3 +1,5 @@
+import { mockBacktest } from "../ats-mock-backtest";
+import { factorFit } from "../ats-regression";
 import { trialScore, summarizeScores } from "../ats-trial";
 import { describe, expect, it } from "vitest";
 import { type Stage } from "../model";
@@ -308,6 +310,29 @@ describe("buildInsights with the visit stages", () => {
 });
 
 describe("ATS outcomes", () => {
+  it("maximizes mock correlation and uses the closest saved allocation when many weights tie", () => {
+    const pairs = [0, 0.5, 1].map((value, i) => ({
+      id: String(i), name: "", fractions: [1-value,value,0,0,0,0,0], penalty: 0, saved: 100*(1-value), mark: 60+20*value, subjects: [],
+    }));
+    const fit = mockBacktest(pairs, [100,0,0,0,0,0,0])!;
+    expect(fit.tried).toBe(230230);
+    expect(fit.savedR).toBeCloseTo(-1);
+    expect(fit.bestR).toBeCloseTo(1);
+    expect(fit.weights[0]).toBe(45);
+    expect(fit.folds).toBe(0);
+  });
+
+  it("holds out the only candidate with a different factor before standardizing the prediction", () => {
+    const points = [40, 40, 80].map((y, i) => ({
+      id: String(i), name: "", x: i, y, subjects: [], positive: null, factors: [i === 2 ? 1 : 0, 1],
+    }));
+    const fit = factorFit(points)!;
+    expect(fit.factors[0].folds).toBe(2);
+    expect(fit.factors[1].value).toBeNull();
+    expect(fit.mae).toBeCloseTo((40 + 2 * (20 / 3)) / 3);
+    expect(fit.baseline).toBeCloseTo(80 / 3);
+  });
+
   it("reapplies the work rights deduction before flooring a simulated score", () => {
     const ats = { score: 0, penalty: 12, parts: [
       { name: "Teaching", max: 20, earned: 10 }, { name: "Curriculum", max: 15, earned: 0 },
