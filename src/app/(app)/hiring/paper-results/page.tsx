@@ -8,6 +8,7 @@ import { requireHiringAdmin } from "@/lib/hiring/access";
 import { paperScore } from "@/lib/hiring/assessment-view";
 import { HiringError, SUBJECTS } from "@/lib/hiring/model";
 import { paperChecks } from "@/lib/hiring/paper-check";
+import { paperProfileSummary } from "@/lib/hiring/paper-profile-summary";
 import { paperDistribution } from "@/lib/hiring/paper-distribution";
 import { resumeAts, settings } from "@/lib/hiring/service";
 
@@ -34,7 +35,7 @@ async function Report() {
     id: sql<null>`null::uuid`, subject: papers.subject, status: papers.status, source: papers.source,
     marks: sql<null>`null::jsonb`, updatedAt: sql<null>`null::timestamptz`, records: count(),
     candidateId: sql<null>`null::uuid`, name: sql<null>`null::text`, profileAssessment: sql<null>`null::jsonb`,
-    universityAssessment: sql<null>`null::jsonb`, workRightsAnswer: sql<null>`null::text`, experience: sql<null>`null::text`,
+    universityAssessment: sql<null>`null::jsonb`, workRightsAnswer: sql<null>`null::text`, preScreen: sql<null>`null::jsonb`,
   }).from(papers).where(not(markedAndDone)).groupBy(papers.subject, papers.status, papers.source);
   const [{ config }, rows, checks] = await Promise.all([
     settings(db),
@@ -45,7 +46,7 @@ async function Report() {
       records: sql<number>`1`.mapWith(Number),
       candidateId: sql<string | null>`${candidates.id}`, name: sql<string | null>`${candidates.name}`,
       profileAssessment: candidates.profileAssessment, universityAssessment: candidates.universityAssessment,
-      workRightsAnswer: candidates.workRightsAnswer, experience: sql<string | null>`${candidates.preScreen}->>'experience'`,
+      workRightsAnswer: candidates.workRightsAnswer, preScreen: candidates.preScreen,
     }).from(papers).innerJoin(candidates, eq(candidates.id, papers.candidateId)).where(markedAndDone).unionAll(excluded),
     paperChecks(db, new Date()),
   ]);
@@ -69,11 +70,12 @@ async function Report() {
     const group = paperGroup(paper.subject);
     const observations = groups.get(group) ?? [];
     const teaching = paper.profileAssessment?.criteria.find(criterion => criterion.id === "teaching");
-    const experience = paper.experience?.trim() || teaching?.brief || teaching?.reason || null;
+    const experience = paper.preScreen?.experience?.trim() || teaching?.brief || teaching?.reason || null;
     observations.push({
       score: result.percent, subject: paper.subject, earned: result.scored, maximum: result.max,
       candidateId: paper.candidateId, name: paper.name, atsScore: resumeAts(paper, config)?.score ?? null,
       university: paper.universityAssessment?.name || paper.profileAssessment?.universities?.find(u => u.completedDegree)?.name || null,
+      profileSummary: paperProfileSummary(paper.preScreen, paper.profileAssessment, paper.subject),
       experience: experience && experience.length > 150 ? experience.slice(0, 149).trimEnd() + "…" : experience,
     });
     groups.set(group, observations);

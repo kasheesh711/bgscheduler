@@ -5,7 +5,7 @@ import type { paperDistribution } from "@/lib/hiring/paper-distribution";
 
 export type PaperObservation = {
   score: number; subject: string; earned: number; maximum: number;
-  candidateId: string; name: string; atsScore: number | null; university: string | null; experience: string | null;
+  candidateId: string; name: string; atsScore: number | null; university: string | null; experience: string | null; profileSummary: string;
 };
 type Row = { subject: string; data: NonNullable<ReturnType<typeof paperDistribution>>; cutoffs: number[]; observations: PaperObservation[] };
 const fmt = (value: number) => value.toFixed(1);
@@ -168,8 +168,8 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
         {inspected !== null && <div className="pointer-events-none absolute inset-y-0 border-l border-dotted border-primary" style={{ left: inspected + "%" }}>
         </div>}
         {inspected !== null && <div key={inspected} id="paper-score-summary" role="tooltip" tabIndex={selected === inspected ? 0 : undefined}
-          className="absolute bottom-4 z-10 max-h-48 w-64 max-w-full overflow-y-auto overscroll-contain rounded-lg border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-md [overflow-wrap:anywhere]"
-          style={{ left: `clamp(0px, calc(${inspected}% - 8rem), max(0px, calc(100% - 16rem)))` }}
+          className="absolute bottom-4 z-10 max-h-64 sm:max-h-56 w-72 max-w-full overflow-y-auto overscroll-contain rounded-lg border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-md [overflow-wrap:anywhere]"
+          style={{ left: `clamp(0px, calc(${inspected}% - 9rem), max(0px, calc(100% - 18rem)))` }}
           onPointerMove={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
           <p className="font-semibold text-primary">Paper score {fmt(inspected)}%</p>
           {[...candidates.values()].map(candidate => <div key={candidate.candidateId} className="mt-1 border-t pt-1.5">
@@ -179,6 +179,8 @@ function SubjectChart({ subject, data, cutoffs, observations }: Row) {
               <dt className="text-muted-foreground">University</dt><dd>{candidate.university || "Not recorded"}</dd>
               <dt className="text-muted-foreground">Teaching experience</dt><dd>{candidate.experience || "Not recorded"}</dd>
             </dl>
+            <p className="mt-2 font-medium">Profile summary</p>
+            <p className="leading-snug">{candidate.profileSummary}</p>
           </div>)}
         </div>}
         {[...counts].map(([score, n]) => <button key={score} type="button" aria-label={`Inspect ${fmt(score)} percent, ${n} ${n === 1 ? "paper" : "papers"}`}
