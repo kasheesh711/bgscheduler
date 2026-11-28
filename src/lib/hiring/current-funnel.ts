@@ -147,7 +147,28 @@ export async function currentFunnel(db: Database, now = new Date()) {
         passAt: c.paperPassedAt,
       })
       .from(c)
-      .leftJoin(s.hiringOnboarding, eq(s.hiringOnboarding.candidateId, c.id)),
+      .leftJoin(s.hiringOnboarding, eq(s.hiringOnboarding.candidateId, c.id))
+      // Filter people before accumulating journeys, waits, completed stays or the action queue.
+      // A tracker hash can come from a mirror, and an older SEEK intake can still be app-only.
+      .where(sql`
+        ${c.applicantId} is null and ${c.paperRecordedBy} is distinct from 'tracker'
+        and not exists (select from ${s.hiringPaperResults} where ${s.hiringPaperResults.candidateId} = ${c.id} and ${s.hiringPaperResults.source} = 'tracker')
+        and not exists (select from ${s.hiringMockResults} where ${s.hiringMockResults.candidateId} = ${c.id} and ${s.hiringMockResults.source} = 'tracker')
+        and not exists (select from ${a} where ${a.candidateId} = ${c.id} and (
+          ${a.action} in ('tracker-mark-contacted', 'legacy-spreadsheet-participant')
+          or (${a.action} = 'tracker-import' and (
+            ${a.detail}->>'sourceTab' = 'Scheduling Responses'
+            or (${c.seekApplicationId} is null and jsonb_array_length(${c.sourceIds}) = 0)
+          ))
+        ))
+        and not coalesce((
+          (${c.preScreen}->>'sourceRow')::integer > 0
+          and ${c.preScreenRepliedAt} < '2026-11-23 00:00:00+07'::timestamptz
+          and not exists (select from ${o} where ${o.candidateId} = ${c.id}
+            and ${o.key} = ${c.id}::text || ':pre-screen' and ${o.status} = 'sent'
+            and ${o.sentAt} <= ${c.preScreenRepliedAt})
+        ), false)
+      `),
     db
       .select({
         id: b.id,

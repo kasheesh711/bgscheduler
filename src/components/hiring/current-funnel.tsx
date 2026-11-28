@@ -422,8 +422,8 @@ export function CurrentFunnelWorkspace({
           <footer className={layout.caption}>
             {chartMode === "Funnel"
               ? "Funnel area shows each stage’s share of active candidates."
-              : "All recorded SEEK candidates, counted once. Subject colors use assigned subjects or recorded ATS matches. Each person’s width is shared across their subjects."}{" "}
-            Avg. stay includes exits in the past 12 weeks.
+              : "SEEK candidates in the app hiring flow, counted once. Subject colors use assigned subjects or recorded ATS matches. Each person’s width is shared across their subjects."}{" "}
+            Spreadsheet-flow candidates are excluded. Avg. stay includes exits in the past 12 weeks.
           </footer>
         </section>
         {drag && (

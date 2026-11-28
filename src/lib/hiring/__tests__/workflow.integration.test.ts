@@ -1039,7 +1039,7 @@ describe("hiring workflow persistence", () => {
       const real = await vi.importActual<typeof import("../availability")>("../availability");
       vi.mocked(availableSlots).mockImplementation((...args) => real.availableSlots(...args));
       const graded = async (score: number) => {
-        const row = await invited({sourceIds: ["seek-paper-" + score]});
+        const row = await invited({sourceIds: ["seek-paper-" + score], preScreen: {...pre, sourceRow: 0}});
         await bookVisit(bookingToken(row.id, "two-day", row.inviteExpiresAt!), choice(EXAM, { mockStart: "2026-11-03T04:00:00.000Z" }), db);
         const [result] = await db.insert(s.hiringPaperResults).values({ candidateId: row.id, subject: "Mathematics", source: "person", status: "done", updatedAt: now, marks: { comment: "", missingPages: null, questions: [
           { id: "1", level: "IGCSE / GCSE" as const, attempted: true, readable: true, marks: score, max: 10, reason: "Marked." },
@@ -1938,7 +1938,7 @@ describe("hiring workflow persistence", () => {
       expect((await readLimitUsage(db, "onsite", new Date())).perWeek).toBe(2);
     });
     it("rolls back the waiver preview and queues one mock invitation without recording a paper pass", async () => {
-      const row = await invited({sourceIds: ["seek-waiver"]});
+      const row = await invited({sourceIds: ["seek-waiver"], preScreen: {...pre, sourceRow: 0}});
       await db.update(s.hiringCandidates).set({
         resumePath: resumePath(row.id, "a".repeat(64), "pdf"), resumeType: "application/pdf",
       }).where(eq(s.hiringCandidates.id, row.id));
@@ -1979,6 +1979,27 @@ describe("hiring workflow persistence", () => {
       });
       expect(report.journeys.some(j => j.id === tracker.id)).toBe(false);
       expect(report.rows.some(r => r.id === tracker.id)).toBe(true);
+    });
+    it("excludes spreadsheet participants from both charts and stage waits while retaining app applicants across cutover", async () => {
+      const monday = new Date("2026-11-22T17:00:00Z");
+      const before = new Date(monday.getTime() - 1000);
+      const input = {stage: "review" as const, sourceIds: ["seek"], preScreen: pre, preScreenRepliedAt: before};
+      const [oldForm, boundary, appForm, legacy, mirror] = await db.insert(s.hiringCandidates).values([
+        {...input, name: "Old sheet form"},
+        {...input, name: "Monday response", preScreenRepliedAt: monday},
+        {...input, name: "App invitation"},
+        {...input, name: "Later app participant", preScreenRepliedAt: monday},
+        {name: "Mirror only", stage: "new" as const, sourceIds: ["old-seek"], trackerHash: "mirror", previouslyContacted: true, createdAt: before},
+      ]).returning();
+      await db.insert(s.hiringOutbox).values({key: appForm.id + ":pre-screen", candidateId: appForm.id,
+        kind: "email", status: "sent", sentAt: before, payload: {workflowStage: "pre_screen"}});
+      await db.insert(s.hiringAudit).values({actor: "hiring-report-cohort", action: "legacy-spreadsheet-participant", candidateId: legacy.id, detail: {sourceTab:"Scheduling Responses"}});
+      const report = await currentFunnel(db, monday);
+      const kept = [boundary.id, appForm.id, mirror.id].sort();
+      expect(report.rows.map(r => r.id).sort()).toEqual(kept);
+      expect(report.journeys.map(j => j.id).sort()).toEqual(kept);
+      expect(report.stages.find(s => s.stage === "Pre-screen")).toMatchObject({count: 2, dated: 2});
+      expect((await read(oldForm.id)).stage).toBe("review");
     });
     it("old paper and mock links still work for old-flow candidates", async () => {
       const paper = {
