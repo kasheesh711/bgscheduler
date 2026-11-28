@@ -1,7 +1,7 @@
 import { eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
-import { approvedOffers } from "./service";
+import { approvedOffers, resumeAts, settings } from "./service";
 import { PAPER_CHECK_REQUESTED, PAPER_CHECK_DONE } from "./paper-check";
 import type { HiringJourney, Milestone, PaperReview } from "./funnel-journey";
 import { offerNext } from "./offer-rows";
@@ -56,6 +56,7 @@ type Visit = { id: string; visitId: string | null; kind: string; start: string }
 export type FunnelPerson = {
   id: string;
   name: string;
+  atsScore: number | null;
   email: string | null;
   phone: string | null;
   subjects: Subject[];
@@ -106,7 +107,7 @@ export async function currentFunnel(db: Database, now = new Date()) {
     a = s.hiringAudit,
     o = s.hiringOutbox,
     d = s.hiringDecisions;
-  const [entries, people, bookings, audits, messages, decisions, offers] = await Promise.all([
+  const [entries, people, bookings, audits, messages, decisions, offers, { config }] = await Promise.all([
     db
       .select({
         candidateId: s.hiringStageEntries.candidateId,
@@ -130,14 +131,13 @@ export async function currentFunnel(db: Database, now = new Date()) {
         id: c.id,
         name: c.name,
         email: c.email,
-        scored: sql<boolean>`${c.profileAssessment} is not null`,
+        profileAssessment: c.profileAssessment,
+        universityAssessment: c.universityAssessment,
+        workRightsAnswer: c.workRightsAnswer,
         callComplete: sql<boolean>`${c.callReview}->'good' is not null`,
         phone: c.phone,
         stage: c.stage,
         subjects: c.subjects,
-        // Before the first invitation, the recorded ATS assessment owns the subject matches.
-        assessedSubjects: sql<Subject[]>`coalesce(jsonb_path_query_array(${c.profileAssessment},
-          '$.subjects[*] ? (@.relevant == true).subject'), '[]'::jsonb)`,
         visitSubject: c.visitSubject,
         revision: c.revision,
         answered: sql<boolean>`${c.preScreen} is not null and ${c.preScreenRepliedAt} is not null`,
@@ -229,6 +229,7 @@ export async function currentFunnel(db: Database, now = new Date()) {
       .from(d)
       .where(isNotNull(d.sentAt)),
     approvedOffers(db),
+    settings(db),
   ]);
   if (offers === null) throw new Error("Approved offers are unavailable");
   const recorded = group(entries);
@@ -237,15 +238,16 @@ export async function currentFunnel(db: Database, now = new Date()) {
     emails = group(messages),
     outcomes = group(decisions);
   const offerById = new Map([...offers].reverse().map((o) => [o.candidateId, o]));
-  const totals = funnelSteps.map((stage) => ({
+  const stageTotals = () => new Map(funnelSteps.map((stage) => [stage, {
     stage,
     count: 0,
     currentDays: 0,
     dated: 0,
     completedDays: 0,
     completed: 0,
-  }));
-  const byStage = new Map(totals.map((t) => [t.stage, t]));
+  }]));
+  const byStage = stageTotals();
+  const seekTotals = new Map<string | null, typeof byStage>([[null, stageTotals()]]);
   const rows: FunnelPerson[] = [];
   const journeys: HiringJourney[] = [];
   for (const p of people) {
@@ -407,11 +409,6 @@ export async function currentFunnel(db: Database, now = new Date()) {
       if (i.end <= +now && i.end >= +now - 84 * day)
         completed.push({ stage: "Human review", days: (i.end - i.start) / day });
     }
-    for (const sample of completed) {
-      const t = byStage.get(sample.stage)!;
-      t.completed++;
-      t.completedDays += sample.days;
-    }
     const assignedSubjects = [
       ...new Set([
         ...p.subjects,
@@ -419,7 +416,33 @@ export async function currentFunnel(db: Database, now = new Date()) {
         ...reviews.map((r) => r.subject),
       ]),
     ];
-    const subjects = assignedSubjects.length ? assignedSubjects : [...new Set(p.assessedSubjects)];
+    const subjects = assignedSubjects.length
+      ? assignedSubjects
+      : [...new Set(p.profileAssessment?.subjects?.filter((s) => s.relevant).map((s) => s.subject) ?? [])];
+    const chartSubjects = subjects.length ? subjects : ["Subject unknown"];
+    const atsScore = resumeAts(p, config)?.score ?? null;
+    const groups = [byStage];
+    if (p.seek) {
+      for (const subject of [null, ...chartSubjects]) {
+        if (!seekTotals.has(subject)) seekTotals.set(subject, stageTotals());
+        groups.push(seekTotals.get(subject)!);
+      }
+    }
+    for (const group of groups) {
+      for (const sample of completed) {
+        const t = group.get(sample.stage)!;
+        t.completed++;
+        t.completedDays += sample.days;
+      }
+      if (stage) {
+        const t = group.get(stage)!;
+        t.count++;
+        if (since) {
+          t.dated++;
+          t.currentDays += (+now - Date.parse(since)) / day;
+        }
+      }
+    }
     if (p.seek) {
       const decision = audits.findLast((a) => a.action === "soft-reject");
       const scoreExit =
@@ -455,7 +478,8 @@ export async function currentFunnel(db: Database, now = new Date()) {
       journeys.push({
         id: p.id,
         name: p.name,
-        subjects: subjects.length ? subjects : ["Subject unknown"],
+        subjects: chartSubjects,
+        atsScore,
         reached,
         scoreExit,
         status: p.stage.replaceAll("_", " "),
@@ -465,15 +489,10 @@ export async function currentFunnel(db: Database, now = new Date()) {
       });
     }
     if (!stage) continue;
-    const t = byStage.get(stage)!;
-    t.count++;
-    if (since) {
-      t.dated++;
-      t.currentDays += (+now - Date.parse(since)) / day;
-    }
     rows.push({
       id: p.id,
       name: p.name,
+      atsScore,
       email: p.email,
       phone: p.phone,
       stage,
@@ -493,7 +512,7 @@ export async function currentFunnel(db: Database, now = new Date()) {
       next: offer
         ? "Contract pending · " + offerNext(offer, now).label
         : stage === "Application screening"
-          ? p.scored
+          ? p.profileAssessment
             ? p.stage === "review"
               ? "ATS scored · progression on hold"
               : "ATS scored · awaiting next step"
@@ -527,18 +546,21 @@ export async function currentFunnel(db: Database, now = new Date()) {
       a.name.localeCompare(b.name) ||
       a.id.localeCompare(b.id),
   );
-  return {
-    now: now.toISOString(),
-    rows,
-    journeys,
-    stages: totals.map((t) => ({
+  const averages = (group: typeof byStage) =>
+    [...group.values()].map((t) => ({
       stage: t.stage,
       count: t.count,
       dated: t.dated,
       completed: t.completed,
       current: t.dated ? t.currentDays / t.dated : null,
       history: t.completed ? t.completedDays / t.completed : null,
-    })),
+    }));
+  return {
+    now: now.toISOString(),
+    rows,
+    journeys,
+    stages: averages(byStage),
+    seekTimings: [...seekTotals].map(([subject, group]) => ({ subject, stages: averages(group) })),
   };
 }
 export type CurrentFunnel = Awaited<ReturnType<typeof currentFunnel>>;

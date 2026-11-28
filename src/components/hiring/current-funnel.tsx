@@ -33,6 +33,8 @@ const labels: Record<Action, string> = {
   cancel_funnel_visit: "Cancel remaining appointments",
   follow_up: "Log call",
 };
+const atsLabel = (score: number | null) =>
+  score === null ? "ATS · Not scored" : `ATS ${Math.round(score * 10) / 10}/100`;
 const day = 86_400_000;
 const date = (s: string) => {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -320,7 +322,7 @@ export function CurrentFunnelWorkspace({
         </button>
       </header>
       <div className={layout.split}>
-        <section className={layout.panel} data-expanded={expanded} aria-label="Current hiring funnel">
+        <section className={layout.panel} data-expanded={chartMode === "Funnel" && expanded} aria-label="Current hiring funnel">
           <div className={layout.panelTitle}>
             <h2>{chartMode === "Sankey" ? "Hiring journey" : "Candidates by stage"}</h2>
             <div className={layout.modeBar} aria-label="Chart view">
@@ -354,21 +356,24 @@ export function CurrentFunnelWorkspace({
           ) : (
             <SubjectSankey
               journeys={report.journeys}
+              timings={report.seekTimings}
               selection={journeyFilter}
               onSelect={selectJourney}
               onDrop={dropCandidate}
             />
           )}
-          <button
-            type="button"
-            className={layout.toggle}
-            aria-expanded={expanded}
-            onClick={() => setExpanded(!expanded)}
-          >
-            <span>Stage averages</span>
-            <span aria-hidden="true">{expanded ? "−" : "+"}</span>
-          </button>
-          {expanded && (
+          {chartMode === "Funnel" && (
+            <button
+              type="button"
+              className={layout.toggle}
+              aria-expanded={expanded}
+              onClick={() => setExpanded(!expanded)}
+            >
+              <span>Stage averages</span>
+              <span aria-hidden="true">{expanded ? "−" : "+"}</span>
+            </button>
+          )}
+          {chartMode === "Funnel" && expanded && (
             <div className={layout.stageStats}>
               <div className={layout.headings} aria-hidden="true">
                 <span>Stage · active candidates</span>
@@ -556,6 +561,7 @@ export function CurrentFunnelWorkspace({
                     >
                       {p.name}
                     </a>
+                    <div className={layout.atsScore}>{atsLabel(p.atsScore)}</div>
                     <p>
                       {chartSubjects(p).join(", ")} · {p.stage}
                     </p>
@@ -715,6 +721,7 @@ export function CurrentFunnelWorkspace({
                   >
                     {j.name}
                   </a>
+                  <div className={layout.atsScore}>{atsLabel(j.atsScore)}</div>
                   <p>{j.subjects.join(", ")}</p>
                 </div>
                 <div>
@@ -732,7 +739,7 @@ export function CurrentFunnelWorkspace({
                       ? date(j.signedAt)
                       : j.scoreExit && journeyFilter?.scoreExit
                         ? [
-                            j.scoreExit.score === null ? null : "Score " + j.scoreExit.score,
+                            j.scoreExit.score === null ? null : "Intake score " + j.scoreExit.score,
                             j.scoreExit.cutoff === null ? null : "Cutoff " + j.scoreExit.cutoff,
                           ]
                             .filter(Boolean)

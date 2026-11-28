@@ -160,13 +160,17 @@ const dropStages: Partial<Record<Milestone, FunnelStage>> = {
   "Offer letter": "Offer and contract",
 };
 
+const days = (value: number | null) => value === null ? "—" : value.toFixed(1) + " d";
+
 export function SubjectSankey({
   journeys,
+  timings,
   selection,
   onSelect,
   onDrop,
 }: {
   journeys: HiringJourney[];
+  timings: CurrentFunnel["seekTimings"];
   selection: JourneyFilter | null;
   onSelect: (filter: JourneyFilter | null) => void;
   onDrop: ChartProps["onDrop"];
@@ -185,6 +189,8 @@ export function SubjectSankey({
     .sort((a, b) => b.weight - a.weight || a.name.localeCompare(b.name));
   const focusedSubject = selection?.subject;
   const subjects = focusedSubject ? allSubjects.filter((s) => s.name === focusedSubject) : allSubjects;
+  const stageTimes = timings.find((group) => group.subject === (focusedSubject ?? null))?.stages;
+  const hrCall = stageTimes?.find((s) => s.stage === "HR call");
   const cohort = focusedSubject ? (subjects[0]?.members ?? []) : journeys;
   const share = (j: HiringJourney) => (focusedSubject ? 1 : 1 / j.subjects.length);
   const total = cohort.length,
@@ -225,7 +231,9 @@ export function SubjectSankey({
       lane.y = y;
       y += lane.weight * scale + gap;
     }
-    return { label, x: x[i], members, lanes };
+    const stage = label === "SEEK" ? "Application screening" : label === "Human review" ? label : dropStages[label];
+    const timing = stageTimes?.find((s) => s.stage === stage);
+    return { label, x: x[i], members, lanes, timing };
   });
   const originY = (mainHeight - total * scale) / 2;
   const outgoingSeek = originY + (total - held) * scale;
@@ -458,6 +466,7 @@ export function SubjectSankey({
   );
   return (
     <div className={styles.journey} onMouseLeave={() => trace(null)}>
+      <div className={styles.timingKey}>Stage averages · Wait / Stay</div>
       <div className={styles.journeyHeaders}>
         {columns.map((col) => (
           <button
@@ -470,18 +479,29 @@ export function SubjectSankey({
               } as CSSProperties
             }
             data-review={col.label === "Human review"}
-            title={col.label === "Human review" ? "Subject head’s recheck of a near-pass paper" : col.label}
+            title={col.timing
+              ? `${col.timing.stage} · Average wait from ${col.timing.dated} dated waits · Average stay from ${col.timing.completed} exits in the past 12 weeks`
+              : "Candidates grouped by subject"}
             aria-label={
               col.label +
               " · " +
               col.members.length +
               (col.members.length === 1 ? " candidate" : " candidates")
             }
+            aria-describedby={col.timing ? `stage-timing-${col.x}` : undefined}
             onClick={() => choose({ subject: selection?.subject, to: col.label })}
             {...dropProps(col.label)}
           >
             <span>{col.label}</span>
             <b>{col.members.length}</b>
+            {col.timing && (
+              <small className={styles.nodeTimes} id={`stage-timing-${col.x}`}>
+                <strong><em>Wait </em>{days(col.timing.current)}</strong>
+                <i> / </i>
+                <strong><em>Stay </em>{days(col.timing.history)}</strong>
+                <span className="sr-only">Average wait from {col.timing.dated} dated waits. Average stay from {col.timing.completed} dated exits in the past 12 weeks.</span>
+              </small>
+            )}
           </button>
         ))}
       </div>
@@ -569,6 +589,11 @@ export function SubjectSankey({
           ))}
         </div>
       </div>
+      {hrCall && (hrCall.dated > 0 || hrCall.completed > 0) && (
+        <p className={styles.hrTiming} title={`${hrCall.dated} dated waits · ${hrCall.completed} dated exits`}>
+          HR call before pre-screen · Avg. wait {days(hrCall.current)} · Avg. stay {days(hrCall.history)}
+        </p>
+      )}
       <div className={styles.intakeStats} aria-label="SEEK intake scoring">
         <button
           type="button"

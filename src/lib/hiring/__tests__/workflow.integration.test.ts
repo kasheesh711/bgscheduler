@@ -1962,14 +1962,23 @@ describe("hiring workflow persistence", () => {
     it("counts each SEEK person once and keeps a returned scoring exit out of the current holds", async () => {
       const [held, returned, tracker] = await db.insert(s.hiringCandidates).values([
         {name: "Held", sourceIds: ["seek-1", "seek-2"], profileAssessment: six as never, stage: "soft_rejected" as const, softRejectedAt: now},
-        {name: "Returned", seekApplicationId: "seek-3", stage: "new" as const, softRejectedAt: now, broughtBackAt: now},
+        {name: "Returned", subjects: ["Physics", "Mathematics"], seekApplicationId: "seek-3", stage: "new" as const, softRejectedAt: now, broughtBackAt: now},
         {name: "Tracker", stage: "new" as const},
       ]).returning();
       await db.insert(s.hiringAudit).values([held, returned].map((person) => ({
         candidateId: person.id, actor: "hiring-queue", action: "soft-reject",
-        createdAt: now, detail: {score: 70, threshold: 75},
+        createdAt: new Date(+now - 3 * 86_400_000), detail: {score: 70, threshold: 75},
       })));
+      const enteredAt = new Date(+now - 2 * 86_400_000);
+      await db.insert(s.hiringAudit).values({candidateId: returned.id, actor: "hr", action: "bring-back", createdAt: enteredAt});
       const report = await currentFunnel(db, now);
+      const screening = (subject: string | null) =>
+        report.seekTimings.find(g => g.subject === subject)?.stages.find(s => s.stage === "Application screening");
+      for (const subject of [null, "Physics", "Mathematics"]) {
+        expect(screening(subject)).toMatchObject({count: 1, dated: 1, current: 2});
+      }
+      expect(report.rows.find(r => r.id === returned.id)?.atsScore).toBeNull();
+      expect(report.journeys.find(j => j.id === held.id)?.atsScore).toBe((await hiringCandidateRecord(db, held.id)).profileScore);
       expect(report.journeys.filter(j => j.id === held.id)).toHaveLength(1);
       expect(report.journeys.find(j => j.id === held.id)).toMatchObject({
         subjects: ["Mathematics"], reached: ["SEEK"], scoreExit: {score: 70, cutoff: 75, held: true, returned: false},
